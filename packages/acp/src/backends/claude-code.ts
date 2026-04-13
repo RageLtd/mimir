@@ -228,6 +228,7 @@ const buildNdjson = (
         type: m.role,
         session_id: SYNTHETIC_SESSION_ID,
         message: {
+          role: m.role,
           content: [{ type: "text", text: m.content }],
         },
       }),
