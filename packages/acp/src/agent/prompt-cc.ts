@@ -10,11 +10,13 @@ import type * as acp from "@agentclientprotocol/sdk";
 import type { Backend, BackendEvent } from "../backends/types";
 import {
   assembleContext,
+  type AssembledMessage,
   type ContextClientConfig,
   persistTurn,
   reportTokenUsage,
 } from "../context-client";
 import { createChildLogger, log } from "../utils/log";
+import { toAnthropicXml } from "../utils/markdown-to-xml";
 import {
   buildToolCallContent,
   extractLocations,
@@ -169,6 +171,80 @@ const handleCCEvent = async (
   }
 };
 
+/**
+ * Separate the context injection pair from conversation history in the
+ * assembled message array. The server bakes a synthetic
+ * "Session context: ..." / "Understood." pair at the front when summaries
+ * or memories exist. We pull that out so we can inject the context into
+ * the user's latest message instead.
+ */
+const extractContextAndHistory = (
+  messages: readonly AssembledMessage[],
+  currentQuery: string,
+) => {
+  let contextBlock: string | null = null;
+  const history: AssembledMessage[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (!msg) continue;
+
+    // Detect context injection pair
+    if (msg.role === "user" && msg.content.startsWith("Session context:\n")) {
+      contextBlock = msg.content.slice("Session context:\n".length);
+      // Skip the paired "Understood." assistant response
+      const next = messages[i + 1];
+      if (next?.role === "assistant" && next.content === "Understood.") {
+        i++;
+      }
+      continue;
+    }
+
+    // Skip the trailing user message that duplicates the current query
+    if (
+      i === messages.length - 1 &&
+      msg.role === "user" &&
+      msg.content === currentQuery
+    ) {
+      continue;
+    }
+
+    history.push(msg);
+  }
+
+  return { contextBlock, history };
+};
+
+/**
+ * Build the full prompt string for `-p`.
+ *
+ * Layout:
+ *   <conversation_history> ... </conversation_history>   (if any)
+ *   <retrieved_context> ... </retrieved_context>          (if any)
+ *   <current prompt text>
+ */
+const buildEnhancedPrompt = (
+  history: readonly AssembledMessage[],
+  contextBlock: string | null,
+  currentQuery: string,
+) => {
+  const parts: string[] = [];
+
+  if (history.length > 0) {
+    const turns = history
+      .map((m) => `<turn role="${m.role}">\n${m.content}\n</turn>`)
+      .join("\n");
+    parts.push(`<conversation_history>\n${turns}\n</conversation_history>`);
+  }
+
+  if (contextBlock) {
+    parts.push(`<retrieved_context>\n${contextBlock}\n</retrieved_context>`);
+  }
+
+  parts.push(currentQuery);
+  return parts.join("\n\n");
+};
+
 export const promptViaClaudeCode = async (
   session: SessionState,
   promptText: string,
@@ -191,7 +267,6 @@ export const promptViaClaudeCode = async (
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error("assembleContext failed:", msg);
-    // Surface the error and bail — without context we can't proceed safely.
     await conn.sessionUpdate({
       sessionId: session.sessionId,
       update: {
@@ -202,6 +277,17 @@ export const promptViaClaudeCode = async (
     return { stopReason: "end_turn" };
   }
 
+  // 1. Convert system prompt from markdown to Anthropic XML
+  const xmlSystemPrompt = toAnthropicXml(context.systemPrompt);
+
+  // 2. Separate context injection from history, then build an enhanced
+  //    prompt that embeds context directly in the user's message.
+  const { contextBlock, history } = extractContextAndHistory(
+    context.messages,
+    promptText,
+  );
+  const enhancedPrompt = buildEnhancedPrompt(history, contextBlock, promptText);
+
   // Track the user message for persistence.
   session.messages.push({ role: "user", content: promptText });
 
@@ -211,9 +297,8 @@ export const promptViaClaudeCode = async (
 
   try {
     for await (const event of backend.run({
-      prompt: promptText,
-      systemPrompt: context.systemPrompt,
-      assembledMessages: context.messages,
+      prompt: enhancedPrompt,
+      systemPrompt: xmlSystemPrompt,
       messages: session.messages,
       tools: [],
       projectPath: session.projectPath,
