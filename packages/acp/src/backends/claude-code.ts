@@ -168,7 +168,7 @@ const stringifyToolResult = (
 };
 
 /** Read NDJSON from a ReadableStream<Uint8Array>, yielding parsed objects. */
-const iterateNdjson = async function* (
+export const iterateNdjson = async function* (
   stream: ReadableStream<Uint8Array>,
 ): AsyncGenerator<unknown> {
   const decoder = new TextDecoder();
@@ -216,9 +216,9 @@ const iterateNdjson = async function* (
  * Each message becomes a JSON line wrapping an Anthropic SDK MessageParam
  * inside the CC envelope: { type, session_id, message: { role, content } }.
  */
-const SYNTHETIC_SESSION_ID = "mimir-context";
+export const SYNTHETIC_SESSION_ID = "mimir-context";
 
-const buildNdjson = (
+export const buildNdjson = (
   messages: ReadonlyArray<{ role: "user" | "assistant"; content: string }>,
 ): string =>
   `${messages
@@ -263,22 +263,15 @@ export type RunClaudeCodeOptions = {
   readonly signal?: AbortSignal;
 };
 
-export const runClaudeCode = async function* (
-  options: RunClaudeCodeOptions,
-): AsyncGenerator<BackendEvent> {
-  // Write a per-invocation MCP config merging mimir's base servers with any
-  // client-provided servers. Using a unique path avoids concurrent sessions
-  // overwriting each other's config file.
-  const mcpConfigPath = `${options.cc.mcpConfigPath}.${Date.now()}.${Math.random().toString(36).slice(2, 7)}`;
-  await writeMcpConfig(
-    mcpConfigPath,
-    options.serverUrl,
-    options.clientMcpServers,
-  );
-
-  // Current user message (enhanced with context) goes to -p.
-  // Prior conversation history goes as NDJSON via stdin.
-  const hasHistory = options.history.length > 0;
+/** Build the CLI args array for `claude`. Pure function, easy to test. */
+export const buildArgs = (
+  options: Pick<
+    RunClaudeCodeOptions,
+    "prompt" | "history" | "systemPrompt" | "model" | "cc"
+  >,
+  mcpConfigPath: string,
+  hasHistory: boolean,
+): string[] => {
   const args: string[] = [
     "-p",
     options.prompt,
@@ -302,6 +295,27 @@ export const runClaudeCode = async function* (
   if (options.model) {
     args.push("--model", options.model);
   }
+
+  return args;
+};
+
+export const runClaudeCode = async function* (
+  options: RunClaudeCodeOptions,
+): AsyncGenerator<BackendEvent> {
+  // Write a per-invocation MCP config merging mimir's base servers with any
+  // client-provided servers. Using a unique path avoids concurrent sessions
+  // overwriting each other's config file.
+  const mcpConfigPath = `${options.cc.mcpConfigPath}.${Date.now()}.${Math.random().toString(36).slice(2, 7)}`;
+  await writeMcpConfig(
+    mcpConfigPath,
+    options.serverUrl,
+    options.clientMcpServers,
+  );
+
+  // Current user message (enhanced with context) goes to -p.
+  // Prior conversation history goes as NDJSON via stdin.
+  const hasHistory = options.history.length > 0;
+  const args = buildArgs(options, mcpConfigPath, hasHistory);
 
   const proc = Bun.spawn(["claude", ...args], {
     cwd: options.workingDirectory,

@@ -177,7 +177,7 @@ const handleCCEvent = async (
  * duplicates the current query — that message goes via `-p` instead,
  * so it shouldn't also appear in the NDJSON history stream.
  */
-const historyWithoutCurrentTurn = (
+export const historyWithoutCurrentTurn = (
   messages: readonly AssembledMessage[],
   currentQuery: string,
 ) => {
