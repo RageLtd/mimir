@@ -20,14 +20,14 @@ import { CACHE_CONTROL } from "./shared";
 // Schemas
 // ---------------------------------------------------------------------------
 
-const MemorySearchSchema = z.object({
+export const MemorySearchSchema = z.object({
   query: z
     .string()
     .describe("Search query — keywords or natural language question"),
   limit: z.number().optional().describe("Maximum results (default: 10)"),
 });
 
-const MemoryStoreSchema = z.object({
+export const MemoryStoreSchema = z.object({
   content: z
     .string()
     .describe("The fact to remember — single, self-contained statement"),
@@ -39,12 +39,12 @@ const MemoryUpdateSchema = z.object({
   content: z.string().describe("New content for this memory"),
 });
 
-const MemoryListSchema = z.object({
+export const MemoryListSchema = z.object({
   limit: z.number().optional().describe("Maximum memories (default: 20)"),
   project: z.string().optional().describe("Filter to project-scoped memories"),
 });
 
-const MemoryDeleteSchema = z.object({
+export const MemoryDeleteSchema = z.object({
   id: z.string().describe("Memory ID to delete"),
 });
 
@@ -81,7 +81,7 @@ function dedupBy<T, K extends string | number>(
 // Execute functions
 // ---------------------------------------------------------------------------
 
-const executeMemorySearch = async ({
+export const executeMemorySearch = async ({
   query,
   limit,
 }: z.infer<typeof MemorySearchSchema>) => {
@@ -123,7 +123,7 @@ const executeMemorySearch = async ({
   return { results, message: null };
 };
 
-const executeMemoryStore = async ({
+export const executeMemoryStore = async ({
   content,
   project,
 }: z.infer<typeof MemoryStoreSchema>) => {
@@ -197,7 +197,7 @@ const executeMemoryUpdate = async ({
   return { updated: true, id, neighbors_linked: neighbors.length, error: null };
 };
 
-const executeMemoryList = async ({
+export const executeMemoryList = async ({
   limit,
   project,
 }: z.infer<typeof MemoryListSchema>) => {
@@ -220,7 +220,7 @@ const executeMemoryList = async ({
   };
 };
 
-const executeMemoryDelete = async ({
+export const executeMemoryDelete = async ({
   id,
 }: z.infer<typeof MemoryDeleteSchema>) => {
   const deleted = await deleteMemory(id);

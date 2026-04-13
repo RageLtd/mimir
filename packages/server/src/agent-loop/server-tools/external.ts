@@ -8,7 +8,7 @@ import { CACHE_CONTROL } from "./shared";
 // Schemas
 // ---------------------------------------------------------------------------
 
-const WebSearchSchema = z.object({
+export const WebSearchSchema = z.object({
   query: z.string().describe("Search query"),
   max_results: z.number().optional().describe("Maximum results (default: 5)"),
   search_depth: z
@@ -42,7 +42,7 @@ async function getTavily() {
 // Execute functions
 // ---------------------------------------------------------------------------
 
-const executeWebSearch = async ({
+export const executeWebSearch = async ({
   query,
   max_results,
   search_depth,

@@ -22,6 +22,8 @@ export type AgentCore = {
   newSession: (projectPath: string) => SessionState;
   setModel: (sessionId: string, modelId: string) => boolean;
   setMode: (sessionId: string, modeId: string) => boolean;
+  /** Clear session message history and reset the CC session id. */
+  compact: (sessionId: string) => boolean;
   prompt: (
     sessionId: string,
     promptText: string,

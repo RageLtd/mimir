@@ -31,7 +31,9 @@ services:
       start_period: 10s
 
   mimir:
-    build: .
+    build:
+      context: packages/server
+      dockerfile: packages/server/Dockerfile
     restart: unless-stopped
     ports:
       - "${MIMIR_PORT:-8080}:8080"

@@ -26,6 +26,15 @@ export const DEFAULT_MODE = "code";
 
 export const AVAILABLE_COMMANDS: acp.AvailableCommand[] = [
   {
+    name: "model",
+    description: "Switch the active model for this session.",
+    input: { hint: "model ID" },
+  },
+  {
+    name: "compact",
+    description: "Clear session history and start fresh.",
+  },
+  {
     name: "memory search",
     description: "Search user memories for a query.",
     input: { hint: "search query" },
@@ -45,3 +54,54 @@ export const AVAILABLE_COMMANDS: acp.AvailableCommand[] = [
     input: { hint: "memory ID" },
   },
 ];
+
+// ── Command parsing ──
+
+export type ParsedCommand =
+  | { type: "model"; modelId: string }
+  | { type: "mode"; modeId: string }
+  | { type: "compact" }
+  | { type: "memory_search"; query: string }
+  | { type: "memory_list" }
+  | { type: "memory_store"; fact: string }
+  | { type: "memory_delete"; id: string };
+
+/**
+ * Parse a slash command from user input.
+ * Returns a typed command object, or null if the text is not a recognised
+ * command (in which case it should be forwarded to the model as-is).
+ */
+export const parseCommand = (text: string): ParsedCommand | null => {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("/")) return null;
+
+  const parts = trimmed.slice(1).split(/\s+/);
+  const cmd = parts[0]?.toLowerCase() ?? "";
+
+  switch (cmd) {
+    case "model":
+      return { type: "model", modelId: parts.slice(1).join(" ") };
+    case "mode":
+      return { type: "mode", modeId: parts.slice(1).join(" ") };
+    case "compact":
+    case "clear":
+      return { type: "compact" };
+    case "memory": {
+      const sub = parts[1]?.toLowerCase() ?? "";
+      switch (sub) {
+        case "search":
+          return { type: "memory_search", query: parts.slice(2).join(" ") };
+        case "list":
+          return { type: "memory_list" };
+        case "store":
+          return { type: "memory_store", fact: parts.slice(2).join(" ") };
+        case "delete":
+          return { type: "memory_delete", id: parts[2] ?? "" };
+        default:
+          return null;
+      }
+    }
+    default:
+      return null;
+  }
+};

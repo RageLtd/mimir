@@ -11,6 +11,31 @@ import type { CCBackendConfig } from "../config";
 import { getCCModelFlag, isCCModel } from "../routing";
 import type { Backend, BackendEvent, BackendRunOptions } from "./types";
 
+/**
+ * Writes the MCP config file consumed by `--mcp-config`, injecting the
+ * correct server URL at startup rather than relying on a hardcoded file.
+ * Call once before the first CC spawn.
+ */
+export const writeMcpConfig = async (
+  mcpConfigPath: string,
+  serverUrl: string,
+): Promise<void> => {
+  const config = {
+    mcpServers: {
+      mimir: {
+        type: "http",
+        url: `${serverUrl}/mcp`,
+      },
+      context7: {
+        type: "stdio",
+        command: "bunx",
+        args: ["@upstash/context7-mcp"],
+      },
+    },
+  };
+  await Bun.write(mcpConfigPath, `${JSON.stringify(config, null, 2)}\n`);
+};
+
 // ── CC stream-json event shapes ──
 
 type CCInitEvent = {

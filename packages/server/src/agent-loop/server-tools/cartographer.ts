@@ -8,7 +8,7 @@ import { CACHE_CONTROL } from "./shared";
 // Schemas
 // ---------------------------------------------------------------------------
 
-const SearchSchema = z.object({
+export const SearchSchema = z.object({
   project: z
     .string()
     .optional()
@@ -19,7 +19,7 @@ const SearchSchema = z.object({
   limit: z.number().optional().describe("Maximum results (default: 10)"),
 });
 
-const FileInfoSchema = z.object({
+export const FileInfoSchema = z.object({
   project: z
     .string()
     .optional()
@@ -27,7 +27,7 @@ const FileInfoSchema = z.object({
   file_path: z.string().describe("Absolute path to the file"),
 });
 
-const QuerySchema = z.object({
+export const QuerySchema = z.object({
   project: z
     .string()
     .optional()
@@ -94,7 +94,7 @@ async function resolveProject(project?: string): Promise<ProjectResolution> {
 // Execute functions
 // ---------------------------------------------------------------------------
 
-const executeSearch = async ({
+export const executeSearch = async ({
   project,
   query,
   limit,
@@ -126,7 +126,7 @@ const executeSearch = async ({
   return { files, error: null };
 };
 
-const executeFileInfo = async ({
+export const executeFileInfo = async ({
   project,
   file_path,
 }: z.infer<typeof FileInfoSchema>) => {
@@ -201,7 +201,7 @@ const executeFileInfo = async ({
   return result;
 };
 
-const executeQuery = async ({
+export const executeQuery = async ({
   project,
   entry_points,
   max_depth,

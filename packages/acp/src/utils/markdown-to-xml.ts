@@ -96,6 +96,28 @@ export const markdownToXml = (markdown: string): string => {
 };
 
 /**
+ * Environment context block.
+ *
+ * Tells the model where it is and how it got there: spawned by mimir-acp
+ * as a CC subprocess, connected to mimir-server via MCP SSE. Explains the
+ * tool name mapping so the model can resolve "memory_search" → the actual
+ * callable MCP tool name.
+ *
+ * Injected alongside ANTHROPIC_MODEL_OVERRIDE — CC-only, same rationale.
+ */
+const ENVIRONMENT_BLOCK = `
+<environment>
+You are running as a Claude Code subprocess spawned by mimir-acp — the ACP layer that bridges Zed's agent panel to Claude Code. Your architecture:
+
+mimir-acp spawns you via \`claude -p\` with \`--mcp-config\` pointing to a generated mimir-mcp.json. That config wires two MCP servers into this session:
+
+- The mimir server (SSE, connecting to mimir-server's /mcp endpoint) exposes Goldfish memory, Cartographer codebase indexing, and web search. Its tools arrive prefixed as \`mcp__mimir__\` — e.g. \`mcp__mimir__memory_search\`, \`mcp__mimir__cartographer_search\`, \`mcp__mimir__web_search\`.
+- The context7 server (stdio) exposes library documentation lookup. Its tools arrive as \`mcp__context7__resolve-library-id\` and \`mcp__context7__query-docs\`.
+
+When the system prompt refers to server tool names (memory_search, memory_store, memory_list, memory_delete, cartographer_search, cartographer_file_info, cartographer_query, web_search, context7_lookup), those are canonical names. In this session they are called via their MCP-prefixed names above.
+</environment>`;
+
+/**
  * Anthropic-specific model override block.
  *
  * Injected ONLY when serving the system prompt to Claude models via the
@@ -137,17 +159,14 @@ When in doubt about voice, default to directness. Mimir's speech patterns in <id
  */
 export const toAnthropicXml = (markdown: string): string => {
   const xml = markdownToXml(markdown);
-  // Insert the model override before the closing identity_and_voice tag
-  // so it sits right next to the personality definition (recency effect).
+  // Inject environment context then model override immediately before
+  // <identity_and_voice> so both sit adjacent to the personality definition
+  // (recency effect). Environment first, override second.
   const insertPoint = xml.lastIndexOf("<identity_and_voice>");
+  const injection = `${ENVIRONMENT_BLOCK}\n\n${ANTHROPIC_MODEL_OVERRIDE}`;
   if (insertPoint !== -1) {
-    return (
-      xml.slice(0, insertPoint) +
-      ANTHROPIC_MODEL_OVERRIDE +
-      "\n\n" +
-      xml.slice(insertPoint)
-    );
+    return `${xml.slice(0, insertPoint) + injection}\n\n${xml.slice(insertPoint)}`;
   }
   // Fallback: append at the end
-  return `${xml}\n${ANTHROPIC_MODEL_OVERRIDE}`;
+  return `${xml}\n${injection}`;
 };

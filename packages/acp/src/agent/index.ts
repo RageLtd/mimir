@@ -16,6 +16,7 @@
 
 import * as acp from "@agentclientprotocol/sdk";
 import { createBackendRouter } from "../backends";
+import { writeMcpConfig } from "../backends/claude-code";
 import {
   type CartographerManager,
   createCartographerManager,
@@ -32,7 +33,13 @@ import { createUserMemoryStore } from "../store/user-memories";
 import { createChildLogger, log } from "../utils/log";
 import { formatContentBlocks } from "./content";
 import { createAgentCore } from "./core";
-import { AVAILABLE_COMMANDS, DEFAULT_MODE, SESSION_MODES } from "./session";
+import {
+  AVAILABLE_COMMANDS,
+  DEFAULT_MODE,
+  type ParsedCommand,
+  parseCommand,
+  SESSION_MODES,
+} from "./session";
 
 const logger = createChildLogger(log, "agent");
 
@@ -53,6 +60,14 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
       })
     : null;
 
+  // Write MCP config with the correct server URL before any CC spawn.
+  // MIMIR_SERVER_URL drives both the backend HTTP client and this file.
+  if (config.cc.enabled) {
+    writeMcpConfig(config.cc.mcpConfigPath, config.serverUrl).catch((err) =>
+      logger.warn({ err }, "failed to write MCP config"),
+    );
+  }
+
   const core = createAgentCore(
     config,
     memoryStore,
@@ -60,6 +75,121 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
     contextClient,
     cartographer,
   );
+
+  // ── Command handler ──────────────────────────────────────────────────────
+  // Executes a parsed slash command and streams a response back to the editor.
+  // Returns a PromptResponse so the prompt handler can return it directly.
+
+  const handleCommand = async (
+    sessionId: string,
+    cmd: ParsedCommand,
+  ): Promise<acp.PromptResponse> => {
+    const reply = async (text: string): Promise<void> => {
+      await conn.sessionUpdate({
+        sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text },
+        },
+      });
+    };
+
+    switch (cmd.type) {
+      case "model": {
+        if (!cmd.modelId) {
+          await reply("Usage: `/model <model-id>`");
+          return { stopReason: "end_turn" };
+        }
+        const ok = core.setModel(sessionId, cmd.modelId);
+        await reply(
+          ok ? `Model switched to \`${cmd.modelId}\`.` : "Session not found.",
+        );
+        return { stopReason: "end_turn" };
+      }
+
+      case "mode": {
+        if (!cmd.modeId) {
+          const list = SESSION_MODES.map((m) => `\`${m.id}\``).join(", ");
+          await reply(`Usage: \`/mode <id>\`\nAvailable modes: ${list}`);
+          return { stopReason: "end_turn" };
+        }
+        const ok = core.setMode(sessionId, cmd.modeId);
+        if (ok) {
+          await conn.sessionUpdate({
+            sessionId,
+            update: {
+              sessionUpdate: "current_mode_update",
+              currentModeId: cmd.modeId,
+            },
+          });
+          await reply(`Mode switched to **${cmd.modeId}**.`);
+        } else {
+          const list = SESSION_MODES.map((m) => `\`${m.id}\``).join(", ");
+          await reply(`Unknown mode \`${cmd.modeId}\`. Available: ${list}`);
+        }
+        return { stopReason: "end_turn" };
+      }
+
+      case "compact": {
+        core.compact(sessionId);
+        await reply("Session history cleared.");
+        return { stopReason: "end_turn" };
+      }
+
+      case "memory_search": {
+        if (!cmd.query) {
+          await reply("Usage: `/memory search <query>`");
+          return { stopReason: "end_turn" };
+        }
+        const results = memoryStore.searchMemories(cmd.query);
+        if (results.length === 0) {
+          await reply(`No memories found for "${cmd.query}".`);
+        } else {
+          const lines = results
+            .map((m) => `[#${m.id}] ${m.content}`)
+            .join("\n");
+          await reply(`**Memory search**: "${cmd.query}"\n\n${lines}`);
+        }
+        return { stopReason: "end_turn" };
+      }
+
+      case "memory_list": {
+        const memories = memoryStore.getMemories();
+        if (memories.length === 0) {
+          await reply("No memories stored.");
+        } else {
+          const lines = memories
+            .map((m) => `[#${m.id}] ${m.content}`)
+            .join("\n");
+          await reply(`**Memories** (${memories.length})\n\n${lines}`);
+        }
+        return { stopReason: "end_turn" };
+      }
+
+      case "memory_store": {
+        if (!cmd.fact) {
+          await reply("Usage: `/memory store <fact>`");
+          return { stopReason: "end_turn" };
+        }
+        const entry = memoryStore.addMemory(cmd.fact);
+        await reply(`Memory stored [#${entry.id}]: "${entry.content}"`);
+        return { stopReason: "end_turn" };
+      }
+
+      case "memory_delete": {
+        const id = parseInt(cmd.id, 10);
+        if (Number.isNaN(id)) {
+          await reply("Usage: `/memory delete <id>`\nID must be a number.");
+          return { stopReason: "end_turn" };
+        }
+        const deleted = memoryStore.deleteMemory(id);
+        await reply(
+          deleted ? `Memory #${id} deleted.` : `Memory #${id} not found.`,
+        );
+        return { stopReason: "end_turn" };
+      }
+    }
+  };
 
   const buildModelsState = async (): Promise<acp.SessionModelState> => {
     const ccConfig = router.runtime.ccEnabled
@@ -173,6 +303,8 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
 
     async prompt(params: acp.PromptRequest): Promise<acp.PromptResponse> {
       const promptText = formatContentBlocks(params.prompt);
+      const cmd = parseCommand(promptText);
+      if (cmd) return handleCommand(params.sessionId, cmd);
       return core.prompt(params.sessionId, promptText, conn);
     },
 

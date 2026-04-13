@@ -1,8 +1,8 @@
 FROM oven/bun:alpine AS build
 WORKDIR /app
 
-COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+COPY package.json ./
+RUN bun install
 
 COPY src/ ./src/
 COPY provider-data.json ./provider-data.json

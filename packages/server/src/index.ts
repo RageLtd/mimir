@@ -8,6 +8,7 @@ import { closeDb, getDb, initSchema } from "./db/surreal";
 import { cartographer } from "./routes/cartographer";
 import { completions } from "./routes/completions";
 import { context } from "./routes/context";
+import { mcp } from "./routes/mcp";
 import { messages } from "./routes/messages";
 import { models as modelsRoute } from "./routes/models";
 import { systemPrompt } from "./routes/system-prompt";
@@ -107,6 +108,9 @@ app.route("/v1/messages", messages);
 // Cartographer and tools
 app.route("/v1/cartographer", cartographer);
 app.route("/v1/tools", tools);
+
+// MCP server for Claude Code tool injection
+app.route("/mcp", mcp);
 
 // Boot sequence
 let server: ReturnType<typeof Bun.serve> | null = null;

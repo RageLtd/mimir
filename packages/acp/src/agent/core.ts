@@ -60,6 +60,16 @@ export const createAgentCore = (
     return true;
   };
 
+  const compact = (sessionId: string): boolean => {
+    const session = sessions.get(sessionId);
+    if (!session) return false;
+    session.messages = [];
+    // Reset CC session so the next CC prompt starts a fresh subprocess session
+    // rather than trying to --resume a conversation that no longer exists here.
+    session.ccSessionId = undefined;
+    return true;
+  };
+
   const setMode = (sessionId: string, modeId: string): boolean => {
     const session = sessions.get(sessionId);
     if (!session) return false;
@@ -146,5 +156,5 @@ export const createAgentCore = (
     cartographer?.dispose();
   };
 
-  return { newSession, setModel, setMode, prompt, cancel, dispose };
+  return { newSession, setModel, setMode, compact, prompt, cancel, dispose };
 };
