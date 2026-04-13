@@ -41,6 +41,7 @@ export const createBackendRouter = (config: MimirConfig): BackendRouter => {
   const server = createServerBackend(serverConfig);
   const cc = createClaudeCodeBackend({
     cc: config.cc,
+    serverUrl: config.serverUrl,
     defaultCwd: process.cwd(),
   });
   const runtime: RuntimeState = { ccEnabled: config.cc.enabled };

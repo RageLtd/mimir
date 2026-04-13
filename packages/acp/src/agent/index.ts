@@ -16,7 +16,6 @@
 
 import * as acp from "@agentclientprotocol/sdk";
 import { createBackendRouter } from "../backends";
-import { writeMcpConfig } from "../backends/claude-code";
 import {
   type CartographerManager,
   createCartographerManager,
@@ -52,21 +51,19 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
     systemPromptTtlMs: config.systemPromptTtlMs,
   };
 
+  // Captured from clientCapabilities during initialize — shared across sessions
+  // on this connection (one connection = one Zed window).
+  let supportsTerminalOutput = false;
+
   // Cartographer lifecycle — spawns the Rust binary as an MCP child
   const cartographer: CartographerManager | null = config.cartographer.enabled
     ? createCartographerManager({
         binaryPath: config.cartographer.binaryPath,
         env: config.cartographer.env,
+        serverUrl: config.serverUrl,
+        apiKey: config.apiKey,
       })
     : null;
-
-  // Write MCP config with the correct server URL before any CC spawn.
-  // MIMIR_SERVER_URL drives both the backend HTTP client and this file.
-  if (config.cc.enabled) {
-    writeMcpConfig(config.cc.mcpConfigPath, config.serverUrl).catch((err) =>
-      logger.warn({ err }, "failed to write MCP config"),
-    );
-  }
 
   const core = createAgentCore(
     config,
@@ -204,7 +201,13 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
   };
 
   return {
-    async initialize(_params: acp.InitializeRequest) {
+    async initialize(params: acp.InitializeRequest) {
+      // Capture terminal output capability — Zed advertises this when it can
+      // render terminal widgets inside tool call chips.
+      supportsTerminalOutput =
+        params.clientCapabilities?._meta?.terminal_output === true;
+      logger.info("terminal output supported:", supportsTerminalOutput);
+
       // Resolve CC availability before accepting any prompts. If the
       // `claude` binary isn't on PATH, disable CC routing so users can't
       // pick a claude-code/* model that would crash on spawn.
@@ -225,6 +228,12 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
           promptCapabilities: {
             embeddedContext: true,
           },
+          // Advertise that we accept HTTP and SSE MCP servers from the client.
+          // Stdio servers are also accepted but aren't part of McpCapabilities.
+          mcpCapabilities: {
+            http: true,
+            sse: true,
+          },
         },
       };
     },
@@ -233,7 +242,11 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
       // ACP spec: cwd MUST be an absolute path and MUST be used for the
       // session regardless of where the agent subprocess was spawned.
       const projectPath = params.cwd || process.cwd();
-      const session = core.newSession(projectPath);
+      const session = core.newSession(
+        projectPath,
+        params.mcpServers,
+        supportsTerminalOutput,
+      );
       logger.info("new session:", session.sessionId, "cwd:", projectPath);
 
       const models = await buildModelsState().catch((err) => {

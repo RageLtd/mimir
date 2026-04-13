@@ -1,25 +1,20 @@
 /**
  * Claude Code backend prompt path.
  *
- * Fetches context from mimir-server, assembles the wrapped prompt,
- * spawns CC, streams events to the editor (including thinking chunks),
- * and persists the conversation back to mimir-server on completion.
+ * Fetches fully assembled context from mimir-server in a single call, then
+ * pipes it to CC as stream-json NDJSON via stdin. No session persistence —
+ * mimir-server owns all context; CC is stateless inference.
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
 import type { Backend, BackendEvent } from "../backends/types";
 import {
+  assembleContext,
   type ContextClientConfig,
-  fetchMemories,
-  fetchSummaries,
-  getSystemPrompt,
   persistTurn,
   reportTokenUsage,
 } from "../context-client";
-import type { UserMemoryStore } from "../store/user-memories";
 import { createChildLogger, log } from "../utils/log";
-import { toAnthropicXml } from "../utils/markdown-to-xml";
-import { buildCCPrompt } from "./content";
 import {
   buildToolCallContent,
   extractLocations,
@@ -55,7 +50,6 @@ const handleCCEvent = async (
   }
 
   if (event.type === "thinking") {
-    // Stream thinking to the editor as thought chunks
     await conn.sessionUpdate({
       sessionId: session.sessionId,
       update: {
@@ -74,17 +68,30 @@ const handleCCEvent = async (
     const kind = toolKindFor(event.name);
     const locations = extractLocations(event.name, event.input);
     const title = toolTitle(event.name, event.input);
+    const isBash =
+      event.name === "Bash" ||
+      event.name === "create_terminal" ||
+      event.name === "terminal";
 
-    // Observe-only: surface to the editor for visibility, don't execute.
     await conn.sessionUpdate({
       sessionId: session.sessionId,
       update: {
+        _meta: {
+          claudeCode: { toolName: event.name },
+          ...(isBash && session.supportsTerminalOutput
+            ? { terminal_info: { terminal_id: event.id } }
+            : {}),
+        },
         sessionUpdate: "tool_call",
         toolCallId: event.id,
         title,
         rawInput: event.input,
         kind,
-        status: "in_progress" as const,
+        status: "pending" as const,
+        content:
+          isBash && session.supportsTerminalOutput
+            ? [{ type: "terminal" as const, terminalId: event.id }]
+            : [],
         ...(locations ? { locations } : {}),
       },
     });
@@ -94,21 +101,59 @@ const handleCCEvent = async (
   if (event.type === "tool_result") {
     const info = ccToolCallInfo.get(event.id);
     const toolName = info?.name ?? event.id;
-    const content = info
-      ? buildToolCallContent(toolName, info.input, event.output)
-      : undefined;
+    const updateTitle = info ? toolTitle(info.name, info.input) : toolName;
+    const isBash =
+      toolName === "Bash" ||
+      toolName === "create_terminal" ||
+      toolName === "terminal";
 
-    await conn.sessionUpdate({
-      sessionId: session.sessionId,
-      update: {
-        sessionUpdate: "tool_call_update",
-        toolCallId: event.id,
-        title: toolName,
-        rawOutput: { content: event.output },
-        status: "completed" as const,
-        ...(content ? { content } : {}),
-      },
-    });
+    if (isBash && session.supportsTerminalOutput) {
+      await conn.sessionUpdate({
+        sessionId: session.sessionId,
+        update: {
+          _meta: {
+            terminal_output: { terminal_id: event.id, data: event.output },
+          },
+          sessionUpdate: "tool_call_update",
+          toolCallId: event.id,
+        },
+      });
+      await conn.sessionUpdate({
+        sessionId: session.sessionId,
+        update: {
+          _meta: {
+            claudeCode: { toolName },
+            terminal_exit: {
+              terminal_id: event.id,
+              exit_code: 0,
+              signal: null,
+            },
+          },
+          sessionUpdate: "tool_call_update",
+          toolCallId: event.id,
+          title: updateTitle,
+          rawOutput: event.output,
+          status: "completed" as const,
+          content: [{ type: "terminal" as const, terminalId: event.id }],
+        },
+      });
+    } else {
+      const content = info
+        ? buildToolCallContent(toolName, info.input, event.output)
+        : undefined;
+      await conn.sessionUpdate({
+        sessionId: session.sessionId,
+        update: {
+          _meta: { claudeCode: { toolName } },
+          sessionUpdate: "tool_call_update",
+          toolCallId: event.id,
+          title: updateTitle,
+          rawOutput: event.output,
+          status: "completed" as const,
+          ...(content ? { content } : {}),
+        },
+      });
+    }
     return;
   }
 
@@ -131,47 +176,33 @@ export const promptViaClaudeCode = async (
   abortController: AbortController,
   backend: Backend,
   contextClient: ContextClientConfig,
-  memoryStore: UserMemoryStore,
 ): Promise<acp.PromptResponse> => {
-  const isResume = !!session.ccSessionId;
+  // Single call to mimir-server assembles the full context: system prompt,
+  // Goldfish memories, summaries, historical turns from DB, and the current
+  // user message as the final entry.
+  let context: Awaited<ReturnType<typeof assembleContext>>;
+  try {
+    context = await assembleContext(
+      contextClient,
+      promptText,
+      session.projectPath,
+      abortController.signal,
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error("assembleContext failed:", msg);
+    // Surface the error and bail — without context we can't proceed safely.
+    await conn.sessionUpdate({
+      sessionId: session.sessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: `Context assembly failed: ${msg}` },
+      },
+    });
+    return { stopReason: "end_turn" };
+  }
 
-  // Fetch context from mimir-server. System prompt is always needed; on
-  // --resume CC already has prior summaries/memories in its session, so
-  // skip injecting them again.
-  const [systemPromptRaw, memories, summaries] = await Promise.all([
-    getSystemPrompt(contextClient, abortController.signal).catch((err) => {
-      logger.warn("system prompt fetch failed:", err);
-      return "";
-    }),
-    isResume
-      ? Promise.resolve(null)
-      : fetchMemories(
-          contextClient,
-          promptText,
-          session.projectPath,
-          abortController.signal,
-        ).catch((err) => {
-          logger.warn("memories fetch failed:", err);
-          return null;
-        }),
-    isResume
-      ? Promise.resolve([])
-      : fetchSummaries(contextClient, 3, abortController.signal).catch(
-          (err) => {
-            logger.warn("summaries fetch failed:", err);
-            return [];
-          },
-        ),
-  ]);
-
-  const systemPrompt = toAnthropicXml(systemPromptRaw);
-
-  const userProfile = isResume ? null : memoryStore.getProfileAsText();
-  const assembledPrompt = isResume
-    ? promptText
-    : buildCCPrompt(promptText, summaries, memories, userProfile);
-
-  // Track the user message for persistence even though CC owns the rest
+  // Track the user message for persistence.
   session.messages.push({ role: "user", content: promptText });
 
   let assistantBuffer = "";
@@ -180,12 +211,13 @@ export const promptViaClaudeCode = async (
 
   try {
     for await (const event of backend.run({
-      prompt: assembledPrompt,
-      systemPrompt,
+      prompt: promptText,
+      systemPrompt: context.systemPrompt,
+      assembledMessages: context.messages,
       messages: session.messages,
       tools: [],
       projectPath: session.projectPath,
-      ccResumeSessionId: session.ccSessionId,
+      clientMcpServers: session.clientMcpServers,
       metadata: {},
       modelId: session.currentModelId,
       signal: abortController.signal,
@@ -194,20 +226,15 @@ export const promptViaClaudeCode = async (
         assistantBuffer += delta;
       });
 
-      if (event.type === "init") {
-        session.ccSessionId = event.sessionId;
-      } else if (event.type === "finish") {
+      if (event.type === "finish") {
         promptTokens = event.promptTokens;
         totalCostUsd = event.cost;
-        // Forward token usage + cost to the ACP client so the editor can
-        // display context consumption and session cost in real time.
         if (typeof promptTokens === "number" && promptTokens > 0) {
           await conn.sessionUpdate({
             sessionId: session.sessionId,
             update: {
               sessionUpdate: "usage_update",
               used: promptTokens,
-              // 200 000 is the standard context window across current Claude models.
               size: 200_000,
               ...(typeof totalCostUsd === "number"
                 ? { cost: { amount: totalCostUsd, currency: "USD" } }
@@ -228,15 +255,11 @@ export const promptViaClaudeCode = async (
     return { stopReason: "end_turn" };
   }
 
-  // Push the assistant turn we observed (text only — CC's tool exchanges
-  // live inside its own session; we don't try to mirror them into the
-  // OpenAI-shape message log).
   if (assistantBuffer.length > 0) {
     session.messages.push({ role: "assistant", content: assistantBuffer });
   }
 
-  // Post-processing: persist + token report. Fire-and-forget; don't
-  // block the response on these.
+  // Post-processing: persist + token report. Fire-and-forget.
   const projectForServer = session.projectPath || "default";
   persistTurn(contextClient, session.messages.slice(-2), projectForServer, {
     totalCostUsd,

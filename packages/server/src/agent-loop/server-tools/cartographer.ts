@@ -106,11 +106,11 @@ export const executeSearch = async ({
   const maxResults = limit ?? 10;
 
   const [result] = await db.query<
-    [Array<{ file_path: string; symbols: string }>]
+    [Array<{ file_path: string; symbols: string; score: number }>]
   >(
-    `SELECT file_path, symbols FROM cart_file
+    `SELECT file_path, symbols, search::score(1) AS score FROM cart_file
      WHERE project = $project AND searchable @1@ $query
-     ORDER BY search::score(1) DESC LIMIT $limit`,
+     ORDER BY score DESC LIMIT $limit`,
     { project: resolved.project, query, limit: maxResults },
   );
 

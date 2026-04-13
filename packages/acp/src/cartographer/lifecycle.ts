@@ -21,6 +21,7 @@
 
 import { createChildLogger, log } from "../utils/log";
 import { type CartographerClient, spawnCartographer } from "./client";
+import { syncIndex } from "./sync";
 
 const logger = createChildLogger(log, "cartographer-lifecycle");
 
@@ -53,8 +54,12 @@ export type CartographerManager = {
 export type CartographerManagerConfig = {
   /** Path to the cartographer binary. */
   readonly binaryPath: string;
-  /** Environment variables to pass to the binary (e.g. SURREAL_URL). */
+  /** Environment variables to pass to the binary. */
   readonly env?: Record<string, string>;
+  /** mimir-server URL for syncing the parsed index. */
+  readonly serverUrl: string;
+  /** API key for mimir-server. */
+  readonly apiKey: string;
 };
 
 export const createCartographerManager = (
@@ -102,23 +107,21 @@ export const createCartographerManager = (
   };
 
   const autoIndex = (projectPath: string): void => {
-    // The binary auto-indexes CWD on startup, so just ensuring the
-    // client is spawned triggers indexing. If already running, call
-    // index_project explicitly.
+    // In --parse-only mode the binary has no DB access; it returns the
+    // full index as JSON via the MCP tool result. We forward that JSON
+    // directly to mimir-server's sync endpoint.
     getClient(projectPath)
       .then(async (client) => {
-        // If client was already alive, trigger explicit index
-        const stats = await client.stats(projectPath).catch(() => null);
-        if (stats && stats.totalFiles === 0) {
-          logger.info("auto-indexing project:", projectPath);
-          await client.indexProject(projectPath);
-        } else {
-          logger.info(
-            "cartographer already indexed:",
-            projectPath,
-            stats ? `(${stats.totalFiles} files)` : "",
-          );
+        logger.info("auto-indexing project:", projectPath);
+        const rawJson = await client.indexProject(projectPath);
+        if (!rawJson || rawJson.trim() === "") {
+          logger.warn("cartographer returned empty index for:", projectPath);
+          return;
         }
+        await syncIndex(
+          { serverUrl: config.serverUrl, apiKey: config.apiKey, logger },
+          rawJson,
+        );
       })
       .catch((err) => {
         logger.warn("auto-index failed:", err);
@@ -126,6 +129,9 @@ export const createCartographerManager = (
   };
 
   const detectChanges = (projectPath: string): void => {
+    // detect_changes returns a summary of what changed, not the full index.
+    // If anything changed, trigger a full re-index and sync so the server
+    // stays in step.
     getClient(projectPath)
       .then(async (client) => {
         const result = await client.detectChanges(projectPath);
@@ -135,8 +141,15 @@ export const createCartographerManager = (
             result.indexed,
             "indexed,",
             result.removed,
-            "removed",
+            "removed — re-syncing index",
           );
+          const rawJson = await client.indexProject(projectPath);
+          if (rawJson && rawJson.trim() !== "") {
+            await syncIndex(
+              { serverUrl: config.serverUrl, apiKey: config.apiKey, logger },
+              rawJson,
+            );
+          }
         }
       })
       .catch((err) => {

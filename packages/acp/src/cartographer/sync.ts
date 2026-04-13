@@ -1,16 +1,9 @@
 /**
  * Cartographer index sync to mimir-server.
  *
- * Pushes parsed file data from the local cartographer binary to
- * mimir-server's sync endpoint over HTTPS. The server persists to
- * SurrealDB so query tools (search, graph walk, file info) work
- * cross-project.
- *
- * Currently the Rust binary writes to SurrealDB directly (shared
- * instance with mimir-server), making this sync redundant. This
- * module exists for the future --parse-only mode where the binary
- * produces JSON output without DB access and mimir-acp handles
- * persistence via HTTP.
+ * Forwards the raw JSON output from the cartographer binary's --parse-only
+ * mode to mimir-server's sync endpoint. The server persists to SurrealDB
+ * so query tools (search, graph walk, file info) work cross-project.
  */
 
 import type { Logger } from "../utils/log";
@@ -21,31 +14,14 @@ export type CartographerSyncConfig = {
   readonly logger: Logger;
 };
 
-export type SyncFileEntry = {
-  readonly path: string;
-  readonly language: string;
-  readonly symbols: readonly {
-    readonly name: string;
-    readonly kind: string;
-    readonly signature?: string;
-    readonly visibility?: string;
-    readonly line: number;
-  }[];
-  readonly imports: readonly {
-    readonly target: string;
-    readonly specifier: string;
-    readonly symbols: readonly string[];
-  }[];
-};
-
-export type IndexPayload = {
-  readonly projectPath: string;
-  readonly files: readonly SyncFileEntry[];
-};
-
+/**
+ * Post raw JSON from the cartographer binary to the server sync endpoint.
+ * The binary's --parse-only output is forwarded as-is; no intermediate
+ * type conversion needed.
+ */
 export const syncIndex = async (
   config: CartographerSyncConfig,
-  payload: IndexPayload,
+  rawJson: string,
 ): Promise<{ readonly ok: boolean; readonly error?: string }> => {
   const url = `${config.serverUrl}/v1/cartographer/sync`;
 
@@ -56,7 +32,7 @@ export const syncIndex = async (
         "Content-Type": "application/json",
         ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
       },
-      body: JSON.stringify(payload),
+      body: rawJson,
     });
 
     if (!response.ok) {
@@ -67,9 +43,7 @@ export const syncIndex = async (
       return { ok: false, error: `${response.status}: ${body}` };
     }
 
-    config.logger.info(
-      `Cartographer sync OK: ${payload.projectPath} (${payload.files.length} files)`,
-    );
+    config.logger.info("Cartographer sync OK");
     return { ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

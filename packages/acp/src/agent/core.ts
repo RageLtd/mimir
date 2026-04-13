@@ -11,7 +11,6 @@ import type { Backend } from "../backends/types";
 import type { CartographerManager } from "../cartographer/lifecycle";
 import type { MimirConfig } from "../config";
 import type { ContextClientConfig } from "../context-client";
-import { isCCModel } from "../routing";
 import type { UserMemoryStore } from "../store/user-memories";
 import { createChildLogger, log } from "../utils/log";
 import { promptViaClaudeCode } from "./prompt-cc";
@@ -30,7 +29,11 @@ export const createAgentCore = (
 ): AgentCore => {
   const sessions = new Map<string, SessionState>();
 
-  const newSession = (projectPath: string): SessionState => {
+  const newSession = (
+    projectPath: string,
+    clientMcpServers?: readonly acp.McpServer[],
+    supportsTerminalOutput = false,
+  ): SessionState => {
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const session: SessionState = {
       sessionId,
@@ -39,6 +42,8 @@ export const createAgentCore = (
       abortController: null,
       currentModelId: appConfig.model,
       currentMode: DEFAULT_MODE,
+      clientMcpServers,
+      supportsTerminalOutput,
     };
     sessions.set(sessionId, session);
     return session;
@@ -51,12 +56,6 @@ export const createAgentCore = (
     const session = sessions.get(sessionId);
     if (!session) return false;
     session.currentModelId = modelId;
-    // Switching to a non-CC model invalidates the CC --resume id; CC won't
-    // be servicing this conversation any more, so any future CC turn
-    // starts fresh.
-    if (!isCCModel(modelId)) {
-      session.ccSessionId = undefined;
-    }
     return true;
   };
 
@@ -64,9 +63,6 @@ export const createAgentCore = (
     const session = sessions.get(sessionId);
     if (!session) return false;
     session.messages = [];
-    // Reset CC session so the next CC prompt starts a fresh subprocess session
-    // rather than trying to --resume a conversation that no longer exists here.
-    session.ccSessionId = undefined;
     return true;
   };
 
@@ -126,7 +122,6 @@ export const createAgentCore = (
         abortController,
         backend,
         contextClient,
-        memoryStore,
       );
     }
     return promptViaServer(

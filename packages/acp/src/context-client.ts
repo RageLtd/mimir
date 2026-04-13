@@ -148,6 +148,34 @@ export const persistTurn = async (
   );
 };
 
+// ── Context assembly (CC backend) ──
+
+export type AssembledMessage = {
+  readonly role: "user" | "assistant";
+  readonly content: string;
+};
+
+export type AssembledContext = {
+  readonly systemPrompt: string;
+  readonly messages: readonly AssembledMessage[];
+};
+
+export const assembleContext = (
+  cfg: ContextClientConfig,
+  query: string,
+  project?: string,
+  signal?: AbortSignal,
+): Promise<AssembledContext> =>
+  requestJson<AssembledContext>(
+    `${cfg.baseUrl}/v1/context/assemble`,
+    {
+      method: "POST",
+      body: JSON.stringify({ query, project }),
+      signal,
+    },
+    cfg.apiKey,
+  );
+
 // ── Token tracking ──
 
 export const reportTokenUsage = async (

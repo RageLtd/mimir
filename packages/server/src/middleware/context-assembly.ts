@@ -72,51 +72,6 @@ function pruneOldToolResults(
 }
 
 /**
- * Truncate large tool result outputs to prevent context explosion.
- */
-function truncateLargeToolResults(
-  messages: ModelMessage[],
-  maxChars: number,
-): { messages: ModelMessage[]; truncated: number } {
-  let truncated = 0;
-
-  const truncatedMessages = messages.map((m) => {
-    if (m.role !== "tool") return m;
-    if (!Array.isArray(m.content)) return m;
-
-    const newContent = m.content.map((part) => {
-      if (part.type !== "tool-result") return part;
-      const toolPart = part as {
-        type: "tool-result";
-        output?: { type: string; value: string };
-      };
-      if (!toolPart.output?.value) return part;
-
-      const value = toolPart.output.value;
-      if (value.length <= maxChars) return part;
-
-      truncated++;
-      return {
-        ...part,
-        output: {
-          type: "content" as const,
-          value: [
-            {
-              type: "text",
-              text: `${value.slice(0, maxChars)}... [truncated]`,
-            },
-          ],
-        },
-      };
-    });
-
-    return { ...m, content: newContent };
-  });
-
-  return { messages: truncatedMessages as ModelMessage[], truncated };
-}
-
-/**
  * Assemble the complete context for the LLM.
  *
  * Order: summaries → memories → rules → format reminder

@@ -7,21 +7,61 @@
  * with observeOnly=true — the agent loop must NOT execute them.
  */
 
+import type { McpServer, McpServerStdio } from "@agentclientprotocol/sdk";
 import type { CCBackendConfig } from "../config";
 import { getCCModelFlag, isCCModel } from "../routing";
 import type { Backend, BackendEvent, BackendRunOptions } from "./types";
 
+// ── ACP → CC MCP config conversion ──
+
+const isStdioServer = (server: McpServer): server is McpServerStdio =>
+  "command" in server;
+
+/** Converts an ACP McpServer to the entry format CC's --mcp-config expects. */
+const acpServerToConfigEntry = (server: McpServer): Record<string, unknown> => {
+  if (isStdioServer(server)) {
+    const env = Object.fromEntries(
+      (server.env ?? []).map((e) => [e.name, e.value]),
+    );
+    return {
+      type: "stdio",
+      command: server.command,
+      args: server.args ?? [],
+      ...(Object.keys(env).length > 0 ? { env } : {}),
+    };
+  }
+  const headers = Object.fromEntries(
+    (server.headers ?? []).map((h) => [h.name, h.value]),
+  );
+  return {
+    type: server.type,
+    url: server.url,
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
+  };
+};
+
 /**
- * Writes the MCP config file consumed by `--mcp-config`, injecting the
- * correct server URL at startup rather than relying on a hardcoded file.
- * Call once before the first CC spawn.
+ * Writes the MCP config file consumed by `--mcp-config`, merging the base
+ * mimir + context7 servers with any MCP servers provided by the ACP client.
+ *
+ * Pass a session-specific `mcpConfigPath` when client servers differ per
+ * session to avoid concurrent sessions overwriting each other's config.
  */
 export const writeMcpConfig = async (
   mcpConfigPath: string,
   serverUrl: string,
+  clientMcpServers?: readonly McpServer[],
 ): Promise<void> => {
+  const clientEntries: Record<string, unknown> = {};
+  for (const server of clientMcpServers ?? []) {
+    clientEntries[server.name] = acpServerToConfigEntry(server);
+  }
+
   const config = {
     mcpServers: {
+      // Client-provided servers first so mimir's own servers always win on
+      // name collision (mimir and context7 are reserved names).
+      ...clientEntries,
       mimir: {
         type: "http",
         url: `${serverUrl}/mcp`,
@@ -167,35 +207,89 @@ const iterateNdjson = async function* (
   }
 };
 
+// ── NDJSON history builder ──
+
+/**
+ * Convert an assembled message array to the stream-json NDJSON format
+ * that `claude --input-format stream-json` expects on stdin.
+ *
+ * Each message becomes a JSON line in CC's native event format.
+ * A synthetic session_id is used since these are server-synthesized turns,
+ * not replayed from an actual CC session.
+ */
+const SYNTHETIC_SESSION_ID = "synthetic-history";
+
+const buildNdjson = (
+  messages: ReadonlyArray<{ role: "user" | "assistant"; content: string }>,
+): string =>
+  `${messages
+    .map((m) =>
+      JSON.stringify({
+        type: m.role,
+        session_id: SYNTHETIC_SESSION_ID,
+        message: {
+          content: [{ type: "text", text: m.content }],
+        },
+      }),
+    )
+    .join("\n")}\n`;
+
 // ── Public API ──
 
 export type RunClaudeCodeOptions = {
-  readonly prompt: string;
+  /**
+   * Pre-assembled messages from mimir-server (context injection pair +
+   * historical turns + current user message). Piped as NDJSON via stdin
+   * with --input-format stream-json.
+   */
+  readonly messages: ReadonlyArray<{
+    role: "user" | "assistant";
+    content: string;
+  }>;
   readonly systemPrompt: string;
-  readonly resumeSessionId?: string;
   readonly workingDirectory: string;
   readonly cc: CCBackendConfig;
+  /** The mimir-server URL, needed to build the MCP config's mimir entry. */
+  readonly serverUrl: string;
   /** CC --model flag value; e.g. "opus", "sonnet[1m]". */
   readonly model?: string;
+  /** MCP servers from the ACP client to merge into the CC MCP config. */
+  readonly clientMcpServers?: readonly McpServer[];
   readonly signal?: AbortSignal;
 };
 
 export const runClaudeCode = async function* (
   options: RunClaudeCodeOptions,
 ): AsyncGenerator<BackendEvent> {
+  // Write a per-invocation MCP config merging mimir's base servers with any
+  // client-provided servers. Using a unique path avoids concurrent sessions
+  // overwriting each other's config file.
+  const mcpConfigPath = `${options.cc.mcpConfigPath}.${Date.now()}.${Math.random().toString(36).slice(2, 7)}`;
+  await writeMcpConfig(
+    mcpConfigPath,
+    options.serverUrl,
+    options.clientMcpServers,
+  );
+
+  // The assembled messages are piped as NDJSON via stdin. The last entry is
+  // the current user message, so -p receives an empty string and CC uses
+  // the stream as the full conversation.
   const args: string[] = [
     "-p",
-    options.prompt,
-    "--system-prompt",
-    options.systemPrompt,
+    "",
+    "--input-format",
+    "stream-json",
     "--output-format",
     "stream-json",
     "--verbose",
+    "--no-session-persistence",
     "--strict-mcp-config",
     "--mcp-config",
-    options.cc.mcpConfigPath,
+    mcpConfigPath,
     "--permission-mode",
     options.cc.permissionMode,
+    "--system-prompt",
+    options.systemPrompt,
   ];
 
   if (options.cc.disallowedTools.length > 0) {
@@ -204,16 +298,19 @@ export const runClaudeCode = async function* (
   if (options.model) {
     args.push("--model", options.model);
   }
-  if (options.resumeSessionId) {
-    args.push("--resume", options.resumeSessionId);
-  }
 
   // Bun is the runtime per package.json; Bun.spawn returns a stream-friendly process.
   const proc = Bun.spawn(["claude", ...args], {
     cwd: options.workingDirectory,
+    stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
   });
+
+  // Write conversation history as NDJSON then close stdin so CC knows input is done.
+  const ndjson = buildNdjson(options.messages);
+  proc.stdin.write(ndjson);
+  proc.stdin.end();
 
   const onAbort = () => {
     try {
@@ -331,6 +428,12 @@ export const runClaudeCode = async function* (
     yield { type: "error", error: msg };
   } finally {
     options.signal?.removeEventListener("abort", onAbort);
+    // Clean up the per-invocation MCP config temp file.
+    Bun.file(mcpConfigPath)
+      .exists()
+      .then((exists) => {
+        if (exists) Bun.$`rm -f ${mcpConfigPath}`.quiet().catch(() => {});
+      });
   }
 };
 
@@ -338,6 +441,8 @@ export const runClaudeCode = async function* (
 
 export type ClaudeCodeBackendDeps = {
   readonly cc: CCBackendConfig;
+  /** The mimir-server URL, forwarded into per-invocation MCP configs. */
+  readonly serverUrl: string;
   /** Default cwd when ACP doesn't supply a project path. */
   readonly defaultCwd: string;
 };
@@ -356,12 +461,13 @@ export const createClaudeCodeBackend = (
       : undefined;
 
     yield* runClaudeCode({
-      prompt: options.prompt,
+      messages: options.assembledMessages ?? [],
       systemPrompt: options.systemPrompt,
-      resumeSessionId: options.ccResumeSessionId,
       workingDirectory: cwd,
       cc: deps.cc,
+      serverUrl: deps.serverUrl,
       model,
+      clientMcpServers: options.clientMcpServers,
       signal: options.signal,
     });
   };

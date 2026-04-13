@@ -12,17 +12,26 @@ export type SessionState = {
   abortController: AbortController | null;
   /** Currently selected model id (drives backend routing per request). */
   currentModelId: string;
-  /** CC session id for --resume, set after the first CC init event. */
-  ccSessionId?: string;
   /** Current session mode (code/ask/architect). */
   currentMode: string;
+  /** MCP servers provided by the ACP client (e.g. Zed's ACP tools server). */
+  clientMcpServers?: readonly acp.McpServer[];
+  /**
+   * Whether the ACP client supports terminal output via _meta.terminal_*.
+   * Set from clientCapabilities._meta.terminal_output during initialize.
+   */
+  supportsTerminalOutput: boolean;
 };
 
 export type AgentCore = {
-  newSession: (projectPath: string) => SessionState;
+  newSession: (
+    projectPath: string,
+    clientMcpServers?: readonly acp.McpServer[],
+    supportsTerminalOutput?: boolean,
+  ) => SessionState;
   setModel: (sessionId: string, modelId: string) => boolean;
   setMode: (sessionId: string, modeId: string) => boolean;
-  /** Clear session message history and reset the CC session id. */
+  /** Clear session message history. */
   compact: (sessionId: string) => boolean;
   prompt: (
     sessionId: string,

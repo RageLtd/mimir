@@ -135,10 +135,21 @@ export const buildToolCallContent = (
     }
   }
 
-  // Bash / terminal tools → inline text content so output is visible
+  // Bash / terminal tools → console code block (matches Zed's fallback format).
+  // Used when the client doesn't support terminal_output _meta; the terminal
+  // path is handled directly in prompt-cc.ts via _meta events.
   if (name === "Bash" || name === "create_terminal" || name === "terminal") {
-    if (result.length > 0) {
-      return [{ type: "content", content: { type: "text", text: result } }];
+    const output = result.trim();
+    if (output.length > 0) {
+      return [
+        {
+          type: "content",
+          content: {
+            type: "text",
+            text: `\`\`\`console\n${output}\n\`\`\``,
+          },
+        },
+      ];
     }
   }
 
