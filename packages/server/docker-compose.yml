@@ -1,0 +1,61 @@
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:latest-dev
+    restart: unless-stopped
+    user: root
+    ports:
+      - "8001:8000"
+    entrypoint:
+      - /surreal
+      - start
+      - --log
+      - info
+      - --user
+      - root
+      - --pass
+      - ${SURREAL_PASS:-changeme}
+      - rocksdb:/data/surreal.db
+    volumes:
+      - surrealdb-data:/data
+    labels:
+      caddy: http://surreal.conhost.lan
+      caddy.reverse_proxy: "192.168.1.160:8001"
+    networks:
+      - caddy
+      - mimir
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  mimir:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${MIMIR_PORT:-8080}:8080"
+    networks:
+      - caddy
+      - mimir
+    env_file:
+      - .env
+    volumes:
+      - ./system-prompt.md:/app/system-prompt.md:ro
+      - ./logs:/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    labels:
+      caddy: http://mimir.conhost.lan
+      caddy.reverse_proxy: "192.168.1.160:8080"
+    depends_on:
+      surrealdb:
+        condition: service_healthy
+
+volumes:
+  surrealdb-data:
+
+networks:
+  caddy:
+    external: true
+  mimir:
+    driver: bridge

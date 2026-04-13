@@ -1,0 +1,18 @@
+{
+  "name": "mimir",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "check": "biome check --write .",
+    "server:dev": "bun run --filter @mimir/server dev",
+    "server:start": "bun run --filter @mimir/server start",
+    "acp:start": "bun run --filter @mimir/acp start",
+    "acp:build": "bun run --filter @mimir/acp build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.11",
+    "@types/bun": "latest"
+  }
+}

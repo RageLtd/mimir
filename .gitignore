@@ -1,0 +1,42 @@
+# dependencies
+node_modules
+
+# output
+out
+dist
+*.tgz
+
+# compiled binaries
+packages/acp/mimir-acp
+
+# code coverage
+coverage
+*.lcov
+
+# logs
+logs
+*.log
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# dotenv
+.env
+.env.*.local
+
+# caches
+.eslintcache
+.cache
+*.tsbuildinfo
+
+# IDEs
+.idea
+
+# macOS
+.DS_Store
+
+# SurrealDB data
+data/
+
+# SQLite databases (local user data)
+*.db
+*.db-shm
+*.db-wal
