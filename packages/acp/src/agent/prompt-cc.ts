@@ -1,9 +1,10 @@
 /**
  * Claude Code backend prompt path.
  *
- * Fetches fully assembled context from mimir-server in a single call, then
- * pipes it to CC as stream-json NDJSON via stdin. No session persistence —
- * mimir-server owns all context; CC is stateless inference.
+ * Fetches assembled context from mimir-server (system prompt, summaries,
+ * memories, historical turns). Converts the system prompt to Anthropic XML,
+ * pipes prior turns as stream-json NDJSON via stdin, and passes the current
+ * user message via `-p`. mimir-server owns all context; CC is stateless.
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
@@ -172,77 +173,19 @@ const handleCCEvent = async (
 };
 
 /**
- * Separate the context injection pair from conversation history in the
- * assembled message array. The server bakes a synthetic
- * "Session context: ..." / "Understood." pair at the front when summaries
- * or memories exist. We pull that out so we can inject the context into
- * the user's latest message instead.
+ * Strip the trailing user message from the assembled array when it
+ * duplicates the current query — that message goes via `-p` instead,
+ * so it shouldn't also appear in the NDJSON history stream.
  */
-const extractContextAndHistory = (
+const historyWithoutCurrentTurn = (
   messages: readonly AssembledMessage[],
   currentQuery: string,
 ) => {
-  let contextBlock: string | null = null;
-  const history: AssembledMessage[] = [];
-
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    if (!msg) continue;
-
-    // Detect context injection pair
-    if (msg.role === "user" && msg.content.startsWith("Session context:\n")) {
-      contextBlock = msg.content.slice("Session context:\n".length);
-      // Skip the paired "Understood." assistant response
-      const next = messages[i + 1];
-      if (next?.role === "assistant" && next.content === "Understood.") {
-        i++;
-      }
-      continue;
-    }
-
-    // Skip the trailing user message that duplicates the current query
-    if (
-      i === messages.length - 1 &&
-      msg.role === "user" &&
-      msg.content === currentQuery
-    ) {
-      continue;
-    }
-
-    history.push(msg);
+  const last = messages[messages.length - 1];
+  if (last?.role === "user" && last.content === currentQuery) {
+    return messages.slice(0, -1);
   }
-
-  return { contextBlock, history };
-};
-
-/**
- * Build the full prompt string for `-p`.
- *
- * Layout:
- *   <conversation_history> ... </conversation_history>   (if any)
- *   <retrieved_context> ... </retrieved_context>          (if any)
- *   <current prompt text>
- */
-const buildEnhancedPrompt = (
-  history: readonly AssembledMessage[],
-  contextBlock: string | null,
-  currentQuery: string,
-) => {
-  const parts: string[] = [];
-
-  if (history.length > 0) {
-    const turns = history
-      .map((m) => `<turn role="${m.role}">\n${m.content}\n</turn>`)
-      .join("\n");
-    parts.push(`<conversation_history>\n${turns}\n</conversation_history>`);
-  }
-
-  if (contextBlock) {
-    parts.push(`<retrieved_context>\n${contextBlock}\n</retrieved_context>`);
-  }
-
-  parts.push(currentQuery);
-  return parts.join("\n\n");
+  return messages;
 };
 
 export const promptViaClaudeCode = async (
@@ -277,16 +220,14 @@ export const promptViaClaudeCode = async (
     return { stopReason: "end_turn" };
   }
 
-  // 1. Convert system prompt from markdown to Anthropic XML
+  // Convert system prompt from markdown to Anthropic XML.
   const xmlSystemPrompt = toAnthropicXml(context.systemPrompt);
 
-  // 2. Separate context injection from history, then build an enhanced
-  //    prompt that embeds context directly in the user's message.
-  const { contextBlock, history } = extractContextAndHistory(
-    context.messages,
-    promptText,
-  );
-  const enhancedPrompt = buildEnhancedPrompt(history, contextBlock, promptText);
+  // The server's assembled messages include the context injection pair
+  // (summaries + memories), historical turns, and the current user message.
+  // Strip the trailing user message — it goes via `-p` instead — and pass
+  // everything else as structured NDJSON history.
+  const history = historyWithoutCurrentTurn(context.messages, promptText);
 
   // Track the user message for persistence.
   session.messages.push({ role: "user", content: promptText });
@@ -297,8 +238,9 @@ export const promptViaClaudeCode = async (
 
   try {
     for await (const event of backend.run({
-      prompt: enhancedPrompt,
+      prompt: promptText,
       systemPrompt: xmlSystemPrompt,
+      assembledMessages: history,
       messages: session.messages,
       tools: [],
       projectPath: session.projectPath,

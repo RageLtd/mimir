@@ -64,6 +64,17 @@ export type BackendRunOptions = {
   readonly tools: readonly ToolDefinition[];
   /** Project path (cwd for CC; metadata for server). */
   readonly projectPath: string;
+  /**
+   * Pre-assembled context messages for the CC backend (prior turns only —
+   * the current user message goes via `-p`). Piped as stream-json NDJSON
+   * to stdin so each turn arrives as a proper role-alternating Anthropic
+   * API message. Includes the server's context injection pair (summaries
+   * + memories) and historical conversation turns.
+   */
+  readonly assembledMessages?: readonly {
+    role: "user" | "assistant";
+    content: string;
+  }[];
   /** MCP servers provided by the ACP client to forward into CC's MCP config. */
   readonly clientMcpServers?: readonly McpServer[];
   readonly metadata: Record<string, unknown>;
