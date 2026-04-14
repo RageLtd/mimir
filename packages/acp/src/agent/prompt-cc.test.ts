@@ -208,6 +208,7 @@ describe("end-to-end: assembled context → claude args + NDJSON", () => {
   });
 
   test("buildArgs produces correct flags for the full pipeline", () => {
+    const history = historyWithoutCurrentTurn(assembledMessages, currentQuery);
     const xmlPrompt = toAnthropicXml(serverSystemPrompt);
     const cc: CCBackendConfig = {
       enabled: true,
@@ -219,7 +220,8 @@ describe("end-to-end: assembled context → claude args + NDJSON", () => {
 
     const args = buildArgs(
       {
-        messages: assembledMessages,
+        prompt: currentQuery,
+        history,
         systemPrompt: xmlPrompt,
         cc,
         model: "opus",
@@ -227,10 +229,10 @@ describe("end-to-end: assembled context → claude args + NDJSON", () => {
       "/tmp/session-mcp.json",
     );
 
-    // -p is empty — messages go via stdin NDJSON
-    expect(args[args.indexOf("-p")! + 1]).toBe("");
+    // -p carries the current user message
+    expect(args[args.indexOf("-p")! + 1]).toBe(currentQuery);
 
-    // --input-format stream-json always present
+    // --input-format stream-json present because we have history
     expect(args).toContain("--input-format");
 
     // --system-prompt carries the XML
@@ -245,10 +247,13 @@ describe("end-to-end: assembled context → claude args + NDJSON", () => {
     );
   });
 
-  test("first-message scenario: messages still go via stream-json", () => {
-    const firstMessageAssembled = [
-      { role: "user" as const, content: "hello" },
-    ];
+  test("first-message scenario: no history omits --input-format", () => {
+    // First message — server returns only the current query
+    const history = historyWithoutCurrentTurn(
+      [{ role: "user" as const, content: "hello" }],
+      "hello",
+    );
+    expect(history).toHaveLength(0);
 
     const cc: CCBackendConfig = {
       enabled: true,
@@ -259,20 +264,22 @@ describe("end-to-end: assembled context → claude args + NDJSON", () => {
     };
     const args = buildArgs(
       {
-        messages: firstMessageAssembled,
+        prompt: "hello",
+        history,
         systemPrompt: "<system/>",
         cc,
       },
       "/tmp/mcp.json",
     );
 
-    // Always uses stream-json now
-    expect(args).toContain("--input-format");
-    expect(args[args.indexOf("-p")! + 1]).toBe("");
+    // No history → no stream-json input, prompt goes via -p
+    expect(args.indexOf("--input-format")).toBe(-1);
+    expect(args[args.indexOf("-p")! + 1]).toBe("hello");
   });
 
   test("each NDJSON line matches SDK SDKUserMessage/SDKAssistantMessage shape", () => {
-    const lines = buildNdjson(assembledMessages)
+    const history = historyWithoutCurrentTurn(assembledMessages, currentQuery);
+    const lines = buildNdjson(history)
       .trimEnd()
       .split("\n")
       .map((l) => JSON.parse(l));

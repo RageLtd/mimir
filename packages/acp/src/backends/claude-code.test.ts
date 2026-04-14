@@ -131,10 +131,11 @@ const baseCc: CCBackendConfig = {
 };
 
 describe("buildArgs", () => {
-  const mkArgs = (overrides?: { systemPrompt?: string; cc?: CCBackendConfig; model?: string }) =>
+  const mkArgs = (overrides?: { prompt?: string; history?: { role: "user" | "assistant"; content: string }[]; systemPrompt?: string; cc?: CCBackendConfig; model?: string }) =>
     buildArgs(
       {
-        messages: [{ role: "user" as const, content: "hello" }],
+        prompt: overrides?.prompt ?? "hello",
+        history: overrides?.history ?? [{ role: "user" as const, content: "prev" }],
         systemPrompt: overrides?.systemPrompt ?? "<xml>prompt</xml>",
         cc: overrides?.cc ?? baseCc,
         model: overrides?.model,
@@ -142,18 +143,23 @@ describe("buildArgs", () => {
       "/tmp/mcp.json",
     );
 
-  test("always includes --input-format stream-json", () => {
+  test("includes --input-format stream-json when history is present", () => {
     const args = mkArgs();
     const idx = args.indexOf("--input-format");
     expect(idx).not.toBe(-1);
     expect(args[idx + 1]).toBe("stream-json");
   });
 
-  test("passes empty string to -p", () => {
-    const args = mkArgs();
+  test("omits --input-format when history is empty", () => {
+    const args = mkArgs({ history: [] });
+    expect(args.indexOf("--input-format")).toBe(-1);
+  });
+
+  test("passes prompt to -p", () => {
+    const args = mkArgs({ prompt: "my question" });
     const idx = args.indexOf("-p");
     expect(idx).not.toBe(-1);
-    expect(args[idx + 1]).toBe("");
+    expect(args[idx + 1]).toBe("my question");
   });
 
   test("passes system prompt to --system-prompt", () => {
@@ -166,7 +172,7 @@ describe("buildArgs", () => {
 
   test("passes mcpConfigPath to --mcp-config", () => {
     const args = buildArgs(
-      { messages: [], systemPrompt: "s", cc: baseCc },
+      { prompt: "q", history: [], systemPrompt: "s", cc: baseCc },
       "/tmp/custom-mcp.json",
     );
     const idx = args.indexOf("--mcp-config");
