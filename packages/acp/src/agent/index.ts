@@ -435,18 +435,6 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
       const cmd = parseCommand(promptText);
       if (cmd) return handleCommand(params.sessionId, cmd);
 
-      // Echo the user message immediately so Zed sees it in the transcript
-      // before the agent starts responding.
-      conn
-        .sessionUpdate({
-          sessionId: params.sessionId,
-          update: {
-            sessionUpdate: "user_message_chunk",
-            content: { type: "text", text: promptText },
-          },
-        })
-        .catch((err) => logger.warn("user_message_chunk echo failed:", err));
-
       const response = await core.prompt(params.sessionId, promptText, conn);
 
       // Persist messages after each round-trip

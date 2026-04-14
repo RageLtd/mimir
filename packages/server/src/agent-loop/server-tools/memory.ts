@@ -1,6 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
-import { embedOne, rerank } from "../../goldfish/clients";
+import { embedOne } from "../../goldfish/clients";
 import type { Memory } from "../../goldfish/store";
 import {
   createRelation,
@@ -106,18 +106,11 @@ export const executeMemorySearch = async ({
     return { results: [], message: "No memories found" };
   }
 
-  const ranked = await rerank(
-    query,
-    candidates.map((candidate) => candidate.content),
-  );
-
-  const results = ranked
-    ? ranked
-        .sort((left, right) => right.relevance_score - left.relevance_score)
-        .slice(0, maxResults)
-        .filter((rankedResult) => rankedResult.relevance_score > 0.1)
-        .map((rankedResult) => candidates[rankedResult.index]?.content ?? "")
-    : candidates.slice(0, maxResults).map((candidate) => candidate.content);
+  // Vector matches come first (ordered by distance), text matches appended after dedup.
+  // Slice to maxResults — no reranker needed.
+  const results = candidates
+    .slice(0, maxResults)
+    .map((candidate) => candidate.content);
 
   log.info({ query, results: results.length }, "memory_search");
   return { results, message: null };

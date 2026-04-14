@@ -3,7 +3,6 @@ import {
   getSmallModelConfig,
   resolveEmbeddingModel,
 } from "../agent-loop/provider/registry";
-import { config } from "../config";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 
@@ -56,59 +55,6 @@ export async function embed(texts: string[]): Promise<number[][] | null> {
 export async function embedOne(text: string): Promise<number[] | null> {
   const result = await embed([text]);
   return result?.[0] ?? null;
-}
-
-/**
- * Rerank documents against a query via llama-server.
- * No AI SDK concept for reranking — raw fetch.
- */
-export async function rerank(
-  query: string,
-  documents: string[],
-): Promise<Array<{ index: number; relevance_score: number }> | null> {
-  const start = Date.now();
-  log.debug({ query, documents: documents.length }, "rerank request");
-
-  const [err, res] = await attempt(() =>
-    fetch(`${config.reranker.baseUrl}/v1/rerank`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: config.reranker.model,
-        query,
-        documents,
-      }),
-    }).then(
-      (r) =>
-        r.json() as Promise<{
-          results: Array<{ index: number; relevance_score: number }>;
-        }>,
-    ),
-  );
-  if (err) {
-    log.error({ err, query, documents: documents.length }, "reranking failed");
-    return null;
-  }
-
-  if (!res.results) {
-    log.error({ response: res }, "reranker returned no results field");
-    return null;
-  }
-
-  const topScore =
-    res.results.length > 0
-      ? Math.max(...res.results.map((r) => r.relevance_score))
-      : 0;
-
-  log.debug(
-    {
-      results: res.results.length,
-      topScore: topScore.toFixed(4),
-      elapsed: `${Date.now() - start}ms`,
-    },
-    "rerank complete",
-  );
-  return res.results;
 }
 
 /**

@@ -7,6 +7,9 @@
  * to mimir-server. There is no global `backend` switch.
  */
 
+const expandHome = (p: string) =>
+  p.startsWith("~/") ? `${Bun.env.HOME}/${p.slice(2)}` : p;
+
 export type CCBackendConfig = {
   /** When false, CC models are hidden from the model list and routing rejects them. */
   readonly enabled: boolean;
@@ -24,7 +27,7 @@ export type CartographerConfig = {
   /** Path to the cartographer binary. Falls back to PATH lookup. */
   readonly binaryPath: string;
   /** Environment variables for the cartographer process. */
-  readonly env: Record<string, string>;
+  readonly env?: Record<string, string>;
 };
 
 export type MimirConfig = {
@@ -77,11 +80,15 @@ const parseEnabled = (raw: string | undefined): boolean | undefined => {
 export const loadConfig = (): MimirConfig => {
   const ccEnabledOverride = parseEnabled(process.env.MIMIR_CC_ENABLED);
   return {
-    serverUrl: process.env.MIMIR_SERVER_URL ?? "http://localhost:3777",
+    serverUrl: process.env.MIMIR_SERVER_URL ?? "http://mimir.conhost.lan:3777",
     apiKey: process.env.MIMIR_API_KEY ?? "",
     model: process.env.MIMIR_MODEL ?? "openrouter/auto",
-    userMemoryDbPath: process.env.MIMIR_USER_MEMORY_DB ?? "user-memories.db",
-    sessionDbPath: process.env.MIMIR_SESSION_DB ?? "sessions.db",
+    userMemoryDbPath: expandHome(
+      process.env.MIMIR_USER_MEMORY_DB ?? "~/.mimir/user-memories.db",
+    ),
+    sessionDbPath: expandHome(
+      process.env.MIMIR_SESSION_DB ?? "~/.mimir/sessions.db",
+    ),
     logLevel: (process.env.LOG_LEVEL as MimirConfig["logLevel"]) ?? "info",
     autoApproveTools: process.env.AUTO_APPROVE_TOOLS === "true",
     systemPromptTtlMs: parseInt(
@@ -101,23 +108,6 @@ export const loadConfig = (): MimirConfig => {
     cartographer: {
       enabled: parseEnabled(process.env.MIMIR_CARTOGRAPHER_ENABLED) ?? true,
       binaryPath: process.env.MIMIR_CARTOGRAPHER_BIN ?? "cartographer",
-      env: {
-        ...(process.env.SURREAL_URL
-          ? { SURREAL_URL: process.env.SURREAL_URL }
-          : {}),
-        ...(process.env.SURREAL_USER
-          ? { SURREAL_USER: process.env.SURREAL_USER }
-          : {}),
-        ...(process.env.SURREAL_PASS
-          ? { SURREAL_PASS: process.env.SURREAL_PASS }
-          : {}),
-        ...(process.env.SURREAL_NS
-          ? { SURREAL_NS: process.env.SURREAL_NS }
-          : {}),
-        ...(process.env.SURREAL_DB
-          ? { SURREAL_DB: process.env.SURREAL_DB }
-          : {}),
-      },
     },
   };
 };

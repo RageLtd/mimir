@@ -33,7 +33,7 @@ services:
   mimir:
     build:
       context: packages/server
-      dockerfile: packages/server/Dockerfile
+      dockerfile: Dockerfile
     restart: unless-stopped
     ports:
       - "${MIMIR_PORT:-8080}:8080"
@@ -43,7 +43,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./system-prompt.md:/app/system-prompt.md:ro
+      - ./packages/server/system-prompt.md:/app/system-prompt.md:ro
       - ./logs:/data
       - /var/run/docker.sock:/var/run/docker.sock:ro
     labels:

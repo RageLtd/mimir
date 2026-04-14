@@ -315,6 +315,7 @@ export const runClaudeCode = async function* (
     cwd: options.workingDirectory,
     stdout: "pipe",
     stderr: "pipe",
+    env: { ...process.env, ENABLE_TOOL_SEARCH: "false" },
   });
 
   const onAbort = () => {

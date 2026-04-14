@@ -54,9 +54,6 @@ app.get("/health", async (c) => {
     pingService(`${config.ollama.baseUrl}/api/tags`).then(
       (r) => ["ollama", r] as [string, HealthStatus],
     ),
-    pingService(`${config.reranker.baseUrl}/health`).then(
-      (r) => ["reranker", r] as [string, HealthStatus],
-    ),
     pingService(`${config.vllm.baseUrl}/health`).then(
       (r) => ["vllm", r] as [string, HealthStatus],
     ),

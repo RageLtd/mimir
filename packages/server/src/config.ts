@@ -56,13 +56,6 @@ export const config = {
       : undefined,
   },
 
-  /** Reranker (llama-server on the Spark) */
-  reranker: {
-    baseUrl: Bun.env.RERANKER_BASE_URL ?? "http://reranker.spark.lan",
-    model:
-      Bun.env.RERANK_MODEL ?? "Voodisss/Qwen3-Reranker-4B-GGUF-llama_cpp:Q8_0",
-  },
-
   /** SurrealDB */
   surreal: {
     url: Bun.env.SURREAL_URL ?? "http://surrealdb:8000/rpc",
