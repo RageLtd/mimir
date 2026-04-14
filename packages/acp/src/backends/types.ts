@@ -66,10 +66,10 @@ export type BackendRunOptions = {
   readonly projectPath: string;
   /**
    * Pre-assembled context messages for the CC backend (prior turns only —
-   * the current user message goes via `-p`). Piped as stream-json NDJSON
-   * to stdin so each turn arrives as a proper role-alternating Anthropic
-   * API message. Includes the server's context injection pair (summaries
-   * + memories) and historical conversation turns.
+   * the current user message goes via the positional prompt arg).
+   * Formatted as structured text and injected via --append-system-prompt.
+   * Includes the server's context injection pair (summaries + memories)
+   * and historical conversation turns.
    */
   readonly assembledMessages?: readonly {
     role: "user" | "assistant";

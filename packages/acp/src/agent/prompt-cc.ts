@@ -174,10 +174,11 @@ const handleCCEvent = async (
 
 /**
  * Strip the trailing user message from the assembled array when it
- * duplicates the current query — that message goes via `-p` instead,
- * so it shouldn't also appear in the NDJSON history stream.
+ * matches the current query — that message goes via the positional
+ * prompt arg, not as context. Everything else (summaries, memories,
+ * prior turns) becomes context for --append-system-prompt.
  */
-export const historyWithoutCurrentTurn = (
+export const contextWithoutCurrentTurn = (
   messages: readonly AssembledMessage[],
   currentQuery: string,
 ) => {
@@ -225,9 +226,21 @@ export const promptViaClaudeCode = async (
 
   // The server's assembled messages include the context injection pair
   // (summaries + memories), historical turns, and the current user message.
-  // Strip the trailing user message — it goes via `-p` so CC treats it as
-  // the active prompt, not as history it already handled.
-  const history = historyWithoutCurrentTurn(context.messages, promptText);
+  // Strip the current user message — it goes as the positional prompt arg.
+  // Everything else becomes context for --append-system-prompt.
+  const contextMessages = contextWithoutCurrentTurn(
+    context.messages,
+    promptText,
+  );
+
+  logger.info(
+    {
+      serverMessageCount: context.messages.length,
+      contextMessageCount: contextMessages.length,
+      roles: contextMessages.map((m) => m.role),
+    },
+    "context assembled for CC backend",
+  );
 
   // Track the user message for persistence.
   session.messages.push({ role: "user", content: promptText });
@@ -240,7 +253,7 @@ export const promptViaClaudeCode = async (
     for await (const event of backend.run({
       prompt: promptText,
       systemPrompt: xmlSystemPrompt,
-      assembledMessages: history,
+      assembledMessages: contextMessages,
       messages: session.messages,
       tools: [],
       projectPath: session.projectPath,

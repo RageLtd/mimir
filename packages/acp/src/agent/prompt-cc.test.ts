@@ -1,19 +1,22 @@
 import { test, expect, describe } from "bun:test";
-import { historyWithoutCurrentTurn } from "./prompt-cc";
-import { buildNdjson, iterateNdjson, buildArgs } from "../backends/claude-code";
+import { contextWithoutCurrentTurn } from "./prompt-cc";
+import {
+  formatContextForPrompt,
+  buildArgs,
+} from "../backends/claude-code";
 import { toAnthropicXml } from "../utils/markdown-to-xml";
 import type { CCBackendConfig } from "../config";
 
-// ── historyWithoutCurrentTurn ──
+// ── contextWithoutCurrentTurn ──
 
-describe("historyWithoutCurrentTurn", () => {
+describe("contextWithoutCurrentTurn", () => {
   test("strips trailing user message when it matches currentQuery", () => {
     const messages = [
       { role: "user" as const, content: "first question" },
       { role: "assistant" as const, content: "first answer" },
       { role: "user" as const, content: "current question" },
     ];
-    const result = historyWithoutCurrentTurn(messages, "current question");
+    const result = contextWithoutCurrentTurn(messages, "current question");
     expect(result).toEqual([
       { role: "user", content: "first question" },
       { role: "assistant", content: "first answer" },
@@ -26,7 +29,7 @@ describe("historyWithoutCurrentTurn", () => {
       { role: "assistant" as const, content: "first answer" },
       { role: "user" as const, content: "different question" },
     ];
-    const result = historyWithoutCurrentTurn(messages, "current question");
+    const result = contextWithoutCurrentTurn(messages, "current question");
     expect(result).toBe(messages);
   });
 
@@ -35,12 +38,12 @@ describe("historyWithoutCurrentTurn", () => {
       { role: "user" as const, content: "question" },
       { role: "assistant" as const, content: "answer" },
     ];
-    const result = historyWithoutCurrentTurn(messages, "question");
+    const result = contextWithoutCurrentTurn(messages, "question");
     expect(result).toBe(messages);
   });
 
   test("handles empty array", () => {
-    const result = historyWithoutCurrentTurn([], "anything");
+    const result = contextWithoutCurrentTurn([], "anything");
     expect(result).toEqual([]);
   });
 
@@ -55,7 +58,7 @@ describe("historyWithoutCurrentTurn", () => {
       { role: "assistant" as const, content: "hi" },
       { role: "user" as const, content: "current question" },
     ];
-    const result = historyWithoutCurrentTurn(messages, "current question");
+    const result = contextWithoutCurrentTurn(messages, "current question");
     expect(result).toEqual([
       {
         role: "user",
@@ -69,7 +72,7 @@ describe("historyWithoutCurrentTurn", () => {
 
   test("handles single user message matching query", () => {
     const messages = [{ role: "user" as const, content: "only message" }];
-    const result = historyWithoutCurrentTurn(messages, "only message");
+    const result = contextWithoutCurrentTurn(messages, "only message");
     expect(result).toEqual([]);
   });
 
@@ -79,7 +82,7 @@ describe("historyWithoutCurrentTurn", () => {
       { role: "assistant" as const, content: "response" },
       { role: "user" as const, content: "repeat" },
     ];
-    const result = historyWithoutCurrentTurn(messages, "repeat");
+    const result = contextWithoutCurrentTurn(messages, "repeat");
     expect(result).toEqual([
       { role: "user", content: "repeat" },
       { role: "assistant", content: "response" },
@@ -91,7 +94,7 @@ describe("historyWithoutCurrentTurn", () => {
       { role: "user" as const, content: "question" },
       { role: "assistant" as const, content: "the query text" },
     ];
-    const result = historyWithoutCurrentTurn(messages, "the query text");
+    const result = contextWithoutCurrentTurn(messages, "the query text");
     // Last message is assistant with matching content — should NOT strip
     expect(result).toBe(messages);
   });
@@ -101,19 +104,20 @@ describe("historyWithoutCurrentTurn", () => {
       { role: "user" as const, content: "a" },
       { role: "assistant" as const, content: "b" },
     ];
-    const result = historyWithoutCurrentTurn(messages, "something else");
+    const result = contextWithoutCurrentTurn(messages, "something else");
     expect(result).toBe(messages); // same reference, no copy
   });
 });
 
-// ── End-to-end pipeline: server response → NDJSON + args ──
+// ── End-to-end pipeline: server response → context + args ──
 //
 // Simulates the full flow: the server's /v1/context/assemble returns a
-// systemPrompt + messages array. prompt-cc splits off the trailing user
-// message, converts the system prompt to XML, and passes history as NDJSON.
-// These tests verify the final artifacts match the Anthropic/CC spec.
+// systemPrompt + messages array. prompt-cc strips the current user
+// message, converts the system prompt to XML, and formats the remaining
+// context for --append-system-prompt. The current question goes as the
+// positional prompt arg after -p.
 
-describe("end-to-end: assembled context → claude args + NDJSON", () => {
+describe("end-to-end: assembled context → claude args + context", () => {
   const serverSystemPrompt =
     "# Critical Rules\nFollow instructions.\n# Identity and Voice\nBe direct.";
   const currentQuery = "What does the auth module do?";
@@ -134,60 +138,36 @@ describe("end-to-end: assembled context → claude args + NDJSON", () => {
     { role: "user" as const, content: currentQuery },
   ];
 
-  test("historyWithoutCurrentTurn strips only the current query", () => {
-    const history = historyWithoutCurrentTurn(
-      assembledMessages,
-      currentQuery,
-    );
-    expect(history).toHaveLength(4);
+  test("contextWithoutCurrentTurn strips only the current query", () => {
+    const context = contextWithoutCurrentTurn(assembledMessages, currentQuery);
+    expect(context).toHaveLength(4);
     // Context injection pair preserved
-    expect(history[0]!.content).toContain("Session context:");
-    expect(history[1]!.content).toBe("Understood.");
+    expect(context[0]!.content).toContain("Session context:");
+    expect(context[1]!.content).toBe("Understood.");
     // Prior conversation preserved
-    expect(history[2]!.content).toBe("Tell me about the project");
-    expect(history[3]!.content).toBe(
+    expect(context[2]!.content).toBe("Tell me about the project");
+    expect(context[3]!.content).toBe(
       "This is a TypeScript monorepo with two packages.",
     );
   });
 
-  test("NDJSON from assembled messages has correct turn count and roles", async () => {
-    const ndjson = buildNdjson(assembledMessages);
-    const stream = new ReadableStream<Uint8Array>({
-      start(c) {
-        c.enqueue(new TextEncoder().encode(ndjson));
-        c.close();
-      },
-    });
-    const parsed: Array<{ type: string }> = [];
-    for await (const obj of iterateNdjson(stream)) {
-      parsed.push(obj as { type: string });
-    }
+  test("formatContextForPrompt produces structured text", () => {
+    const context = contextWithoutCurrentTurn(assembledMessages, currentQuery);
+    const text = formatContextForPrompt(context);
 
-    // All 5 messages including the current user query
-    expect(parsed).toHaveLength(5);
-    expect(parsed.map((p) => p.type)).toEqual([
-      "user",
-      "assistant",
-      "user",
-      "assistant",
-      "user",
-    ]);
+    expect(text).toContain("<conversation_context>");
+    expect(text).toContain("</conversation_context>");
+    expect(text).toContain("[User]");
+    expect(text).toContain("[Assistant]");
+    expect(text).toContain("Session context:");
+    expect(text).toContain("Understood.");
+    expect(text).toContain("Tell me about the project");
+    // Should NOT contain the current query
+    expect(text).not.toContain(currentQuery);
   });
 
-  test("context injection pair survives as proper NDJSON messages", async () => {
-    const ndjson = buildNdjson(assembledMessages);
-    const lines = ndjson.trimEnd().split("\n").map((l) => JSON.parse(l));
-
-    // First line: the "Session context:..." user message
-    expect(lines[0].type).toBe("user");
-    expect(lines[0].message.role).toBe("user");
-    expect(lines[0].message.content[0].text).toContain("<summaries>");
-    expect(lines[0].message.content[0].text).toContain("<memories>");
-
-    // Second line: the "Understood." assistant acknowledgment
-    expect(lines[1].type).toBe("assistant");
-    expect(lines[1].message.role).toBe("assistant");
-    expect(lines[1].message.content[0].text).toBe("Understood.");
+  test("formatContextForPrompt returns empty string for no context", () => {
+    expect(formatContextForPrompt([])).toBe("");
   });
 
   test("system prompt is converted to XML with injected blocks", () => {
@@ -207,8 +187,8 @@ describe("end-to-end: assembled context → claude args + NDJSON", () => {
     expect(xml).toContain("Be direct.");
   });
 
-  test("buildArgs produces correct flags for the full pipeline", () => {
-    const history = historyWithoutCurrentTurn(assembledMessages, currentQuery);
+  test("buildArgs passes prompt as positional arg and includes --append-system-prompt", () => {
+    const context = contextWithoutCurrentTurn(assembledMessages, currentQuery);
     const xmlPrompt = toAnthropicXml(serverSystemPrompt);
     const cc: CCBackendConfig = {
       enabled: true,
@@ -221,7 +201,7 @@ describe("end-to-end: assembled context → claude args + NDJSON", () => {
     const args = buildArgs(
       {
         prompt: currentQuery,
-        history,
+        contextMessages: context,
         systemPrompt: xmlPrompt,
         cc,
         model: "opus",
@@ -229,11 +209,18 @@ describe("end-to-end: assembled context → claude args + NDJSON", () => {
       "/tmp/session-mcp.json",
     );
 
-    // -p carries the current user message
-    expect(args[args.indexOf("-p")! + 1]).toBe(currentQuery);
+    // -p carries the current user message as positional arg
+    expect(args).toContain("-p");
+    const pIdx = args.indexOf("-p");
+    expect(args[pIdx + 1]).toBe(currentQuery);
 
-    // --input-format stream-json present because we have history
-    expect(args).toContain("--input-format");
+    // No --input-format (not using stream-json for input)
+    expect(args).not.toContain("--input-format");
+
+    // --append-system-prompt carries the context
+    expect(args).toContain("--append-system-prompt");
+    const appendIdx = args.indexOf("--append-system-prompt");
+    expect(args[appendIdx + 1]).toContain("<conversation_context>");
 
     // --system-prompt carries the XML
     expect(args[args.indexOf("--system-prompt")! + 1]).toBe(xmlPrompt);
@@ -247,13 +234,13 @@ describe("end-to-end: assembled context → claude args + NDJSON", () => {
     );
   });
 
-  test("first-message scenario: no history omits --input-format", () => {
+  test("first-message scenario: no context omits --append-system-prompt", () => {
     // First message — server returns only the current query
-    const history = historyWithoutCurrentTurn(
+    const context = contextWithoutCurrentTurn(
       [{ role: "user" as const, content: "hello" }],
       "hello",
     );
-    expect(history).toHaveLength(0);
+    expect(context).toHaveLength(0);
 
     const cc: CCBackendConfig = {
       enabled: true,
@@ -265,42 +252,17 @@ describe("end-to-end: assembled context → claude args + NDJSON", () => {
     const args = buildArgs(
       {
         prompt: "hello",
-        history,
+        contextMessages: context,
         systemPrompt: "<system/>",
         cc,
       },
       "/tmp/mcp.json",
     );
 
-    // No history → no stream-json input, prompt goes via -p
-    expect(args.indexOf("--input-format")).toBe(-1);
+    // No context → no --append-system-prompt, no --input-format
+    expect(args).not.toContain("--append-system-prompt");
+    expect(args).not.toContain("--input-format");
+    // Prompt goes via positional arg
     expect(args[args.indexOf("-p")! + 1]).toBe("hello");
-  });
-
-  test("each NDJSON line matches SDK SDKUserMessage/SDKAssistantMessage shape", () => {
-    const history = historyWithoutCurrentTurn(assembledMessages, currentQuery);
-    const lines = buildNdjson(history)
-      .trimEnd()
-      .split("\n")
-      .map((l) => JSON.parse(l));
-
-    for (const line of lines) {
-      // Required SDK envelope fields
-      expect(typeof line.type).toBe("string");
-      expect(["user", "assistant"]).toContain(line.type);
-      expect(typeof line.session_id).toBe("string");
-
-      // Anthropic API MessageParam shape
-      expect(line.message).toBeDefined();
-      expect(line.message.role).toBe(line.type);
-      expect(Array.isArray(line.message.content)).toBe(true);
-      expect(line.message.content.length).toBeGreaterThan(0);
-
-      // Each content block is a text block
-      for (const block of line.message.content) {
-        expect(block.type).toBe("text");
-        expect(typeof block.text).toBe("string");
-      }
-    }
   });
 });

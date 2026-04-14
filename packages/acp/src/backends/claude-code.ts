@@ -1,10 +1,18 @@
 /**
  * Claude Code backend.
  *
- * Spawns `claude -p` in stream-json (NDJSON) mode, parses each line as a
- * typed CC event, and translates it to BackendEvent. CC runs its own
- * internal tool loop, so all tool_call / tool_result events are surfaced
- * with observeOnly=true — the agent loop must NOT execute them.
+ * Spawns `claude -p <prompt>` with context injected via
+ * --append-system-prompt, parses stream-json OUTPUT (NDJSON) events, and
+ * translates them to BackendEvent. CC runs its own internal tool loop,
+ * so all tool_call / tool_result events are surfaced with
+ * observeOnly=true — the agent loop must NOT execute them.
+ *
+ * NOTE: --input-format stream-json is NOT used. That mode treats each
+ * user message in the NDJSON as a separate turn and responds to each
+ * independently — it's designed for realtime interactive I/O, not for
+ * injecting conversation history. Instead, summaries, memories, and
+ * prior turns are packed into --append-system-prompt, and the current
+ * user question is the positional prompt arg.
  */
 
 import type { McpServer, McpServerStdio } from "@agentclientprotocol/sdk";
@@ -167,84 +175,74 @@ const stringifyToolResult = (
   return "";
 };
 
+const tryParseJson = (line: string): unknown | undefined => {
+  const trimmed = line.trim();
+  if (!trimmed) return undefined;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+};
+
 /** Read NDJSON from a ReadableStream<Uint8Array>, yielding parsed objects. */
 export const iterateNdjson = async function* (
   stream: ReadableStream<Uint8Array>,
-): AsyncGenerator<unknown> {
+) {
   const decoder = new TextDecoder();
   const reader = stream.getReader();
   let buffer = "";
 
   try {
-    while (true) {
+    for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
+
       let nl = buffer.indexOf("\n");
       while (nl !== -1) {
-        const line = buffer.slice(0, nl).trim();
+        const parsed = tryParseJson(buffer.slice(0, nl));
         buffer = buffer.slice(nl + 1);
-        if (line.length > 0) {
-          try {
-            yield JSON.parse(line);
-          } catch {
-            // ignore non-JSON lines (e.g. progress noise)
-          }
-        }
+        if (parsed !== undefined) yield parsed;
         nl = buffer.indexOf("\n");
       }
     }
-    const tail = buffer.trim();
-    if (tail.length > 0) {
-      try {
-        yield JSON.parse(tail);
-      } catch {
-        // ignore
-      }
-    }
+
+    const parsed = tryParseJson(buffer);
+    if (parsed !== undefined) yield parsed;
   } finally {
     reader.releaseLock();
   }
 };
 
-// ── NDJSON history builder ──
+// ── Context formatting ──
 
 /**
- * Convert an assembled message array to the stream-json NDJSON format
- * that `claude --input-format stream-json` expects on stdin.
- *
- * Each message becomes a JSON line wrapping an Anthropic SDK MessageParam
- * inside the CC envelope: { type, session_id, message: { role, content } }.
+ * Format assembled context messages (summaries, memories, prior turns)
+ * as structured text for --append-system-prompt. The current user
+ * message must NOT be included — it goes as the positional prompt arg.
  */
-export const SYNTHETIC_SESSION_ID = "mimir-context";
-
-export const buildNdjson = (
+export const formatContextForPrompt = (
   messages: ReadonlyArray<{ role: "user" | "assistant"; content: string }>,
-): string =>
-  `${messages
-    .map((m) =>
-      JSON.stringify({
-        type: m.role,
-        session_id: SYNTHETIC_SESSION_ID,
-        message: {
-          role: m.role,
-          content: [{ type: "text", text: m.content }],
-        },
-      }),
-    )
-    .join("\n")}\n`;
+): string => {
+  if (messages.length === 0) return "";
+  const lines = messages.map(
+    (m) => `[${m.role === "user" ? "User" : "Assistant"}]\n${m.content}`,
+  );
+  return `<conversation_context>\n${lines.join("\n\n")}\n</conversation_context>`;
+};
 
 // ── Public API ──
 
 export type RunClaudeCodeOptions = {
-  /** Current user prompt — passed to `-p`. */
+  /** Current user prompt — passed as the positional arg after -p. */
   readonly prompt: string;
   /**
-   * Prior conversation turns piped as NDJSON via stdin with
-   * --input-format stream-json. Must NOT include the current user
-   * message — that goes via `-p` so CC treats it as the active prompt.
+   * Prior context messages (summaries, memories, conversation history)
+   * injected via --append-system-prompt. Must NOT include the current
+   * user message — that goes via the positional prompt arg.
    */
-  readonly history: ReadonlyArray<{
+  readonly contextMessages: ReadonlyArray<{
     role: "user" | "assistant";
     content: string;
   }>;
@@ -264,15 +262,14 @@ export type RunClaudeCodeOptions = {
 export const buildArgs = (
   options: Pick<
     RunClaudeCodeOptions,
-    "prompt" | "history" | "systemPrompt" | "model" | "cc"
+    "prompt" | "contextMessages" | "systemPrompt" | "model" | "cc"
   >,
   mcpConfigPath: string,
 ): string[] => {
-  const hasHistory = options.history.length > 0;
+  const contextText = formatContextForPrompt(options.contextMessages);
   const args: string[] = [
     "-p",
     options.prompt,
-    ...(hasHistory ? ["--input-format", "stream-json"] : []),
     "--output-format",
     "stream-json",
     "--verbose",
@@ -286,6 +283,9 @@ export const buildArgs = (
     options.systemPrompt,
   ];
 
+  if (contextText) {
+    args.push("--append-system-prompt", contextText);
+  }
   if (options.cc.disallowedTools.length > 0) {
     args.push("--disallowedTools", options.cc.disallowedTools.join(","));
   }
@@ -309,23 +309,13 @@ export const runClaudeCode = async function* (
     options.clientMcpServers,
   );
 
-  // Current user message goes to -p. Prior turns go as NDJSON via stdin.
-  const hasHistory = options.history.length > 0;
   const args = buildArgs(options, mcpConfigPath);
 
   const proc = Bun.spawn(["claude", ...args], {
     cwd: options.workingDirectory,
-    stdin: hasHistory ? "pipe" : undefined,
     stdout: "pipe",
     stderr: "pipe",
   });
-
-  // Pipe prior conversation history as NDJSON, then close stdin.
-  if (hasHistory) {
-    const ndjson = buildNdjson(options.history);
-    proc.stdin.write(ndjson);
-    proc.stdin.end();
-  }
 
   const onAbort = () => {
     try {
@@ -477,7 +467,7 @@ export const createClaudeCodeBackend = (
 
     yield* runClaudeCode({
       prompt: options.prompt,
-      history: options.assembledMessages ?? [],
+      contextMessages: options.assembledMessages ?? [],
       systemPrompt: options.systemPrompt,
       workingDirectory: cwd,
       cc: deps.cc,

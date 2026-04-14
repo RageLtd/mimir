@@ -1,122 +1,51 @@
 import { test, expect, describe } from "bun:test";
 import {
-  buildNdjson,
-  SYNTHETIC_SESSION_ID,
+  formatContextForPrompt,
   buildArgs,
   writeMcpConfig,
   iterateNdjson,
 } from "./claude-code";
 import type { CCBackendConfig } from "../config";
 
-// ── buildNdjson ──
+// ── formatContextForPrompt ──
 
-describe("buildNdjson", () => {
-  test("produces valid NDJSON with one line per message", () => {
+describe("formatContextForPrompt", () => {
+  test("formats messages with role labels and XML wrapper", () => {
     const messages = [
       { role: "user" as const, content: "hello" },
       { role: "assistant" as const, content: "hi" },
     ];
-    const ndjson = buildNdjson(messages);
-    const lines = ndjson.trimEnd().split("\n");
-    expect(lines).toHaveLength(2);
-    for (const line of lines) {
-      expect(() => JSON.parse(line)).not.toThrow();
-    }
+    const result = formatContextForPrompt(messages);
+    expect(result).toContain("<conversation_context>");
+    expect(result).toContain("</conversation_context>");
+    expect(result).toContain("[User]\nhello");
+    expect(result).toContain("[Assistant]\nhi");
   });
 
-  test("ends with a trailing newline", () => {
-    const ndjson = buildNdjson([{ role: "user" as const, content: "test" }]);
-    expect(ndjson.endsWith("\n")).toBe(true);
-  });
-
-  test("wraps each message in SDK envelope format", () => {
-    const messages = [
-      { role: "user" as const, content: "question" },
-      { role: "assistant" as const, content: "answer" },
-    ];
-    const lines = buildNdjson(messages)
-      .trimEnd()
-      .split("\n")
-      .map((l) => JSON.parse(l));
-
-    expect(lines[0]).toEqual({
-      type: "user",
-      session_id: SYNTHETIC_SESSION_ID,
-      message: {
-        role: "user",
-        content: [{ type: "text", text: "question" }],
-      },
-    });
-
-    expect(lines[1]).toEqual({
-      type: "assistant",
-      session_id: SYNTHETIC_SESSION_ID,
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "answer" }],
-      },
-    });
-  });
-
-  test("uses Anthropic API content block format (array of text blocks)", () => {
-    const ndjson = buildNdjson([
-      { role: "user" as const, content: "test message" },
-    ]);
-    const parsed = JSON.parse(ndjson.trimEnd());
-    const content = parsed.message.content;
-
-    expect(Array.isArray(content)).toBe(true);
-    expect(content).toHaveLength(1);
-    expect(content[0]).toEqual({ type: "text", text: "test message" });
-  });
-
-  test("type field matches the message role", () => {
-    const messages = [
-      { role: "user" as const, content: "u" },
-      { role: "assistant" as const, content: "a" },
-      { role: "user" as const, content: "u2" },
-    ];
-    const lines = buildNdjson(messages)
-      .trimEnd()
-      .split("\n")
-      .map((l) => JSON.parse(l));
-
-    expect(lines[0].type).toBe("user");
-    expect(lines[1].type).toBe("assistant");
-    expect(lines[2].type).toBe("user");
-  });
-
-  test("handles empty array", () => {
-    const ndjson = buildNdjson([]);
-    expect(ndjson).toBe("\n");
+  test("returns empty string for empty array", () => {
+    expect(formatContextForPrompt([])).toBe("");
   });
 
   test("preserves multiline content", () => {
-    const content = "line one\nline two\nline three";
-    const ndjson = buildNdjson([{ role: "user" as const, content }]);
-    const parsed = JSON.parse(ndjson.trimEnd());
-    expect(parsed.message.content[0].text).toBe(content);
+    const messages = [
+      { role: "user" as const, content: "line one\nline two\nline three" },
+    ];
+    const result = formatContextForPrompt(messages);
+    expect(result).toContain("line one\nline two\nline three");
   });
 
   test("preserves unicode and special characters", () => {
     const content = 'quotes "here" and émojis 🎉 and <xml> & entities';
-    const ndjson = buildNdjson([{ role: "user" as const, content }]);
-    const parsed = JSON.parse(ndjson.trimEnd());
-    expect(parsed.message.content[0].text).toBe(content);
+    const messages = [{ role: "user" as const, content }];
+    const result = formatContextForPrompt(messages);
+    expect(result).toContain(content);
   });
 
-  test("each line is self-contained valid JSON (no cross-line dependencies)", () => {
-    const messages = [
-      { role: "user" as const, content: "a" },
-      { role: "assistant" as const, content: "b" },
-      { role: "user" as const, content: "c" },
-    ];
-    const lines = buildNdjson(messages).trimEnd().split("\n");
-    // Parse each independently
-    const parsed = lines.map((l) => JSON.parse(l));
-    expect(parsed[0].message.content[0].text).toBe("a");
-    expect(parsed[1].message.content[0].text).toBe("b");
-    expect(parsed[2].message.content[0].text).toBe("c");
+  test("handles single message", () => {
+    const messages = [{ role: "user" as const, content: "only" }];
+    const result = formatContextForPrompt(messages);
+    expect(result).toContain("[User]\nonly");
+    expect(result).toContain("<conversation_context>");
   });
 });
 
@@ -131,11 +60,19 @@ const baseCc: CCBackendConfig = {
 };
 
 describe("buildArgs", () => {
-  const mkArgs = (overrides?: { prompt?: string; history?: { role: "user" | "assistant"; content: string }[]; systemPrompt?: string; cc?: CCBackendConfig; model?: string }) =>
+  const mkArgs = (overrides?: {
+    prompt?: string;
+    contextMessages?: { role: "user" | "assistant"; content: string }[];
+    systemPrompt?: string;
+    cc?: CCBackendConfig;
+    model?: string;
+  }) =>
     buildArgs(
       {
         prompt: overrides?.prompt ?? "hello",
-        history: overrides?.history ?? [{ role: "user" as const, content: "prev" }],
+        contextMessages: overrides?.contextMessages ?? [
+          { role: "user" as const, content: "prev" },
+        ],
         systemPrompt: overrides?.systemPrompt ?? "<xml>prompt</xml>",
         cc: overrides?.cc ?? baseCc,
         model: overrides?.model,
@@ -143,20 +80,32 @@ describe("buildArgs", () => {
       "/tmp/mcp.json",
     );
 
-  test("includes --input-format stream-json when history is present", () => {
+  test("includes --append-system-prompt when context messages are present", () => {
     const args = mkArgs();
-    const idx = args.indexOf("--input-format");
-    expect(idx).not.toBe(-1);
-    expect(args[idx + 1]).toBe("stream-json");
+    expect(args).toContain("--append-system-prompt");
+    const idx = args.indexOf("--append-system-prompt");
+    expect(args[idx + 1]).toContain("<conversation_context>");
   });
 
-  test("omits --input-format when history is empty", () => {
-    const args = mkArgs({ history: [] });
-    expect(args.indexOf("--input-format")).toBe(-1);
+  test("omits --append-system-prompt when context is empty", () => {
+    const args = mkArgs({ contextMessages: [] });
+    expect(args).not.toContain("--append-system-prompt");
   });
 
-  test("passes prompt to -p", () => {
+  test("never includes --input-format (no stream-json input)", () => {
+    const args = mkArgs();
+    expect(args).not.toContain("--input-format");
+  });
+
+  test("always passes prompt as positional arg after -p", () => {
     const args = mkArgs({ prompt: "my question" });
+    const idx = args.indexOf("-p");
+    expect(idx).not.toBe(-1);
+    expect(args[idx + 1]).toBe("my question");
+  });
+
+  test("passes prompt after -p even with no context", () => {
+    const args = mkArgs({ contextMessages: [], prompt: "my question" });
     const idx = args.indexOf("-p");
     expect(idx).not.toBe(-1);
     expect(args[idx + 1]).toBe("my question");
@@ -172,7 +121,12 @@ describe("buildArgs", () => {
 
   test("passes mcpConfigPath to --mcp-config", () => {
     const args = buildArgs(
-      { prompt: "q", history: [], systemPrompt: "s", cc: baseCc },
+      {
+        prompt: "q",
+        contextMessages: [],
+        systemPrompt: "s",
+        cc: baseCc,
+      },
       "/tmp/custom-mcp.json",
     );
     const idx = args.indexOf("--mcp-config");
@@ -371,7 +325,6 @@ describe("iterateNdjson", () => {
   });
 
   test("handles chunked delivery across line boundaries", async () => {
-    // Simulate data arriving in chunks that split across JSON lines
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         const encoder = new TextEncoder();
@@ -383,24 +336,5 @@ describe("iterateNdjson", () => {
     });
     const results = await collectNdjson(stream);
     expect(results).toEqual([{ a: 1 }, { b: 2 }]);
-  });
-
-  test("roundtrips with buildNdjson", async () => {
-    const messages = [
-      { role: "user" as const, content: "hello" },
-      { role: "assistant" as const, content: "hi there" },
-      { role: "user" as const, content: "follow up" },
-    ];
-    const ndjson = buildNdjson(messages);
-    const stream = toStream(ndjson);
-    const parsed = await collectNdjson(stream);
-
-    expect(parsed).toHaveLength(3);
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i]!;
-      const obj = parsed[i] as { type: string; message: { content: Array<{ text: string }> } };
-      expect(obj.type).toBe(msg.role);
-      expect(obj.message.content[0]!.text).toBe(msg.content);
-    }
   });
 });
