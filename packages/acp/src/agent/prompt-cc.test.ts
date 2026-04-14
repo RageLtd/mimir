@@ -150,12 +150,8 @@ describe("end-to-end: assembled context → claude args + NDJSON", () => {
     );
   });
 
-  test("NDJSON from history has correct turn count and roles", async () => {
-    const history = historyWithoutCurrentTurn(
-      assembledMessages,
-      currentQuery,
-    );
-    const ndjson = buildNdjson(history);
+  test("NDJSON from assembled messages has correct turn count and roles", async () => {
+    const ndjson = buildNdjson(assembledMessages);
     const stream = new ReadableStream<Uint8Array>({
       start(c) {
         c.enqueue(new TextEncoder().encode(ndjson));
@@ -167,21 +163,19 @@ describe("end-to-end: assembled context → claude args + NDJSON", () => {
       parsed.push(obj as { type: string });
     }
 
-    expect(parsed).toHaveLength(4);
+    // All 5 messages including the current user query
+    expect(parsed).toHaveLength(5);
     expect(parsed.map((p) => p.type)).toEqual([
       "user",
       "assistant",
       "user",
       "assistant",
+      "user",
     ]);
   });
 
   test("context injection pair survives as proper NDJSON messages", async () => {
-    const history = historyWithoutCurrentTurn(
-      assembledMessages,
-      currentQuery,
-    );
-    const ndjson = buildNdjson(history);
+    const ndjson = buildNdjson(assembledMessages);
     const lines = ndjson.trimEnd().split("\n").map((l) => JSON.parse(l));
 
     // First line: the "Session context:..." user message
@@ -214,10 +208,6 @@ describe("end-to-end: assembled context → claude args + NDJSON", () => {
   });
 
   test("buildArgs produces correct flags for the full pipeline", () => {
-    const history = historyWithoutCurrentTurn(
-      assembledMessages,
-      currentQuery,
-    );
     const xmlPrompt = toAnthropicXml(serverSystemPrompt);
     const cc: CCBackendConfig = {
       enabled: true,
@@ -229,20 +219,18 @@ describe("end-to-end: assembled context → claude args + NDJSON", () => {
 
     const args = buildArgs(
       {
-        prompt: currentQuery,
-        history,
+        messages: assembledMessages,
         systemPrompt: xmlPrompt,
         cc,
         model: "opus",
       },
       "/tmp/session-mcp.json",
-      history.length > 0,
     );
 
-    // -p carries the current user message
-    expect(args[args.indexOf("-p")! + 1]).toBe(currentQuery);
+    // -p is empty — messages go via stdin NDJSON
+    expect(args[args.indexOf("-p")! + 1]).toBe("");
 
-    // --input-format stream-json present because we have history
+    // --input-format stream-json always present
     expect(args).toContain("--input-format");
 
     // --system-prompt carries the XML
@@ -257,13 +245,10 @@ describe("end-to-end: assembled context → claude args + NDJSON", () => {
     );
   });
 
-  test("first-message scenario: no history produces no --input-format", () => {
-    // First message ever — server returns only the current query, no history
+  test("first-message scenario: messages still go via stream-json", () => {
     const firstMessageAssembled = [
       { role: "user" as const, content: "hello" },
     ];
-    const history = historyWithoutCurrentTurn(firstMessageAssembled, "hello");
-    expect(history).toHaveLength(0);
 
     const cc: CCBackendConfig = {
       enabled: true,
@@ -274,25 +259,20 @@ describe("end-to-end: assembled context → claude args + NDJSON", () => {
     };
     const args = buildArgs(
       {
-        prompt: "hello",
-        history,
+        messages: firstMessageAssembled,
         systemPrompt: "<system/>",
         cc,
       },
       "/tmp/mcp.json",
-      history.length > 0,
     );
 
-    expect(args).not.toContain("--input-format");
-    expect(args[args.indexOf("-p")! + 1]).toBe("hello");
+    // Always uses stream-json now
+    expect(args).toContain("--input-format");
+    expect(args[args.indexOf("-p")! + 1]).toBe("");
   });
 
   test("each NDJSON line matches SDK SDKUserMessage/SDKAssistantMessage shape", () => {
-    const history = historyWithoutCurrentTurn(
-      assembledMessages,
-      currentQuery,
-    );
-    const lines = buildNdjson(history)
+    const lines = buildNdjson(assembledMessages)
       .trimEnd()
       .split("\n")
       .map((l) => JSON.parse(l));

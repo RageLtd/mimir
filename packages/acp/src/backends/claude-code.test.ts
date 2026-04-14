@@ -131,66 +131,34 @@ const baseCc: CCBackendConfig = {
 };
 
 describe("buildArgs", () => {
-  test("includes --input-format stream-json when hasHistory is true", () => {
-    const args = buildArgs(
+  const mkArgs = (overrides?: { systemPrompt?: string; cc?: CCBackendConfig; model?: string }) =>
+    buildArgs(
       {
-        prompt: "hello",
-        history: [{ role: "user" as const, content: "prev" }],
-        systemPrompt: "<xml>prompt</xml>",
-        cc: baseCc,
+        messages: [{ role: "user" as const, content: "hello" }],
+        systemPrompt: overrides?.systemPrompt ?? "<xml>prompt</xml>",
+        cc: overrides?.cc ?? baseCc,
+        model: overrides?.model,
       },
       "/tmp/mcp.json",
-      true,
     );
+
+  test("always includes --input-format stream-json", () => {
+    const args = mkArgs();
     const idx = args.indexOf("--input-format");
     expect(idx).not.toBe(-1);
     expect(args[idx + 1]).toBe("stream-json");
   });
 
-  test("omits --input-format when hasHistory is false", () => {
-    const args = buildArgs(
-      {
-        prompt: "hello",
-        history: [],
-        systemPrompt: "<xml>prompt</xml>",
-        cc: baseCc,
-      },
-      "/tmp/mcp.json",
-      false,
-    );
-    expect(args).not.toContain("--input-format");
-    // "stream-json" still appears as --output-format value, but not after --input-format
-    expect(args.indexOf("--input-format")).toBe(-1);
-  });
-
-  test("passes prompt to -p", () => {
-    const args = buildArgs(
-      {
-        prompt: "my question",
-        history: [],
-        systemPrompt: "sys",
-        cc: baseCc,
-      },
-      "/tmp/mcp.json",
-      false,
-    );
+  test("passes empty string to -p", () => {
+    const args = mkArgs();
     const idx = args.indexOf("-p");
     expect(idx).not.toBe(-1);
-    expect(args[idx + 1]).toBe("my question");
+    expect(args[idx + 1]).toBe("");
   });
 
   test("passes system prompt to --system-prompt", () => {
     const xml = "<rules>Be direct.</rules>";
-    const args = buildArgs(
-      {
-        prompt: "q",
-        history: [],
-        systemPrompt: xml,
-        cc: baseCc,
-      },
-      "/tmp/mcp.json",
-      false,
-    );
+    const args = mkArgs({ systemPrompt: xml });
     const idx = args.indexOf("--system-prompt");
     expect(idx).not.toBe(-1);
     expect(args[idx + 1]).toBe(xml);
@@ -198,14 +166,8 @@ describe("buildArgs", () => {
 
   test("passes mcpConfigPath to --mcp-config", () => {
     const args = buildArgs(
-      {
-        prompt: "q",
-        history: [],
-        systemPrompt: "s",
-        cc: baseCc,
-      },
+      { messages: [], systemPrompt: "s", cc: baseCc },
       "/tmp/custom-mcp.json",
-      false,
     );
     const idx = args.indexOf("--mcp-config");
     expect(idx).not.toBe(-1);
@@ -214,78 +176,44 @@ describe("buildArgs", () => {
 
   test("includes --disallowedTools when configured", () => {
     const cc = { ...baseCc, disallowedTools: ["Agent", "Monitor"] };
-    const args = buildArgs(
-      { prompt: "q", history: [], systemPrompt: "s", cc },
-      "/tmp/mcp.json",
-      false,
-    );
+    const args = mkArgs({ cc });
     const idx = args.indexOf("--disallowedTools");
     expect(idx).not.toBe(-1);
     expect(args[idx + 1]).toBe("Agent,Monitor");
   });
 
   test("omits --disallowedTools when list is empty", () => {
-    const args = buildArgs(
-      { prompt: "q", history: [], systemPrompt: "s", cc: baseCc },
-      "/tmp/mcp.json",
-      false,
-    );
+    const args = mkArgs();
     expect(args).not.toContain("--disallowedTools");
   });
 
   test("includes --model when provided", () => {
-    const args = buildArgs(
-      {
-        prompt: "q",
-        history: [],
-        systemPrompt: "s",
-        cc: baseCc,
-        model: "opus",
-      },
-      "/tmp/mcp.json",
-      false,
-    );
+    const args = mkArgs({ model: "opus" });
     const idx = args.indexOf("--model");
     expect(idx).not.toBe(-1);
     expect(args[idx + 1]).toBe("opus");
   });
 
   test("omits --model when not provided", () => {
-    const args = buildArgs(
-      { prompt: "q", history: [], systemPrompt: "s", cc: baseCc },
-      "/tmp/mcp.json",
-      false,
-    );
+    const args = mkArgs();
     expect(args).not.toContain("--model");
   });
 
   test("always includes --output-format stream-json", () => {
-    const args = buildArgs(
-      { prompt: "q", history: [], systemPrompt: "s", cc: baseCc },
-      "/tmp/mcp.json",
-      false,
-    );
+    const args = mkArgs();
     const idx = args.indexOf("--output-format");
     expect(idx).not.toBe(-1);
     expect(args[idx + 1]).toBe("stream-json");
   });
 
   test("always includes --no-session-persistence", () => {
-    const args = buildArgs(
-      { prompt: "q", history: [], systemPrompt: "s", cc: baseCc },
-      "/tmp/mcp.json",
-      false,
-    );
+    const args = mkArgs();
     expect(args).toContain("--no-session-persistence");
   });
 
   test("passes permission mode from cc config", () => {
     const cc = { ...baseCc, permissionMode: "plan" };
-    const args = buildArgs(
-      { prompt: "q", history: [], systemPrompt: "s", cc },
-      "/tmp/mcp.json",
-      false,
-    );
+    const args = mkArgs({ cc });
     const idx = args.indexOf("--permission-mode");
     expect(idx).not.toBe(-1);
     expect(args[idx + 1]).toBe("plan");

@@ -225,9 +225,8 @@ export const promptViaClaudeCode = async (
 
   // The server's assembled messages include the context injection pair
   // (summaries + memories), historical turns, and the current user message.
-  // Strip the trailing user message — it goes via `-p` instead — and pass
-  // everything else as structured NDJSON history.
-  const history = historyWithoutCurrentTurn(context.messages, promptText);
+  // Pass all of them — the CC backend pipes everything as NDJSON via stdin.
+  const assembled = context.messages;
 
   // Track the user message for persistence.
   session.messages.push({ role: "user", content: promptText });
@@ -240,7 +239,7 @@ export const promptViaClaudeCode = async (
     for await (const event of backend.run({
       prompt: promptText,
       systemPrompt: xmlSystemPrompt,
-      assembledMessages: history,
+      assembledMessages: assembled,
       messages: session.messages,
       tools: [],
       projectPath: session.projectPath,

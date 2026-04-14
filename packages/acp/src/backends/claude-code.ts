@@ -238,16 +238,11 @@ export const buildNdjson = (
 
 export type RunClaudeCodeOptions = {
   /**
-   * The current user prompt, enhanced with retrieved context.
-   * Passed directly to `-p`.
+   * Full conversation to pipe as NDJSON via stdin with
+   * --input-format stream-json. The last entry should be the current
+   * user message. `-p ""` is passed so CC reads from stdin.
    */
-  readonly prompt: string;
-  /**
-   * Prior conversation history (no current turn). Piped as NDJSON via
-   * stdin with --input-format stream-json so each prior turn arrives as
-   * a proper role-alternating Anthropic API message.
-   */
-  readonly history: ReadonlyArray<{
+  readonly messages: ReadonlyArray<{
     role: "user" | "assistant";
     content: string;
   }>;
@@ -267,15 +262,15 @@ export type RunClaudeCodeOptions = {
 export const buildArgs = (
   options: Pick<
     RunClaudeCodeOptions,
-    "prompt" | "history" | "systemPrompt" | "model" | "cc"
+    "messages" | "systemPrompt" | "model" | "cc"
   >,
   mcpConfigPath: string,
-  hasHistory: boolean,
 ): string[] => {
   const args: string[] = [
     "-p",
-    options.prompt,
-    ...(hasHistory ? ["--input-format", "stream-json"] : []),
+    "",
+    "--input-format",
+    "stream-json",
     "--output-format",
     "stream-json",
     "--verbose",
@@ -312,24 +307,21 @@ export const runClaudeCode = async function* (
     options.clientMcpServers,
   );
 
-  // Current user message (enhanced with context) goes to -p.
-  // Prior conversation history goes as NDJSON via stdin.
-  const hasHistory = options.history.length > 0;
-  const args = buildArgs(options, mcpConfigPath, hasHistory);
+  // All messages (history + current turn) go as NDJSON via stdin.
+  // `-p ""` puts CC in print mode; stream-json reads the conversation.
+  const args = buildArgs(options, mcpConfigPath);
 
   const proc = Bun.spawn(["claude", ...args], {
     cwd: options.workingDirectory,
-    stdin: hasHistory ? "pipe" : undefined,
+    stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
   });
 
-  // Pipe prior conversation history as NDJSON, then close stdin.
-  if (hasHistory) {
-    const ndjson = buildNdjson(options.history);
-    proc.stdin.write(ndjson);
-    proc.stdin.end();
-  }
+  // Write full conversation as NDJSON then close stdin so CC knows input is done.
+  const ndjson = buildNdjson(options.messages);
+  proc.stdin.write(ndjson);
+  proc.stdin.end();
 
   const onAbort = () => {
     try {
@@ -480,8 +472,7 @@ export const createClaudeCodeBackend = (
       : undefined;
 
     yield* runClaudeCode({
-      prompt: options.prompt,
-      history: options.assembledMessages ?? [],
+      messages: options.assembledMessages ?? [],
       systemPrompt: options.systemPrompt,
       workingDirectory: cwd,
       cc: deps.cc,
