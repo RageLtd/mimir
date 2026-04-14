@@ -4,8 +4,8 @@ import {
   buildArgs,
   writeMcpConfig,
   iterateNdjson,
-} from "./claude-code";
-import type { CCBackendConfig } from "../config";
+} from ".";
+import type { CCBackendConfig } from "../../config";
 
 // ── formatContextForPrompt ──
 
@@ -61,7 +61,6 @@ const baseCc: CCBackendConfig = {
 
 describe("buildArgs", () => {
   const mkArgs = (overrides?: {
-    prompt?: string;
     contextMessages?: { role: "user" | "assistant"; content: string }[];
     systemPrompt?: string;
     cc?: CCBackendConfig;
@@ -69,7 +68,6 @@ describe("buildArgs", () => {
   }) =>
     buildArgs(
       {
-        prompt: overrides?.prompt ?? "hello",
         contextMessages: overrides?.contextMessages ?? [
           { role: "user" as const, content: "prev" },
         ],
@@ -92,23 +90,16 @@ describe("buildArgs", () => {
     expect(args).not.toContain("--append-system-prompt");
   });
 
-  test("never includes --input-format (no stream-json input)", () => {
+  test("always includes --input-format stream-json", () => {
     const args = mkArgs();
-    expect(args).not.toContain("--input-format");
+    const idx = args.indexOf("--input-format");
+    expect(idx).not.toBe(-1);
+    expect(args[idx + 1]).toBe("stream-json");
   });
 
-  test("always passes prompt as positional arg after -p", () => {
-    const args = mkArgs({ prompt: "my question" });
-    const idx = args.indexOf("-p");
-    expect(idx).not.toBe(-1);
-    expect(args[idx + 1]).toBe("my question");
-  });
-
-  test("passes prompt after -p even with no context", () => {
-    const args = mkArgs({ contextMessages: [], prompt: "my question" });
-    const idx = args.indexOf("-p");
-    expect(idx).not.toBe(-1);
-    expect(args[idx + 1]).toBe("my question");
+  test("never includes -p flag (prompt goes via stdin)", () => {
+    const args = mkArgs();
+    expect(args).not.toContain("-p");
   });
 
   test("passes system prompt to --system-prompt", () => {
@@ -122,7 +113,6 @@ describe("buildArgs", () => {
   test("passes mcpConfigPath to --mcp-config", () => {
     const args = buildArgs(
       {
-        prompt: "q",
         contextMessages: [],
         systemPrompt: "s",
         cc: baseCc,

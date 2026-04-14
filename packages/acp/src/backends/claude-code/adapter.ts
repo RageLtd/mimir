@@ -1,0 +1,54 @@
+/**
+ * Claude Code backend adapter.
+ *
+ * Bridges the generic Backend interface to `runClaudeCode`. This is the
+ * entry point for the backend router — swapping to a different CLI
+ * (Copilot, Gemini CLI, etc.) means creating a new adapter that consumes
+ * the same NDJSON temp file that `runner.ts` produces.
+ */
+
+import type { CCBackendConfig } from "../../config";
+import { getCCModelFlag, isCCModel } from "../../routing";
+import type { Backend, BackendEvent, BackendRunOptions } from "../types";
+import { runClaudeCode } from "./runner";
+
+export type ClaudeCodeBackendDeps = {
+  readonly cc: CCBackendConfig;
+  /** The mimir-server URL, forwarded into per-invocation MCP configs. */
+  readonly serverUrl: string;
+  /** Path to the user memory SQLite database, forwarded to the MCP subprocess. */
+  readonly userMemoryDbPath: string;
+  /** Default cwd when ACP doesn't supply a project path. */
+  readonly defaultCwd: string;
+};
+
+export const createClaudeCodeBackend = (
+  deps: ClaudeCodeBackendDeps,
+): Backend => {
+  const run = async function* (
+    options: BackendRunOptions,
+  ): AsyncGenerator<BackendEvent> {
+    const cwd =
+      deps.cc.workingDirectory ?? options.projectPath ?? deps.defaultCwd;
+
+    const model = isCCModel(options.modelId)
+      ? getCCModelFlag(options.modelId, deps.cc)
+      : undefined;
+
+    yield* runClaudeCode({
+      prompt: options.prompt,
+      promptBlocks: options.promptBlocks,
+      contextMessages: options.assembledMessages ?? [],
+      systemPrompt: options.systemPrompt,
+      workingDirectory: cwd,
+      cc: deps.cc,
+      serverUrl: deps.serverUrl,
+      userMemoryDbPath: deps.userMemoryDbPath,
+      model,
+      clientMcpServers: options.clientMcpServers,
+      signal: options.signal,
+    });
+  };
+
+  return { kind: "claude-code", run };
+};

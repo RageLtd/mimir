@@ -1,11 +1,8 @@
 import { test, expect, describe } from "bun:test";
 import { contextWithoutCurrentTurn } from "./prompt-cc";
-import {
-  formatContextForPrompt,
-  buildArgs,
-} from "../backends/claude-code";
-import { toAnthropicXml } from "../utils/markdown-to-xml";
-import type { CCBackendConfig } from "../config";
+import { formatContextForPrompt, buildArgs } from ".";
+import { toAnthropicXml } from "../../utils/markdown-to-xml";
+import type { CCBackendConfig } from "../../config";
 
 // ── contextWithoutCurrentTurn ──
 
@@ -114,8 +111,7 @@ describe("contextWithoutCurrentTurn", () => {
 // Simulates the full flow: the server's /v1/context/assemble returns a
 // systemPrompt + messages array. prompt-cc strips the current user
 // message, converts the system prompt to XML, and formats the remaining
-// context for --append-system-prompt. The current question goes as the
-// positional prompt arg after -p.
+// context for --append-system-prompt.
 
 describe("end-to-end: assembled context → claude args + context", () => {
   const serverSystemPrompt =
@@ -187,7 +183,7 @@ describe("end-to-end: assembled context → claude args + context", () => {
     expect(xml).toContain("Be direct.");
   });
 
-  test("buildArgs passes prompt as positional arg and includes --append-system-prompt", () => {
+  test("buildArgs uses --input-format stream-json and includes --append-system-prompt", () => {
     const context = contextWithoutCurrentTurn(assembledMessages, currentQuery);
     const xmlPrompt = toAnthropicXml(serverSystemPrompt);
     const cc: CCBackendConfig = {
@@ -200,7 +196,6 @@ describe("end-to-end: assembled context → claude args + context", () => {
 
     const args = buildArgs(
       {
-        prompt: currentQuery,
         contextMessages: context,
         systemPrompt: xmlPrompt,
         cc,
@@ -209,13 +204,13 @@ describe("end-to-end: assembled context → claude args + context", () => {
       "/tmp/session-mcp.json",
     );
 
-    // -p carries the current user message as positional arg
-    expect(args).toContain("-p");
-    const pIdx = args.indexOf("-p");
-    expect(args[pIdx + 1]).toBe(currentQuery);
+    // Prompt goes via stdin, not -p
+    expect(args).not.toContain("-p");
 
-    // No --input-format (not using stream-json for input)
-    expect(args).not.toContain("--input-format");
+    // --input-format stream-json is always present
+    const inputFmtIdx = args.indexOf("--input-format");
+    expect(inputFmtIdx).not.toBe(-1);
+    expect(args[inputFmtIdx + 1]).toBe("stream-json");
 
     // --append-system-prompt carries the context
     expect(args).toContain("--append-system-prompt");
@@ -251,7 +246,6 @@ describe("end-to-end: assembled context → claude args + context", () => {
     };
     const args = buildArgs(
       {
-        prompt: "hello",
         contextMessages: context,
         systemPrompt: "<system/>",
         cc,
@@ -259,10 +253,11 @@ describe("end-to-end: assembled context → claude args + context", () => {
       "/tmp/mcp.json",
     );
 
-    // No context → no --append-system-prompt, no --input-format
+    // No context → no --append-system-prompt
     expect(args).not.toContain("--append-system-prompt");
-    expect(args).not.toContain("--input-format");
-    // Prompt goes via positional arg
-    expect(args[args.indexOf("-p")! + 1]).toBe("hello");
+
+    // --input-format stream-json always present, no -p
+    expect(args).toContain("--input-format");
+    expect(args).not.toContain("-p");
   });
 });

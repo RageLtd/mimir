@@ -3,30 +3,31 @@
  *
  * Fetches assembled context from mimir-server (system prompt, summaries,
  * memories, historical turns). Converts the system prompt to Anthropic XML,
- * pipes prior turns as stream-json NDJSON via stdin, and passes the current
- * user message via `-p`. mimir-server owns all context; CC is stateless.
+ * injects local user context, formats prior turns for --append-system-prompt,
+ * and passes the current user message via NDJSON stdin. mimir-server owns
+ * all context; CC is stateless.
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
-import type { Backend, BackendEvent } from "../backends/types";
+import type { Backend, BackendEvent } from "../types";
 import {
   type AssembledMessage,
   assembleContext,
   type ContextClientConfig,
   persistTurn,
   reportTokenUsage,
-} from "../context-client";
-import { createChildLogger, log } from "../utils/log";
-import { toAnthropicXml } from "../utils/markdown-to-xml";
-import type { UserMemoryStore } from "../store/user-memories";
-import { buildUserContext } from "../tools/user-memory";
+} from "../../context-client";
+import type { UserMemoryStore } from "../../store/user-memories";
+import { buildUserContext } from "../../tools/user-memory";
+import { createChildLogger, log } from "../../utils/log";
+import { toAnthropicXml } from "../../utils/markdown-to-xml";
 import {
   buildToolCallContent,
   extractLocations,
   toolKindFor,
   toolTitle,
-} from "./tool-reporting";
-import type { SessionState } from "./types";
+} from "../../agent/tool-reporting";
+import type { SessionState } from "../../agent/types";
 
 const logger = createChildLogger(log, "prompt-cc");
 
@@ -199,6 +200,7 @@ export const promptViaClaudeCode = async (
   backend: Backend,
   contextClient: ContextClientConfig,
   memoryStore: UserMemoryStore,
+  promptBlocks?: readonly acp.ContentBlock[],
 ): Promise<acp.PromptResponse> => {
   // Single call to mimir-server assembles the full context: system prompt,
   // Goldfish memories, summaries, historical turns from DB, and the current
@@ -234,7 +236,7 @@ export const promptViaClaudeCode = async (
 
   // The server's assembled messages include the context injection pair
   // (summaries + memories), historical turns, and the current user message.
-  // Strip the current user message — it goes as the positional prompt arg.
+  // Strip the current user message — it goes as NDJSON via stdin.
   // Everything else becomes context for --append-system-prompt.
   const contextMessages = contextWithoutCurrentTurn(
     context.messages,
@@ -260,6 +262,7 @@ export const promptViaClaudeCode = async (
   try {
     for await (const event of backend.run({
       prompt: promptText,
+      promptBlocks,
       systemPrompt: xmlSystemPrompt,
       assembledMessages: contextMessages,
       messages: session.messages,

@@ -18,7 +18,7 @@
  *       agent loop must NOT execute them.
  */
 
-import type { McpServer } from "@agentclientprotocol/sdk";
+import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk";
 import type { ChatMessage, ToolDefinition } from "../server-client";
 
 export type BackendEvent =
@@ -77,6 +77,12 @@ export type BackendRunOptions = {
   }[];
   /** MCP servers provided by the ACP client to forward into CC's MCP config. */
   readonly clientMcpServers?: readonly McpServer[];
+  /**
+   * Raw ACP content blocks for the current turn.
+   * Used by the CC backend to preserve image data when piping via stdin.
+   * The server backend ignores this field.
+   */
+  readonly promptBlocks?: readonly ContentBlock[];
   readonly metadata: Record<string, unknown>;
   readonly signal?: AbortSignal;
   /** Resolved model id. CC backend uses this to derive --model. */

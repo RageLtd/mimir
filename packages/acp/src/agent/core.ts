@@ -14,7 +14,7 @@ import type { ContextClientConfig } from "../context-client";
 import type { SessionStore } from "../store/sessions";
 import type { UserMemoryStore } from "../store/user-memories";
 import { createChildLogger, log } from "../utils/log";
-import { promptViaClaudeCode } from "./prompt-cc";
+import { promptViaClaudeCode } from "../backends/claude-code/prompt-cc";
 import { promptViaServer } from "./prompt-server";
 import { DEFAULT_MODE, SESSION_MODES } from "./session";
 import type { AgentCore, SessionState } from "./types";
@@ -137,6 +137,7 @@ export const createAgentCore = (
     sessionId: string,
     promptText: string,
     conn: acp.AgentSideConnection,
+    promptBlocks?: readonly acp.ContentBlock[],
   ): Promise<acp.PromptResponse> => {
     const session = getSession(sessionId);
     if (!session) {
@@ -181,6 +182,7 @@ export const createAgentCore = (
         backend,
         contextClient,
         memoryStore,
+        promptBlocks,
       );
     }
     return promptViaServer(

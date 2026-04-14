@@ -53,6 +53,7 @@ export type AgentCore = {
     sessionId: string,
     promptText: string,
     conn: acp.AgentSideConnection,
+    promptBlocks?: readonly acp.ContentBlock[],
   ) => Promise<acp.PromptResponse>;
   cancel: (sessionId: string) => void;
   dispose: () => void;
