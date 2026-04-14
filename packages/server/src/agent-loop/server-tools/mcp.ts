@@ -9,7 +9,7 @@
 
 import { createMCPClient, type MCPClient } from "@ai-sdk/mcp";
 import { Experimental_StdioMCPTransport } from "@ai-sdk/mcp/mcp-stdio";
-import type { Tool } from "ai";
+import type { ToolSet } from "ai";
 import { config } from "../../config";
 import { log } from "../../util/logger";
 import { attempt } from "../../util/result";
@@ -18,14 +18,14 @@ import { attempt } from "../../util/result";
 const clients: MCPClient[] = [];
 
 /** Cached tools from all MCP servers */
-let mcpTools: Record<string, Tool> = {};
+let mcpTools: ToolSet = {};
 
 /**
  * Initialize MCP clients and fetch their tools.
  * Call once during server boot. Failures are non-fatal.
  */
 export async function initMcpTools(): Promise<void> {
-  const tools: Record<string, Tool> = {};
+  const tools: ToolSet = {};
 
   // --- Context7 ---
   const [c7Err, c7Client] = await attempt(async () => {
@@ -93,7 +93,7 @@ export async function initMcpTools(): Promise<void> {
 }
 
 /** Get all tools from connected MCP servers */
-export function getMcpTools(): Record<string, Tool> {
+export function getMcpTools(): ToolSet {
   return mcpTools;
 }
 

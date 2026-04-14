@@ -9,6 +9,7 @@
  */
 
 import { createUserMemoryStore } from "../store/user-memories";
+import { errMessage } from "../util";
 import { executeUserMemoryTool, userMemoryToolDefs } from "./user-memory";
 
 const dbPath = process.env.MIMIR_USER_MEMORY_DB;
@@ -107,7 +108,7 @@ const processBuffer = () => {
       try {
         handleRequest(JSON.parse(line));
       } catch (err) {
-        respondError(null, -32700, "Parse error");
+        respondError(null, -32700, `Parse error: ${errMessage(err)}`);
       }
     }
     nl = buffer.indexOf("\n");

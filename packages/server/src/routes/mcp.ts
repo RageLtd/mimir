@@ -15,99 +15,15 @@
  */
 
 import { Hono } from "hono";
-import { z } from "zod";
-import {
-  executeFileInfo,
-  executeQuery,
-  executeSearch,
-  FileInfoSchema,
-  QuerySchema,
-  SearchSchema,
-} from "../agent-loop/server-tools/cartographer";
-import {
-  executeWebSearch,
-  WebSearchSchema,
-} from "../agent-loop/server-tools/external";
-import {
-  executeMemoryDelete,
-  executeMemoryList,
-  executeMemorySearch,
-  executeMemoryStore,
-  MemoryDeleteSchema,
-  MemoryListSchema,
-  MemorySearchSchema,
-  MemoryStoreSchema,
-} from "../agent-loop/server-tools/memory";
+import { getMcpPublicTools } from "../agent-loop/server-tools";
 import { log } from "../util/logger";
 
 export const mcp = new Hono();
 
 // ── Tool registry ──────────────────────────────────────────────────────────
+// Derived automatically from getMcpPublicTools() — add new tools there, not here.
 
-type McpToolDef = {
-  name: string;
-  description: string;
-  schema: z.ZodTypeAny;
-  run: (args: unknown) => Promise<unknown>;
-};
-
-const TOOLS: McpToolDef[] = [
-  {
-    name: "memory_search",
-    description:
-      "Search persistent memory for facts, preferences, or context from past conversations.",
-    schema: MemorySearchSchema,
-    run: (args) => executeMemorySearch(MemorySearchSchema.parse(args)),
-  },
-  {
-    name: "memory_store",
-    description:
-      "Store a fact in persistent memory. Use when the user asks to remember something.",
-    schema: MemoryStoreSchema,
-    run: (args) => executeMemoryStore(MemoryStoreSchema.parse(args)),
-  },
-  {
-    name: "memory_list",
-    description: "List stored memories, most recent first.",
-    schema: MemoryListSchema,
-    run: (args) => executeMemoryList(MemoryListSchema.parse(args)),
-  },
-  {
-    name: "memory_delete",
-    description:
-      "Delete a memory by ID. Confirm content with user before deleting.",
-    schema: MemoryDeleteSchema,
-    run: (args) => executeMemoryDelete(MemoryDeleteSchema.parse(args)),
-  },
-  {
-    name: "cartographer_search",
-    description:
-      "Search indexed codebase for files by path or symbol name. Omit project to auto-detect.",
-    schema: SearchSchema,
-    run: (args) => executeSearch(SearchSchema.parse(args)),
-  },
-  {
-    name: "cartographer_file_info",
-    description:
-      "Get file details: symbols, imports, and dependents. Omit project to auto-detect.",
-    schema: FileInfoSchema,
-    run: (args) => executeFileInfo(FileInfoSchema.parse(args)),
-  },
-  {
-    name: "cartographer_query",
-    description:
-      "Walk import graph from entry points. Returns dependencies and dependents up to depth.",
-    schema: QuerySchema,
-    run: (args) => executeQuery(QuerySchema.parse(args)),
-  },
-  {
-    name: "web_search",
-    description:
-      "Search the web for current information. Use for up-to-date data, news, or recent docs.",
-    schema: WebSearchSchema,
-    run: (args) => executeWebSearch(WebSearchSchema.parse(args)),
-  },
-];
+const TOOLS = getMcpPublicTools();
 
 // ── JSON-RPC types ─────────────────────────────────────────────────────────
 
@@ -149,10 +65,10 @@ async function dispatch(req: JsonRpcRequest): Promise<JsonRpcResponse | null> {
       return {
         jsonrpc: "2.0",
         result: {
-          tools: TOOLS.map((t) => ({
-            name: t.name,
-            description: t.description,
-            inputSchema: z.toJSONSchema(t.schema),
+          tools: Object.entries(TOOLS).map(([name, t]) => ({
+            name,
+            description: t.description ?? name,
+            inputSchema: t.inputSchema.jsonSchema,
           })),
         },
         id,
@@ -160,7 +76,7 @@ async function dispatch(req: JsonRpcRequest): Promise<JsonRpcResponse | null> {
 
     case "tools/call": {
       const params = req.params as { name: string; arguments?: unknown };
-      const t = TOOLS.find((tool) => tool.name === params.name);
+      const t = TOOLS[params.name];
 
       if (!t) {
         return {
@@ -171,7 +87,10 @@ async function dispatch(req: JsonRpcRequest): Promise<JsonRpcResponse | null> {
       }
 
       try {
-        const result = await t.run(params.arguments ?? {});
+        const result = await t.execute?.(params.arguments ?? {}, {
+          toolCallId: "mcp",
+          messages: [],
+        });
         return {
           jsonrpc: "2.0",
           result: {

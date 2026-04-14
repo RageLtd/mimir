@@ -6,6 +6,7 @@
  * so query tools (search, graph walk, file info) work cross-project.
  */
 
+import { errMessage } from "../util";
 import type { Logger } from "../utils/log";
 
 export type CartographerSyncConfig = {
@@ -46,7 +47,7 @@ export const syncIndex = async (
     config.logger.info("Cartographer sync OK");
     return { ok: true };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errMessage(err);
     config.logger.error(`Cartographer sync error: ${message}`);
     return { ok: false, error: message };
   }

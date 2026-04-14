@@ -1,4 +1,4 @@
-import type { Tool } from "ai";
+import type { ToolSet } from "ai";
 import { approvalTools } from "./approval";
 import { cartographerTools } from "./cartographer";
 import { externalTools } from "./external";
@@ -40,7 +40,7 @@ export type ServerToolName =
   | string; // MCP tools have dynamic names
 
 /** Type for the server tools record */
-export type ServerTools = Record<string, Tool>;
+export type ServerTools = ToolSet;
 
 /** Combined server tools with prompt caching enabled */
 export const getServerTools = (): ServerTools => ({
@@ -50,4 +50,17 @@ export const getServerTools = (): ServerTools => ({
   ...approvalTools,
   ...introspectionTools,
   ...getMcpTools(),
+});
+
+/**
+ * Tools exposed via the /mcp endpoint to external clients (e.g. Claude Code).
+ * Excludes approvalTools (internal agent-loop workflow) and getMcpTools()
+ * (already remote MCP servers — re-exposing them would create a loop).
+ * Add new public tool groups here and they appear in /mcp automatically.
+ */
+export const getMcpPublicTools = (): ServerTools => ({
+  ...memoryTools,
+  ...cartographerTools,
+  ...externalTools,
+  ...introspectionTools,
 });

@@ -11,6 +11,7 @@
  */
 
 import { acpBlocksToAnthropicContent } from "../../agent/content";
+import { errMessage } from "../../util";
 import type { BackendEvent } from "../types";
 import { buildArgs, type RunClaudeCodeOptions } from "./formatting";
 import { writeMcpConfig } from "./mcp-config";
@@ -178,8 +179,7 @@ export const runClaudeCode = async function* (
       yield { type: "finish", sessionId };
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    yield { type: "error", error: msg };
+    yield { type: "error", error: errMessage(err) };
   } finally {
     options.signal?.removeEventListener("abort", onAbort);
     // Clean up per-invocation temp files (MCP config + stdin input).

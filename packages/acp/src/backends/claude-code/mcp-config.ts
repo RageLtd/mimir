@@ -53,7 +53,7 @@ export const writeMcpConfig = async (
     clientEntries[server.name] = acpServerToConfigEntry(server);
   }
 
-  // Resolve the user-memory MCP server script relative to this file.
+  // Resolve built-in MCP server scripts relative to this file.
   const userMemoryScript = new URL(
     "../../tools/user-memory-mcp.ts",
     import.meta.url,

@@ -7,14 +7,15 @@
 
 import type * as acp from "@agentclientprotocol/sdk";
 import type { BackendRouter } from "../backends";
+import { promptViaClaudeCode } from "../backends/claude-code/prompt-cc";
 import type { Backend } from "../backends/types";
 import type { CartographerManager } from "../cartographer/lifecycle";
 import type { MimirConfig } from "../config";
 import type { ContextClientConfig } from "../context-client";
 import type { SessionStore } from "../store/sessions";
 import type { UserMemoryStore } from "../store/user-memories";
+import { errMessage } from "../util";
 import { createChildLogger, log } from "../utils/log";
-import { promptViaClaudeCode } from "../backends/claude-code/prompt-cc";
 import { promptViaServer } from "./prompt-server";
 import { DEFAULT_MODE, SESSION_MODES } from "./session";
 import type { AgentCore, SessionState } from "./types";
@@ -161,7 +162,7 @@ export const createAgentCore = (
     try {
       backend = router.forModel(session.currentModelId);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errMessage(err);
       logger.error("Backend routing failed:", msg);
       await conn.sessionUpdate({
         sessionId,

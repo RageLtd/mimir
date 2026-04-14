@@ -18,9 +18,7 @@ export const formatContentBlocks = (
 ): string =>
   acpBlocksToAnthropicContent(blocks)
     .map((part) =>
-      part.type === "text"
-        ? part.text
-        : `[Image: ${part.source.media_type}]`,
+      part.type === "text" ? part.text : `[Image: ${part.source.media_type}]`,
     )
     .filter(Boolean)
     .join("\n\n");
@@ -38,7 +36,10 @@ export const hasImageBlocks = (blocks: readonly acp.ContentBlock[]) =>
  */
 type AnthropicContentPart =
   | { type: "text"; text: string }
-  | { type: "image"; source: { type: "base64"; media_type: string; data: string } };
+  | {
+      type: "image";
+      source: { type: "base64"; media_type: string; data: string };
+    };
 
 export const acpBlocksToAnthropicContent = (
   blocks: readonly acp.ContentBlock[],
@@ -65,7 +66,10 @@ export const acpBlocksToAnthropicContent = (
       const label = block.title ?? block.name ?? block.uri;
       const desc = block.description ? ` — ${block.description}` : "";
       return [
-        { type: "text" as const, text: `[Resource: ${label}${desc}] (${block.uri})` },
+        {
+          type: "text" as const,
+          text: `[Resource: ${label}${desc}] (${block.uri})`,
+        },
       ];
     }
 
@@ -102,4 +106,3 @@ export const buildMetadata = (
 ): Record<string, unknown> => ({
   project: projectPath,
 });
-

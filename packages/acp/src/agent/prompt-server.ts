@@ -18,6 +18,7 @@ import {
   userMemoryToolDefs,
   userMemoryToolNames,
 } from "../tools/user-memory";
+import { errMessage } from "../util";
 import { createChildLogger, log } from "../utils/log";
 import { executeClientTool } from "./client-tools";
 import { buildMetadata } from "./content";
@@ -110,7 +111,7 @@ export const promptViaServer = async (
       if (abortController.signal.aborted) {
         return { stopReason: "cancelled" };
       }
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errMessage(err);
       logger.error("Agent loop error:", msg);
       return { stopReason: "end_turn" };
     }
@@ -158,7 +159,7 @@ export const promptViaServer = async (
         try {
           resultContent = await cartographer.executeTool(tc.name, tc.input);
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = errMessage(err);
           logger.error("Cartographer tool error:", msg);
           resultContent = `Error executing ${tc.name}: ${msg}`;
         }

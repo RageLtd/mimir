@@ -9,7 +9,13 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
-import type { Backend, BackendEvent } from "../types";
+import {
+  buildToolCallContent,
+  extractLocations,
+  toolKindFor,
+  toolTitle,
+} from "../../agent/tool-reporting";
+import type { SessionState } from "../../agent/types";
 import {
   type AssembledMessage,
   assembleContext,
@@ -19,15 +25,10 @@ import {
 } from "../../context-client";
 import type { UserMemoryStore } from "../../store/user-memories";
 import { buildUserContext } from "../../tools/user-memory";
+import { errMessage } from "../../util";
 import { createChildLogger, log } from "../../utils/log";
 import { toAnthropicXml } from "../../utils/markdown-to-xml";
-import {
-  buildToolCallContent,
-  extractLocations,
-  toolKindFor,
-  toolTitle,
-} from "../../agent/tool-reporting";
-import type { SessionState } from "../../agent/types";
+import type { Backend, BackendEvent } from "../types";
 
 const logger = createChildLogger(log, "prompt-cc");
 
@@ -214,7 +215,7 @@ export const promptViaClaudeCode = async (
       abortController.signal,
     );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errMessage(err);
     logger.error("assembleContext failed:", msg);
     await conn.sessionUpdate({
       sessionId: session.sessionId,
@@ -301,7 +302,7 @@ export const promptViaClaudeCode = async (
     if (abortController.signal.aborted) {
       return { stopReason: "cancelled" };
     }
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errMessage(err);
     logger.error("CC backend error:", msg);
     return { stopReason: "end_turn" };
   }

@@ -10,6 +10,7 @@
 
 import type { ModelInfo } from "@agentclientprotocol/sdk";
 import type { CCBackendConfig } from "./config";
+import { errMessage } from "./util";
 import { createChildLogger, log } from "./utils/log";
 
 const logger = createChildLogger(log, "routing");
@@ -92,7 +93,7 @@ export const fetchServerModels = async (
     logger.info(`fetched ${models.length} models from mimir-server`);
     return models;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errMessage(err);
     logger.warn(`server model fetch failed: ${msg} (${serverUrl}/v1/models)`);
     return [];
   }

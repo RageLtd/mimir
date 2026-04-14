@@ -435,7 +435,12 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
       const cmd = parseCommand(promptText);
       if (cmd) return handleCommand(params.sessionId, cmd);
 
-      const response = await core.prompt(params.sessionId, promptText, conn, params.prompt);
+      const response = await core.prompt(
+        params.sessionId,
+        promptText,
+        conn,
+        params.prompt,
+      );
 
       // Persist messages after each round-trip
       core.persistMessages(params.sessionId);

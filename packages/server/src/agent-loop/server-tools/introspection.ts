@@ -7,7 +7,7 @@ import { CACHE_CONTROL } from "./shared";
 // Schemas
 // ---------------------------------------------------------------------------
 
-const ReadLogsSchema = z.object({
+export const ReadLogsSchema = z.object({
   lines: z
     .number()
     .optional()
@@ -30,7 +30,7 @@ const ReadLogsSchema = z.object({
 // Execute
 // ---------------------------------------------------------------------------
 
-const executeReadLogs = async ({
+export const executeReadLogs = async ({
   lines,
   filter,
   since,

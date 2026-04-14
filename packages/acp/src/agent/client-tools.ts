@@ -6,6 +6,7 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
+import { errMessage } from "../util";
 import { createChildLogger, log } from "../utils/log";
 
 const logger = createChildLogger(log, "client-tools");
@@ -51,7 +52,7 @@ export const executeClientTool = async (
 
     return `Unknown client tool: ${name}`;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errMessage(err);
     logger.error("Client tool error:", msg);
     return `Error executing ${name}: ${msg}`;
   }

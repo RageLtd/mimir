@@ -19,6 +19,7 @@ import {
   type MutableToolCall,
   mergeToolCallDelta,
 } from "../sse-parser";
+import { errMessage } from "../util";
 import type { Backend, BackendEvent, BackendRunOptions } from "./types";
 
 export const createServerBackend = (
@@ -74,8 +75,7 @@ export const createServerBackend = (
         }
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      yield { type: "error", error: msg };
+      yield { type: "error", error: errMessage(err) };
     }
   };
 
