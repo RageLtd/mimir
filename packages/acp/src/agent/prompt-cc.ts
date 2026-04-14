@@ -18,6 +18,8 @@ import {
 } from "../context-client";
 import { createChildLogger, log } from "../utils/log";
 import { toAnthropicXml } from "../utils/markdown-to-xml";
+import type { UserMemoryStore } from "../store/user-memories";
+import { buildUserContext } from "../tools/user-memory";
 import {
   buildToolCallContent,
   extractLocations,
@@ -196,6 +198,7 @@ export const promptViaClaudeCode = async (
   abortController: AbortController,
   backend: Backend,
   contextClient: ContextClientConfig,
+  memoryStore: UserMemoryStore,
 ): Promise<acp.PromptResponse> => {
   // Single call to mimir-server assembles the full context: system prompt,
   // Goldfish memories, summaries, historical turns from DB, and the current
@@ -222,7 +225,12 @@ export const promptViaClaudeCode = async (
   }
 
   // Convert system prompt from markdown to Anthropic XML.
-  const xmlSystemPrompt = toAnthropicXml(context.systemPrompt);
+  // Append local user context (profile + memories) so the model knows
+  // about the user from the first turn. This data never leaves the client.
+  const userContext = buildUserContext(memoryStore);
+  const xmlSystemPrompt = userContext
+    ? `${toAnthropicXml(context.systemPrompt)}\n\n${userContext}`
+    : toAnthropicXml(context.systemPrompt);
 
   // The server's assembled messages include the context injection pair
   // (summaries + memories), historical turns, and the current user message.

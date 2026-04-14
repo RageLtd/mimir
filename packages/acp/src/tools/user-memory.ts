@@ -84,6 +84,55 @@ export const userMemoryToolDefs: ToolDefinition[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "user_profile_get",
+      description:
+        "Get the user's profile — structured facts like name, role, preferences, and communication style. Returns all profile entries.",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "user_profile_add",
+      description:
+        "Add an entry to the user's profile. Use for structured personal facts: name, role, team, preferred communication style, editor setup, etc.",
+      parameters: {
+        type: "object",
+        properties: {
+          content: {
+            type: "string",
+            description:
+              "The profile fact to store (e.g. 'Name: Alex', 'Prefers concise responses')",
+          },
+        },
+        required: ["content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "user_profile_remove",
+      description:
+        "Remove a profile entry by ID. Use when a profile fact is outdated or wrong.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: {
+            type: "integer",
+            description: "The ID of the profile entry to remove",
+          },
+        },
+        required: ["id"],
+      },
+    },
+  },
 ];
 
 export const userMemoryToolNames = new Set(
@@ -134,7 +183,61 @@ export const executeUserMemoryTool = (
         : { content: `Memory ${id} not found.`, isError: true };
     }
 
+    case "user_profile_get": {
+      const entries = store.getProfile();
+      if (entries.length === 0) {
+        return { content: "No profile entries yet." };
+      }
+      return {
+        content: entries.map((e) => `[${e.id}] ${e.content}`).join("\n"),
+      };
+    }
+
+    case "user_profile_add": {
+      const content = args.content as string;
+      const entry = store.addProfileEntry(content);
+      return {
+        content: `Profile entry stored with ID ${entry.id}: "${entry.content}"`,
+      };
+    }
+
+    case "user_profile_remove": {
+      const id = args.id as number;
+      const removed = store.removeProfileEntry(id);
+      return removed
+        ? { content: `Profile entry ${id} removed.` }
+        : { content: `Profile entry ${id} not found.`, isError: true };
+    }
+
     default:
       return { content: `Unknown tool: ${name}`, isError: true };
   }
+};
+
+/**
+ * Build a <user_context> XML block from profile + recent memories.
+ * Returns null if the user has no profile and no memories.
+ */
+export const buildUserContext = (store: UserMemoryStore): string | null => {
+  const profile = store.getProfileAsText();
+  const memories = store.getMemories();
+
+  if (!profile && memories.length === 0) return null;
+
+  const parts: string[] = ["<user_context>"];
+
+  if (profile) {
+    parts.push("<user_profile>");
+    parts.push(profile);
+    parts.push("</user_profile>");
+  }
+
+  if (memories.length > 0) {
+    parts.push("<user_memories>");
+    parts.push(memories.map(formatMemoryEntry).join("\n"));
+    parts.push("</user_memories>");
+  }
+
+  parts.push("</user_context>");
+  return parts.join("\n");
 };

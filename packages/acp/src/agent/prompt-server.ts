@@ -51,8 +51,7 @@ export const promptViaServer = async (
     abortController.signal,
   );
   const allTools: ToolDefinition[] = [...serverTools, ...userMemoryToolDefs];
-  const userProfile = memoryStore.getProfileAsText();
-  const metadata = buildMetadata(userProfile, session.projectPath);
+  const metadata = buildMetadata(session.projectPath);
 
   let turnCount = 0;
 

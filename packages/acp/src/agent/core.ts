@@ -180,6 +180,7 @@ export const createAgentCore = (
         abortController,
         backend,
         contextClient,
+        memoryStore,
       );
     }
     return promptViaServer(

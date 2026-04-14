@@ -53,55 +53,10 @@ export const formatContentBlocks = (
     })
     .join("\n\n");
 
-/** Build server request metadata from user profile and project path. */
+/** Build server request metadata from project path. */
 export const buildMetadata = (
-  userProfile: string | null,
   projectPath: string,
 ): Record<string, unknown> => ({
   project: projectPath,
-  ...(userProfile ? { userProfile } : {}),
 });
 
-/**
- * Assemble the wrapped prompt for the CC backend.
- *
- * Injects session context (summaries, memories, user profile) around the
- * user message. On --resume follow-ups the caller skips this and sends
- * the raw prompt text instead.
- */
-export const buildCCPrompt = (
-  userMessage: string,
-  summaries: readonly { content: string; created_at: string }[],
-  memories: string | null,
-  userProfile: string | null,
-): string => {
-  const parts: string[] = ["<session_context>"];
-
-  if (summaries.length > 0) {
-    parts.push("<summaries>");
-    summaries.forEach((s, i) => {
-      parts.push(`[Summary ${i + 1} — ${s.created_at}]\n${s.content}`);
-    });
-    parts.push("</summaries>");
-  }
-
-  if (memories) {
-    parts.push("<memories>");
-    parts.push(memories);
-    parts.push("</memories>");
-  }
-
-  if (userProfile) {
-    parts.push("<user_profile>");
-    parts.push(userProfile);
-    parts.push("</user_profile>");
-  }
-
-  parts.push("</session_context>");
-  parts.push("");
-  parts.push("<user_message>");
-  parts.push(userMessage);
-  parts.push("</user_message>");
-
-  return parts.join("\n");
-};

@@ -42,6 +42,10 @@ const TOOL_KIND_MAP: Record<string, acp.ToolKind> = {
   user_memory_store: "other",
   user_memory_list: "read",
   user_memory_delete: "delete",
+  // Local user profile tools
+  user_profile_get: "read",
+  user_profile_add: "other",
+  user_profile_remove: "delete",
 };
 
 export const toolKindFor = (name: string): acp.ToolKind =>
