@@ -186,7 +186,7 @@ describe("writeMcpConfig", () => {
   test("writes valid JSON with mimir and context7 servers", async () => {
     const tmpPath = `/tmp/mimir-test-mcp-${Date.now()}.json`;
     try {
-      await writeMcpConfig(tmpPath, "http://localhost:3777");
+      await writeMcpConfig(tmpPath, "http://localhost:3777", "/tmp/test-user-memories.db");
       const content = JSON.parse(await Bun.file(tmpPath).text());
 
       expect(content.mcpServers.mimir).toEqual({
@@ -206,7 +206,7 @@ describe("writeMcpConfig", () => {
   test("merges client stdio MCP servers", async () => {
     const tmpPath = `/tmp/mimir-test-mcp-${Date.now()}.json`;
     try {
-      await writeMcpConfig(tmpPath, "http://localhost:3777", [
+      await writeMcpConfig(tmpPath, "http://localhost:3777", "/tmp/test-user-memories.db", [
         {
           name: "custom",
           command: "node",
@@ -233,7 +233,7 @@ describe("writeMcpConfig", () => {
   test("mimir's servers win on name collision", async () => {
     const tmpPath = `/tmp/mimir-test-mcp-${Date.now()}.json`;
     try {
-      await writeMcpConfig(tmpPath, "http://localhost:3777", [
+      await writeMcpConfig(tmpPath, "http://localhost:3777", "/tmp/test-user-memories.db", [
         {
           name: "mimir",
           command: "fake",
@@ -254,7 +254,7 @@ describe("writeMcpConfig", () => {
   test("merges client SSE MCP servers", async () => {
     const tmpPath = `/tmp/mimir-test-mcp-${Date.now()}.json`;
     try {
-      await writeMcpConfig(tmpPath, "http://localhost:3777", [
+      await writeMcpConfig(tmpPath, "http://localhost:3777", "/tmp/test-user-memories.db", [
         {
           name: "remote",
           type: "sse",

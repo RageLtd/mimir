@@ -58,6 +58,7 @@ const acpServerToConfigEntry = (server: McpServer): Record<string, unknown> => {
 export const writeMcpConfig = async (
   mcpConfigPath: string,
   serverUrl: string,
+  userMemoryDbPath: string,
   clientMcpServers?: readonly McpServer[],
 ): Promise<void> => {
   const clientEntries: Record<string, unknown> = {};
@@ -65,11 +66,23 @@ export const writeMcpConfig = async (
     clientEntries[server.name] = acpServerToConfigEntry(server);
   }
 
+  // Resolve the user-memory MCP server script relative to this file.
+  const userMemoryScript = new URL(
+    "../tools/user-memory-mcp.ts",
+    import.meta.url,
+  ).pathname;
+
   const config = {
     mcpServers: {
       // Client-provided servers first so mimir's own servers always win on
       // name collision (mimir and context7 are reserved names).
       ...clientEntries,
+      "user-memory": {
+        type: "stdio",
+        command: "bun",
+        args: [userMemoryScript],
+        env: { MIMIR_USER_MEMORY_DB: userMemoryDbPath },
+      },
       mimir: {
         type: "http",
         url: `${serverUrl}/mcp`,
@@ -251,6 +264,8 @@ export type RunClaudeCodeOptions = {
   readonly cc: CCBackendConfig;
   /** The mimir-server URL, needed to build the MCP config's mimir entry. */
   readonly serverUrl: string;
+  /** Path to the user memory SQLite database. */
+  readonly userMemoryDbPath: string;
   /** CC --model flag value; e.g. "opus", "sonnet[1m]". */
   readonly model?: string;
   /** MCP servers from the ACP client to merge into the CC MCP config. */
@@ -306,6 +321,7 @@ export const runClaudeCode = async function* (
   await writeMcpConfig(
     mcpConfigPath,
     options.serverUrl,
+    options.userMemoryDbPath,
     options.clientMcpServers,
   );
 
@@ -449,6 +465,8 @@ export type ClaudeCodeBackendDeps = {
   readonly cc: CCBackendConfig;
   /** The mimir-server URL, forwarded into per-invocation MCP configs. */
   readonly serverUrl: string;
+  /** Path to the user memory SQLite database, forwarded to the MCP subprocess. */
+  readonly userMemoryDbPath: string;
   /** Default cwd when ACP doesn't supply a project path. */
   readonly defaultCwd: string;
 };
@@ -473,6 +491,7 @@ export const createClaudeCodeBackend = (
       workingDirectory: cwd,
       cc: deps.cc,
       serverUrl: deps.serverUrl,
+      userMemoryDbPath: deps.userMemoryDbPath,
       model,
       clientMcpServers: options.clientMcpServers,
       signal: options.signal,
