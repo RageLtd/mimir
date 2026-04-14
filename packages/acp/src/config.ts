@@ -32,6 +32,7 @@ export type MimirConfig = {
   readonly apiKey: string;
   readonly model: string;
   readonly userMemoryDbPath: string;
+  readonly sessionDbPath: string;
   readonly logLevel: "debug" | "info" | "warn" | "error";
   readonly autoApproveTools: boolean;
   readonly systemPromptTtlMs: number;
@@ -80,6 +81,7 @@ export const loadConfig = (): MimirConfig => {
     apiKey: process.env.MIMIR_API_KEY ?? "",
     model: process.env.MIMIR_MODEL ?? "openrouter/auto",
     userMemoryDbPath: process.env.MIMIR_USER_MEMORY_DB ?? "user-memories.db",
+    sessionDbPath: process.env.MIMIR_SESSION_DB ?? "sessions.db",
     logLevel: (process.env.LOG_LEVEL as MimirConfig["logLevel"]) ?? "info",
     autoApproveTools: process.env.AUTO_APPROVE_TOOLS === "true",
     systemPromptTtlMs: parseInt(

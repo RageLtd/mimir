@@ -10,8 +10,8 @@
 import type * as acp from "@agentclientprotocol/sdk";
 import type { Backend, BackendEvent } from "../backends/types";
 import {
-  assembleContext,
   type AssembledMessage,
+  assembleContext,
   type ContextClientConfig,
   persistTurn,
   reportTokenUsage,

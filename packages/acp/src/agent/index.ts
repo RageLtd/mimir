@@ -28,6 +28,7 @@ import {
   getCCModelList,
   mergeModels,
 } from "../routing";
+import { createSessionStore } from "../store/sessions";
 import { createUserMemoryStore } from "../store/user-memories";
 import { createChildLogger, log } from "../utils/log";
 import { formatContentBlocks } from "./content";
@@ -44,6 +45,7 @@ const logger = createChildLogger(log, "agent");
 
 export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
   const memoryStore = createUserMemoryStore(config.userMemoryDbPath);
+  const sessionStore = createSessionStore(config.sessionDbPath);
   const router = createBackendRouter(config);
   const contextClient: ContextClientConfig = {
     baseUrl: config.serverUrl,
@@ -70,6 +72,7 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
     memoryStore,
     router,
     contextClient,
+    sessionStore,
     cartographer,
   );
 
@@ -225,6 +228,7 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
       return {
         protocolVersion: acp.PROTOCOL_VERSION,
         agentCapabilities: {
+          loadSession: true,
           promptCapabilities: {
             embeddedContext: true,
           },
@@ -233,6 +237,9 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
           mcpCapabilities: {
             http: true,
             sse: true,
+          },
+          sessionCapabilities: {
+            list: {},
           },
         },
       };
@@ -312,13 +319,161 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
       return {};
     },
 
+    async loadSession(params: acp.LoadSessionRequest) {
+      const session = core.restoreSession(
+        params.sessionId,
+        params.mcpServers,
+        supportsTerminalOutput,
+      );
+      if (!session) {
+        logger.warn("loadSession: unknown session", params.sessionId);
+        // Return empty response — the client will likely fall back to newSession
+        return {};
+      }
+      logger.info(
+        "loadSession:",
+        params.sessionId,
+        `(${session.messages.length} messages)`,
+      );
+
+      const models = await buildModelsState().catch((err) => {
+        logger.warn("buildModelsState failed:", err);
+        return undefined;
+      });
+
+      // Re-advertise commands and current mode for this session
+      conn
+        .sessionUpdate({
+          sessionId: params.sessionId,
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: AVAILABLE_COMMANDS,
+          },
+        })
+        .catch((err) =>
+          logger.warn("loadSession: available_commands_update failed:", err),
+        );
+
+      conn
+        .sessionUpdate({
+          sessionId: params.sessionId,
+          update: {
+            sessionUpdate: "current_mode_update",
+            currentModeId: session.currentMode,
+          },
+        })
+        .catch((err) =>
+          logger.warn("loadSession: current_mode_update failed:", err),
+        );
+
+      // Replay conversation history so the editor can render the transcript.
+      // We emit user/assistant turns only — tool calls and thinking are not
+      // replayed since the editor doesn't need them for display.
+      for (const msg of session.messages) {
+        if (msg.role === "user" && msg.content) {
+          conn
+            .sessionUpdate({
+              sessionId: params.sessionId,
+              update: {
+                sessionUpdate: "user_message_chunk",
+                content: { type: "text", text: msg.content },
+              },
+            })
+            .catch(() => {});
+        } else if (msg.role === "assistant" && msg.content) {
+          conn
+            .sessionUpdate({
+              sessionId: params.sessionId,
+              update: {
+                sessionUpdate: "agent_message_chunk",
+                content: { type: "text", text: msg.content },
+              },
+            })
+            .catch(() => {});
+        }
+      }
+
+      // Restore the session title if we have one
+      if (session.title) {
+        conn
+          .sessionUpdate({
+            sessionId: params.sessionId,
+            update: {
+              sessionUpdate: "session_info_update",
+              title: session.title,
+              updatedAt: new Date().toISOString(),
+            },
+          })
+          .catch(() => {});
+      }
+
+      return {
+        ...(models ? { models } : {}),
+        modes: {
+          availableModes: SESSION_MODES,
+          currentModeId: session.currentMode,
+        },
+      };
+    },
+
+    async listSessions(_params: acp.ListSessionsRequest) {
+      const persisted = core.listSessions();
+      return {
+        sessions: persisted.map((s) => ({
+          sessionId: s.session_id,
+          cwd: s.project_path,
+          title: s.title ?? undefined,
+          updatedAt: s.updated_at,
+        })),
+      };
+    },
+
     async authenticate(_params: acp.AuthenticateRequest) {},
 
     async prompt(params: acp.PromptRequest): Promise<acp.PromptResponse> {
       const promptText = formatContentBlocks(params.prompt);
       const cmd = parseCommand(promptText);
       if (cmd) return handleCommand(params.sessionId, cmd);
-      return core.prompt(params.sessionId, promptText, conn);
+
+      // Echo the user message immediately so Zed sees it in the transcript
+      // before the agent starts responding.
+      conn
+        .sessionUpdate({
+          sessionId: params.sessionId,
+          update: {
+            sessionUpdate: "user_message_chunk",
+            content: { type: "text", text: promptText },
+          },
+        })
+        .catch((err) => logger.warn("user_message_chunk echo failed:", err));
+
+      const response = await core.prompt(params.sessionId, promptText, conn);
+
+      // Persist messages after each round-trip
+      core.persistMessages(params.sessionId);
+
+      // Generate and push a session title from the first user message if we
+      // don't have one yet. We truncate to 60 chars to keep it readable in
+      // Zed's session panel.
+      const session = core.getSession(params.sessionId);
+      if (session && !session.title) {
+        const title = promptText.slice(0, 60).replace(/\s+/g, " ").trim();
+        if (title) {
+          core.setTitle(params.sessionId, title);
+          conn
+            .sessionUpdate({
+              sessionId: params.sessionId,
+              update: {
+                sessionUpdate: "session_info_update",
+                title,
+                updatedAt: new Date().toISOString(),
+              },
+            })
+            .catch((err) => logger.warn("session_info_update failed:", err));
+        }
+      }
+
+      return response;
     },
 
     async cancel(params: acp.CancelNotification): Promise<void> {

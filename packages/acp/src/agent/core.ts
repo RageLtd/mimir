@@ -11,6 +11,7 @@ import type { Backend } from "../backends/types";
 import type { CartographerManager } from "../cartographer/lifecycle";
 import type { MimirConfig } from "../config";
 import type { ContextClientConfig } from "../context-client";
+import type { SessionStore } from "../store/sessions";
 import type { UserMemoryStore } from "../store/user-memories";
 import { createChildLogger, log } from "../utils/log";
 import { promptViaClaudeCode } from "./prompt-cc";
@@ -25,6 +26,7 @@ export const createAgentCore = (
   memoryStore: UserMemoryStore,
   router: BackendRouter,
   contextClient: ContextClientConfig,
+  sessionStore: SessionStore,
   cartographer?: CartographerManager | null,
 ): AgentCore => {
   const sessions = new Map<string, SessionState>();
@@ -42,6 +44,44 @@ export const createAgentCore = (
       abortController: null,
       currentModelId: appConfig.model,
       currentMode: DEFAULT_MODE,
+      title: null,
+      clientMcpServers,
+      supportsTerminalOutput,
+    };
+    sessions.set(sessionId, session);
+    sessionStore.upsert(
+      sessionId,
+      projectPath,
+      appConfig.model,
+      DEFAULT_MODE,
+      null,
+      [],
+    );
+    return session;
+  };
+
+  const restoreSession = (
+    sessionId: string,
+    clientMcpServers?: readonly acp.McpServer[],
+    supportsTerminalOutput = false,
+  ): SessionState | null => {
+    // Already live in this process — just update runtime fields
+    const existing = sessions.get(sessionId);
+    if (existing) {
+      existing.clientMcpServers = clientMcpServers;
+      existing.supportsTerminalOutput = supportsTerminalOutput;
+      return existing;
+    }
+    const persisted = sessionStore.get(sessionId);
+    if (!persisted) return null;
+    const session: SessionState = {
+      sessionId: persisted.session_id,
+      messages: JSON.parse(persisted.messages),
+      projectPath: persisted.project_path,
+      abortController: null,
+      currentModelId: persisted.model_id,
+      currentMode: persisted.mode,
+      title: persisted.title,
       clientMcpServers,
       supportsTerminalOutput,
     };
@@ -52,10 +92,13 @@ export const createAgentCore = (
   const getSession = (sessionId: string): SessionState | undefined =>
     sessions.get(sessionId);
 
+  const listSessions = () => sessionStore.list();
+
   const setModel = (sessionId: string, modelId: string): boolean => {
     const session = sessions.get(sessionId);
     if (!session) return false;
     session.currentModelId = modelId;
+    sessionStore.updateMeta(sessionId, { modelId });
     return true;
   };
 
@@ -63,6 +106,7 @@ export const createAgentCore = (
     const session = sessions.get(sessionId);
     if (!session) return false;
     session.messages = [];
+    sessionStore.updateMessages(sessionId, []);
     return true;
   };
 
@@ -72,7 +116,21 @@ export const createAgentCore = (
     const valid = SESSION_MODES.some((m) => m.id === modeId);
     if (!valid) return false;
     session.currentMode = modeId;
+    sessionStore.updateMeta(sessionId, { mode: modeId });
     return true;
+  };
+
+  const setTitle = (sessionId: string, title: string): void => {
+    const session = sessions.get(sessionId);
+    if (!session) return;
+    session.title = title;
+    sessionStore.updateMeta(sessionId, { title });
+  };
+
+  const persistMessages = (sessionId: string): void => {
+    const session = sessions.get(sessionId);
+    if (!session) return;
+    sessionStore.updateMessages(sessionId, session.messages);
   };
 
   const prompt = async (
@@ -148,8 +206,22 @@ export const createAgentCore = (
       session.abortController?.abort();
     }
     memoryStore.close();
+    sessionStore.close();
     cartographer?.dispose();
   };
 
-  return { newSession, setModel, setMode, compact, prompt, cancel, dispose };
+  return {
+    newSession,
+    restoreSession,
+    getSession,
+    listSessions,
+    setModel,
+    setMode,
+    setTitle,
+    persistMessages,
+    compact,
+    prompt,
+    cancel,
+    dispose,
+  };
 };
