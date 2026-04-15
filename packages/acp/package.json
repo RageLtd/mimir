@@ -8,6 +8,7 @@
     "build": "bun build --compile ./index.ts --outfile mimir-acp"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^0.18.2"
+    "@agentclientprotocol/sdk": "^0.18.2",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.108"
   }
 }

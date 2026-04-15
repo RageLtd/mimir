@@ -1,7 +1,8 @@
 /**
  * Minimal stdio MCP server for user memory tools.
  *
- * Runs as a subprocess spawned by Claude Code via --mcp-config.
+ * Spawned by the Claude Code Agent SDK as a stdio MCP server,
+ * configured via the `mcpServers` SDK option in mcp-config.ts.
  * Speaks JSON-RPC 2.0 over stdin/stdout — the MCP stdio transport.
  * Connects to the same bun:sqlite database as the main ACP process.
  *

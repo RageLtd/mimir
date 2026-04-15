@@ -9,7 +9,12 @@
       "WebFetch(domain:docs.claude.com)",
       "Bash(bun test:*)",
       "Bash(bunx tsc:*)",
-      "mcp__claude_ai_Context7__resolve-library-id"
+      "mcp__claude_ai_Context7__resolve-library-id",
+      "WebSearch",
+      "Read(//Users/nathandevuono/.local/share/**)",
+      "Read(//Users/nathandevuono/.claude/**)",
+      "WebFetch(domain:github.com)",
+      "Bash(grep *)"
     ]
   }
 }

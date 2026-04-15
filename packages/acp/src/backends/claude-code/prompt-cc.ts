@@ -3,9 +3,9 @@
  *
  * Fetches assembled context from mimir-server (system prompt, summaries,
  * memories, historical turns). Converts the system prompt to Anthropic XML,
- * injects local user context, formats prior turns for --append-system-prompt,
- * and passes the current user message via NDJSON stdin. mimir-server owns
- * all context; CC is stateless.
+ * injects local user context, formats prior turns as structured text in the
+ * system prompt, and passes the current user message as the SDK prompt input.
+ * mimir-server owns all context; CC is stateless.
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
@@ -178,9 +178,9 @@ const handleCCEvent = async (
 
 /**
  * Strip the trailing user message from the assembled array when it
- * matches the current query — that message goes via the positional
- * prompt arg, not as context. Everything else (summaries, memories,
- * prior turns) becomes context for --append-system-prompt.
+ * matches the current query — that message goes as the SDK prompt input,
+ * not as context. Everything else (summaries, memories, prior turns)
+ * becomes structured context in the system prompt.
  */
 export const contextWithoutCurrentTurn = (
   messages: readonly AssembledMessage[],
@@ -237,8 +237,8 @@ export const promptViaClaudeCode = async (
 
   // The server's assembled messages include the context injection pair
   // (summaries + memories), historical turns, and the current user message.
-  // Strip the current user message — it goes as NDJSON via stdin.
-  // Everything else becomes context for --append-system-prompt.
+  // Strip the current user message — it goes as the SDK prompt input.
+  // Everything else becomes structured context in the system prompt.
   const contextMessages = contextWithoutCurrentTurn(
     context.messages,
     promptText,

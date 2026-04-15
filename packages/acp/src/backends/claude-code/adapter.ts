@@ -2,9 +2,9 @@
  * Claude Code backend adapter.
  *
  * Bridges the generic Backend interface to `runClaudeCode`. This is the
- * entry point for the backend router — swapping to a different CLI
- * (Copilot, Gemini CLI, etc.) means creating a new adapter that consumes
- * the same NDJSON temp file that `runner.ts` produces.
+ * entry point for the backend router — swapping to a different SDK or CLI
+ * means creating a new adapter with the same BackendRunOptions → BackendEvent
+ * async generator contract.
  */
 
 import type { CCBackendConfig } from "../../config";
@@ -16,7 +16,7 @@ export type ClaudeCodeBackendDeps = {
   readonly cc: CCBackendConfig;
   /** The mimir-server URL, forwarded into per-invocation MCP configs. */
   readonly serverUrl: string;
-  /** Path to the user memory SQLite database, forwarded to the MCP subprocess. */
+  /** Path to the user memory SQLite database, forwarded to the MCP server config. */
   readonly userMemoryDbPath: string;
   /** Default cwd when ACP doesn't supply a project path. */
   readonly defaultCwd: string;

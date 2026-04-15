@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { contextWithoutCurrentTurn } from "./prompt-cc";
-import { formatContextForPrompt, buildArgs } from ".";
+import { formatContextForPrompt, buildSdkOptions } from "./formatting";
 import { toAnthropicXml } from "../../utils/markdown-to-xml";
 import type { CCBackendConfig } from "../../config";
 
@@ -106,12 +106,12 @@ describe("contextWithoutCurrentTurn", () => {
   });
 });
 
-// ── End-to-end pipeline: server response → context + args ──
+// ── End-to-end pipeline: server response → SDK options ──
 //
 // Simulates the full flow: the server's /v1/context/assemble returns a
 // systemPrompt + messages array. prompt-cc strips the current user
 // message, converts the system prompt to XML, and formats the remaining
-// context for --append-system-prompt.
+// context as structured text in the system prompt for the SDK.
 
 describe("end-to-end: assembled context → claude args + context", () => {
   const serverSystemPrompt =
@@ -183,54 +183,38 @@ describe("end-to-end: assembled context → claude args + context", () => {
     expect(xml).toContain("Be direct.");
   });
 
-  test("buildArgs uses --input-format stream-json and includes --append-system-prompt", () => {
+  test("buildSdkOptions includes context in system prompt and passes model/disallowedTools", () => {
     const context = contextWithoutCurrentTurn(assembledMessages, currentQuery);
     const xmlPrompt = toAnthropicXml(serverSystemPrompt);
     const cc: CCBackendConfig = {
       enabled: true,
-      mcpConfigPath: "./mcp.json",
       disallowedTools: ["Agent", "Monitor"],
       permissionMode: "bypassPermissions",
       models: {},
     };
 
-    const args = buildArgs(
-      {
-        contextMessages: context,
-        systemPrompt: xmlPrompt,
-        cc,
-        model: "opus",
-      },
-      "/tmp/session-mcp.json",
-    );
+    const opts = buildSdkOptions({
+      contextMessages: context,
+      systemPrompt: xmlPrompt,
+      cc,
+      model: "opus",
+      workingDirectory: "/tmp/test",
+      serverUrl: "http://localhost:3777",
+      userMemoryDbPath: "/tmp/test-memories.db",
+    });
 
-    // Prompt goes via stdin, not -p
-    expect(args).not.toContain("-p");
+    // Context is concatenated into system prompt
+    expect(opts.systemPrompt).toContain(xmlPrompt);
+    expect(opts.systemPrompt).toContain("<conversation_context>");
 
-    // --input-format stream-json is always present
-    const inputFmtIdx = args.indexOf("--input-format");
-    expect(inputFmtIdx).not.toBe(-1);
-    expect(args[inputFmtIdx + 1]).toBe("stream-json");
+    // Model passed through
+    expect(opts.model).toBe("opus");
 
-    // --append-system-prompt carries the context
-    expect(args).toContain("--append-system-prompt");
-    const appendIdx = args.indexOf("--append-system-prompt");
-    expect(args[appendIdx + 1]).toContain("<conversation_context>");
-
-    // --system-prompt carries the XML
-    expect(args[args.indexOf("--system-prompt")! + 1]).toBe(xmlPrompt);
-
-    // --model passed through
-    expect(args[args.indexOf("--model")! + 1]).toBe("opus");
-
-    // --disallowedTools joined
-    expect(args[args.indexOf("--disallowedTools")! + 1]).toBe(
-      "Agent,Monitor",
-    );
+    // DisallowedTools passed through
+    expect(opts.disallowedTools).toEqual(["Agent", "Monitor"]);
   });
 
-  test("first-message scenario: no context omits --append-system-prompt", () => {
-    // First message — server returns only the current query
+  test("first-message scenario: no context keeps system prompt clean", () => {
     const context = contextWithoutCurrentTurn(
       [{ role: "user" as const, content: "hello" }],
       "hello",
@@ -239,25 +223,21 @@ describe("end-to-end: assembled context → claude args + context", () => {
 
     const cc: CCBackendConfig = {
       enabled: true,
-      mcpConfigPath: "./mcp.json",
       disallowedTools: [],
       permissionMode: "bypassPermissions",
       models: {},
     };
-    const args = buildArgs(
-      {
-        contextMessages: context,
-        systemPrompt: "<system/>",
-        cc,
-      },
-      "/tmp/mcp.json",
-    );
+    const opts = buildSdkOptions({
+      contextMessages: context,
+      systemPrompt: "<system/>",
+      cc,
+      workingDirectory: "/tmp/test",
+      serverUrl: "http://localhost:3777",
+      userMemoryDbPath: "/tmp/test-memories.db",
+    });
 
-    // No context → no --append-system-prompt
-    expect(args).not.toContain("--append-system-prompt");
-
-    // --input-format stream-json always present, no -p
-    expect(args).toContain("--input-format");
-    expect(args).not.toContain("-p");
+    // No context → system prompt is just the base prompt
+    expect(opts.systemPrompt).toBe("<system/>");
+    expect(opts.systemPrompt).not.toContain("<conversation_context>");
   });
 });

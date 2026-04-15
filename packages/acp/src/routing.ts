@@ -1,8 +1,8 @@
 /**
  * Model-based backend routing.
  *
- * Models prefixed with `claude-code/` route through the CC subprocess
- * backend. Everything else routes through mimir-server.
+ * Models prefixed with `claude-code/` route through the Claude Code
+ * Agent SDK backend. Everything else routes through mimir-server.
  *
  * Backend selection is per-request, not per-session — the editor's
  * model dropdown determines the backend on every prompt.
@@ -38,7 +38,7 @@ export const getCCModelList = (cc: CCBackendConfig): ModelInfo[] => {
   return Object.keys(cc.models).map((suffix) => ({
     modelId: `${CC_PREFIX}${suffix}`,
     name: `Claude Code (${suffix})`,
-    description: `Routed through the local Claude Code subprocess (--model ${cc.models[suffix]})`,
+    description: `Routed through the Claude Code Agent SDK (model: ${cc.models[suffix]})`,
   }));
 };
 

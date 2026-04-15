@@ -1,194 +1,238 @@
 /**
- * Core Claude Code subprocess runner.
+ * Core Claude Code runner using the Agent SDK.
  *
- * Spawns `claude --input-format stream-json`, writes the current user
- * message as a single NDJSON line to a temp file (passed as stdin), parses
- * stream-json OUTPUT events, and translates them to BackendEvent. Writing
- * via a temp file rather than a pipe avoids macOS's ~65 KB pipe buffer
- * ceiling — large context windows would deadlock a pipe. CC runs its own
- * internal tool loop, so all tool_call / tool_result events are surfaced
- * with observeOnly=true — the agent loop must NOT execute them.
+ * Uses `query()` from @anthropic-ai/claude-agent-sdk to run Claude Code,
+ * translates SDK message types to the normalized BackendEvent stream.
+ * The SDK handles subprocess spawning, auth, and session management
+ * internally — no temp files or NDJSON parsing needed.
  */
 
+import {
+  type Query,
+  query,
+  type SDKAssistantMessage,
+  type SDKResultMessage,
+  type SDKSystemMessage,
+  type SDKUserMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import { acpBlocksToAnthropicContent } from "../../agent/content";
 import { errMessage } from "../../util";
+import { createChildLogger, log } from "../../utils/log";
 import type { BackendEvent } from "../types";
-import { buildArgs, type RunClaudeCodeOptions } from "./formatting";
-import { writeMcpConfig } from "./mcp-config";
-import {
-  type CCAssistantEvent,
-  type CCEvent,
-  type CCInitEvent,
-  type CCResultEvent,
-  type CCToolResultEvent,
-  iterateNdjson,
-  stringifyToolResult,
-} from "./protocol";
+import { buildSdkOptions, type RunClaudeCodeOptions } from "./formatting";
+
+const logger = createChildLogger(log, "cc-runner");
+
+/**
+ * Tracks active Query instances so they can be closed on process shutdown.
+ * Per-request cancellation uses abortController (interrupts the current
+ * turn); close() is reserved for agent termination.
+ */
+const activeQueries = new Set<Query>();
+
+const shutdownAll = () => {
+  for (const q of activeQueries) {
+    q.close();
+  }
+  activeQueries.clear();
+};
+
+process.on("SIGTERM", shutdownAll);
+process.on("SIGINT", shutdownAll);
+
+/** Extract text from a tool_result content field. */
+const stringifyToolResultContent = (content: unknown): string => {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((p) => {
+        if (typeof p === "string") return p;
+        if (p && typeof p === "object" && "text" in p) {
+          return String((p as { text?: unknown }).text ?? "");
+        }
+        return "";
+      })
+      .join("");
+  }
+  return "";
+};
+
+/** Translate an SDKAssistantMessage into BackendEvent(s). */
+function* translateAssistant(
+  msg: SDKAssistantMessage,
+): Generator<BackendEvent> {
+  for (const block of msg.message.content ?? []) {
+    if (block.type === "text") {
+      yield { type: "text", text: block.text };
+    } else if (block.type === "thinking") {
+      yield {
+        type: "thinking",
+        text: (block as { thinking: string }).thinking,
+      };
+    } else if (block.type === "tool_use") {
+      const tb = block as { id: string; name: string; input: unknown };
+      yield {
+        type: "tool_call",
+        id: tb.id,
+        name: tb.name,
+        input: (tb.input ?? {}) as Record<string, unknown>,
+        observeOnly: true,
+      };
+    }
+  }
+}
+
+/** Translate an SDKUserMessage (tool results) into BackendEvent(s). */
+function* translateUser(msg: SDKUserMessage): Generator<BackendEvent> {
+  const content = msg.message?.content;
+  if (!Array.isArray(content)) return;
+  for (const part of content) {
+    if (
+      part &&
+      typeof part === "object" &&
+      "type" in part &&
+      (part as { type: string }).type === "tool_result"
+    ) {
+      const tr = part as {
+        tool_use_id: string;
+        content: unknown;
+      };
+      yield {
+        type: "tool_result",
+        id: tr.tool_use_id,
+        output: stringifyToolResultContent(tr.content),
+        observeOnly: true,
+      };
+    }
+  }
+}
+
+/** Translate an SDKResultMessage into BackendEvent(s). */
+function* translateResult(
+  msg: SDKResultMessage,
+  sessionId: string | undefined,
+): Generator<BackendEvent> {
+  const usage = msg.usage;
+  const promptTokens =
+    (usage?.input_tokens ?? 0) +
+    (usage?.cache_read_input_tokens ?? 0) +
+    (usage?.cache_creation_input_tokens ?? 0);
+
+  if (msg.subtype !== "success") {
+    yield { type: "error", error: msg.errors.join("; ") };
+  }
+
+  yield {
+    type: "finish",
+    sessionId,
+    stopReason: msg.subtype,
+    promptTokens,
+    completionTokens: usage?.output_tokens,
+    cost: msg.total_cost_usd,
+  };
+}
+
+/** Pull the next value from an async iterator, returning { ok, data/error }. */
+type SafeOk<T> = { ok: true; data: IteratorResult<T> };
+type SafeErr = { ok: false; error: string };
+
+const safeNext = async <T>(
+  iter: AsyncIterator<T>,
+): Promise<SafeOk<T> | SafeErr> => {
+  const result = await iter.next().catch(errMessage);
+  if (typeof result === "string") return { ok: false, error: result };
+  return { ok: true, data: result };
+};
 
 export const runClaudeCode = async function* (
   options: RunClaudeCodeOptions,
 ): AsyncGenerator<BackendEvent> {
-  // Write a per-invocation MCP config merging mimir's base servers with any
-  // client-provided servers. Using a unique path avoids concurrent sessions
-  // overwriting each other's config file.
-  const suffix = `${Date.now()}.${Math.random().toString(36).slice(2, 7)}`;
-  const mcpConfigPath = `${options.cc.mcpConfigPath}.${suffix}`;
-
-  // Build the NDJSON user message. Use promptBlocks if available (preserves
-  // images); fall back to plain text. Write to a temp file rather than
-  // piping directly — macOS's ~65 KB pipe buffer would deadlock on large
-  // context. File reads have no such ceiling.
+  // Build the user message content parts. Use promptBlocks if available
+  // (preserves images); fall back to plain text.
   const contentParts =
     options.promptBlocks && options.promptBlocks.length > 0
       ? acpBlocksToAnthropicContent(options.promptBlocks)
       : [{ type: "text" as const, text: options.prompt }];
-  const inputPath = `/tmp/mimir-input-${suffix}.ndjson`;
 
-  await Promise.all([
-    writeMcpConfig(
-      mcpConfigPath,
-      options.serverUrl,
-      options.userMemoryDbPath,
-      options.clientMcpServers,
-    ),
-    Bun.write(
-      inputPath,
-      `${JSON.stringify({ type: "user", message: { role: "user", content: contentParts } })}\n`,
-    ),
-  ]);
+  // Streaming input: yield a single user message then close the generator.
+  async function* promptInput() {
+    yield {
+      type: "user" as const,
+      message: { role: "user" as const, content: contentParts },
+      parent_tool_use_id: null,
+    };
+  }
 
-  const args = buildArgs(options, mcpConfigPath);
+  // abortController interrupts the current turn without tearing down the session.
+  // Full session cleanup happens only on agent shutdown via activeQueries.
+  const abortController = new AbortController();
+  if (options.signal) {
+    options.signal.addEventListener("abort", () => abortController.abort(), {
+      once: true,
+    });
+  }
 
-  const proc = Bun.spawn(["claude", ...args], {
-    cwd: options.workingDirectory,
-    stdin: Bun.file(inputPath),
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, ENABLE_TOOL_SEARCH: "false" },
+  const q = query({
+    prompt: promptInput(),
+    options: { ...buildSdkOptions(options), abortController },
   });
+  activeQueries.add(q);
 
-  const onAbort = () => {
-    try {
-      proc.kill("SIGTERM");
-    } catch {
-      // ignore
-    }
-  };
-  options.signal?.addEventListener("abort", onAbort, { once: true });
-
-  let lastUsage:
-    | {
-        input_tokens?: number;
-        output_tokens?: number;
-        cache_read_input_tokens?: number;
-        cache_creation_input_tokens?: number;
-      }
-    | undefined;
+  const iter = q[Symbol.asyncIterator]();
   let sessionId: string | undefined;
 
-  try {
-    for await (const raw of iterateNdjson(proc.stdout)) {
-      const ev = raw as CCEvent;
+  for (;;) {
+    const next = await safeNext(iter);
 
-      if (ev.type === "system" && (ev as CCInitEvent).subtype === "init") {
-        const init = ev as CCInitEvent;
-        sessionId = init.session_id;
-        yield {
-          type: "init",
-          sessionId: init.session_id,
-          tools: init.tools ?? [],
-        };
-        continue;
+    if (!next.ok) {
+      if (!abortController.signal.aborted) {
+        yield { type: "error", error: next.error };
       }
-
-      if (ev.type === "assistant") {
-        const a = ev as CCAssistantEvent;
-        sessionId = a.session_id;
-        if (a.message.usage) lastUsage = a.message.usage;
-
-        for (const part of a.message.content ?? []) {
-          if (part.type === "text") {
-            yield { type: "text", text: part.text };
-          } else if (part.type === "thinking") {
-            yield { type: "thinking", text: part.thinking };
-          } else if (part.type === "tool_use") {
-            yield {
-              type: "tool_call",
-              id: part.id,
-              name: part.name,
-              input: part.input ?? {},
-              observeOnly: true,
-            };
-          }
-        }
-        continue;
-      }
-
-      if (ev.type === "user") {
-        const u = ev as CCToolResultEvent;
-        for (const part of u.message?.content ?? []) {
-          if (
-            part &&
-            typeof part === "object" &&
-            (part as { type?: string }).type === "tool_result"
-          ) {
-            const tr = part as {
-              tool_use_id: string;
-              content: unknown;
-            };
-            yield {
-              type: "tool_result",
-              id: tr.tool_use_id,
-              output: stringifyToolResult(part as never),
-              observeOnly: true,
-            };
-          }
-        }
-        continue;
-      }
-
-      if (ev.type === "result") {
-        const r = ev as CCResultEvent;
-        sessionId = r.session_id;
-        const usage = r.usage ?? lastUsage;
-        const promptTokens =
-          (usage?.input_tokens ?? 0) +
-          (usage?.cache_read_input_tokens ?? 0) +
-          (usage?.cache_creation_input_tokens ?? 0);
-        yield {
-          type: "finish",
-          sessionId,
-          stopReason: r.subtype,
-          promptTokens,
-          completionTokens: usage?.output_tokens,
-          cost: r.total_cost_usd,
-        };
-        return;
-      }
+      break;
     }
 
-    // Stream closed without a result event
-    const exit = await proc.exited;
-    if (exit !== 0) {
-      const err = await new Response(proc.stderr).text().catch(() => "");
+    if (next.data.done) break;
+    const msg = next.data.value;
+
+    // system:init
+    if (msg.type === "system" && "subtype" in msg && msg.subtype === "init") {
+      const init = msg as SDKSystemMessage;
+      sessionId = init.session_id;
       yield {
-        type: "error",
-        error: `claude exited ${exit}: ${err.slice(0, 500)}`,
+        type: "init",
+        sessionId: init.session_id,
+        tools: init.tools ?? [],
       };
-    } else {
-      yield { type: "finish", sessionId };
+      continue;
     }
-  } catch (err) {
-    yield { type: "error", error: errMessage(err) };
-  } finally {
-    options.signal?.removeEventListener("abort", onAbort);
-    // Clean up per-invocation temp files (MCP config + stdin input).
-    for (const path of [mcpConfigPath, inputPath]) {
-      Bun.file(path)
-        .exists()
-        .then((exists) => {
-          if (exists) Bun.$`rm -f ${path}`.quiet().catch(() => {});
-        });
+
+    // assistant message (complete turn)
+    if (msg.type === "assistant") {
+      const asst = msg as SDKAssistantMessage;
+      sessionId = asst.session_id;
+      yield* translateAssistant(asst);
+      continue;
     }
+
+    // user message (tool results from CC's internal loop)
+    if (msg.type === "user" && !("isReplay" in msg)) {
+      yield* translateUser(msg as SDKUserMessage);
+      continue;
+    }
+
+    // result (final)
+    if (msg.type === "result") {
+      const result = msg as SDKResultMessage;
+      sessionId = result.session_id;
+      yield* translateResult(result, sessionId);
+      activeQueries.delete(q);
+      return;
+    }
+
+    // All other message types (stream_event, compact_boundary, etc.) — skip
+    logger.debug({ type: msg.type }, "ignoring SDK message");
   }
+
+  activeQueries.delete(q);
+  yield { type: "finish", sessionId };
 };

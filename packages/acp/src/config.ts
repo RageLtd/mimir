@@ -3,8 +3,8 @@
  * Reads from environment variables with sensible defaults.
  *
  * Backend selection is per-request, driven by the model prefix:
- * `claude-code/*` routes to the CC subprocess; everything else routes
- * to mimir-server. There is no global `backend` switch.
+ * `claude-code/*` routes to the Claude Code Agent SDK; everything else
+ * routes to mimir-server. There is no global `backend` switch.
  */
 
 const expandHome = (p: string) =>
@@ -13,7 +13,6 @@ const expandHome = (p: string) =>
 export type CCBackendConfig = {
   /** When false, CC models are hidden from the model list and routing rejects them. */
   readonly enabled: boolean;
-  readonly mcpConfigPath: string;
   readonly disallowedTools: readonly string[];
   readonly permissionMode: string;
   readonly workingDirectory?: string;
@@ -98,7 +97,6 @@ export const loadConfig = (): MimirConfig => {
     cc: {
       // Default to true; routing.ts disables it at startup if `claude` isn't on PATH.
       enabled: ccEnabledOverride ?? true,
-      mcpConfigPath: process.env.MIMIR_CC_MCP_CONFIG ?? "./mimir-mcp.json",
       disallowedTools: parseDisallowed(process.env.MIMIR_CC_DISALLOWED_TOOLS),
       permissionMode:
         process.env.MIMIR_CC_PERMISSION_MODE ?? "bypassPermissions",

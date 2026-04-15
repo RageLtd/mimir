@@ -165,7 +165,7 @@ export async function initSchema(): Promise<void> {
     DEFINE FIELD IF NOT EXISTS indexed_at ON cart_file TYPE datetime DEFAULT time::now();
     DEFINE INDEX IF NOT EXISTS cart_file_project ON cart_file FIELDS project;
     DEFINE INDEX IF NOT EXISTS cart_file_path ON cart_file FIELDS file_path;
-    DEFINE INDEX cart_file_searchable ON cart_file FIELDS searchable
+    DEFINE INDEX IF NOT EXISTS cart_file_searchable ON cart_file FIELDS searchable
       FULLTEXT ANALYZER memory_analyzer BM25;
 
     DEFINE TABLE IF NOT EXISTS cart_import SCHEMAFULL;

@@ -30,15 +30,27 @@ export const hasImageBlocks = (blocks: readonly acp.ContentBlock[]) =>
 /**
  * Convert ACP content blocks to Anthropic API message content format.
  *
- * Used when piping a multipart user message to the CC subprocess via stdin
- * (--input-format stream-json). Images are preserved as base64 source blocks;
- * everything else is collapsed to text parts, matching formatContentBlocks.
+ * Used when building the SDK prompt input for a multipart user message.
+ * Images are preserved as base64 source blocks; everything else is
+ * collapsed to text parts, matching formatContentBlocks.
  */
+type ImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+
+const VALID_IMAGE_TYPES = new Set<string>([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+]);
+
+const isImageMediaType = (s: string): s is ImageMediaType =>
+  VALID_IMAGE_TYPES.has(s);
+
 type AnthropicContentPart =
   | { type: "text"; text: string }
   | {
       type: "image";
-      source: { type: "base64"; media_type: string; data: string };
+      source: { type: "base64"; media_type: ImageMediaType; data: string };
     };
 
 export const acpBlocksToAnthropicContent = (
@@ -50,6 +62,14 @@ export const acpBlocksToAnthropicContent = (
     }
 
     if (block.type === "image") {
+      if (!isImageMediaType(block.mimeType)) {
+        return [
+          {
+            type: "text" as const,
+            text: `[Unsupported image type: ${block.mimeType}]`,
+          },
+        ];
+      }
       return [
         {
           type: "image" as const,

@@ -2,8 +2,8 @@
  * Backend abstraction.
  *
  * A Backend yields a normalized stream of BackendEvent values regardless of
- * whether inference happens on mimir-server (HTTP+SSE) or via a local
- * Claude Code subprocess (NDJSON stream-json).
+ * whether inference happens on mimir-server (HTTP+SSE) or via the Claude
+ * Code Agent SDK.
  *
  * Event semantics differ slightly per backend:
  *
@@ -66,8 +66,8 @@ export type BackendRunOptions = {
   readonly projectPath: string;
   /**
    * Pre-assembled context messages for the CC backend (prior turns only —
-   * the current user message goes via the positional prompt arg).
-   * Formatted as structured text and injected via --append-system-prompt.
+   * the current user message goes as the SDK prompt input).
+   * Formatted as structured text and concatenated into the system prompt.
    * Includes the server's context injection pair (summaries + memories)
    * and historical conversation turns.
    */
@@ -79,7 +79,7 @@ export type BackendRunOptions = {
   readonly clientMcpServers?: readonly McpServer[];
   /**
    * Raw ACP content blocks for the current turn.
-   * Used by the CC backend to preserve image data when piping via stdin.
+   * Used by the CC backend to preserve image data in the SDK prompt input.
    * The server backend ignores this field.
    */
   readonly promptBlocks?: readonly ContentBlock[];

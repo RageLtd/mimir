@@ -2,8 +2,8 @@
  * Backend factory.
  *
  * Backend selection is driven by the model id (per-request), not by a
- * static config. `claude-code/*` routes through the CC subprocess; every
- * other model routes through mimir-server.
+ * static config. `claude-code/*` routes through the Claude Code Agent SDK;
+ * every other model routes through mimir-server.
  *
  * The two backends are constructed once and selected by model on each
  * call so users can switch models mid-conversation.

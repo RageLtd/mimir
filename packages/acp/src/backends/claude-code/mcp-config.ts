@@ -1,54 +1,65 @@
 /**
- * MCP config builder for the Claude Code backend.
+ * MCP server config builder for the Claude Code SDK backend.
  *
- * Converts ACP McpServer descriptors to the JSON format expected by
- * `claude --mcp-config`, merging the base mimir/context7/user-memory
+ * Converts ACP McpServer descriptors to the record format expected by
+ * the SDK's `mcpServers` option, merging the base mimir/context7/user-memory
  * servers with any client-supplied servers. Client-supplied names are
- * written first so mimir's reserved names always win on collision.
+ * inserted first so mimir's reserved names always win on collision.
  */
 
 import type { McpServer, McpServerStdio } from "@agentclientprotocol/sdk";
+import type {
+  McpHttpServerConfig,
+  McpServerConfig,
+  McpSSEServerConfig,
+  McpStdioServerConfig,
+} from "@anthropic-ai/claude-agent-sdk";
 
 const isStdioServer = (server: McpServer): server is McpServerStdio =>
   "command" in server;
 
-/** Converts an ACP McpServer to the entry format CC's --mcp-config expects. */
-const acpServerToConfigEntry = (server: McpServer): Record<string, unknown> => {
+/** Converts an ACP McpServer to the SDK's McpServerConfig shape. */
+const acpServerToConfigEntry = (server: McpServer): McpServerConfig => {
   if (isStdioServer(server)) {
     const env = Object.fromEntries(
       (server.env ?? []).map((e) => [e.name, e.value]),
     );
     return {
-      type: "stdio",
       command: server.command,
       args: server.args ?? [],
       ...(Object.keys(env).length > 0 ? { env } : {}),
-    };
+    } satisfies McpStdioServerConfig;
   }
   const headers = Object.fromEntries(
     (server.headers ?? []).map((h) => [h.name, h.value]),
   );
+  if (server.type === "sse") {
+    return {
+      type: "sse",
+      url: server.url,
+      ...(Object.keys(headers).length > 0 ? { headers } : {}),
+    } satisfies McpSSEServerConfig;
+  }
   return {
-    type: server.type,
+    type: "http",
     url: server.url,
     ...(Object.keys(headers).length > 0 ? { headers } : {}),
-  };
+  } satisfies McpHttpServerConfig;
 };
 
 /**
- * Writes the MCP config file consumed by `--mcp-config`, merging the base
- * mimir + context7 servers with any MCP servers provided by the ACP client.
+ * Build the MCP server record for the SDK's `mcpServers` option.
  *
- * Pass a session-specific `mcpConfigPath` when client servers differ per
- * session to avoid concurrent sessions overwriting each other's config.
+ * Merges the base mimir + context7 + user-memory servers with any
+ * MCP servers provided by the ACP client. Mimir's reserved names
+ * always win on collision.
  */
-export const writeMcpConfig = async (
-  mcpConfigPath: string,
+export const buildMcpServers = (
   serverUrl: string,
   userMemoryDbPath: string,
   clientMcpServers?: readonly McpServer[],
-): Promise<void> => {
-  const clientEntries: Record<string, unknown> = {};
+): Record<string, McpServerConfig> => {
+  const clientEntries: Record<string, McpServerConfig> = {};
   for (const server of clientMcpServers ?? []) {
     clientEntries[server.name] = acpServerToConfigEntry(server);
   }
@@ -59,27 +70,22 @@ export const writeMcpConfig = async (
     import.meta.url,
   ).pathname;
 
-  const config = {
-    mcpServers: {
-      // Client-provided servers first so mimir's own servers always win on
-      // name collision (mimir and context7 are reserved names).
-      ...clientEntries,
-      "user-memory": {
-        type: "stdio",
-        command: "bun",
-        args: [userMemoryScript],
-        env: { MIMIR_USER_MEMORY_DB: userMemoryDbPath },
-      },
-      mimir: {
-        type: "http",
-        url: `${serverUrl}/mcp`,
-      },
-      context7: {
-        type: "stdio",
-        command: "bunx",
-        args: ["@upstash/context7-mcp"],
-      },
+  return {
+    // Client-provided servers first so mimir's own servers always win on
+    // name collision (mimir and context7 are reserved names).
+    ...clientEntries,
+    "user-memory": {
+      command: "bun",
+      args: [userMemoryScript],
+      env: { MIMIR_USER_MEMORY_DB: userMemoryDbPath },
+    },
+    mimir: {
+      type: "http",
+      url: `${serverUrl}/mcp`,
+    },
+    context7: {
+      command: "bunx",
+      args: ["@upstash/context7-mcp"],
     },
   };
-  await Bun.write(mcpConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 };
