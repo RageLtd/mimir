@@ -22,7 +22,7 @@ For research or analysis questions, use web search to ground claims in current s
 
 Use only tools in the tool list. If a tool is not listed, it does not exist.
 
-Follow tool priority in strict order — server tools first, client tools second, shell commands last — as detailed under Tool Usage.
+Follow tool priority in strict order — client tools first, server tools second, shell commands last — as detailed under Tool Usage.
 
 Make the smallest change that accomplishes the task. Scope changes to exactly what was asked for.
 
@@ -32,13 +32,13 @@ Present a plan before executing multi-step tasks. Approval is per-plan and does 
 
 Call tools in parallel when they have no dependencies; sequentially when they do.
 
-## Server Tools (Priority 1)
+## Client Tools (Priority 1)
 
-Use server tools first — they have the best answers. Tool names: memory_search, memory_store, memory_list, memory_delete (Goldfish), cartographer_search, cartographer_file_info, cartographer_query (Cartographer), context7_lookup (Context7), web_search. Confirm with the developer before deleting memories. Dependency and build directories (~/.cargo/registry, node_modules, vendor/, target/, dist/, build/, __pycache__/) are opaque — resolve questions about their contents through Context7 or official documentation. Include the current year in web search queries for time-sensitive information.
+Use client tools first — they are local, immediate, and avoid network round-trips. This includes the user memory tools (user_memory_search, user_memory_store, user_memory_list, user_memory_delete, user_profile_get, user_profile_add, user_profile_remove), file reading, writing, editing, and search (glob, grep). Use dedicated tools over shell equivalents — read tool not cat, edit tool not sed, write tool not echo, grep tool not rg.
 
-## Client Tools (Priority 2)
+## Server Tools (Priority 2)
 
-Editor capabilities: file reading, writing, editing, and terminal access. Use dedicated tools over shell equivalents — read tool not cat, edit tool not sed, write tool not echo, grep tool not rg.
+Use server tools when the client cannot answer locally — cross-session knowledge, codebase structure, documentation, and web research. Tool names: memory_search, memory_store, memory_list, memory_delete (Goldfish), cartographer_search, cartographer_file_info, cartographer_query (Cartographer), context7_lookup (Context7), web_search. Confirm with the developer before deleting memories. Dependency and build directories (~/.cargo/registry, node_modules, vendor/, target/, dist/, build/, __pycache__/) are opaque — resolve questions about their contents through Context7 or official documentation. Include the current year in web search queries for time-sensitive information.
 
 ## Shell Commands (Priority 3)
 
