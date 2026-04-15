@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { HookRegistry } from "../registry";
-import { setTaskTracker, TaskTracker } from "../task-tracker";
+import { type HookRegistry, createHookRegistry } from "../registry";
+import { type TaskTracker, createTaskTracker, setTaskTracker } from "../task-tracker";
 import type { HookContext, PostToolUseContext } from "../types";
 import { detectTaskType, registerBackgroundHook } from "./background";
 
@@ -19,7 +19,7 @@ function bashCtx(
 }
 
 function makeRegistry(): HookRegistry {
-  const registry = new HookRegistry();
+  const registry = createHookRegistry();
   registerBackgroundHook(registry);
   return registry;
 }
@@ -217,9 +217,9 @@ describe("Background Task Manager — PostToolUse", () => {
   let registry: HookRegistry;
 
   beforeEach(() => {
-    tracker = new TaskTracker();
+    tracker = createTaskTracker();
     setTaskTracker(tracker);
-    registry = new HookRegistry();
+    registry = createHookRegistry();
     registerBackgroundHook(registry);
   });
 

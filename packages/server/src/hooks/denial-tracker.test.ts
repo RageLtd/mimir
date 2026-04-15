@@ -1,16 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { DenialTracker } from "./denial-tracker";
+import { createDenialTracker, denialKey } from "./denial-tracker";
 
 describe("DenialTracker", () => {
   test("first denial does not exceed threshold", () => {
-    const tracker = new DenialTracker(3);
+    const tracker = createDenialTracker(3);
     const result = tracker.recordDenial("bash", { command: "rm -rf /" }, "fp1");
     expect(result.exceeded).toBe(false);
     expect(result.count).toBe(1);
   });
 
   test("exceeds threshold after N consecutive denials", () => {
-    const tracker = new DenialTracker(3);
+    const tracker = createDenialTracker(3);
     const args = { command: "git push --force" };
 
     tracker.recordDenial("bash", args, "fp1");
@@ -22,7 +22,7 @@ describe("DenialTracker", () => {
   });
 
   test("different commands tracked independently", () => {
-    const tracker = new DenialTracker(3);
+    const tracker = createDenialTracker(3);
 
     tracker.recordDenial("bash", { command: "rm -rf /" }, "fp1");
     tracker.recordDenial("bash", { command: "rm -rf /" }, "fp1");
@@ -37,7 +37,7 @@ describe("DenialTracker", () => {
   });
 
   test("different conversations tracked independently", () => {
-    const tracker = new DenialTracker(2);
+    const tracker = createDenialTracker(2);
     const args = { command: "rm -rf /" };
 
     tracker.recordDenial("bash", args, "fp1");
@@ -48,7 +48,7 @@ describe("DenialTracker", () => {
   });
 
   test("clearForConversation resets all records for that fingerprint", () => {
-    const tracker = new DenialTracker(3);
+    const tracker = createDenialTracker(3);
     const args = { command: "rm -rf /" };
 
     tracker.recordDenial("bash", args, "fp1");
@@ -61,7 +61,7 @@ describe("DenialTracker", () => {
   });
 
   test("clearForConversation doesn't affect other conversations", () => {
-    const tracker = new DenialTracker(3);
+    const tracker = createDenialTracker(3);
     const args = { command: "rm -rf /" };
 
     tracker.recordDenial("bash", args, "fp1");
@@ -73,7 +73,7 @@ describe("DenialTracker", () => {
   });
 
   test("clearSpecific resets only the matching record", () => {
-    const tracker = new DenialTracker(3);
+    const tracker = createDenialTracker(3);
     const args1 = { command: "rm -rf /" };
     const args2 = { command: "git push --force" };
 
@@ -93,7 +93,7 @@ describe("DenialTracker", () => {
   });
 
   test("prune removes old records", () => {
-    const tracker = new DenialTracker(3);
+    const tracker = createDenialTracker(3);
     const args = { command: "rm -rf /" };
 
     tracker.recordDenial("bash", args, "fp1");
@@ -106,14 +106,14 @@ describe("DenialTracker", () => {
     expect(result.count).toBe(1); // Reset after prune
   });
 
-  test("static key normalizes whitespace", () => {
-    const key1 = DenialTracker.key("bash", { command: "git  push   --force" });
-    const key2 = DenialTracker.key("bash", { command: "git push --force" });
+  test("denialKey normalizes whitespace", () => {
+    const key1 = denialKey("bash", { command: "git  push   --force" });
+    const key2 = denialKey("bash", { command: "git push --force" });
     expect(key1).toBe(key2);
   });
 
   test("null fingerprint uses global scope", () => {
-    const tracker = new DenialTracker(2);
+    const tracker = createDenialTracker(2);
     const args = { command: "rm -rf /" };
 
     tracker.recordDenial("bash", args, null);

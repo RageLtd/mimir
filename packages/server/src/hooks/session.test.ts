@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import type { SessionContext } from "./session";
-import { SessionStore } from "./session";
+import type { SessionContext, SessionStore } from "./session";
+import { createSessionStore } from "./session";
 
 function makeCtx(overrides: Partial<SessionContext> = {}): SessionContext {
   return {
@@ -16,7 +16,7 @@ describe("SessionStore", () => {
   let store: SessionStore;
 
   beforeEach(() => {
-    store = new SessionStore();
+    store = createSessionStore();
   });
 
   test("set and get round-trips", () => {

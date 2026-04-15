@@ -38,6 +38,27 @@ const ccToolCallInfo = new Map<
   { name: string; input: Record<string, unknown> }
 >();
 
+/** Translate TodoWrite input into an ACP plan session update. */
+const emitPlanUpdate = async (
+  session: SessionState,
+  conn: acp.AgentSideConnection,
+  todos: readonly { content: string; status: string; activeForm?: string }[],
+) => {
+  await conn.sessionUpdate({
+    sessionId: session.sessionId,
+    update: {
+      sessionUpdate: "plan",
+      entries: todos.map((t) => ({
+        content: t.activeForm && t.status === "in_progress"
+          ? t.activeForm
+          : t.content,
+        status: t.status as "pending" | "in_progress" | "completed",
+        priority: "medium" as const,
+      })),
+    },
+  });
+};
+
 const handleCCEvent = async (
   event: BackendEvent,
   session: SessionState,
@@ -72,6 +93,16 @@ const handleCCEvent = async (
       name: event.name,
       input: event.input,
     });
+
+    // TodoWrite → emit an ACP plan update alongside the normal tool card.
+    if (event.name === "TodoWrite" && Array.isArray(event.input.todos)) {
+      await emitPlanUpdate(session, conn, event.input.todos as {
+        content: string;
+        status: string;
+        activeForm?: string;
+      }[]);
+    }
+
     const kind = toolKindFor(event.name);
     const locations = extractLocations(event.name, event.input);
     const title = toolTitle(event.name, event.input);
@@ -108,6 +139,7 @@ const handleCCEvent = async (
   if (event.type === "tool_result") {
     const info = ccToolCallInfo.get(event.id);
     const toolName = info?.name ?? event.id;
+
     const updateTitle = info ? toolTitle(info.name, info.input) : toolName;
     const isBash =
       toolName === "Bash" ||
@@ -227,13 +259,17 @@ export const promptViaClaudeCode = async (
     return { stopReason: "end_turn" };
   }
 
-  // Convert system prompt from markdown to Anthropic XML.
-  // Append local user context (profile + memories) so the model knows
-  // about the user from the first turn. This data never leaves the client.
+  // Convert system prompt from markdown to Anthropic XML, then append
+  // project rules and user context. Both are client-side data that
+  // never leaves the machine — rules from the filesystem, user context
+  // from the local SQLite store.
+  const basePrompt = toAnthropicXml(context.systemPrompt);
+  const projectRules = session.projectRules;
   const userContext = buildUserContext(memoryStore);
-  const xmlSystemPrompt = userContext
-    ? `${toAnthropicXml(context.systemPrompt)}\n\n${userContext}`
-    : toAnthropicXml(context.systemPrompt);
+
+  const xmlSystemPrompt = [basePrompt, projectRules, userContext]
+    .filter(Boolean)
+    .join("\n\n");
 
   // The server's assembled messages include the context injection pair
   // (summaries + memories), historical turns, and the current user message.

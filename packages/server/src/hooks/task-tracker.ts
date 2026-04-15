@@ -77,7 +77,7 @@ const FAILURE_PATTERNS = [
  * Scan the tail of a log file for completion indicators.
  * Returns "running" if no completion pattern matched.
  */
-async function scanLogForCompletion(logPath: string) {
+async function scanLogForCompletion(logPath: string): Promise<TaskStatus> {
   try {
     const file = Bun.file(logPath);
     const exists = await file.exists();
@@ -111,129 +111,131 @@ async function scanLogForCompletion(logPath: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Tracker
+// TaskTracker
 // ---------------------------------------------------------------------------
 
 /** Default max age before pruning stale tasks (1 hour) */
 const DEFAULT_MAX_AGE_MS = 60 * 60 * 1000;
 
-export class TaskTracker {
-  private tasks = new Map<string, BackgroundTask[]>();
+export interface TaskTracker {
+  add(task: BackgroundTask): void;
+  active(fingerprint: string | null): BackgroundTask[];
+  checkCompletion(task: BackgroundTask): Promise<TaskStatus>;
+  snapshot(fingerprint: string | null): Promise<TaskSnapshot[]>;
+  pruneCompleted(fingerprint: string | null): Promise<number>;
+  pruneStale(maxAgeMs?: number): number;
+  clear(fingerprint: string | null): void;
+  readonly size: number;
+}
 
-  /** Register a new background task. */
-  add(task: BackgroundTask): void {
-    const key = task.fingerprint ?? "global";
-    const list = this.tasks.get(key) ?? [];
-    list.push(task);
-    this.tasks.set(key, list);
+export function createTaskTracker(): TaskTracker {
+  const tasks = new Map<string, BackgroundTask[]>();
 
-    log.info(
-      {
-        taskType: task.taskType,
-        logPath: task.logPath,
-        fingerprint: task.fingerprint,
-      },
-      "background task registered",
-    );
-  }
+  return {
+    add(task) {
+      const key = task.fingerprint ?? "global";
+      const list = tasks.get(key) ?? [];
+      list.push(task);
+      tasks.set(key, list);
 
-  /** Get all tasks for a conversation (regardless of completion status). */
-  active(fingerprint: string | null): BackgroundTask[] {
-    return this.tasks.get(fingerprint ?? "global") ?? [];
-  }
+      log.info(
+        {
+          taskType: task.taskType,
+          logPath: task.logPath,
+          fingerprint: task.fingerprint,
+        },
+        "background task registered",
+      );
+    },
 
-  /** Check completion status for a specific task. */
-  async checkCompletion(task: BackgroundTask): Promise<TaskStatus> {
-    return scanLogForCompletion(task.logPath);
-  }
+    active(fingerprint) {
+      return tasks.get(fingerprint ?? "global") ?? [];
+    },
 
-  /**
-   * Build a snapshot of all tasks for a conversation with current status.
-   * Used for context injection into the system prompt.
-   */
-  async snapshot(fingerprint: string | null): Promise<TaskSnapshot[]> {
-    const tasks = this.active(fingerprint);
-    if (tasks.length === 0) return [];
+    async checkCompletion(task) {
+      return scanLogForCompletion(task.logPath);
+    },
 
-    const now = Date.now();
-    return Promise.all(
-      tasks.map(async (t) => ({
-        taskType: t.taskType,
-        logPath: t.logPath,
-        status: await this.checkCompletion(t),
-        elapsedSec: Math.round((now - t.startedAt) / 1000),
-        command: t.command,
-      })),
-    );
-  }
+    async snapshot(fingerprint) {
+      const activeTasks = this.active(fingerprint);
+      if (activeTasks.length === 0) return [];
 
-  /** Remove completed tasks for a conversation. */
-  async pruneCompleted(fingerprint: string | null): Promise<number> {
-    const key = fingerprint ?? "global";
-    const tasks = this.tasks.get(key);
-    if (!tasks || tasks.length === 0) return 0;
+      const now = Date.now();
+      return Promise.all(
+        activeTasks.map(async (t) => ({
+          taskType: t.taskType,
+          logPath: t.logPath,
+          status: await this.checkCompletion(t),
+          elapsedSec: Math.round((now - t.startedAt) / 1000),
+          command: t.command,
+        })),
+      );
+    },
 
-    const results = await Promise.all(
-      tasks.map(async (t) => ({
-        task: t,
-        status: await this.checkCompletion(t),
-      })),
-    );
+    async pruneCompleted(fingerprint) {
+      const key = fingerprint ?? "global";
+      const currentTasks = tasks.get(key);
+      if (!currentTasks || currentTasks.length === 0) return 0;
 
-    const remaining = results
-      .filter((r) => r.status === "running")
-      .map((r) => r.task);
-    const pruned = tasks.length - remaining.length;
+      const results = await Promise.all(
+        currentTasks.map(async (t) => ({
+          task: t,
+          status: await this.checkCompletion(t),
+        })),
+      );
 
-    if (remaining.length === 0) {
-      this.tasks.delete(key);
-    } else {
-      this.tasks.set(key, remaining);
-    }
-
-    if (pruned > 0) {
-      log.debug({ fingerprint, pruned }, "pruned completed background tasks");
-    }
-
-    return pruned;
-  }
-
-  /** Remove stale tasks older than maxAgeMs. */
-  pruneStale(maxAgeMs = DEFAULT_MAX_AGE_MS): number {
-    const cutoff = Date.now() - maxAgeMs;
-    let pruned = 0;
-
-    for (const [key, tasks] of this.tasks) {
-      const remaining = tasks.filter((t) => t.startedAt > cutoff);
-      pruned += tasks.length - remaining.length;
+      const remaining = results
+        .filter((r) => r.status === "running")
+        .map((r) => r.task);
+      const pruned = currentTasks.length - remaining.length;
 
       if (remaining.length === 0) {
-        this.tasks.delete(key);
+        tasks.delete(key);
       } else {
-        this.tasks.set(key, remaining);
+        tasks.set(key, remaining);
       }
-    }
 
-    if (pruned > 0) {
-      log.debug({ pruned }, "pruned stale background tasks");
-    }
+      if (pruned > 0) {
+        log.debug({ fingerprint, pruned }, "pruned completed background tasks");
+      }
 
-    return pruned;
-  }
+      return pruned;
+    },
 
-  /** Clear all tasks for a conversation. */
-  clear(fingerprint: string | null): void {
-    this.tasks.delete(fingerprint ?? "global");
-  }
+    pruneStale(maxAgeMs = DEFAULT_MAX_AGE_MS) {
+      const cutoff = Date.now() - maxAgeMs;
+      let pruned = 0;
 
-  /** Total number of tracked tasks across all conversations. */
-  get size(): number {
-    let total = 0;
-    for (const tasks of this.tasks.values()) {
-      total += tasks.length;
-    }
-    return total;
-  }
+      for (const [key, taskList] of tasks) {
+        const remaining = taskList.filter((t) => t.startedAt > cutoff);
+        pruned += taskList.length - remaining.length;
+
+        if (remaining.length === 0) {
+          tasks.delete(key);
+        } else {
+          tasks.set(key, remaining);
+        }
+      }
+
+      if (pruned > 0) {
+        log.debug({ pruned }, "pruned stale background tasks");
+      }
+
+      return pruned;
+    },
+
+    clear(fingerprint) {
+      tasks.delete(fingerprint ?? "global");
+    },
+
+    get size() {
+      let total = 0;
+      for (const taskList of tasks.values()) {
+        total += taskList.length;
+      }
+      return total;
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +247,7 @@ let instance: TaskTracker | null = null;
 /** Get or create the global task tracker instance. */
 export function getTaskTracker() {
   if (!instance) {
-    instance = new TaskTracker();
+    instance = createTaskTracker();
   }
   return instance;
 }

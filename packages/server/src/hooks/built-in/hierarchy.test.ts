@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { HookRegistry } from "../registry";
+import { type HookRegistry, createHookRegistry } from "../registry";
 import type { HookContext } from "../types";
 import { registerHierarchyHook } from "./hierarchy";
 
@@ -15,7 +15,7 @@ function bashCtx(command: string, availableTools: string[] = []): HookContext {
 }
 
 function makeRegistry(): HookRegistry {
-  const registry = new HookRegistry();
+  const registry = createHookRegistry();
   registerHierarchyHook(registry);
   return registry;
 }

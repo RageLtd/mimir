@@ -44,6 +44,7 @@ export type MimirConfig = {
 
 const DEFAULT_DISALLOWED = [
   "Agent",
+  "AskUserQuestion",
   "EnterWorktree",
   "ExitWorktree",
   "CronCreate",

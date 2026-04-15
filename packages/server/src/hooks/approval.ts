@@ -41,64 +41,63 @@ export function approvalKey(toolName: string, args: Record<string, unknown>) {
 // ApprovalTracker
 // ---------------------------------------------------------------------------
 
-export class ApprovalTracker {
-  /** Map of fingerprint → Set of approved keys */
-  private approvals = new Map<string, Set<string>>();
+export interface ApprovalTracker {
+  approve(key: string, fingerprint: string | null): void;
+  isApproved(key: string, fingerprint: string | null): boolean;
+  clear(fingerprint: string | null): void;
+  revoke(key: string, fingerprint: string | null): void;
+  count(fingerprint: string | null): number;
+  readonly size: number;
+}
 
-  /** Record an approval for a specific action in a conversation. */
-  approve(key: string, fingerprint: string | null): void {
-    const fp = fingerprint ?? "global";
-    let set = this.approvals.get(fp);
-    if (!set) {
-      set = new Set();
-      this.approvals.set(fp, set);
-    }
-    set.add(key);
-    log.info({ key, fingerprint }, "action approved");
-  }
+export function createApprovalTracker(): ApprovalTracker {
+  const approvals = new Map<string, Set<string>>();
 
-  /**
-   * Check if an action has been approved.
-   * Checks both conversation-scoped and global approvals.
-   * Global approvals are used when the approve_action tool can't
-   * determine the fingerprint (server tool execute has no hook context).
-   */
-  isApproved(key: string, fingerprint: string | null): boolean {
-    const fp = fingerprint ?? "global";
-    // Check conversation-scoped first, then global fallback
-    if (this.approvals.get(fp)?.has(key)) return true;
-    if (fp !== "global" && this.approvals.get("global")?.has(key)) return true;
-    return false;
-  }
+  return {
+    approve(key, fingerprint) {
+      const fp = fingerprint ?? "global";
+      let set = approvals.get(fp);
+      if (!set) {
+        set = new Set();
+        approvals.set(fp, set);
+      }
+      set.add(key);
+      log.info({ key, fingerprint }, "action approved");
+    },
 
-  /** Clear all approvals for a conversation. */
-  clear(fingerprint: string | null): void {
-    this.approvals.delete(fingerprint ?? "global");
-  }
+    isApproved(key, fingerprint) {
+      const fp = fingerprint ?? "global";
+      // Check conversation-scoped first, then global fallback
+      if (approvals.get(fp)?.has(key)) return true;
+      if (fp !== "global" && approvals.get("global")?.has(key)) return true;
+      return false;
+    },
 
-  /** Clear a specific approval. */
-  revoke(key: string, fingerprint: string | null): void {
-    const fp = fingerprint ?? "global";
-    const set = this.approvals.get(fp);
-    if (set) {
-      set.delete(key);
-      if (set.size === 0) this.approvals.delete(fp);
-    }
-  }
+    clear(fingerprint) {
+      approvals.delete(fingerprint ?? "global");
+    },
 
-  /** Number of approved actions for a conversation. */
-  count(fingerprint: string | null): number {
-    return this.approvals.get(fingerprint ?? "global")?.size ?? 0;
-  }
+    revoke(key, fingerprint) {
+      const fp = fingerprint ?? "global";
+      const set = approvals.get(fp);
+      if (set) {
+        set.delete(key);
+        if (set.size === 0) approvals.delete(fp);
+      }
+    },
 
-  /** Total approvals across all conversations (diagnostics). */
-  get size(): number {
-    let total = 0;
-    for (const set of this.approvals.values()) {
-      total += set.size;
-    }
-    return total;
-  }
+    count(fingerprint) {
+      return approvals.get(fingerprint ?? "global")?.size ?? 0;
+    },
+
+    get size() {
+      let total = 0;
+      for (const set of approvals.values()) {
+        total += set.size;
+      }
+      return total;
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +107,7 @@ export class ApprovalTracker {
 let instance: ApprovalTracker | null = null;
 
 export function getApprovalTracker() {
-  if (!instance) instance = new ApprovalTracker();
+  if (!instance) instance = createApprovalTracker();
   return instance;
 }
 

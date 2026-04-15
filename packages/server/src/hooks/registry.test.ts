@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { HookRegistry } from "./registry";
+import { createHookRegistry } from "./registry";
 import type { HookContext } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -24,13 +24,13 @@ function makeCtx(overrides?: Partial<HookContext>): HookContext {
 
 describe("HookRegistry — PreToolUse", () => {
   test("returns allow when no hooks registered", async () => {
-    const registry = new HookRegistry();
+    const registry = createHookRegistry();
     const result = await registry.runPreHooks(makeCtx());
     expect(result.action).toBe("allow");
   });
 
   test("returns allow when all hooks allow", async () => {
-    const registry = new HookRegistry();
+    const registry = createHookRegistry();
     registry.onPreToolUse(() => ({ action: "allow" }));
     registry.onPreToolUse(() => ({ action: "allow" }));
     const result = await registry.runPreHooks(makeCtx());
@@ -38,7 +38,7 @@ describe("HookRegistry — PreToolUse", () => {
   });
 
   test("first deny short-circuits remaining hooks", async () => {
-    const registry = new HookRegistry();
+    const registry = createHookRegistry();
     const calls: string[] = [];
 
     registry.onPreToolUse(() => {
@@ -61,7 +61,7 @@ describe("HookRegistry — PreToolUse", () => {
   });
 
   test("modify results are cumulative", async () => {
-    const registry = new HookRegistry();
+    const registry = createHookRegistry();
 
     registry.onPreToolUse((ctx) => ({
       action: "modify",
@@ -84,7 +84,7 @@ describe("HookRegistry — PreToolUse", () => {
   });
 
   test("filter by tool name", async () => {
-    const registry = new HookRegistry();
+    const registry = createHookRegistry();
     const calls: string[] = [];
 
     registry.onPreToolUse(
@@ -107,7 +107,7 @@ describe("HookRegistry — PreToolUse", () => {
   });
 
   test("filter by tool type", async () => {
-    const registry = new HookRegistry();
+    const registry = createHookRegistry();
     const calls: string[] = [];
 
     registry.onPreToolUse(
@@ -130,7 +130,7 @@ describe("HookRegistry — PreToolUse", () => {
   });
 
   test("filter by regex pattern", async () => {
-    const registry = new HookRegistry();
+    const registry = createHookRegistry();
     const calls: string[] = [];
 
     registry.onPreToolUse(
@@ -150,7 +150,7 @@ describe("HookRegistry — PreToolUse", () => {
   });
 
   test("hook throwing is caught and treated as allow", async () => {
-    const registry = new HookRegistry();
+    const registry = createHookRegistry();
 
     registry.onPreToolUse(() => {
       throw new Error("oops");
@@ -169,7 +169,7 @@ describe("HookRegistry — PreToolUse", () => {
 
 describe("HookRegistry — PostToolUse", () => {
   test("returns original result when no hooks registered", async () => {
-    const registry = new HookRegistry();
+    const registry = createHookRegistry();
     const result = await registry.runPostHooks({
       ...makeCtx(),
       result: { data: "original" },
@@ -179,7 +179,7 @@ describe("HookRegistry — PostToolUse", () => {
   });
 
   test("hook can modify result", async () => {
-    const registry = new HookRegistry();
+    const registry = createHookRegistry();
 
     registry.onPostToolUse((ctx) => ({
       result: { ...(ctx.result as object), modified: true },
@@ -194,7 +194,7 @@ describe("HookRegistry — PostToolUse", () => {
   });
 
   test("void return leaves result unchanged", async () => {
-    const registry = new HookRegistry();
+    const registry = createHookRegistry();
     const observed: unknown[] = [];
 
     registry.onPostToolUse((ctx) => {
@@ -212,7 +212,7 @@ describe("HookRegistry — PostToolUse", () => {
   });
 
   test("multiple hooks see cumulative modifications", async () => {
-    const registry = new HookRegistry();
+    const registry = createHookRegistry();
 
     registry.onPostToolUse((ctx) => ({
       result: { ...(ctx.result as object), step1: true },
@@ -230,7 +230,7 @@ describe("HookRegistry — PostToolUse", () => {
   });
 
   test("hook throwing is caught, original result preserved", async () => {
-    const registry = new HookRegistry();
+    const registry = createHookRegistry();
 
     registry.onPostToolUse(() => {
       throw new Error("post-hook error");
@@ -251,7 +251,7 @@ describe("HookRegistry — PostToolUse", () => {
 
 describe("HookRegistry — stats", () => {
   test("reports correct hook counts", () => {
-    const registry = new HookRegistry();
+    const registry = createHookRegistry();
     expect(registry.stats).toEqual({ pre: 0, post: 0, lifecycle: 0 });
 
     registry.onPreToolUse(() => ({ action: "allow" }));

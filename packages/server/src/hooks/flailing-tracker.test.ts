@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import type { ToolCallRecord } from "./flailing-tracker";
+import type { FlailingTracker, ToolCallRecord } from "./flailing-tracker";
 import {
   computeScore,
+  createFlailingTracker,
   extractTarget,
-  FlailingTracker,
   isErrorResult,
   resultSnippet,
 } from "./flailing-tracker";
@@ -186,7 +186,7 @@ describe("computeScore", () => {
     expect(computeScore(records)).toBe(0.0);
   });
 
-test("non-consecutive errors don't count as run", () => {
+  test("non-consecutive errors don't count as run", () => {
     const records = [
       makeRecord({ target: "a", isError: true, resultSnippet: "Error!" }),
       makeRecord({ target: "b", isError: false, resultSnippet: "OK" }),
@@ -206,7 +206,7 @@ describe("FlailingTracker", () => {
   let tracker: FlailingTracker;
 
   beforeEach(() => {
-    tracker = new FlailingTracker(20); // default window size
+    tracker = createFlailingTracker(20); // default window size
   });
 
   // --- get + record ---
@@ -235,7 +235,7 @@ describe("FlailingTracker", () => {
   });
 
   test("window rolls over at max size", () => {
-    const smallTracker = new FlailingTracker(3);
+    const smallTracker = createFlailingTracker(3);
     smallTracker.record("s1", makeRecord({ target: "a" }));
     smallTracker.record("s1", makeRecord({ target: "b" }));
     smallTracker.record("s1", makeRecord({ target: "c" }));

@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { HookContext, PostToolUseContext } from "../types";
 import {
-  FlailingTracker,
+  type FlailingTracker,
+  createFlailingTracker,
   getFlailingTracker,
   setFlailingTracker,
 } from "../flailing-tracker";
 import { registerFlailingHooks } from "./flailing";
-import { HookRegistry } from "../registry";
+import { type HookRegistry, createHookRegistry } from "../registry";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -43,8 +44,8 @@ describe("flailingObserverHook", () => {
   let tracker: FlailingTracker;
 
   beforeEach(() => {
-    registry = new HookRegistry();
-    tracker = new FlailingTracker(20);
+    registry = createHookRegistry();
+    tracker = createFlailingTracker(20);
     setFlailingTracker(tracker);
     registerFlailingHooks(registry);
   });
@@ -103,8 +104,8 @@ describe("flailingInterceptorHook", () => {
   let tracker: FlailingTracker;
 
   beforeEach(() => {
-    registry = new HookRegistry();
-    tracker = new FlailingTracker(20);
+    registry = createHookRegistry();
+    tracker = createFlailingTracker(20);
     setFlailingTracker(tracker);
     registerFlailingHooks(registry);
   });
@@ -196,8 +197,8 @@ describe("flailing hooks integration", () => {
   let tracker: FlailingTracker;
 
   beforeEach(() => {
-    registry = new HookRegistry();
-    tracker = new FlailingTracker(20);
+    registry = createHookRegistry();
+    tracker = createFlailingTracker(20);
     setFlailingTracker(tracker);
     registerFlailingHooks(registry);
   });

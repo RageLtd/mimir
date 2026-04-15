@@ -41,13 +41,13 @@ export const userMemoryToolDefs: ToolDefinition[] = [
     function: {
       name: "user_memory_store",
       description:
-        "Store a new personal memory about the user. Use this when you learn something about the user that should persist across conversations.",
+        "Store a new personal memory about the user. Call this proactively whenever the developer reveals something about themselves — preferences, opinions, life circumstances, health conditions, frustrations, personal history, technical decisions, or anything else worth remembering. No explicit 'remember this' required; if it's worth knowing next session, store it now.",
       parameters: {
         type: "object",
         properties: {
           content: {
             type: "string",
-            description: "The fact or preference to remember",
+            description: "The fact to remember — a single, self-contained statement (e.g. 'Has ADHD', 'Frustrated with current employer', 'Prefers dark themes', 'Partner is pregnant')",
           },
         },
         required: ["content"],
@@ -101,14 +101,14 @@ export const userMemoryToolDefs: ToolDefinition[] = [
     function: {
       name: "user_profile_add",
       description:
-        "Add an entry to the user's profile. Use for structured personal facts: name, role, team, preferred communication style, editor setup, etc.",
+        "Add an entry to the user's profile. Use for stable identity facts: name, role, location, health conditions, communication preferences, editor/tool setup, household details, hobbies, philosophical outlook — anything that defines who the developer is rather than what happened in a specific session.",
       parameters: {
         type: "object",
         properties: {
           content: {
             type: "string",
             description:
-              "The profile fact to store (e.g. 'Name: Alex', 'Prefers concise responses')",
+              "The profile fact to store (e.g. 'Name: Alex', 'Has ADHD — prefers direct communication', 'HEMA practitioner', 'Lives in Vancouver with partner and dog')",
           },
         },
         required: ["content"],

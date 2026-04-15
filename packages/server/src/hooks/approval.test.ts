@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { ApprovalTracker, approvalKey } from "./approval";
+import type { ApprovalTracker } from "./approval";
+import { approvalKey, createApprovalTracker } from "./approval";
 
 describe("approvalKey", () => {
   test("generates key from bash command", () => {
@@ -34,7 +35,7 @@ describe("ApprovalTracker", () => {
   let tracker: ApprovalTracker;
 
   beforeEach(() => {
-    tracker = new ApprovalTracker();
+    tracker = createApprovalTracker();
   });
 
   test("approve and isApproved round-trips", () => {

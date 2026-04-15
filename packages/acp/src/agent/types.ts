@@ -16,6 +16,8 @@ export type SessionState = {
   currentMode: string;
   /** Human-readable title, generated from the first exchange and persisted. */
   title: string | null;
+  /** Formatted project rules (CLAUDE.md, .claude/rules/, etc.) for prompt injection. */
+  projectRules: string | null;
   /** MCP servers provided by the ACP client (e.g. Zed's ACP tools server). */
   clientMcpServers?: readonly acp.McpServer[];
   /**

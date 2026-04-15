@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import type { BackgroundTask } from "./task-tracker";
-import { TaskTracker } from "./task-tracker";
+import type { BackgroundTask, TaskTracker } from "./task-tracker";
+import { createTaskTracker } from "./task-tracker";
 
 function makeTask(overrides: Partial<BackgroundTask> = {}): BackgroundTask {
   return {
@@ -17,7 +17,7 @@ describe("TaskTracker", () => {
   let tracker: TaskTracker;
 
   beforeEach(() => {
-    tracker = new TaskTracker();
+    tracker = createTaskTracker();
   });
 
   // --- add + active ---

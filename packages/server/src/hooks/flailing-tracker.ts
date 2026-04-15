@@ -193,65 +193,71 @@ export function computeScore(window: ToolCallRecord[]) {
 // Tracker
 // ---------------------------------------------------------------------------
 
-export class FlailingTracker {
-  private state = new Map<string, FlailingState>();
-  private windowSize: number;
+export interface FlailingTracker {
+  get(sessionId: string): FlailingState;
+  record(sessionId: string, entry: ToolCallRecord): void;
+  computeScore(sessionId: string): number;
+  markNudged(sessionId: string): void;
+  reset(sessionId: string): void;
+  clear(): void;
+}
 
-  constructor(windowSize: number = DEFAULT_WINDOW_SIZE) {
-    this.windowSize = windowSize;
-  }
+export function createFlailingTracker(
+  windowSize: number = DEFAULT_WINDOW_SIZE,
+): FlailingTracker {
+  const state = new Map<string, FlailingState>();
 
-  /** Get or create state for a session. */
-  get(sessionId: string): FlailingState {
-    let state = this.state.get(sessionId);
-    if (!state) {
-      state = {
+  function getOrCreate(sessionId: string) {
+    let s = state.get(sessionId);
+    if (!s) {
+      s = {
         window: [],
         score: 0.0,
         nudged: false,
         nudgeCount: 0,
       };
-      this.state.set(sessionId, state);
+      state.set(sessionId, s);
     }
-    return state;
+    return s;
   }
 
-  /** Record a tool call into the rolling window. */
-  record(sessionId: string, entry: ToolCallRecord): void {
-    const state = this.get(sessionId);
-    state.window.push(entry);
+  return {
+    get(sessionId) {
+      return getOrCreate(sessionId);
+    },
 
-    // Enforce window size limit
-    if (state.window.length > this.windowSize) {
-      state.window.shift();
-    }
+    record(sessionId, entry) {
+      const s = getOrCreate(sessionId);
+      s.window.push(entry);
 
-    // Recompute score after each record
-    state.score = computeScore(state.window);
-  }
+      // Enforce window size limit
+      if (s.window.length > windowSize) {
+        s.window.shift();
+      }
 
-  /** Compute the current flailing score. */
-  computeScore(sessionId: string): number {
-    const state = this.get(sessionId);
-    return state.score;
-  }
+      // Recompute score after each record
+      s.score = computeScore(s.window);
+    },
 
-  /** Mark that a nudge was injected. */
-  markNudged(sessionId: string): void {
-    const state = this.get(sessionId);
-    state.nudged = true;
-    state.nudgeCount++;
-  }
+    computeScore(sessionId) {
+      const s = getOrCreate(sessionId);
+      return s.score;
+    },
 
-  /** Reset state (e.g., on session_start or after successful escalation). */
-  reset(sessionId: string): void {
-    this.state.delete(sessionId);
-  }
+    markNudged(sessionId) {
+      const s = getOrCreate(sessionId);
+      s.nudged = true;
+      s.nudgeCount++;
+    },
 
-  /** Clear all state (for testing). */
-  clear(): void {
-    this.state.clear();
-  }
+    reset(sessionId) {
+      state.delete(sessionId);
+    },
+
+    clear() {
+      state.clear();
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -263,7 +269,7 @@ let instance: FlailingTracker | null = null;
 /** Get or create the global flailing tracker instance. */
 export function getFlailingTracker() {
   if (!instance) {
-    instance = new FlailingTracker();
+    instance = createFlailingTracker();
   }
   return instance;
 }

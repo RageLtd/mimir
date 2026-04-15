@@ -10,6 +10,7 @@ import type { BackendRouter } from "../backends";
 import { promptViaClaudeCode } from "../backends/claude-code/prompt-cc";
 import type { Backend } from "../backends/types";
 import type { CartographerManager } from "../cartographer/lifecycle";
+import { formatRulesForPrompt, readProjectRules } from "../cartographer/rules";
 import type { MimirConfig } from "../config";
 import type { ContextClientConfig } from "../context-client";
 import type { SessionStore } from "../store/sessions";
@@ -46,10 +47,19 @@ export const createAgentCore = (
       currentModelId: appConfig.model,
       currentMode: DEFAULT_MODE,
       title: null,
+      projectRules: null,
       clientMcpServers,
       supportsTerminalOutput,
     };
     sessions.set(sessionId, session);
+
+    // Load project rules asynchronously — they'll be ready by the first prompt
+    readProjectRules(projectPath)
+      .then((entries) => {
+        session.projectRules = formatRulesForPrompt(entries);
+      })
+      .catch((err) => logger.warn("failed to load project rules:", err));
+
     sessionStore.upsert(
       sessionId,
       projectPath,
@@ -83,10 +93,19 @@ export const createAgentCore = (
       currentModelId: persisted.model_id,
       currentMode: persisted.mode,
       title: persisted.title,
+      projectRules: null,
       clientMcpServers,
       supportsTerminalOutput,
     };
     sessions.set(sessionId, session);
+
+    // Load project rules asynchronously
+    readProjectRules(persisted.project_path)
+      .then((entries) => {
+        session.projectRules = formatRulesForPrompt(entries);
+      })
+      .catch((err) => logger.warn("failed to load project rules:", err));
+
     return session;
   };
 

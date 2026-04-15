@@ -35,42 +35,51 @@ export interface SessionContext {
 // SessionStore
 // ---------------------------------------------------------------------------
 
-export class SessionStore {
-  private sessions = new Map<string, SessionContext>();
+export interface SessionStore {
+  set(fingerprint: string, ctx: SessionContext): void;
+  get(fingerprint: string): SessionContext | null;
+  has(fingerprint: string): boolean;
+  delete(fingerprint: string): void;
+  prune(maxAgeMs: number): number;
+  readonly size: number;
+}
 
-  set(fingerprint: string, ctx: SessionContext): void {
-    this.sessions.set(fingerprint, ctx);
-  }
+export function createSessionStore(): SessionStore {
+  const sessions = new Map<string, SessionContext>();
 
-  get(fingerprint: string): SessionContext | null {
-    return this.sessions.get(fingerprint) ?? null;
-  }
+  return {
+    set(fingerprint, ctx) {
+      sessions.set(fingerprint, ctx);
+    },
 
-  has(fingerprint: string): boolean {
-    return this.sessions.has(fingerprint);
-  }
+    get(fingerprint) {
+      return sessions.get(fingerprint) ?? null;
+    },
 
-  /** Remove a session (e.g. on conversation end or TTL expiry) */
-  delete(fingerprint: string): void {
-    this.sessions.delete(fingerprint);
-  }
+    has(fingerprint) {
+      return sessions.has(fingerprint);
+    },
 
-  /** Prune sessions older than maxAgeMs */
-  prune(maxAgeMs: number): number {
-    const cutoff = Date.now() - maxAgeMs;
-    let pruned = 0;
-    for (const [key, ctx] of this.sessions) {
-      if (ctx.resolvedAt < cutoff) {
-        this.sessions.delete(key);
-        pruned++;
+    delete(fingerprint) {
+      sessions.delete(fingerprint);
+    },
+
+    prune(maxAgeMs) {
+      const cutoff = Date.now() - maxAgeMs;
+      let pruned = 0;
+      for (const [key, ctx] of sessions) {
+        if (ctx.resolvedAt < cutoff) {
+          sessions.delete(key);
+          pruned++;
+        }
       }
-    }
-    return pruned;
-  }
+      return pruned;
+    },
 
-  get size(): number {
-    return this.sessions.size;
-  }
+    get size() {
+      return sessions.size;
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -80,7 +89,7 @@ export class SessionStore {
 let store: SessionStore | null = null;
 
 export function getSessionStore() {
-  if (!store) store = new SessionStore();
+  if (!store) store = createSessionStore();
   return store;
 }
 

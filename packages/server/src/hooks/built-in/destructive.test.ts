@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { ApprovalTracker, approvalKey, setApprovalTracker } from "../approval";
-import { HookRegistry } from "../registry";
+import { approvalKey, createApprovalTracker, setApprovalTracker } from "../approval";
+import { type HookRegistry, createHookRegistry } from "../registry";
 import type { HookContext } from "../types";
 import { registerDestructiveHook } from "./destructive";
 
@@ -15,7 +15,7 @@ function bashCtx(command: string): HookContext {
 }
 
 function makeRegistry(): HookRegistry {
-  const registry = new HookRegistry();
+  const registry = createHookRegistry();
   registerDestructiveHook(registry);
   return registry;
 }
@@ -23,7 +23,7 @@ function makeRegistry(): HookRegistry {
 describe("Destructive Action Guard", () => {
   // Reset approval tracker before each test to prevent leakage
   beforeEach(() => {
-    setApprovalTracker(new ApprovalTracker());
+    setApprovalTracker(createApprovalTracker());
   });
 
   // --- Should DENY ---
@@ -208,7 +208,7 @@ describe("Destructive Action Guard", () => {
   // --- Approval flow ---
 
   test("allows destructive action after approval", async () => {
-    const tracker = new ApprovalTracker();
+    const tracker = createApprovalTracker();
     setApprovalTracker(tracker);
 
     const registry = makeRegistry();
@@ -230,7 +230,7 @@ describe("Destructive Action Guard", () => {
   });
 
   test("denial message mentions approve_action", async () => {
-    setApprovalTracker(new ApprovalTracker());
+    setApprovalTracker(createApprovalTracker());
     const result = await makeRegistry().runPreHooks(
       bashCtx("rm -rf /tmp/test"),
     );

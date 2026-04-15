@@ -12,7 +12,7 @@
  */
 
 import { approvalKey, getApprovalTracker } from "../approval";
-import { DenialTracker } from "../denial-tracker";
+import { createDenialTracker, type DenialTracker } from "../denial-tracker";
 import type { HookRegistry } from "../registry";
 import type { HookContext, PreToolUseResult } from "../types";
 
@@ -171,7 +171,7 @@ function createDestructiveGuardHook(tracker: DenialTracker) {
 let activeTracker: DenialTracker | null = null;
 
 export function registerDestructiveHook(registry: HookRegistry): void {
-  const tracker = new DenialTracker();
+  const tracker = createDenialTracker();
   activeTracker = tracker;
 
   const hook = createDestructiveGuardHook(tracker);
