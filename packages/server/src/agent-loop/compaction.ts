@@ -38,7 +38,10 @@ import {
   startCompaction,
 } from "./message-log/compaction-state";
 import { getModelMessagesSince } from "./message-log/persistence";
-import { getProviderConfigForModel } from "./provider/query";
+import {
+  getProviderConfigForModel,
+  getSmallModelConfig,
+} from "./provider/query";
 
 // ---------------------------------------------------------------------------
 // Async Compaction
@@ -184,38 +187,57 @@ const SUMMARIZATION_PROMPT = `You summarize conversations into concise context t
 
 Output a clear, dense summary in 2-4 paragraphs. Do not include pleasantries or meta-commentary.`;
 
+function resolveSummarizationModel(modelId?: string) {
+  // Try the request model against the provider registry
+  if (modelId) {
+    const providerCfg = getProviderConfigForModel(modelId);
+    if (providerCfg) {
+      return {
+        baseUrl: providerCfg.baseUrl,
+        apiKey: providerCfg.apiKey,
+        model: modelId.includes("/")
+          ? modelId.split("/").slice(1).join("/")
+          : modelId,
+      };
+    }
+    // Model is client-side (e.g. claude-code/opus, copilot/gpt-4o) —
+    // fall through to small model below
+    log.info(
+      { modelId },
+      "request model not in registry, falling back to small model",
+    );
+  }
+
+  // Fall back to the small model — always appropriate for utility tasks
+  const smallModel = getSmallModelConfig();
+  if (!smallModel) {
+    log.warn(
+      { modelId },
+      "no provider config and no small model configured, skipping summarization",
+    );
+    return null;
+  }
+
+  return {
+    baseUrl: smallModel.baseUrl,
+    apiKey: smallModel.apiKey || undefined,
+    model: smallModel.model,
+  };
+}
+
 async function summarizeConversation(
   conversationText: string,
   modelId?: string,
 ): Promise<string | null> {
   const start = Date.now();
 
-  // Use the same model/provider that handled the request.
-  // Falls back to vLLM config if no model ID was passed.
-  let baseUrl: string;
-  let apiKey: string | undefined;
-  let model: string;
+  // Resolve a model for summarization. Try the request model first (it may be
+  // a server-side provider like vLLM), then fall back to the small model config
+  // which is always appropriate for utility tasks like summarization.
+  const resolved = resolveSummarizationModel(modelId);
+  if (!resolved) return null;
 
-  if (modelId) {
-    const providerCfg = getProviderConfigForModel(modelId);
-    if (providerCfg) {
-      baseUrl = providerCfg.baseUrl;
-      apiKey = providerCfg.apiKey;
-      // Strip provider prefix if present (e.g. "chutes/Qwen..." → "Qwen...")
-      model = modelId.includes("/")
-        ? modelId.split("/").slice(1).join("/")
-        : modelId;
-    } else {
-      log.warn(
-        { modelId },
-        "no provider config for model, skipping summarization",
-      );
-      return null;
-    }
-  } else {
-    log.warn("no model ID for compaction, skipping summarization");
-    return null;
-  }
+  const { baseUrl, apiKey, model } = resolved;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
