@@ -20,11 +20,15 @@ const mockStoreMemory = mock<() => Promise<string | null>>(() =>
   Promise.resolve(null),
 );
 
-mock.module("./message-log", () => ({
+// Mock the specific submodules that compaction.ts imports (not the barrel)
+mock.module("./message-log/compaction-state", () => ({
   getCompactionState: mockGetCompactionState,
   startCompaction: mockStartCompaction,
   finishCompaction: mockFinishCompaction,
-  getMessagesSince: mockGetMessagesSince,
+}));
+
+mock.module("./message-log/persistence", () => ({
+  getModelMessagesSince: mockGetMessagesSince,
 }));
 
 mock.module("../goldfish/store", () => ({
@@ -40,12 +44,34 @@ mock.module("../goldfish/clients", () => ({
   embedOne: mockEmbedOne,
 }));
 
-// Mock config
+// Mock config — must include all sections that transitive imports may read
 mock.module("../config", () => ({
   config: {
     context: {
       maxTokens: 262144,
       compactionThreshold: 0.8,
+      keepRecentMessages: 50,
+      keepRecentToolResults: 20,
+      responseReserve: 8192,
+    },
+    hooks: {
+      auditLog: false,
+      destructiveGuard: false,
+      hierarchyEnforcer: false,
+      backgroundTaskManager: false,
+      cartographerTrigger: false,
+      flailingDetection: false,
+    },
+    flailing: {
+      nudgeThreshold: 0.6,
+      maxNudges: 4,
+      windowSize: 20,
+    },
+    smallModel: {
+      baseUrl: "http://localhost:11434",
+      apiKey: "",
+      model: "qwen3.5:9b",
+      providerType: "ollama",
     },
   },
 }));

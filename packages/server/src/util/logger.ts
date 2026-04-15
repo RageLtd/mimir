@@ -1,7 +1,9 @@
 import pino from "pino";
 import pretty from "pino-pretty";
 
-const logFile = Bun.env.MIMIR_LOG_FILE ?? "/data/mimir.log";
+const isTest = process.env.NODE_ENV === "test";
+
+const logFile = Bun.env.MIMIR_LOG_FILE ?? (isTest ? "/tmp/mimir-test.log" : "/data/mimir.log");
 
 const prettyStream = pretty({
   colorize: true,
@@ -15,7 +17,7 @@ const fileStream = pino.destination({
 });
 
 export const log = pino(
-  { level: Bun.env.LOG_LEVEL ?? "info" },
+  { level: isTest ? "silent" : (Bun.env.LOG_LEVEL ?? "info") },
   pino.multistream([
     { stream: prettyStream, level: "debug" },
     { stream: fileStream, level: "debug" },

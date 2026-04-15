@@ -67,13 +67,13 @@ export async function appendModelMessage(
 
   if (err) {
     log.error({ err, project, role: message.role }, "failed to append message");
-    return "";
+    return null;
   }
 
   const created = result?.[0]?.[0];
   if (!created?.id) {
     log.error({ project, role: message.role }, "message append returned no ID");
-    return "";
+    return null;
   }
 
   log.debug(
