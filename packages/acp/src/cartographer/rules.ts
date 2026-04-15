@@ -20,7 +20,11 @@ const isDirectory = async (path: string) => {
     (error) => ({ data: false, error }),
   );
   if (result.error && result.error.code !== "ENOENT") {
-    logger.warn("unexpected error checking directory: %s — %s", path, result.error.message);
+    logger.warn(
+      "unexpected error checking directory: %s — %s",
+      path,
+      result.error.message,
+    );
   }
   return result.data;
 };

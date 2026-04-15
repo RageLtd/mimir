@@ -10,19 +10,23 @@
  */
 
 import type { MimirConfig } from "../config";
-import { isCCModel } from "../routing";
+import { isCCModel, isCopilotModel } from "../routing";
 import type { ServerClientConfig } from "../server-client";
 import { createClaudeCodeBackend } from "./claude-code";
+import { createCopilotBackend } from "./copilot/adapter";
 import { createServerBackend } from "./server";
 import type { Backend } from "./types";
 
 /**
  * Mutable runtime state shared with the agent. Set after startup
- * auto-detection of the `claude` binary, then read on every routing
- * decision so we never spawn CC when it isn't actually installed.
+ * auto-detection of CLI backends, then read on every routing decision
+ * so we never spawn a backend whose CLI isn't actually installed.
  */
 export type RuntimeState = {
   ccEnabled: boolean;
+  copilotEnabled: boolean;
+  /** Discovered Copilot model IDs, keyed by suffix for routing. */
+  copilotModelMap: Map<string, string>;
 };
 
 export type BackendRouter = {
@@ -30,6 +34,7 @@ export type BackendRouter = {
   readonly forModel: (modelId: string) => Backend;
   readonly server: Backend;
   readonly cc: Backend;
+  readonly copilot: Backend;
   readonly runtime: RuntimeState;
 };
 
@@ -45,7 +50,17 @@ export const createBackendRouter = (config: MimirConfig): BackendRouter => {
     userMemoryDbPath: config.userMemoryDbPath,
     defaultCwd: process.cwd(),
   });
-  const runtime: RuntimeState = { ccEnabled: config.cc.enabled };
+  const copilot = createCopilotBackend({
+    copilot: config.copilot,
+    serverUrl: config.serverUrl,
+    userMemoryDbPath: config.userMemoryDbPath,
+    defaultCwd: process.cwd(),
+  });
+  const runtime: RuntimeState = {
+    ccEnabled: config.cc.enabled,
+    copilotEnabled: config.copilot.enabled,
+    copilotModelMap: new Map(),
+  };
 
   const forModel = (modelId: string): Backend => {
     if (isCCModel(modelId)) {
@@ -56,10 +71,18 @@ export const createBackendRouter = (config: MimirConfig): BackendRouter => {
       }
       return cc;
     }
+    if (isCopilotModel(modelId)) {
+      if (!runtime.copilotEnabled) {
+        throw new Error(
+          `Model ${modelId} requires the Copilot backend, which is disabled.`,
+        );
+      }
+      return copilot;
+    }
     return server;
   };
 
-  return { forModel, server, cc, runtime };
+  return { forModel, server, cc, copilot, runtime };
 };
 
 export type { Backend, BackendEvent, BackendRunOptions } from "./types";

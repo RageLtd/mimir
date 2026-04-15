@@ -20,6 +20,14 @@ export type CCBackendConfig = {
   readonly models: Readonly<Record<string, string>>;
 };
 
+export type CopilotBackendConfig = {
+  /** When false, Copilot models are hidden from the model list and routing rejects them. */
+  readonly enabled: boolean;
+  /** Fallback model when the requested suffix isn't in the discovered list. */
+  readonly defaultModel: string;
+  readonly workingDirectory?: string;
+};
+
 export type CartographerConfig = {
   /** Enable cartographer binary integration. */
   readonly enabled: boolean;
@@ -39,6 +47,7 @@ export type MimirConfig = {
   readonly autoApproveTools: boolean;
   readonly systemPromptTtlMs: number;
   readonly cc: CCBackendConfig;
+  readonly copilot: CopilotBackendConfig;
   readonly cartographer: CartographerConfig;
 };
 
@@ -103,6 +112,11 @@ export const loadConfig = (): MimirConfig => {
         process.env.MIMIR_CC_PERMISSION_MODE ?? "bypassPermissions",
       workingDirectory: process.env.MIMIR_CC_WORKING_DIR,
       models: DEFAULT_CC_MODELS,
+    },
+    copilot: {
+      enabled: parseEnabled(process.env.MIMIR_COPILOT_ENABLED) ?? true,
+      defaultModel: process.env.MIMIR_COPILOT_DEFAULT_MODEL ?? "gpt-5",
+      workingDirectory: process.env.MIMIR_COPILOT_WORKING_DIR,
     },
     cartographer: {
       enabled: parseEnabled(process.env.MIMIR_CARTOGRAPHER_ENABLED) ?? true,

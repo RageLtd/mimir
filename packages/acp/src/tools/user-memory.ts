@@ -47,7 +47,8 @@ export const userMemoryToolDefs: ToolDefinition[] = [
         properties: {
           content: {
             type: "string",
-            description: "The fact to remember — a single, self-contained statement (e.g. 'Has ADHD', 'Frustrated with current employer', 'Prefers dark themes', 'Partner is pregnant')",
+            description:
+              "The fact to remember — a single, self-contained statement (e.g. 'Has ADHD', 'Frustrated with current employer', 'Prefers dark themes', 'Partner is pregnant')",
           },
         },
         required: ["content"],

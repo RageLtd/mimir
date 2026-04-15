@@ -2,18 +2,23 @@
  * Model-based backend routing.
  *
  * Models prefixed with `claude-code/` route through the Claude Code
- * Agent SDK backend. Everything else routes through mimir-server.
+ * Agent SDK backend. Models prefixed with `copilot/` route through the
+ * GitHub Copilot SDK backend, with models discovered at startup via
+ * CopilotClient.listModels(). Everything else routes through mimir-server.
  *
  * Backend selection is per-request, not per-session — the editor's
  * model dropdown determines the backend on every prompt.
  */
 
 import type { ModelInfo } from "@agentclientprotocol/sdk";
+import { CopilotClient } from "@github/copilot-sdk";
 import type { CCBackendConfig } from "./config";
 import { errMessage } from "./util";
 import { createChildLogger, log } from "./utils/log";
 
 const logger = createChildLogger(log, "routing");
+
+// ── Claude Code routing ──
 
 export const CC_PREFIX = "claude-code/";
 
@@ -99,8 +104,74 @@ export const fetchServerModels = async (
   }
 };
 
-/** Merge server + CC models, with CC entries first. */
+// ── Copilot routing ──
+
+export const COPILOT_PREFIX = "copilot/";
+
+export const isCopilotModel = (modelId: string) =>
+  modelId.startsWith(COPILOT_PREFIX);
+
+/**
+ * Map a `copilot/<suffix>` model id to the Copilot SDK model value.
+ * Uses the discovered model list if available, falling back to the suffix as-is.
+ */
+export const getCopilotModelFlag = (
+  modelId: string,
+  discoveredModels: Map<string, string>,
+) => {
+  const suffix = modelId.slice(COPILOT_PREFIX.length);
+  return discoveredModels.get(suffix) ?? suffix;
+};
+
+/**
+ * Detect whether the Copilot CLI is available and discover models.
+ *
+ * Spawns a CopilotClient, calls listModels(), then stops the client.
+ * Returns the discovered models as ACP ModelInfo entries prefixed with
+ * `copilot/`, plus a map from suffix → SDK model id for routing.
+ * Returns empty results on failure so other backends are still available.
+ */
+export const discoverCopilotModels = async () => {
+  const client = new CopilotClient();
+  try {
+    await client.start();
+    const models = await client.listModels();
+    await client.stop();
+
+    const modelMap = new Map<string, string>();
+    const modelList: ModelInfo[] = models.map((m) => {
+      modelMap.set(m.id, m.id);
+      return {
+        modelId: `${COPILOT_PREFIX}${m.id}`,
+        name: `Copilot (${m.name ?? m.id})`,
+        description: m.capabilities?.limits?.max_context_window_tokens
+          ? `Context: ${m.capabilities.limits.max_context_window_tokens} tokens`
+          : undefined,
+      };
+    });
+
+    logger.info(`discovered ${modelList.length} Copilot models`);
+    return { available: true, models: modelList, modelMap };
+  } catch (err) {
+    logger.debug("Copilot CLI not available:", errMessage(err));
+    try {
+      await client.stop();
+    } catch {
+      // Client may not have started successfully.
+    }
+    return {
+      available: false,
+      models: [] as ModelInfo[],
+      modelMap: new Map<string, string>(),
+    };
+  }
+};
+
+// ── Model merging ──
+
+/** Merge server + CC + Copilot models. CC and Copilot entries come first. */
 export const mergeModels = (
   serverModels: ModelInfo[],
   ccModels: ModelInfo[],
-) => [...ccModels, ...serverModels];
+  copilotModels: ModelInfo[] = [],
+) => [...ccModels, ...copilotModels, ...serverModels];

@@ -49,9 +49,8 @@ const emitPlanUpdate = async (
     update: {
       sessionUpdate: "plan",
       entries: todos.map((t) => ({
-        content: t.activeForm && t.status === "in_progress"
-          ? t.activeForm
-          : t.content,
+        content:
+          t.activeForm && t.status === "in_progress" ? t.activeForm : t.content,
         status: t.status as "pending" | "in_progress" | "completed",
         priority: "medium" as const,
       })),
@@ -96,11 +95,15 @@ const handleCCEvent = async (
 
     // TodoWrite → emit an ACP plan update alongside the normal tool card.
     if (event.name === "TodoWrite" && Array.isArray(event.input.todos)) {
-      await emitPlanUpdate(session, conn, event.input.todos as {
-        content: string;
-        status: string;
-        activeForm?: string;
-      }[]);
+      await emitPlanUpdate(
+        session,
+        conn,
+        event.input.todos as {
+          content: string;
+          status: string;
+          activeForm?: string;
+        }[],
+      );
     }
 
     const kind = toolKindFor(event.name);

@@ -90,6 +90,6 @@ export type BackendRunOptions = {
 };
 
 export type Backend = {
-  readonly kind: "server" | "claude-code";
+  readonly kind: "server" | "claude-code" | "copilot";
   readonly run: (options: BackendRunOptions) => AsyncGenerator<BackendEvent>;
 };

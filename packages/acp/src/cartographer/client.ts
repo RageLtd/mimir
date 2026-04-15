@@ -9,6 +9,7 @@
  * project root as cwd triggers a full index automatically.
  */
 
+import { parseJSON } from "../util";
 import { createChildLogger, log } from "../utils/log";
 
 const logger = createChildLogger(log, "cartographer-client");
@@ -249,7 +250,10 @@ export const spawnCartographer = async (
 
     const raw = response.result;
     const content =
-      raw && typeof raw === "object" && "content" in raw && Array.isArray((raw as McpToolResult).content)
+      raw &&
+      typeof raw === "object" &&
+      "content" in raw &&
+      Array.isArray((raw as McpToolResult).content)
         ? (raw as McpToolResult).content
         : [];
     const textParts = content

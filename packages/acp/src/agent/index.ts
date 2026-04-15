@@ -24,6 +24,7 @@ import { config } from "../config";
 import type { ContextClientConfig } from "../context-client";
 import {
   ccAvailable,
+  discoverCopilotModels,
   fetchServerModels,
   getCCModelList,
   mergeModels,
@@ -75,6 +76,10 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
     sessionStore,
     cartographer,
   );
+
+  // Discovered Copilot models — populated during init, read by buildModelsState.
+  let discoveredCopilotModels: import("@agentclientprotocol/sdk").ModelInfo[] =
+    [];
 
   // ── Command handler ──────────────────────────────────────────────────────
   // Executes a parsed slash command and streams a response back to the editor.
@@ -199,7 +204,10 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
       fetchServerModels(config.serverUrl, config.apiKey),
       Promise.resolve(getCCModelList(ccConfig)),
     ]);
-    const availableModels = mergeModels(serverModels, ccModels);
+    const copilotModels = router.runtime.copilotEnabled
+      ? discoveredCopilotModels
+      : [];
+    const availableModels = mergeModels(serverModels, ccModels, copilotModels);
     return { availableModels, currentModelId: config.model };
   };
 
@@ -211,19 +219,46 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
         params.clientCapabilities?._meta?.terminal_output === true;
       logger.info("terminal output supported:", supportsTerminalOutput);
 
-      // Resolve CC availability before accepting any prompts. If the
-      // `claude` binary isn't on PATH, disable CC routing so users can't
-      // pick a claude-code/* model that would crash on spawn.
-      if (config.cc.enabled) {
-        const available = await ccAvailable();
-        router.runtime.ccEnabled = available;
-        if (!available) {
-          logger.info("claude binary not found on PATH; disabling CC backend");
-        } else {
-          logger.info("CC backend enabled");
-        }
+      // Resolve backend availability in parallel before accepting prompts.
+      // Disables routing to backends whose CLIs aren't installed so users
+      // can't pick a model that would crash on spawn.
+      const [ccResult, copilotResult] = await Promise.all([
+        config.cc.enabled
+          ? ccAvailable().then((available) => ({ available }))
+          : Promise.resolve({ available: false }),
+        config.copilot.enabled
+          ? discoverCopilotModels()
+          : Promise.resolve({
+              available: false,
+              models: [],
+              modelMap: new Map<string, string>(),
+            }),
+      ]);
+
+      router.runtime.ccEnabled = ccResult.available;
+      if (ccResult.available) {
+        logger.info("CC backend enabled");
       } else {
-        router.runtime.ccEnabled = false;
+        logger.info(
+          config.cc.enabled
+            ? "claude binary not found on PATH; disabling CC backend"
+            : "CC backend disabled by config",
+        );
+      }
+
+      router.runtime.copilotEnabled = copilotResult.available;
+      router.runtime.copilotModelMap = copilotResult.modelMap;
+      discoveredCopilotModels = copilotResult.models;
+      if (copilotResult.available) {
+        logger.info(
+          `Copilot backend enabled (${copilotResult.models.length} models discovered)`,
+        );
+      } else {
+        logger.info(
+          config.copilot.enabled
+            ? "Copilot CLI not available; disabling Copilot backend"
+            : "Copilot backend disabled by config",
+        );
       }
       return {
         protocolVersion: acp.PROTOCOL_VERSION,

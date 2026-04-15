@@ -73,12 +73,16 @@ export const createUserMemoryStore = (dbPath: string) => {
 
   const getProfile = () =>
     db
-      .query<UserProfileEntry, []>("SELECT * FROM user_profile ORDER BY created_at ASC")
+      .query<UserProfileEntry, []>(
+        "SELECT * FROM user_profile ORDER BY created_at ASC",
+      )
       .all();
 
   const addProfileEntry = (content: string) =>
     db
-      .query<UserProfileEntry, [string]>("INSERT INTO user_profile (content) VALUES (?) RETURNING *")
+      .query<UserProfileEntry, [string]>(
+        "INSERT INTO user_profile (content) VALUES (?) RETURNING *",
+      )
       .get(content)!;
 
   const removeProfileEntry = (id: number) => {
@@ -88,7 +92,9 @@ export const createUserMemoryStore = (dbPath: string) => {
 
   const getMemories = () =>
     db
-      .query<UserMemoryEntry, []>("SELECT * FROM user_memories ORDER BY created_at DESC")
+      .query<UserMemoryEntry, []>(
+        "SELECT * FROM user_memories ORDER BY created_at DESC",
+      )
       .all();
 
   const searchMemories = (query: string) =>
@@ -100,7 +106,9 @@ export const createUserMemoryStore = (dbPath: string) => {
 
   const addMemory = (content: string) =>
     db
-      .query<UserMemoryEntry, [string]>("INSERT INTO user_memories (content) VALUES (?) RETURNING *")
+      .query<UserMemoryEntry, [string]>(
+        "INSERT INTO user_memories (content) VALUES (?) RETURNING *",
+      )
       .get(content)!;
 
   const updateMemory = (id: number, content: string) =>

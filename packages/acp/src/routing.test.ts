@@ -1,0 +1,170 @@
+import { test, expect, describe } from "bun:test";
+import {
+  CC_PREFIX,
+  COPILOT_PREFIX,
+  isCCModel,
+  isCopilotModel,
+  getCCModelFlag,
+  getCopilotModelFlag,
+  getCCModelList,
+  mergeModels,
+} from "./routing";
+import type { CCBackendConfig } from "./config";
+
+// ── CC routing ──
+
+describe("isCCModel", () => {
+  test("returns true for claude-code/ prefixed models", () => {
+    expect(isCCModel("claude-code/opus")).toBe(true);
+    expect(isCCModel("claude-code/sonnet")).toBe(true);
+  });
+
+  test("returns false for non-CC models", () => {
+    expect(isCCModel("gpt-4o")).toBe(false);
+    expect(isCCModel("copilot/gpt-4o")).toBe(false);
+    expect(isCCModel("")).toBe(false);
+  });
+
+  test("prefix is exact — no partial matches", () => {
+    expect(isCCModel("claude-code-wrong/opus")).toBe(false);
+  });
+});
+
+describe("getCCModelFlag", () => {
+  const cc: CCBackendConfig = {
+    enabled: true,
+    disallowedTools: [],
+    permissionMode: "bypassPermissions",
+    models: { opus: "claude-opus-4-20250514", sonnet: "claude-sonnet-4-20250514" },
+  };
+
+  test("maps known suffix to configured model id", () => {
+    expect(getCCModelFlag(`${CC_PREFIX}opus`, cc)).toBe(
+      "claude-opus-4-20250514",
+    );
+    expect(getCCModelFlag(`${CC_PREFIX}sonnet`, cc)).toBe(
+      "claude-sonnet-4-20250514",
+    );
+  });
+
+  test("falls back to suffix for unknown models", () => {
+    expect(getCCModelFlag(`${CC_PREFIX}haiku`, cc)).toBe("haiku");
+  });
+});
+
+describe("getCCModelList", () => {
+  test("returns ModelInfo entries for configured models", () => {
+    const cc: CCBackendConfig = {
+      enabled: true,
+      disallowedTools: [],
+      permissionMode: "bypassPermissions",
+      models: { opus: "claude-opus-4-20250514" },
+    };
+    const list = getCCModelList(cc);
+    expect(list).toHaveLength(1);
+    expect(list[0]!.modelId).toBe("claude-code/opus");
+    expect(list[0]!.name).toContain("opus");
+  });
+
+  test("returns empty list when disabled", () => {
+    const cc: CCBackendConfig = {
+      enabled: false,
+      disallowedTools: [],
+      permissionMode: "bypassPermissions",
+      models: { opus: "claude-opus-4-20250514" },
+    };
+    expect(getCCModelList(cc)).toEqual([]);
+  });
+
+  test("returns empty list when no models configured", () => {
+    const cc: CCBackendConfig = {
+      enabled: true,
+      disallowedTools: [],
+      permissionMode: "bypassPermissions",
+      models: {},
+    };
+    expect(getCCModelList(cc)).toEqual([]);
+  });
+});
+
+// ── Copilot routing ──
+
+describe("isCopilotModel", () => {
+  test("returns true for copilot/ prefixed models", () => {
+    expect(isCopilotModel("copilot/gpt-4o")).toBe(true);
+    expect(isCopilotModel("copilot/claude-sonnet-4")).toBe(true);
+  });
+
+  test("returns false for non-Copilot models", () => {
+    expect(isCopilotModel("gpt-4o")).toBe(false);
+    expect(isCopilotModel("claude-code/opus")).toBe(false);
+    expect(isCopilotModel("")).toBe(false);
+  });
+
+  test("prefix is exact — no partial matches", () => {
+    expect(isCopilotModel("copilot-wrong/gpt-4o")).toBe(false);
+  });
+});
+
+describe("getCopilotModelFlag", () => {
+  test("returns SDK model id from discovered map", () => {
+    const discovered = new Map([["gpt-4o", "gpt-4o"]]);
+    expect(getCopilotModelFlag(`${COPILOT_PREFIX}gpt-4o`, discovered)).toBe(
+      "gpt-4o",
+    );
+  });
+
+  test("falls back to suffix for undiscovered models", () => {
+    const discovered = new Map<string, string>();
+    expect(
+      getCopilotModelFlag(`${COPILOT_PREFIX}unknown-model`, discovered),
+    ).toBe("unknown-model");
+  });
+});
+
+// ── mergeModels ──
+
+describe("mergeModels", () => {
+  test("CC and Copilot models come before server models", () => {
+    const server = [{ modelId: "s1", name: "Server 1" }];
+    const cc = [{ modelId: "claude-code/opus", name: "CC Opus" }];
+    const copilot = [{ modelId: "copilot/gpt-4o", name: "Copilot GPT-4o" }];
+    const merged = mergeModels(server, cc, copilot);
+    expect(merged[0]!.modelId).toBe("claude-code/opus");
+    expect(merged[1]!.modelId).toBe("copilot/gpt-4o");
+    expect(merged[2]!.modelId).toBe("s1");
+  });
+
+  test("handles empty copilot list", () => {
+    const server = [{ modelId: "s1", name: "Server 1" }];
+    const cc = [{ modelId: "claude-code/opus", name: "CC Opus" }];
+    const merged = mergeModels(server, cc);
+    expect(merged).toHaveLength(2);
+    expect(merged[0]!.modelId).toBe("claude-code/opus");
+    expect(merged[1]!.modelId).toBe("s1");
+  });
+
+  test("handles all empty lists", () => {
+    expect(mergeModels([], [], [])).toEqual([]);
+  });
+
+  test("preserves order within each group", () => {
+    const cc = [
+      { modelId: "claude-code/a", name: "A" },
+      { modelId: "claude-code/b", name: "B" },
+    ];
+    const copilot = [
+      { modelId: "copilot/x", name: "X" },
+      { modelId: "copilot/y", name: "Y" },
+    ];
+    const server = [{ modelId: "s1", name: "S1" }];
+    const merged = mergeModels(server, cc, copilot);
+    expect(merged.map((m) => m.modelId)).toEqual([
+      "claude-code/a",
+      "claude-code/b",
+      "copilot/x",
+      "copilot/y",
+      "s1",
+    ]);
+  });
+});
