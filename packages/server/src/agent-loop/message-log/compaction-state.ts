@@ -8,7 +8,7 @@
 import { config } from "../../config";
 import { getDb, queryFirst, queryOne } from "../../db/surreal";
 import { log } from "../../util/logger";
-import { getContextWindow } from "../provider/registry";
+import { getContextWindow } from "../provider/query";
 
 export interface CompactionState {
   id: string;

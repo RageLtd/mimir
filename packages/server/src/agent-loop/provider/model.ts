@@ -12,7 +12,7 @@ import {
   hasModel,
   hasProvider,
   resolveModel as registryResolveModel,
-} from "./registry";
+} from "./query";
 
 // Local providers
 const vllmProvider = createOpenAI({

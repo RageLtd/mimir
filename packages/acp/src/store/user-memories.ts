@@ -73,13 +73,13 @@ export const createUserMemoryStore = (dbPath: string) => {
 
   const getProfile = () =>
     db
-      .query("SELECT * FROM user_profile ORDER BY created_at ASC")
-      .all() as UserProfileEntry[];
+      .query<UserProfileEntry, []>("SELECT * FROM user_profile ORDER BY created_at ASC")
+      .all();
 
   const addProfileEntry = (content: string) =>
     db
-      .query("INSERT INTO user_profile (content) VALUES (?) RETURNING *")
-      .get(content) as UserProfileEntry;
+      .query<UserProfileEntry, [string]>("INSERT INTO user_profile (content) VALUES (?) RETURNING *")
+      .get(content)!;
 
   const removeProfileEntry = (id: number) => {
     const result = db.query("DELETE FROM user_profile WHERE id = ?").run(id);
@@ -88,27 +88,27 @@ export const createUserMemoryStore = (dbPath: string) => {
 
   const getMemories = () =>
     db
-      .query("SELECT * FROM user_memories ORDER BY created_at DESC")
-      .all() as UserMemoryEntry[];
+      .query<UserMemoryEntry, []>("SELECT * FROM user_memories ORDER BY created_at DESC")
+      .all();
 
   const searchMemories = (query: string) =>
     db
-      .query(
+      .query<UserMemoryEntry, [string]>(
         "SELECT m.* FROM user_memories m JOIN user_memories_fts f ON m.id = f.rowid WHERE f.content MATCH ? ORDER BY f.rank",
       )
-      .all(query) as UserMemoryEntry[];
+      .all(query);
 
   const addMemory = (content: string) =>
     db
-      .query("INSERT INTO user_memories (content) VALUES (?) RETURNING *")
-      .get(content) as UserMemoryEntry;
+      .query<UserMemoryEntry, [string]>("INSERT INTO user_memories (content) VALUES (?) RETURNING *")
+      .get(content)!;
 
   const updateMemory = (id: number, content: string) =>
     db
-      .query(
+      .query<UserMemoryEntry | null, [string, number]>(
         "UPDATE user_memories SET content = ?, updated_at = datetime('now') WHERE id = ? RETURNING *",
       )
-      .get(content, id) as UserMemoryEntry | null;
+      .get(content, id);
 
   const deleteMemory = (id: number) => {
     const result = db.query("DELETE FROM user_memories WHERE id = ?").run(id);

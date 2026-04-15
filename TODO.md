@@ -10,4 +10,4 @@
 
 - [x] Refactor hook classes to functional style (packages/server/src/hooks/)
 - [ ] Split oversized files: agent/run.ts (736 lines), provider/registry.ts (674 lines)
-- [ ] Eliminate remaining `as` type casts across codebase
+- [x] Eliminate `as` type casts — SQLite boundary casts fixed via `db.query<T>()` generics; result.ts structural casts fixed. JSON.parse / JSON-RPC boundary casts intentionally kept — TypeScript has no pattern matching, and `as` at serialisation boundaries is the correct tool

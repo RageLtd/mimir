@@ -136,7 +136,7 @@ export const spawnCartographer = async (
           buffer = buffer.slice(nl + 1);
           if (line.length > 0) {
             try {
-              const msg = JSON.parse(line) as JsonRpcResponse;
+              const msg = parseJSON<JsonRpcResponse>(line);
               if (typeof msg.id === "number") {
                 const p = pending.get(msg.id);
                 if (p) {
@@ -247,8 +247,12 @@ export const spawnCartographer = async (
       );
     }
 
-    const result = response.result as McpToolResult;
-    const textParts = (result.content ?? [])
+    const raw = response.result;
+    const content =
+      raw && typeof raw === "object" && "content" in raw && Array.isArray((raw as McpToolResult).content)
+        ? (raw as McpToolResult).content
+        : [];
+    const textParts = content
       .filter((c) => c.type === "text" && c.text)
       .map((c) => c.text ?? "");
     return textParts.join("\n");

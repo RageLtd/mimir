@@ -38,7 +38,7 @@ import {
   startCompaction,
 } from "./message-log/compaction-state";
 import { getModelMessagesSince } from "./message-log/persistence";
-import { getProviderConfigForModel } from "./provider/registry";
+import { getProviderConfigForModel } from "./provider/query";
 
 // ---------------------------------------------------------------------------
 // Async Compaction

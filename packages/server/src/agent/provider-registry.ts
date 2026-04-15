@@ -1,21 +1,15 @@
 /**
  * Provider registry — re-exports from agent-loop/provider.
  *
- * This is a thin wrapper to maintain the import structure
+ * Thin wrapper to maintain the import structure
  * specified in the v2 architecture.
  */
 
 export {
   defaultModel,
   embeddingModel,
-  getContextWindow,
-  getModelMetadata,
-  getModelNpm,
-  getModelProvider,
   getReasoningOptions,
   getSamplingOptions,
-  hasModel,
-  hasProvider,
   isMistralModel,
   ollama,
   resolveModel,
@@ -24,11 +18,23 @@ export {
 
 export {
   fetchModelId,
+  getContextWindow,
+  getEmbeddingModelMetadata,
+  getModelMetadata,
+  getModelNpm,
+  getModelProvider,
   getProviderConfigForModel,
-  initProviderRegistry,
+  getSmallModelConfig,
+  hasModel,
+  hasProvider,
   isRegistryReady,
   listModels,
   listProviders,
+  resolveEmbeddingModel,
+} from "../agent-loop/provider/query";
+
+export {
+  initProviderRegistry,
   type ModelEntry,
   type ProviderEntry,
 } from "../agent-loop/provider/registry";

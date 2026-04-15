@@ -2,7 +2,7 @@ import { embedMany } from "ai";
 import {
   getSmallModelConfig,
   resolveEmbeddingModel,
-} from "../agent-loop/provider/registry";
+} from "../agent-loop/provider/query";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 

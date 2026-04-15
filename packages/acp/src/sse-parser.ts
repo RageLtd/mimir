@@ -5,6 +5,7 @@
  * Tool call accumulation and agent loop logic live in agent.ts.
  */
 
+import { parseJSON } from "./util";
 import { createChildLogger, log as rootLog } from "./utils/log";
 
 const log = createChildLogger(rootLog, "sse-parser");
@@ -56,7 +57,7 @@ export const parseSSELine = (line: string) => {
   const data = line.slice(6).trim();
   if (data === "[DONE]") return null;
   try {
-    return JSON.parse(data) as ChatCompletionChunk;
+    return parseJSON<ChatCompletionChunk>(data);
   } catch (err) {
     log.debug(
       `Failed to parse SSE data: ${err instanceof Error ? err.message : String(err)}`,

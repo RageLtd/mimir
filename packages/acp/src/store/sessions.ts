@@ -120,14 +120,14 @@ export const createSessionStore = (dbPath: string) => {
   };
 
   const get = (sessionId: string) =>
-    (db
-      .query("SELECT * FROM sessions WHERE session_id = ?")
-      .get(sessionId) as PersistedSession | null) ?? null;
+    db
+      .query<PersistedSession, [string]>("SELECT * FROM sessions WHERE session_id = ?")
+      .get(sessionId) ?? null;
 
   const list = () =>
     db
-      .query("SELECT * FROM sessions ORDER BY updated_at DESC")
-      .all() as PersistedSession[];
+      .query<PersistedSession, []>("SELECT * FROM sessions ORDER BY updated_at DESC")
+      .all();
 
   const close = () => {
     db.close();

@@ -12,7 +12,7 @@ import type { ModelMessage } from "ai";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { runAgent } from "../agent/run";
-import { getSmallModelConfig } from "../agent-loop/provider/registry";
+import { getSmallModelConfig } from "../agent-loop/provider/query";
 import { assembleContext } from "../middleware/context-assembly";
 import { injectMemories } from "../middleware/goldfish";
 import { injectSystemPrompt } from "../middleware/system-prompt";
