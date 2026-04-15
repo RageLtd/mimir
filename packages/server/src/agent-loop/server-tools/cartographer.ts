@@ -44,12 +44,16 @@ export const QuerySchema = z.object({
 // ---------------------------------------------------------------------------
 
 /** Safe JSON parse with fallback */
-function parseJson<T>(fallback: T): (str: string | null | undefined) => T {
-  return (str: string | null | undefined): T => {
+function parseJson<T>(fallback: T) {
+  return (str: string | null | undefined) => {
     if (!str) return fallback;
     try {
-      return JSON.parse(str);
-    } catch {
+      return JSON.parse(str) as T;
+    } catch (err) {
+      log.debug(
+        { err: err instanceof Error ? err.message : String(err) },
+        "parseJson failed, using fallback",
+      );
       return fallback;
     }
   };

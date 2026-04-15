@@ -95,7 +95,7 @@ export const createAgentCore = (
 
   const listSessions = () => sessionStore.list();
 
-  const setModel = (sessionId: string, modelId: string): boolean => {
+  const setModel = (sessionId: string, modelId: string) => {
     const session = sessions.get(sessionId);
     if (!session) return false;
     session.currentModelId = modelId;
@@ -103,7 +103,7 @@ export const createAgentCore = (
     return true;
   };
 
-  const compact = (sessionId: string): boolean => {
+  const compact = (sessionId: string) => {
     const session = sessions.get(sessionId);
     if (!session) return false;
     session.messages = [];
@@ -111,7 +111,7 @@ export const createAgentCore = (
     return true;
   };
 
-  const setMode = (sessionId: string, modeId: string): boolean => {
+  const setMode = (sessionId: string, modeId: string) => {
     const session = sessions.get(sessionId);
     if (!session) return false;
     const valid = SESSION_MODES.some((m) => m.id === modeId);
@@ -121,14 +121,14 @@ export const createAgentCore = (
     return true;
   };
 
-  const setTitle = (sessionId: string, title: string): void => {
+  const setTitle = (sessionId: string, title: string) => {
     const session = sessions.get(sessionId);
     if (!session) return;
     session.title = title;
     sessionStore.updateMeta(sessionId, { title });
   };
 
-  const persistMessages = (sessionId: string): void => {
+  const persistMessages = (sessionId: string) => {
     const session = sessions.get(sessionId);
     if (!session) return;
     sessionStore.updateMessages(sessionId, session.messages);
@@ -198,14 +198,14 @@ export const createAgentCore = (
     );
   };
 
-  const cancel = (sessionId: string): void => {
+  const cancel = (sessionId: string) => {
     const session = sessions.get(sessionId);
     if (session?.abortController) {
       session.abortController.abort();
     }
   };
 
-  const dispose = (): void => {
+  const dispose = () => {
     for (const session of sessions.values()) {
       session.abortController?.abort();
     }

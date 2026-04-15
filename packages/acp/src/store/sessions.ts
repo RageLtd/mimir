@@ -56,7 +56,7 @@ export type SessionStore = {
   readonly close: () => void;
 };
 
-export const createSessionStore = (dbPath: string): SessionStore => {
+export const createSessionStore = (dbPath: string) => {
   const db = new Database(dbPath);
   db.exec("PRAGMA journal_mode=WAL");
   db.exec(SCHEMA);
@@ -68,7 +68,7 @@ export const createSessionStore = (dbPath: string): SessionStore => {
     mode: string,
     title: string | null,
     messages: readonly ChatMessage[],
-  ): void => {
+  ) => {
     db.query(
       `INSERT INTO sessions (session_id, project_path, model_id, mode, title, messages, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
@@ -92,7 +92,7 @@ export const createSessionStore = (dbPath: string): SessionStore => {
   const updateMeta = (
     sessionId: string,
     fields: { modelId?: string; mode?: string; title?: string | null },
-  ): void => {
+  ) => {
     if (fields.modelId !== undefined) {
       db.query(
         "UPDATE sessions SET model_id = ?, updated_at = datetime('now') WHERE session_id = ?",
@@ -113,23 +113,23 @@ export const createSessionStore = (dbPath: string): SessionStore => {
   const updateMessages = (
     sessionId: string,
     messages: readonly ChatMessage[],
-  ): void => {
+  ) => {
     db.query(
       `UPDATE sessions SET messages = ?, updated_at = datetime('now') WHERE session_id = ?`,
     ).run(JSON.stringify(messages), sessionId);
   };
 
-  const get = (sessionId: string): PersistedSession | null =>
+  const get = (sessionId: string) =>
     (db
       .query("SELECT * FROM sessions WHERE session_id = ?")
       .get(sessionId) as PersistedSession | null) ?? null;
 
-  const list = (): PersistedSession[] =>
+  const list = () =>
     db
       .query("SELECT * FROM sessions ORDER BY updated_at DESC")
       .all() as PersistedSession[];
 
-  const close = (): void => {
+  const close = () => {
     db.close();
   };
 

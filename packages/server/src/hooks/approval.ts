@@ -25,10 +25,7 @@ import { log } from "../util/logger";
  * (e.g. "bash:git push --force" → "bash:git_push_--force").
  * For other tools, uses tool name + sorted arg keys.
  */
-export function approvalKey(
-  toolName: string,
-  args: Record<string, unknown>,
-): string {
+export function approvalKey(toolName: string, args: Record<string, unknown>) {
   const command = args.command ?? args.cmd;
   if (typeof command === "string" && command) {
     // Normalize whitespace, keep the core command shape
@@ -110,12 +107,12 @@ export class ApprovalTracker {
 
 let instance: ApprovalTracker | null = null;
 
-export function getApprovalTracker(): ApprovalTracker {
+export function getApprovalTracker() {
   if (!instance) instance = new ApprovalTracker();
   return instance;
 }
 
 /** Replace the global instance (for testing). */
-export function setApprovalTracker(tracker: ApprovalTracker): void {
+export function setApprovalTracker(tracker: ApprovalTracker) {
   instance = tracker;
 }

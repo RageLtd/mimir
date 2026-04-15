@@ -28,15 +28,14 @@ const slugify = (heading: string) =>
     .trim()
     .replace(/\s+/g, "_");
 
-const headingLevel = (line: string): number => {
+const headingLevel = (line: string) => {
   const match = line.match(/^(#{1,6})\s/);
   return match?.[1]?.length ?? 0;
 };
 
-const headingText = (line: string): string =>
-  line.replace(/^#{1,6}\s+/, "").trim();
+const headingText = (line: string) => line.replace(/^#{1,6}\s+/, "").trim();
 
-export const markdownToXml = (markdown: string): string => {
+export const markdownToXml = (markdown: string) => {
   const lines = markdown.split("\n");
   const output: string[] = [];
 
@@ -158,7 +157,7 @@ When in doubt about voice, default to directness. Mimir's speech patterns in <id
  * 1. Markdown headings → nested XML tags (structural)
  * 2. Injects the Anthropic model override block (CC-only content)
  */
-export const toAnthropicXml = (markdown: string): string => {
+export const toAnthropicXml = (markdown: string) => {
   const xml = markdownToXml(markdown);
   // Inject environment context then model override immediately before
   // <identity_and_voice> so both sit adjacent to the personality definition

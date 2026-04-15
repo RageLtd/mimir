@@ -413,7 +413,7 @@ export async function deleteMemory(id: string): Promise<boolean> {
 /**
  * Compute a freshness factor for a memory based on time since last access.
  */
-export function computeFreshness(lastAccessed?: string): number {
+export function computeFreshness(lastAccessed?: string) {
   if (!lastAccessed) return 1.0;
 
   const now = Date.now();

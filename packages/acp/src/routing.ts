@@ -17,23 +17,19 @@ const logger = createChildLogger(log, "routing");
 
 export const CC_PREFIX = "claude-code/";
 
-export const isCCModel = (modelId: string): boolean =>
-  modelId.startsWith(CC_PREFIX);
+export const isCCModel = (modelId: string) => modelId.startsWith(CC_PREFIX);
 
 /**
  * Map a `claude-code/<suffix>` model id to CC's --model flag value.
  * Falls back to the suffix as-is so unknown ids still pass through.
  */
-export const getCCModelFlag = (
-  modelId: string,
-  cc: CCBackendConfig,
-): string => {
+export const getCCModelFlag = (modelId: string, cc: CCBackendConfig) => {
   const suffix = modelId.slice(CC_PREFIX.length);
   return cc.models[suffix] ?? suffix;
 };
 
 /** Synthetic ModelInfo entries for the CC models the user has mapped. */
-export const getCCModelList = (cc: CCBackendConfig): ModelInfo[] => {
+export const getCCModelList = (cc: CCBackendConfig) => {
   if (!cc.enabled) return [];
   return Object.keys(cc.models).map((suffix) => ({
     modelId: `${CC_PREFIX}${suffix}`,
@@ -43,7 +39,7 @@ export const getCCModelList = (cc: CCBackendConfig): ModelInfo[] => {
 };
 
 /** Detect whether the `claude` binary is on PATH. */
-export const ccAvailable = async (): Promise<boolean> => {
+export const ccAvailable = async () => {
   try {
     const proc = Bun.spawn(["claude", "--version"], {
       stdout: "ignore",
@@ -51,7 +47,11 @@ export const ccAvailable = async (): Promise<boolean> => {
     });
     const code = await proc.exited;
     return code === 0;
-  } catch {
+  } catch (err) {
+    logger.debug(
+      "claude binary not found:",
+      err instanceof Error ? err.message : String(err),
+    );
     return false;
   }
 };
@@ -72,7 +72,7 @@ export const fetchServerModels = async (
   serverUrl: string,
   apiKey: string,
   signal?: AbortSignal,
-): Promise<ModelInfo[]> => {
+) => {
   try {
     const headers: Record<string, string> = apiKey
       ? { Authorization: `Bearer ${apiKey}` }
@@ -103,4 +103,4 @@ export const fetchServerModels = async (
 export const mergeModels = (
   serverModels: ModelInfo[],
   ccModels: ModelInfo[],
-): ModelInfo[] => [...ccModels, ...serverModels];
+) => [...ccModels, ...serverModels];

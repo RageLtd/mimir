@@ -79,13 +79,13 @@ export class SessionStore {
 
 let store: SessionStore | null = null;
 
-export function getSessionStore(): SessionStore {
+export function getSessionStore() {
   if (!store) store = new SessionStore();
   return store;
 }
 
 /** Replace the global instance (for testing). */
-export function setSessionStore(s: SessionStore): void {
+export function setSessionStore(s: SessionStore) {
   store = s;
 }
 
@@ -100,7 +100,7 @@ export function setSessionStore(s: SessionStore): void {
  * - If zero or multiple projects, returns null (caller should use the
  *   client-provided project path from Zed's system message).
  */
-async function autoResolveProject(): Promise<string | null> {
+async function autoResolveProject() {
   try {
     const db = await getDb();
     const [result] = await db.query<
@@ -122,7 +122,7 @@ async function autoResolveProject(): Promise<string | null> {
 // Index status check
 // ---------------------------------------------------------------------------
 
-async function checkIndexStatus(project: string): Promise<string> {
+async function checkIndexStatus(project: string) {
   try {
     const db = await getDb();
     const [result] = await db.query<[Array<{ count: number }>]>(
@@ -157,7 +157,7 @@ const RULES_DIRS = [".claude/rules"];
  * root. Returns null if no rules files are found or if the project path
  * is not accessible from the server.
  */
-async function loadProjectRules(project: string): Promise<string | null> {
+async function loadProjectRules(project: string) {
   const parts: string[] = [];
 
   // Root-level rules files
@@ -171,8 +171,11 @@ async function loadProjectRules(project: string): Promise<string | null> {
           parts.push(`--- ${name} ---\n${content.trim()}`);
         }
       }
-    } catch {
-      // File not accessible (remote filesystem, permissions, etc.)
+    } catch (err) {
+      log.debug(
+        { filePath, err: err instanceof Error ? err.message : String(err) },
+        "rules file not accessible",
+      );
     }
   }
 
@@ -192,12 +195,18 @@ async function loadProjectRules(project: string): Promise<string | null> {
           if (content.trim()) {
             parts.push(`--- ${dir}/${entry.name} ---\n${content.trim()}`);
           }
-        } catch {
-          // Individual file read failed
+        } catch (err) {
+          log.debug(
+            { filePath, err: err instanceof Error ? err.message : String(err) },
+            "individual rules file read failed",
+          );
         }
       }
-    } catch {
-      // Directory doesn't exist or not accessible
+    } catch (err) {
+      log.debug(
+        { dirPath, err: err instanceof Error ? err.message : String(err) },
+        "rules directory not accessible",
+      );
     }
   }
 
@@ -218,7 +227,7 @@ async function loadProjectRules(project: string): Promise<string | null> {
 export async function resolveSessionContext(
   clientProject: string | null,
   fingerprint: string | null,
-): Promise<SessionContext> {
+) {
   const start = Date.now();
 
   // Resolve project: prefer client-provided path, fall back to auto-detect
@@ -264,7 +273,7 @@ export async function resolveSessionContext(
  * - Loads project rules
  * - Stores the result in the SessionStore
  */
-export function registerSessionHooks(registry: HookRegistry): void {
+export function registerSessionHooks(registry: HookRegistry) {
   const sessionStore = getSessionStore();
 
   registry.onLifecycle(async (event) => {

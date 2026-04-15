@@ -49,7 +49,11 @@ context.post("/memories", async (c) => {
   let body: MemoriesRequest;
   try {
     body = await c.req.json();
-  } catch {
+  } catch (err) {
+    log.debug(
+      { err: err instanceof Error ? err.message : String(err) },
+      "invalid JSON body",
+    );
     return c.json({ error: "Invalid JSON body" }, 400);
   }
 
@@ -107,7 +111,11 @@ context.post("/token-report", async (c) => {
   let body: TokenReportRequest;
   try {
     body = await c.req.json();
-  } catch {
+  } catch (err) {
+    log.debug(
+      { err: err instanceof Error ? err.message : String(err) },
+      "invalid JSON body",
+    );
     return c.json({ error: "Invalid JSON body" }, 400);
   }
 
@@ -165,7 +173,11 @@ context.post("/assemble", async (c) => {
   let body: AssembleRequest;
   try {
     body = await c.req.json();
-  } catch {
+  } catch (err) {
+    log.debug(
+      { err: err instanceof Error ? err.message : String(err) },
+      "invalid JSON body",
+    );
     return c.json({ error: "Invalid JSON body" }, 400);
   }
 

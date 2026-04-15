@@ -24,8 +24,7 @@ export type Logger = {
 };
 
 export const createLogger = (level: LogLevel): Logger => {
-  const shouldLog = (msgLevel: LogLevel): boolean =>
-    LEVELS[msgLevel] >= LEVELS[level];
+  const shouldLog = (msgLevel: LogLevel) => LEVELS[msgLevel] >= LEVELS[level];
 
   const log =
     (msgLevel: LogLevel, prefix: string) =>

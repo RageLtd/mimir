@@ -142,7 +142,7 @@ export const userMemoryToolNames = new Set(
 const formatMemoryEntry = (entry: {
   readonly id: number;
   readonly content: string;
-}): string => `[${entry.id}] ${entry.content}`;
+}) => `[${entry.id}] ${entry.content}`;
 
 export const executeUserMemoryTool = (
   store: UserMemoryStore,
@@ -218,7 +218,7 @@ export const executeUserMemoryTool = (
  * Build a <user_context> XML block from profile + recent memories.
  * Returns null if the user has no profile and no memories.
  */
-export const buildUserContext = (store: UserMemoryStore): string | null => {
+export const buildUserContext = (store: UserMemoryStore) => {
   const profile = store.getProfileAsText();
   const memories = store.getMemories();
 

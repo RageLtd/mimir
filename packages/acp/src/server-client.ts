@@ -8,6 +8,9 @@
  */
 
 import { iterateSSE, type SSEEvent } from "./sse-parser";
+import { createChildLogger, log as rootLog } from "./utils/log";
+
+const log = createChildLogger(rootLog, "server-client");
 
 // ── Types ──
 
@@ -142,7 +145,11 @@ export const getTools = async (
     }
 
     return response.json() as Promise<ToolDefinition[]>;
-  } catch {
+  } catch (err) {
+    log.debug(
+      "tool manifest fetch failed:",
+      err instanceof Error ? err.message : String(err),
+    );
     return [];
   }
 };

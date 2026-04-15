@@ -5,6 +5,10 @@
  * Tool call accumulation and agent loop logic live in agent.ts.
  */
 
+import { createChildLogger, log as rootLog } from "./utils/log";
+
+const log = createChildLogger(rootLog, "sse-parser");
+
 export type ChatCompletionChunk = {
   readonly id: string;
   readonly object: string;
@@ -47,18 +51,21 @@ export type SSEEvent =
   | { readonly type: "finish"; readonly reason: string | null }
   | { readonly type: "error"; readonly error: string };
 
-export const parseSSELine = (line: string): ChatCompletionChunk | null => {
+export const parseSSELine = (line: string) => {
   if (!line.startsWith("data: ")) return null;
   const data = line.slice(6).trim();
   if (data === "[DONE]") return null;
   try {
     return JSON.parse(data) as ChatCompletionChunk;
-  } catch {
+  } catch (err) {
+    log.debug(
+      `Failed to parse SSE data: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return null;
   }
 };
 
-export const chunkToEvents = (chunk: ChatCompletionChunk): SSEEvent[] => {
+export const chunkToEvents = (chunk: ChatCompletionChunk) => {
   const events: SSEEvent[] = [];
 
   for (const choice of chunk.choices) {
@@ -136,7 +143,7 @@ export type MutableToolCall = {
   function: MutableFunction;
 };
 
-const initMutable = (delta: ToolCallDelta): MutableToolCall => ({
+const initMutable = (delta: ToolCallDelta) => ({
   index: delta.index,
   id: delta.id ?? "",
   type: delta.type ?? "function",
@@ -153,7 +160,7 @@ const initMutable = (delta: ToolCallDelta): MutableToolCall => ({
 export const mergeToolCallDelta = (
   acc: Map<number, MutableToolCall>,
   delta: ToolCallDelta,
-): void => {
+) => {
   const idx = delta.index;
   const existing = acc.get(idx);
   if (!existing) {
@@ -172,9 +179,7 @@ export const mergeToolCallDelta = (
 /**
  * Freeze the accumulated mutable tool calls into immutable ResolvedToolCall values.
  */
-export const accumulateToolCallDeltas = (
-  map: Map<number, MutableToolCall>,
-): ResolvedToolCall[] => {
+export const accumulateToolCallDeltas = (map: Map<number, MutableToolCall>) => {
   const calls: ResolvedToolCall[] = [];
   for (const [, tc] of map) {
     calls.push({

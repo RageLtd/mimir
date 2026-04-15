@@ -77,7 +77,7 @@ const FAILURE_PATTERNS = [
  * Scan the tail of a log file for completion indicators.
  * Returns "running" if no completion pattern matched.
  */
-async function scanLogForCompletion(logPath: string): Promise<TaskStatus> {
+async function scanLogForCompletion(logPath: string) {
   try {
     const file = Bun.file(logPath);
     const exists = await file.exists();
@@ -101,8 +101,11 @@ async function scanLogForCompletion(logPath: string): Promise<TaskStatus> {
     }
 
     return "running";
-  } catch {
-    // Can't read log (permissions, remote filesystem, etc.)
+  } catch (err) {
+    log.debug(
+      { logPath, err: err instanceof Error ? err.message : String(err) },
+      "failed to read task log, treating as still running",
+    );
     return "running";
   }
 }
@@ -240,7 +243,7 @@ export class TaskTracker {
 let instance: TaskTracker | null = null;
 
 /** Get or create the global task tracker instance. */
-export function getTaskTracker(): TaskTracker {
+export function getTaskTracker() {
   if (!instance) {
     instance = new TaskTracker();
   }
@@ -248,6 +251,6 @@ export function getTaskTracker(): TaskTracker {
 }
 
 /** Replace the global instance (for testing). */
-export function setTaskTracker(tracker: TaskTracker): void {
+export function setTaskTracker(tracker: TaskTracker) {
   instance = tracker;
 }

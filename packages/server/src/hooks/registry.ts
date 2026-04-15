@@ -40,7 +40,7 @@ interface PostEntry {
 // Filter matching
 // ---------------------------------------------------------------------------
 
-function matchesFilter(ctx: HookContext, filter?: ToolFilter): boolean {
+function matchesFilter(ctx: HookContext, filter?: ToolFilter) {
   if (!filter) return true;
 
   if (filter.type && filter.type !== ctx.toolType) return false;
@@ -126,8 +126,8 @@ export class HookRegistry {
             { err, tool: ctx.toolName },
             "pre-hook threw, treating as allow",
           );
-        } catch {
-          // Logger itself failed (e.g. fd closed in tests)
+        } catch (logErr) {
+          console.error("pre-hook error (logger also failed):", err, logErr);
         }
       }
     }
@@ -169,8 +169,8 @@ export class HookRegistry {
       } catch (err) {
         try {
           log.error({ err, tool: ctx.toolName }, "post-hook threw, continuing");
-        } catch {
-          // Logger itself failed
+        } catch (logErr) {
+          console.error("post-hook error (logger also failed):", err, logErr);
         }
       }
     }

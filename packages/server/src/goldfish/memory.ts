@@ -18,7 +18,7 @@ import {
 /**
  * Build a search query from the most recent user messages.
  */
-function buildQuery(messages: ModelMessage[]): string {
+function buildQuery(messages: ModelMessage[]) {
   return messages
     .filter((m) => m.role === "user" && modelContentToString(m.content))
     .slice(-3)
@@ -153,7 +153,7 @@ export async function retrieveMemories(
 /** Max chars to send to the extraction model — keeps prompt eval under ~60s on Vulkan */
 const EXTRACTION_MAX_CHARS = 4000;
 
-function buildExtractionText(messages: ModelMessage[]): string {
+function buildExtractionText(messages: ModelMessage[]) {
   const filtered = messages.filter((m) => {
     if (m.role === "tool") return false;
     if (m.role === "system") return false;

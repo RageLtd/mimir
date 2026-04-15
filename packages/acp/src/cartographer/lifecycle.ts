@@ -32,7 +32,7 @@ export const LOCAL_CARTOGRAPHER_TOOLS = new Set([
   "cartographer_parse_file",
 ]);
 
-export const isLocalCartographerTool = (name: string): boolean =>
+export const isLocalCartographerTool = (name: string) =>
   LOCAL_CARTOGRAPHER_TOOLS.has(name);
 
 export type CartographerManager = {
@@ -64,7 +64,7 @@ export type CartographerManagerConfig = {
 
 export const createCartographerManager = (
   config: CartographerManagerConfig,
-): CartographerManager => {
+) => {
   // One client per project path (each binary instance gets its own cwd)
   const clients = new Map<string, CartographerClient>();
   const spawning = new Map<string, Promise<CartographerClient>>();
@@ -106,7 +106,7 @@ export const createCartographerManager = (
     return client.callTool(name, args);
   };
 
-  const autoIndex = (projectPath: string): void => {
+  const autoIndex = (projectPath: string) => {
     // In --parse-only mode the binary has no DB access; it returns the
     // full index as JSON via the MCP tool result. We forward that JSON
     // directly to mimir-server's sync endpoint.
@@ -128,7 +128,7 @@ export const createCartographerManager = (
       });
   };
 
-  const detectChanges = (projectPath: string): void => {
+  const detectChanges = (projectPath: string) => {
     // detect_changes returns a summary of what changed, not the full index.
     // If anything changed, trigger a full re-index and sync so the server
     // stays in step.
@@ -157,7 +157,7 @@ export const createCartographerManager = (
       });
   };
 
-  const dispose = (): void => {
+  const dispose = () => {
     for (const [path, client] of clients) {
       logger.info("killing cartographer for:", path);
       client.kill();

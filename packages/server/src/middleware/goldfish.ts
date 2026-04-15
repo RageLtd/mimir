@@ -13,7 +13,7 @@ import type { MimirContext } from "./types";
 /**
  * Extract text content from a ModelMessage, handling string and array formats.
  */
-function messageContentToString(content: ModelMessage["content"]): string {
+function messageContentToString(content: ModelMessage["content"]) {
   if (typeof content === "string") return content;
   if (!content) return "";
   if (Array.isArray(content)) {
@@ -31,7 +31,7 @@ function messageContentToString(content: ModelMessage["content"]): string {
 /**
  * Retrieve memories based on the last user message and inject into context.
  */
-export async function injectMemories(ctx: MimirContext): Promise<void> {
+export async function injectMemories(ctx: MimirContext) {
   const start = Date.now();
 
   // Extract query from the last user message

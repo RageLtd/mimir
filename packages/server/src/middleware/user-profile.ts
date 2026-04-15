@@ -17,7 +17,7 @@ import type { MimirContext } from "./types";
  * Inject user profile into memories if present in request metadata.
  * Profile is appended after retrieved memories (if any).
  */
-export function injectUserProfile(ctx: MimirContext): void {
+export function injectUserProfile(ctx: MimirContext) {
   const start = Date.now();
 
   const profile = ctx.request.metadata?.userProfile as string | undefined;

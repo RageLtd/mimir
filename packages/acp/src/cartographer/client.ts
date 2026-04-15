@@ -144,15 +144,22 @@ export const spawnCartographer = async (
                   p.resolve(msg);
                 }
               }
-            } catch {
-              // Non-JSON lines (e.g. MCP notifications) — ignore
+            } catch (err) {
+              logger.debug(
+                "non-JSON line from cartographer:",
+                line.slice(0, 120),
+                err instanceof Error ? err.message : "",
+              );
             }
           }
           nl = buffer.indexOf("\n");
         }
       }
-    } catch {
-      // Process exited
+    } catch (err) {
+      logger.debug(
+        "stdout read loop ended:",
+        err instanceof Error ? err.message : String(err),
+      );
     } finally {
       reader.releaseLock();
       // Reject all pending requests
@@ -175,8 +182,11 @@ export const spawnCartographer = async (
         const text = dec.decode(value, { stream: true }).trim();
         if (text) logger.debug("cartographer stderr:", text);
       }
-    } catch {
-      // Process exited
+    } catch (err) {
+      logger.debug(
+        "stderr read loop ended:",
+        err instanceof Error ? err.message : String(err),
+      );
     } finally {
       reader.releaseLock();
     }
@@ -266,7 +276,11 @@ export const spawnCartographer = async (
     // detect_changes returns either plain text ("No changes") or JSON
     try {
       return JSON.parse(text) as DetectChangesOutput;
-    } catch {
+    } catch (err) {
+      logger.debug(
+        "detect_changes returned non-JSON, treating as no changes:",
+        err instanceof Error ? err.message : String(err),
+      );
       return { indexed: 0, removed: 0, modified: [], deleted: [] };
     }
   };
@@ -276,19 +290,26 @@ export const spawnCartographer = async (
     return JSON.parse(text) as StatsOutput;
   };
 
-  const isAlive = (): boolean => {
+  const isAlive = () => {
     try {
       return proc.exitCode === null;
-    } catch {
+    } catch (err) {
+      logger.debug(
+        "isAlive check failed, treating as dead:",
+        err instanceof Error ? err.message : String(err),
+      );
       return false;
     }
   };
 
-  const kill = (): void => {
+  const kill = () => {
     try {
       proc.kill();
-    } catch {
-      // Already dead
+    } catch (err) {
+      logger.debug(
+        "kill failed (process likely already dead):",
+        err instanceof Error ? err.message : String(err),
+      );
     }
   };
 

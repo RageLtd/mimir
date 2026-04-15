@@ -730,7 +730,11 @@ async function executeServerTools(
 function safeParseJSON(str: string) {
   try {
     return JSON.parse(str);
-  } catch {
+  } catch (err) {
+    log.debug(
+      { err: err instanceof Error ? err.message : String(err) },
+      "safeParseJSON failed, returning raw string",
+    );
     return str;
   }
 }

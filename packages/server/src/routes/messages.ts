@@ -38,7 +38,11 @@ messages.post("/persist", async (c) => {
   let body: PersistRequest;
   try {
     body = await c.req.json();
-  } catch {
+  } catch (err) {
+    log.debug(
+      { err: err instanceof Error ? err.message : String(err) },
+      "invalid JSON body",
+    );
     return c.json({ error: "Invalid JSON body" }, 400);
   }
 

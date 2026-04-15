@@ -13,9 +13,7 @@ import type * as acp from "@agentclientprotocol/sdk";
  * Derives from acpBlocksToAnthropicContent — text parts are joined as-is,
  * image parts produce a textual note (since this path is text-only).
  */
-export const formatContentBlocks = (
-  blocks: readonly acp.ContentBlock[],
-): string =>
+export const formatContentBlocks = (blocks: readonly acp.ContentBlock[]) =>
   acpBlocksToAnthropicContent(blocks)
     .map((part) =>
       part.type === "text" ? part.text : `[Image: ${part.source.media_type}]`,

@@ -8,6 +8,10 @@
  * agent loop, so observeOnly is always false here.
  */
 
+import { createChildLogger, log as rootLog } from "../utils/log";
+
+const log = createChildLogger(rootLog, "server-backend");
+
 import {
   type ChatMessage,
   type ServerClientConfig,
@@ -55,7 +59,11 @@ export const createServerBackend = (
               let input: Record<string, unknown> = {};
               try {
                 input = JSON.parse(tc.function.arguments);
-              } catch {
+              } catch (err) {
+                log.debug(
+                  `Failed to parse tool call arguments for ${tc.function.name}:`,
+                  err instanceof Error ? err.message : String(err),
+                );
                 input = {};
               }
               yield {

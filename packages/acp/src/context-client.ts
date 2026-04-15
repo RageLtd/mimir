@@ -37,7 +37,7 @@ type CachedPrompt = {
 let cachedPrompt: CachedPrompt | null = null;
 
 /** For tests. */
-export const _resetSystemPromptCache = (): void => {
+export const _resetSystemPromptCache = () => {
   cachedPrompt = null;
 };
 

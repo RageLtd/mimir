@@ -16,7 +16,7 @@
 /**
  * Extract text from ModelMessage content.
  */
-function messageContentToString(content: unknown): string {
+function messageContentToString(content: unknown) {
   if (typeof content === "string") return content;
   if (!content) return "";
   if (Array.isArray(content)) {

@@ -54,10 +54,7 @@ export const toolKindFor = (name: string): acp.ToolKind =>
 // ── Title extraction ──
 
 /** Build a human-readable title for a tool call. */
-export const toolTitle = (
-  name: string,
-  args: Record<string, unknown>,
-): string => {
+export const toolTitle = (name: string, args: Record<string, unknown>) => {
   if (name === "Bash") {
     if (typeof args.description === "string" && args.description.length > 0)
       return args.description;
@@ -195,5 +192,5 @@ const CLIENT_FS_TOOLS = new Set([
 
 const CLIENT_TERMINAL_TOOLS = new Set(["create_terminal", "terminal"]);
 
-export const isClientTool = (name: string): boolean =>
+export const isClientTool = (name: string) =>
   CLIENT_FS_TOOLS.has(name) || CLIENT_TERMINAL_TOOLS.has(name);

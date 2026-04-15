@@ -59,10 +59,7 @@ const DEFAULT_WINDOW_SIZE = 20;
  * Extract a normalized target string from tool arguments.
  * This lets us detect repeated operations on the same file/resource.
  */
-export function extractTarget(
-  toolName: string,
-  args: Record<string, unknown>,
-): string {
+export function extractTarget(toolName: string, args: Record<string, unknown>) {
   // File operations — path is the target
   if (args.path && typeof args.path === "string") return args.path;
 
@@ -96,7 +93,7 @@ const ERROR_PATTERNS =
  * Heuristic check on the tool result to determine if it's an error.
  * Doesn't need to be perfect — false positives just add small noise to the score.
  */
-export function isErrorResult(result: unknown): boolean {
+export function isErrorResult(result: unknown) {
   const text = typeof result === "string" ? result : JSON.stringify(result);
   return ERROR_PATTERNS.test(text.slice(0, 500));
 }
@@ -105,7 +102,7 @@ export function isErrorResult(result: unknown): boolean {
  * Extract a snippet from the result for comparison.
  * Used to detect consecutive identical errors.
  */
-export function resultSnippet(result: unknown): string {
+export function resultSnippet(result: unknown) {
   const text = typeof result === "string" ? result : JSON.stringify(result);
   return text.slice(0, 200).trim();
 }
@@ -118,7 +115,7 @@ export function resultSnippet(result: unknown): string {
  * Count occurrences of each (toolName, target) pair in the window.
  * Returns the highest count.
  */
-function countRepetition(window: ToolCallRecord[]): number {
+function countRepetition(window: ToolCallRecord[]) {
   if (window.length === 0) return 0;
   // Count consecutive repetitions (not total)
   let max = 1;
@@ -141,7 +138,7 @@ function countRepetition(window: ToolCallRecord[]): number {
  * Returns the length of the longest run where isError is true and
  * resultSnippet matches the previous error.
  */
-function countConsecutiveErrors(window: ToolCallRecord[]): number {
+function countConsecutiveErrors(window: ToolCallRecord[]) {
   let longest = 0;
   let current = 0;
   let lastSnippet = "";
@@ -174,7 +171,7 @@ function countConsecutiveErrors(window: ToolCallRecord[]): number {
  * Returns a value between 0.0 and 1.0.
  * Score is the maximum of the repetition and error-run sub-scores.
  */
-export function computeScore(window: ToolCallRecord[]): number {
+export function computeScore(window: ToolCallRecord[]) {
   if (window.length === 0) return 0.0;
 
   // Repetition score: 0.0 for 1 call, 1.0 for REPETITION_CEILING calls
@@ -264,7 +261,7 @@ export class FlailingTracker {
 let instance: FlailingTracker | null = null;
 
 /** Get or create the global flailing tracker instance. */
-export function getFlailingTracker(): FlailingTracker {
+export function getFlailingTracker() {
   if (!instance) {
     instance = new FlailingTracker();
   }
@@ -272,6 +269,6 @@ export function getFlailingTracker(): FlailingTracker {
 }
 
 /** Replace the global instance (for testing). */
-export function setFlailingTracker(tracker: FlailingTracker | null): void {
+export function setFlailingTracker(tracker: FlailingTracker | null) {
   instance = tracker;
 }

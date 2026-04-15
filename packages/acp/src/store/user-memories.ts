@@ -65,61 +65,61 @@ export type UserMemoryStore = {
   readonly getProfileAsText: () => string | null;
 };
 
-export const createUserMemoryStore = (dbPath: string): UserMemoryStore => {
+export const createUserMemoryStore = (dbPath: string) => {
   const db = new Database(dbPath);
   db.exec("PRAGMA journal_mode=WAL");
   db.exec("PRAGMA foreign_keys=ON");
   db.exec(SCHEMA);
 
-  const getProfile = (): UserProfileEntry[] =>
+  const getProfile = () =>
     db
       .query("SELECT * FROM user_profile ORDER BY created_at ASC")
       .all() as UserProfileEntry[];
 
-  const addProfileEntry = (content: string): UserProfileEntry =>
+  const addProfileEntry = (content: string) =>
     db
       .query("INSERT INTO user_profile (content) VALUES (?) RETURNING *")
       .get(content) as UserProfileEntry;
 
-  const removeProfileEntry = (id: number): boolean => {
+  const removeProfileEntry = (id: number) => {
     const result = db.query("DELETE FROM user_profile WHERE id = ?").run(id);
     return result.changes > 0;
   };
 
-  const getMemories = (): UserMemoryEntry[] =>
+  const getMemories = () =>
     db
       .query("SELECT * FROM user_memories ORDER BY created_at DESC")
       .all() as UserMemoryEntry[];
 
-  const searchMemories = (query: string): UserMemoryEntry[] =>
+  const searchMemories = (query: string) =>
     db
       .query(
         "SELECT m.* FROM user_memories m JOIN user_memories_fts f ON m.id = f.rowid WHERE f.content MATCH ? ORDER BY f.rank",
       )
       .all(query) as UserMemoryEntry[];
 
-  const addMemory = (content: string): UserMemoryEntry =>
+  const addMemory = (content: string) =>
     db
       .query("INSERT INTO user_memories (content) VALUES (?) RETURNING *")
       .get(content) as UserMemoryEntry;
 
-  const updateMemory = (id: number, content: string): UserMemoryEntry | null =>
+  const updateMemory = (id: number, content: string) =>
     db
       .query(
         "UPDATE user_memories SET content = ?, updated_at = datetime('now') WHERE id = ? RETURNING *",
       )
       .get(content, id) as UserMemoryEntry | null;
 
-  const deleteMemory = (id: number): boolean => {
+  const deleteMemory = (id: number) => {
     const result = db.query("DELETE FROM user_memories WHERE id = ?").run(id);
     return result.changes > 0;
   };
 
-  const close = (): void => {
+  const close = () => {
     db.close();
   };
 
-  const getProfileAsText = (): string | null => {
+  const getProfileAsText = () => {
     const profile = getProfile();
     if (profile.length === 0) return null;
     return profile.map((p) => p.content).join("\n");

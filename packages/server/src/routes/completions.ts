@@ -23,7 +23,7 @@ import type {
   OpenAIToolDef,
 } from "../middleware/types";
 import { injectUserProfile } from "../middleware/user-profile";
-import { requestLog } from "../util/logger";
+import { log as baseLog, requestLog } from "../util/logger";
 
 /**
  * Convert OpenAI-format messages to AI SDK ModelMessage format.
@@ -130,7 +130,7 @@ function normalizeMessages(messages: unknown[]): ModelMessage[] {
 }
 
 /** Extract text from either a string or array-of-parts content field */
-function extractTextContent(content: unknown): string {
+function extractTextContent(content: unknown) {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return (content as Array<{ type?: string; text?: string }>)
@@ -142,10 +142,14 @@ function extractTextContent(content: unknown): string {
 }
 
 /** Safely parse JSON arguments, returning the string as-is on failure */
-function safeParseJSON(str: string): unknown {
+function safeParseJSON(str: string) {
   try {
     return JSON.parse(str);
-  } catch {
+  } catch (err) {
+    baseLog.debug(
+      { err: err instanceof Error ? err.message : String(err) },
+      "safeParseJSON failed, returning raw string",
+    );
     return str;
   }
 }
@@ -153,7 +157,7 @@ function safeParseJSON(str: string): unknown {
 /**
  * Generate a correlation ID for request logging.
  */
-function generateRequestId(): string {
+function generateRequestId() {
   return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
@@ -325,7 +329,7 @@ function logRequest(log: ReturnType<typeof requestLog>, req: ChatRequest) {
  * Deterministic session ID from first user message content.
  * Falls back to request hash if no user message found.
  */
-function fingerprint(req: ChatRequest): string {
+function fingerprint(req: ChatRequest) {
   const first = req.messages.find((m) => m.role === "user");
   if (!first) {
     return Bun.hash(JSON.stringify(req)).toString(36);

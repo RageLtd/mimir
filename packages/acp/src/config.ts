@@ -71,7 +71,7 @@ const parseDisallowed = (raw: string | undefined): string[] => {
     .filter((s) => s.length > 0);
 };
 
-const parseEnabled = (raw: string | undefined): boolean | undefined => {
+const parseEnabled = (raw: string | undefined) => {
   if (raw === undefined) return undefined;
   return raw === "true" || raw === "1";
 };
