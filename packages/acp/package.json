@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "start": "bun run index.ts",
-    "build": "bun build --compile ./index.ts --outfile mimir-acp"
+    "build": "bun build --compile ./index.ts --outfile mimir-acp",
+    "test": "bun run ../../tests/run-tests.ts acp"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.18.2",

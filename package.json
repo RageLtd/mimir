@@ -6,6 +6,9 @@
   ],
   "scripts": {
     "check": "biome check --write .",
+    "test": "bun run tests/run-tests.ts",
+    "test:server": "bun run tests/run-tests.ts server",
+    "test:acp": "bun run tests/run-tests.ts acp",
     "server:dev": "bun run --filter @mimir/server dev",
     "server:start": "bun run --filter @mimir/server start",
     "acp:start": "bun run --filter @mimir/acp start",

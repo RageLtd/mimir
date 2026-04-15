@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
-    "test": "bun run tests/run-tests.ts"
+    "test": "bun run ../../tests/run-tests.ts server"
   },
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^4.0.93",
