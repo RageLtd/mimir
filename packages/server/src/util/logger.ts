@@ -3,9 +3,7 @@ import pretty from "pino-pretty";
 
 const isTest = process.env.NODE_ENV === "test";
 
-const logFile =
-  Bun.env.MIMIR_LOG_FILE ??
-  (isTest ? "/tmp/mimir-test.log" : "/data/mimir.log");
+const logFile = Bun.env.MIMIR_LOG_FILE ?? (isTest ? "/tmp/mimir-test.log" : "/data/mimir.log");
 
 const prettyStream = pretty({
   colorize: true,

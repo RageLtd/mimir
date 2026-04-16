@@ -8,6 +8,7 @@
 
 import type {
   LanguageModelV3FilePart,
+  LanguageModelV3Message,
   LanguageModelV3Prompt,
   LanguageModelV3ReasoningPart,
   LanguageModelV3TextPart,
