@@ -14,6 +14,7 @@
  */
 
 import type {
+  LanguageModelV3,
   LanguageModelV3Message,
   LanguageModelV3ReasoningPart,
   LanguageModelV3TextPart,
@@ -31,7 +32,7 @@ import type { buildCallOptions } from "./tools";
 
 export const MAX_AGENT_STEPS = 20;
 
-export type Model = { doStream: Function; doGenerate: Function };
+export type Model = Pick<LanguageModelV3, "doStream" | "doGenerate">;
 export type EmitSSE = (
   controller: ReadableStreamDefaultController,
   delta: Record<string, unknown>,

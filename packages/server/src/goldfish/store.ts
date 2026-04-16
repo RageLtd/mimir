@@ -1,5 +1,12 @@
+import { RecordId } from "surrealdb";
 import { getDb, queryFirst, queryOne } from "../db/surreal";
 import { log } from "../util/logger";
+
+/** Parse a "table:id" string into a SurrealDB RecordId for parameterized queries. */
+function toRecordId(id: string) {
+  const [table, key] = id.split(":");
+  return new RecordId(table, key);
+}
 
 export interface Memory {
   id?: string;
@@ -198,7 +205,12 @@ export async function createRelation(
     RELATE $from -> relates_to -> $to
     SET weight = $weight, relation_type = $type
     `,
-    { from: fromId, to: toId, weight, type: relationType },
+    {
+      from: toRecordId(fromId),
+      to: toRecordId(toId),
+      weight,
+      type: relationType,
+    },
   );
 
   log.debug(
@@ -217,6 +229,7 @@ export async function getRelatedMemories(
   if (memoryIds.length === 0) return [];
 
   const start = Date.now();
+  const rids = memoryIds.map(toRecordId);
 
   const outgoing = await queryOne<{
     id: string;
@@ -231,7 +244,7 @@ export async function getRelatedMemories(
     ORDER BY weight DESC
     LIMIT $limit
     `,
-    { ids: memoryIds, limit },
+    { ids: rids, limit },
   );
 
   const incoming = await queryOne<{
@@ -247,7 +260,7 @@ export async function getRelatedMemories(
     ORDER BY weight DESC
     LIMIT $limit
     `,
-    { ids: memoryIds, limit },
+    { ids: rids, limit },
   );
 
   const all = [...outgoing, ...incoming];
@@ -295,7 +308,7 @@ export async function touchMemories(memoryIds: string[]): Promise<void> {
       last_accessed = time::now(),
       access_count = access_count + 1
     `,
-    { ids: memoryIds },
+    { ids: memoryIds.map(toRecordId) },
   );
 
   log.debug({ count: memoryIds.length, ids: memoryIds }, "touched memories");
@@ -369,10 +382,11 @@ export async function updateMemory(
   embedding: number[],
 ): Promise<boolean> {
   const db = await getDb();
+  const rid = toRecordId(id);
 
   // Check existence
   const existing = await queryFirst<{ id: string }>(`SELECT id FROM $id`, {
-    id,
+    id: rid,
   });
   if (!existing) return false;
 
@@ -383,11 +397,11 @@ export async function updateMemory(
       embedding = $embedding,
       last_accessed = time::now(),
       confidence = 1.0`,
-    { id, content, embedding },
+    { id: rid, content, embedding },
   );
 
   // Remove old relations
-  await db.query(`DELETE relates_to WHERE in = $id OR out = $id`, { id });
+  await db.query(`DELETE relates_to WHERE in = $id OR out = $id`, { id: rid });
 
   log.info({ id, content }, "updated memory");
   return true;
@@ -396,10 +410,11 @@ export async function updateMemory(
 /** Delete a memory by ID */
 export async function deleteMemory(id: string): Promise<boolean> {
   const db = await getDb();
+  const rid = toRecordId(id);
   // Delete relations first
-  await db.query(`DELETE relates_to WHERE in = $id OR out = $id`, { id });
+  await db.query(`DELETE relates_to WHERE in = $id OR out = $id`, { id: rid });
   const result = await queryOne<{ id: string }>(`DELETE $id RETURN BEFORE`, {
-    id,
+    id: rid,
   });
   const deleted = result.length > 0;
   if (deleted) {
