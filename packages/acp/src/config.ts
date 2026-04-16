@@ -18,6 +18,10 @@ export type CCBackendConfig = {
   readonly workingDirectory?: string;
   /** Maps the suffix after `claude-code/` to CC's --model flag value. */
   readonly models: Readonly<Record<string, string>>;
+  /** Turns between voice anchor injections. 0 disables the feature. */
+  readonly anchorInterval: number;
+  /** Path to the canonical system prompt markdown file. */
+  readonly systemPromptPath?: string;
 };
 
 export type CopilotBackendConfig = {
@@ -89,7 +93,7 @@ const parseEnabled = (raw: string | undefined) => {
 export const loadConfig = (): MimirConfig => {
   const ccEnabledOverride = parseEnabled(process.env.MIMIR_CC_ENABLED);
   return {
-    serverUrl: process.env.MIMIR_SERVER_URL ?? "http://mimir.conhost.lan:3777",
+    serverUrl: process.env.MIMIR_SERVER_URL ?? "http://mimir.conhost.lan",
     apiKey: process.env.MIMIR_API_KEY ?? "",
     model: process.env.MIMIR_MODEL ?? "openrouter/auto",
     userMemoryDbPath: expandHome(
@@ -112,6 +116,8 @@ export const loadConfig = (): MimirConfig => {
         process.env.MIMIR_CC_PERMISSION_MODE ?? "bypassPermissions",
       workingDirectory: process.env.MIMIR_CC_WORKING_DIR,
       models: DEFAULT_CC_MODELS,
+      anchorInterval: parseInt(process.env.ANCHOR_INTERVAL ?? "6", 10),
+      systemPromptPath: process.env.MIMIR_SYSTEM_PROMPT_PATH,
     },
     copilot: {
       enabled: parseEnabled(process.env.MIMIR_COPILOT_ENABLED) ?? true,

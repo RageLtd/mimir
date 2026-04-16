@@ -3,6 +3,7 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
+import type { VoiceAnchorState } from "../backends/claude-code/voice-anchors";
 import type { ChatMessage } from "../server-client";
 
 export type SessionState = {
@@ -25,6 +26,12 @@ export type SessionState = {
    * Set from clientCapabilities._meta.terminal_output during initialize.
    */
   supportsTerminalOutput: boolean;
+  /**
+   * Voice anchor rotation state for the CC backend. Counters tick once per
+   * developer-initiated ACP prompt, never per SDK tool-result turn. Unused
+   * for the mimir-server backend path.
+   */
+  voiceAnchors: VoiceAnchorState;
 };
 
 export type AgentCore = {

@@ -29,6 +29,12 @@ import { errMessage } from "../../util";
 import { createChildLogger, log } from "../../utils/log";
 import { toAnthropicXml } from "../../utils/markdown-to-xml";
 import type { Backend, BackendEvent } from "../types";
+import { formatAnchor, nextAnchor, type VoiceAnchor } from "./voice-anchors";
+
+export type VoiceAnchorOpts = {
+  readonly library: readonly VoiceAnchor[];
+  readonly interval: number;
+};
 
 const logger = createChildLogger(log, "prompt-cc");
 
@@ -228,6 +234,19 @@ export const contextWithoutCurrentTurn = (
   return messages;
 };
 
+/**
+ * Prepend an anchor text chunk to promptBlocks when present, otherwise
+ * return a clone with the anchor as a leading text block. Used so that
+ * the SDK's acpBlocksToAnthropicContent path still sees the anchor.
+ */
+const blocksWithAnchor = (
+  anchorText: string,
+  blocks: readonly acp.ContentBlock[],
+): readonly acp.ContentBlock[] => [
+  { type: "text", text: `${anchorText}\n\n` },
+  ...blocks,
+];
+
 export const promptViaClaudeCode = async (
   session: SessionState,
   promptText: string,
@@ -236,6 +255,7 @@ export const promptViaClaudeCode = async (
   backend: Backend,
   contextClient: ContextClientConfig,
   memoryStore: UserMemoryStore,
+  anchorOpts: VoiceAnchorOpts,
   promptBlocks?: readonly acp.ContentBlock[],
 ): Promise<acp.PromptResponse> => {
   // Single call to mimir-server assembles the full context: system prompt,
@@ -292,8 +312,41 @@ export const promptViaClaudeCode = async (
     "context assembled for CC backend",
   );
 
-  // Track the user message for persistence.
+  // Track the user message for persistence. The raw promptText is stored —
+  // the anchor wrapping below only applies to what's sent to the model, not
+  // to the transcript we persist.
   session.messages.push({ role: "user", content: promptText });
+
+  // Voice anchor decision. Counter ticks once per ACP prompt (developer-
+  // initiated), never per tool-result turn the SDK emits inside runClaudeCode.
+  // An empty library or interval ≤ 0 makes nextAnchor a no-op.
+  const effectiveInterval =
+    anchorOpts.interval > 0 ? anchorOpts.interval : Number.POSITIVE_INFINITY;
+  const step = nextAnchor(
+    session.voiceAnchors,
+    anchorOpts.library,
+    effectiveInterval,
+  );
+  session.voiceAnchors = step.next;
+
+  let sdkPrompt = promptText;
+  let sdkBlocks = promptBlocks;
+  if (step.inject) {
+    const anchorText = formatAnchor(step.anchor);
+    sdkPrompt = `${anchorText}\n\n${promptText}`;
+    sdkBlocks =
+      promptBlocks && promptBlocks.length > 0
+        ? blocksWithAnchor(anchorText, promptBlocks)
+        : promptBlocks;
+    logger.info(
+      {
+        turn: step.next.turnCount,
+        anchorIndex: step.next.anchorIndex,
+        title: step.anchor.title,
+      },
+      "voice anchor injected",
+    );
+  }
 
   let assistantBuffer = "";
   let promptTokens: number | undefined;
@@ -301,8 +354,8 @@ export const promptViaClaudeCode = async (
 
   try {
     for await (const event of backend.run({
-      prompt: promptText,
-      promptBlocks,
+      prompt: sdkPrompt,
+      promptBlocks: sdkBlocks,
       systemPrompt: xmlSystemPrompt,
       assembledMessages: contextMessages,
       messages: session.messages,

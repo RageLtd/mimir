@@ -175,7 +175,7 @@ describe("Tool Hierarchy Enforcer", () => {
 
   test("allows non-bash tools", async () => {
     const result = await makeRegistry().runPreHooks({
-      toolName: "memory_search",
+      toolName: "project_memory_search",
       args: { command: "cat something" },
       toolType: "server",
       project: "/test",

@@ -8,6 +8,10 @@
 import type * as acp from "@agentclientprotocol/sdk";
 import type { BackendRouter } from "../backends";
 import { promptViaClaudeCode } from "../backends/claude-code/prompt-cc";
+import {
+  createAnchorState,
+  type VoiceAnchor,
+} from "../backends/claude-code/voice-anchors";
 import type { Backend } from "../backends/types";
 import type { CartographerManager } from "../cartographer/lifecycle";
 import { formatRulesForPrompt, readProjectRules } from "../cartographer/rules";
@@ -21,6 +25,13 @@ import { promptViaServer } from "./prompt-server";
 import { DEFAULT_MODE, SESSION_MODES } from "./session";
 import type { AgentCore, SessionState } from "./types";
 
+export type AgentCoreDeps = {
+  /** Parsed Voice in Action library used by the CC anchor wrapper. */
+  readonly voiceAnchorLibrary: readonly VoiceAnchor[];
+  /** Turns between anchor injections on the CC backend. */
+  readonly anchorInterval: number;
+};
+
 const logger = createChildLogger(log, "core");
 
 export const createAgentCore = (
@@ -29,6 +40,7 @@ export const createAgentCore = (
   router: BackendRouter,
   contextClient: ContextClientConfig,
   sessionStore: SessionStore,
+  deps: AgentCoreDeps,
   cartographer?: CartographerManager | null,
 ): AgentCore => {
   const sessions = new Map<string, SessionState>();
@@ -50,6 +62,10 @@ export const createAgentCore = (
       projectRules: null,
       clientMcpServers,
       supportsTerminalOutput,
+      voiceAnchors: createAnchorState(
+        sessionId,
+        deps.voiceAnchorLibrary.length,
+      ),
     };
     sessions.set(sessionId, session);
 
@@ -96,6 +112,10 @@ export const createAgentCore = (
       projectRules: null,
       clientMcpServers,
       supportsTerminalOutput,
+      voiceAnchors: createAnchorState(
+        persisted.session_id,
+        deps.voiceAnchorLibrary.length,
+      ),
     };
     sessions.set(sessionId, session);
 
@@ -202,6 +222,10 @@ export const createAgentCore = (
         backend,
         contextClient,
         memoryStore,
+        {
+          library: deps.voiceAnchorLibrary,
+          interval: deps.anchorInterval,
+        },
         promptBlocks,
       );
     }

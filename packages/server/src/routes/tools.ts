@@ -148,9 +148,9 @@ const SERVER_TOOLS: ToolDef[] = [
   {
     type: "function",
     function: {
-      name: "memory_search",
+      name: "project_memory_search",
       description:
-        "Search conversation-level memories (Goldfish). These are facts extracted from past conversations, not user profile facts.",
+        "Search memories scoped to the current project (Goldfish) — architectural decisions, conventions, session summaries, pending work on THIS codebase. Distinct from user_memory_search which stores facts about the developer themselves.",
       parameters: {
         type: "object",
         properties: {
@@ -170,9 +170,9 @@ const SERVER_TOOLS: ToolDef[] = [
   {
     type: "function",
     function: {
-      name: "memory_store",
+      name: "project_memory_store",
       description:
-        "Store a fact in conversation-level memory (Goldfish). This memory is tied to the current conversation context.",
+        "Persist a project-scoped fact to Goldfish memory. Use for architectural decisions, conventions, session summaries, and reasoning about THIS codebase. Facts about the developer themselves belong in user_memory_store.",
       parameters: {
         type: "object",
         properties: {

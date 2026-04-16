@@ -36,6 +36,7 @@ describe("getCCModelFlag", () => {
     disallowedTools: [],
     permissionMode: "bypassPermissions",
     models: { opus: "claude-opus-4-20250514", sonnet: "claude-sonnet-4-20250514" },
+    anchorInterval: 6,
   };
 
   test("maps known suffix to configured model id", () => {
@@ -59,6 +60,7 @@ describe("getCCModelList", () => {
       disallowedTools: [],
       permissionMode: "bypassPermissions",
       models: { opus: "claude-opus-4-20250514" },
+      anchorInterval: 6,
     };
     const list = getCCModelList(cc);
     expect(list).toHaveLength(1);
@@ -72,6 +74,7 @@ describe("getCCModelList", () => {
       disallowedTools: [],
       permissionMode: "bypassPermissions",
       models: { opus: "claude-opus-4-20250514" },
+      anchorInterval: 6,
     };
     expect(getCCModelList(cc)).toEqual([]);
   });
@@ -82,6 +85,7 @@ describe("getCCModelList", () => {
       disallowedTools: [],
       permissionMode: "bypassPermissions",
       models: {},
+      anchorInterval: 6,
     };
     expect(getCCModelList(cc)).toEqual([]);
   });

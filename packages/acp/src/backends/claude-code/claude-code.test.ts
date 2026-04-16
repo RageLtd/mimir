@@ -52,6 +52,7 @@ const baseCc: CCBackendConfig = {
   disallowedTools: [],
   permissionMode: "bypassPermissions",
   models: {},
+  anchorInterval: 6,
 };
 
 describe("buildSdkOptions", () => {

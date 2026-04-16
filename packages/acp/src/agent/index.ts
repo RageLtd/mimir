@@ -17,6 +17,10 @@
 import * as acp from "@agentclientprotocol/sdk";
 import { createBackendRouter } from "../backends";
 import {
+  defaultSystemPromptPath,
+  loadVoiceAnchors,
+} from "../backends/claude-code/voice-anchors";
+import {
   type CartographerManager,
   createCartographerManager,
 } from "../cartographer/lifecycle";
@@ -43,6 +47,16 @@ import {
 } from "./session";
 
 const logger = createChildLogger(log, "agent");
+
+// Load the voice anchor library once at process startup. Parsing failures
+// throw at module init — a malformed Voice in Action section surfaces at
+// boot, not later. An empty library effectively disables anchor injection;
+// nextAnchor() no-ops gracefully.
+const anchorPath = config.cc.systemPromptPath ?? defaultSystemPromptPath();
+const voiceAnchorLibrary = await loadVoiceAnchors(anchorPath);
+logger.info(
+  `Loaded ${voiceAnchorLibrary.length} voice anchors from ${anchorPath}`,
+);
 
 export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
   const memoryStore = createUserMemoryStore(config.userMemoryDbPath);
@@ -74,6 +88,10 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
     router,
     contextClient,
     sessionStore,
+    {
+      voiceAnchorLibrary,
+      anchorInterval: config.cc.anchorInterval,
+    },
     cartographer,
   );
 

@@ -596,11 +596,11 @@ Three overlapping layers:
 
 | Tool | Purpose | Keep? |
 |------|---------|-------|
-| `memory_search` | Targeted queries beyond automatic retrieval | Yes |
-| `memory_store` | Model decides what to persist explicitly | Yes |
-| `memory_update` | Update existing memory content | Yes |
-| `memory_list` | Review stored memories | Yes |
-| `memory_delete` | Remove a memory (with confirmation) | Yes |
+| `project_memory_search` | Targeted queries beyond automatic retrieval | Yes |
+| `project_memory_store` | Model decides what to persist explicitly | Yes |
+| `project_memory_update` | Update existing memory content | Yes |
+| `project_memory_list` | Review stored memories | Yes |
+| `project_memory_delete` | Remove a memory (with confirmation) | Yes |
 | `cartographer_search` | Find files/symbols in the codebase | Yes |
 | `cartographer_file_info` | File details, imports, dependents | Yes |
 | `cartographer_query` | Walk the import graph from entry points | Yes |
@@ -691,7 +691,7 @@ Cartographer index status, project rules, and memory retrieval are all
 injected into context before Mimir's first turn.
 
 Ongoing: When the developer makes decisions about architecture, conventions,
-patterns, or approaches, Mimir persists these to Goldfish (memory_store)
+patterns, or approaches, Mimir persists these to Goldfish (project_memory_store)
 so they are available in future sessions.
 
 Context management: Mimir monitors its context window utilization. When

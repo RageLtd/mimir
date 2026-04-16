@@ -23,7 +23,7 @@ export const userMemoryToolDefs: ToolDefinition[] = [
     function: {
       name: "user_memory_search",
       description:
-        "Search the user's personal memories using full-text search. Use this to find facts about the user's preferences, background, or past interactions.",
+        "Search facts about the developer themselves — preferences, setup, opinions, life circumstances, past decisions they've made, frustrations. Use when the developer mentions something about their workflow, environment, or history that might have context worth recalling, when a preference they've expressed before seems relevant to the current task, or when you want to check whether you already know something about them before asking. This store is user-scoped across all projects — use project_memory_search for facts about the current codebase instead.",
       parameters: {
         type: "object",
         properties: {
@@ -41,7 +41,7 @@ export const userMemoryToolDefs: ToolDefinition[] = [
     function: {
       name: "user_memory_store",
       description:
-        "Store a new personal memory about the user. Call this proactively whenever the developer reveals something about themselves — preferences, opinions, life circumstances, health conditions, frustrations, personal history, technical decisions, or anything else worth remembering. No explicit 'remember this' required; if it's worth knowing next session, store it now.",
+        "Store a new fact about the developer. Call proactively whenever they reveal something about themselves — preferences, opinions, life circumstances, health conditions, frustrations, personal history, technical decisions, or anything worth remembering next session. No explicit 'remember this' required; if it's worth knowing across future sessions, store it now. User-scoped across all projects — facts about the current codebase belong in project_memory_store instead.",
       parameters: {
         type: "object",
         properties: {
@@ -60,7 +60,7 @@ export const userMemoryToolDefs: ToolDefinition[] = [
     function: {
       name: "user_memory_list",
       description:
-        "List all stored user memories. Use this to get an overview of what is known about the user.",
+        "List all stored facts about the developer. Use to get an overview of what is known about them, find the ID of a specific memory for update or deletion, or audit the store when context is thin.",
       parameters: {
         type: "object",
         properties: {},
@@ -72,7 +72,7 @@ export const userMemoryToolDefs: ToolDefinition[] = [
     function: {
       name: "user_memory_delete",
       description:
-        "Delete a user memory by ID. Use this when a memory is no longer accurate or relevant.",
+        "Delete a developer memory by ID. Use when a stored fact is no longer accurate, has been superseded, or the developer asks you to forget it. Confirm the content with them before calling unless they explicitly requested deletion.",
       parameters: {
         type: "object",
         properties: {
@@ -90,7 +90,7 @@ export const userMemoryToolDefs: ToolDefinition[] = [
     function: {
       name: "user_profile_get",
       description:
-        "Get the user's profile — structured facts like name, role, preferences, and communication style. Returns all profile entries.",
+        "Get the developer's profile — stable identity facts like name, role, location, editor, communication preferences. Use when you need to reference their setup or preferences and the ambient <user_context> block isn't sufficient.",
       parameters: {
         type: "object",
         properties: {},
@@ -102,7 +102,7 @@ export const userMemoryToolDefs: ToolDefinition[] = [
     function: {
       name: "user_profile_add",
       description:
-        "Add an entry to the user's profile. Use for stable identity facts: name, role, location, health conditions, communication preferences, editor/tool setup, household details, hobbies, philosophical outlook — anything that defines who the developer is rather than what happened in a specific session.",
+        "Add an entry to the developer's profile. Use for stable identity facts: name, role, location, health conditions, communication preferences, editor/tool setup, household details, hobbies, philosophical outlook — anything that defines who they are rather than what happened in a specific session. Ephemeral facts belong in user_memory_store instead.",
       parameters: {
         type: "object",
         properties: {
@@ -121,7 +121,7 @@ export const userMemoryToolDefs: ToolDefinition[] = [
     function: {
       name: "user_profile_remove",
       description:
-        "Remove a profile entry by ID. Use when a profile fact is outdated or wrong.",
+        "Remove a profile entry by ID. Use when a profile fact is outdated, wrong, or the developer corrects it. Find the target ID via user_profile_get.",
       parameters: {
         type: "object",
         properties: {

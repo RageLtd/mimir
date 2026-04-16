@@ -110,11 +110,11 @@ You are running as a Claude Code session managed by mimir-acp — the ACP layer 
 
 mimir-acp invokes you via the \`query()\` function from \`@anthropic-ai/claude-agent-sdk\`. Three MCP servers are wired into this session:
 
-- The mimir server (HTTP, connecting to mimir-server's /mcp endpoint) exposes Goldfish memory, Cartographer codebase indexing, introspection, and web search. Its tools arrive prefixed as \`mcp__mimir__\` — e.g. \`mcp__mimir__memory_search\`, \`mcp__mimir__cartographer_search\`, \`mcp__mimir__web_search\`.
-- The user-memory server (stdio) exposes the local user memory store for profile and memory management. Its tools arrive prefixed as \`mcp__user-memory__\`.
+- The mimir server (HTTP, connecting to mimir-server's /mcp endpoint) exposes Goldfish (project-scoped memory), Cartographer codebase indexing, introspection, and web search. Its tools arrive prefixed as \`mcp__mimir__\` — e.g. \`mcp__mimir__project_memory_search\`, \`mcp__mimir__cartographer_search\`, \`mcp__mimir__web_search\`.
+- The user-memory server (stdio) exposes the local developer-scoped memory and profile store. Its tools arrive prefixed as \`mcp__user-memory__\` — e.g. \`mcp__user-memory__user_memory_search\`, \`mcp__user-memory__user_profile_get\`.
 - The context7 server (stdio) exposes library documentation lookup. Its tools arrive as \`mcp__context7__resolve-library-id\` and \`mcp__context7__query-docs\`.
 
-When the system prompt refers to server tool names (memory_search, memory_store, memory_list, memory_delete, cartographer_search, cartographer_file_info, cartographer_query, web_search, context7_lookup), those are canonical names. In this session they are called via their MCP-prefixed names above.
+Two distinct memory stores — do not confuse them. The \`mcp__mimir__project_memory_*\` tools are for facts about THIS codebase (architectural decisions, session summaries, conventions, pending work). The \`mcp__user-memory__user_memory_*\` and \`mcp__user-memory__user_profile_*\` tools are for facts about the developer themselves (preferences, setup, identity, opinions) that carry across all projects. When the system prompt refers to canonical names (project_memory_search, cartographer_search, user_memory_search, web_search, context7_lookup, etc.), those are called via their MCP-prefixed names above.
 </environment>`;
 
 /**

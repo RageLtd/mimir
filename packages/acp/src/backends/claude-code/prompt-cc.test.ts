@@ -191,6 +191,7 @@ describe("end-to-end: assembled context → claude args + context", () => {
       disallowedTools: ["Agent", "Monitor"],
       permissionMode: "bypassPermissions",
       models: {},
+      anchorInterval: 6,
     };
 
     const opts = buildSdkOptions({
@@ -226,6 +227,7 @@ describe("end-to-end: assembled context → claude args + context", () => {
       disallowedTools: [],
       permissionMode: "bypassPermissions",
       models: {},
+      anchorInterval: 6,
     };
     const opts = buildSdkOptions({
       contextMessages: context,

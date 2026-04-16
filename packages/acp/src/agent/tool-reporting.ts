@@ -28,11 +28,12 @@ const TOOL_KIND_MAP: Record<string, acp.ToolKind> = {
   WebFetch: "fetch",
   WebSearch: "fetch",
   TodoWrite: "other",
-  // Server tools
-  memory_search: "search",
-  memory_store: "other",
-  memory_list: "read",
-  memory_delete: "delete",
+  // Server tools (project-scoped memory via Goldfish)
+  project_memory_search: "search",
+  project_memory_store: "other",
+  project_memory_update: "other",
+  project_memory_list: "read",
+  project_memory_delete: "delete",
   cartographer_search: "search",
   cartographer_file_info: "read",
   cartographer_query: "search",

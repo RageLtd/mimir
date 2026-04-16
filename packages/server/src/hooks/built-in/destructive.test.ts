@@ -167,7 +167,7 @@ describe("Destructive Action Guard", () => {
 
   test("allows non-bash tools", async () => {
     const result = await makeRegistry().runPreHooks({
-      toolName: "memory_search",
+      toolName: "project_memory_search",
       args: { query: "git push --force" },
       toolType: "server",
       project: "/test",
