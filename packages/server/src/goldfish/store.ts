@@ -4,7 +4,7 @@ import { log } from "../util/logger";
 
 /** Parse a "table:id" string into a SurrealDB RecordId for parameterized queries. */
 function toRecordId(id: string) {
-  const [table, key] = id.split(":");
+  const [table, key] = id.split(":") as [string, string];
   return new RecordId(table, key);
 }
 
