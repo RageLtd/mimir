@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { initProviderRegistry } from "./agent/provider-registry";
+import { clearStaleCompaction } from "./agent-loop/message-log";
 import { refreshToolNames } from "./agent-loop/server-tools";
 import { closeMcpClients, initMcpTools } from "./agent-loop/server-tools/mcp";
 import { config, OPENROUTER_API_URL } from "./config";
@@ -121,6 +122,9 @@ async function boot() {
     log.warn("continuing without database — some features will be unavailable");
   } else {
     log.info("SurrealDB connected");
+    // Recover from crashes mid-compaction — a stuck is_compacting lock
+    // permanently blocks all future compactions
+    await clearStaleCompaction();
   }
 
   // Update provider data

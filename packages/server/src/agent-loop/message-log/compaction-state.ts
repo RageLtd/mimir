@@ -67,7 +67,11 @@ export async function updateTokenCount(
     delta = 0;
   } else if (promptTokens > lastPromptTokens) {
     delta = promptTokens - lastPromptTokens;
+  } else if (promptTokens === lastPromptTokens) {
+    // Same value reported again (retry, duplicate call) — nothing new
+    delta = 0;
   } else {
+    // Prompt shrank (context trimmed, compaction on client side) — new baseline
     delta = promptTokens;
   }
 
@@ -130,7 +134,7 @@ export async function updateTokenCount(
   log.info(
     {
       promptTokens,
-      lastPromptTokens: state.last_prompt_tokens,
+      lastPromptTokens,
       delta,
       sinceLast: state.tokens_since_last,
       threshold,
