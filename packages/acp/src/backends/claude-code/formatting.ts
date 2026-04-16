@@ -8,7 +8,10 @@
  */
 
 import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk";
-import type { Options } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  McpSdkServerConfigWithInstance,
+  Options,
+} from "@anthropic-ai/claude-agent-sdk";
 import type { CCBackendConfig } from "../../config";
 import { buildMcpServers } from "./mcp-config";
 
@@ -36,15 +39,6 @@ export type RunClaudeCodeOptions = {
    * that would be lost if the prompt were flattened to plain text.
    */
   readonly promptBlocks?: readonly ContentBlock[];
-  /**
-   * Prior context messages (summaries, memories, conversation history)
-   * appended to the system prompt. Must NOT include the current user
-   * message — that goes as the SDK prompt input.
-   */
-  readonly contextMessages: ReadonlyArray<{
-    role: "user" | "assistant";
-    content: string;
-  }>;
   readonly systemPrompt: string;
   readonly workingDirectory: string;
   readonly cc: CCBackendConfig;
@@ -56,14 +50,30 @@ export type RunClaudeCodeOptions = {
   readonly model?: string;
   /** MCP servers from the ACP client to merge into the SDK MCP config. */
   readonly clientMcpServers?: readonly McpServer[];
+  /** In-process boot MCP server delivering per-session context as tool results. */
+  readonly bootServer?: McpSdkServerConfigWithInstance;
   readonly signal?: AbortSignal;
 };
+
+/**
+ * Boot instruction appended to the system prompt. Tells the model to
+ * call the two boot tools on its first turn to load per-session context.
+ * Session context (summaries, memories, prior turns) is injected directly
+ * into the system prompt rather than via a boot tool.
+ */
+const BOOT_INSTRUCTION = `<boot_sequence>
+At the start of every session, BEFORE responding to the user's message, call these two tools in parallel to load your context:
+
+1. \`load_user_profile\` — developer identity, preferences, and memories
+2. \`load_project_rules\` — this project's rules and conventions (CLAUDE.md, .claude/rules/)
+
+Call both in your first response. Do not skip either. Do not respond to the user until you have loaded and read both results. The tool results, combined with the session context already in this prompt, contain your operating context for this session.
+</boot_sequence>`;
 
 /** Build the SDK Options object from runner options. Pure function, easy to test. */
 export const buildSdkOptions = (
   options: Pick<
     RunClaudeCodeOptions,
-    | "contextMessages"
     | "systemPrompt"
     | "model"
     | "cc"
@@ -71,12 +81,12 @@ export const buildSdkOptions = (
     | "serverUrl"
     | "userMemoryDbPath"
     | "clientMcpServers"
+    | "bootServer"
   >,
 ): Options => {
-  const contextText = formatContextForPrompt(options.contextMessages);
-  const fullSystemPrompt = contextText
-    ? `${options.systemPrompt}\n\n${contextText}`
-    : options.systemPrompt;
+  // System prompt arrives with session context already embedded (injected by
+  // prompt-cc.ts). Boot instruction appended after it.
+  const fullSystemPrompt = `${options.systemPrompt}\n\n${BOOT_INSTRUCTION}`;
 
   const sdkOptions: Options = {
     cwd: options.workingDirectory,
@@ -89,9 +99,11 @@ export const buildSdkOptions = (
       options.serverUrl,
       options.userMemoryDbPath,
       options.clientMcpServers,
+      options.bootServer,
     ),
     strictMcpConfig: true,
-    persistSession: false,
+    persistSession: true,
+    continue: true,
     settingSources: [],
     includePartialMessages: true,
     env: { ...process.env, ENABLE_TOOL_SEARCH: "false" },

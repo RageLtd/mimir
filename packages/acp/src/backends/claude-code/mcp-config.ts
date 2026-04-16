@@ -10,6 +10,7 @@
 import type { McpServer, McpServerStdio } from "@agentclientprotocol/sdk";
 import type {
   McpHttpServerConfig,
+  McpSdkServerConfigWithInstance,
   McpServerConfig,
   McpSSEServerConfig,
   McpStdioServerConfig,
@@ -58,6 +59,7 @@ export const buildMcpServers = (
   serverUrl: string,
   userMemoryDbPath: string,
   clientMcpServers?: readonly McpServer[],
+  bootServer?: McpSdkServerConfigWithInstance,
 ): Record<string, McpServerConfig> => {
   const clientEntries: Record<string, McpServerConfig> = {};
   for (const server of clientMcpServers ?? []) {
@@ -87,5 +89,8 @@ export const buildMcpServers = (
       command: "bunx",
       args: ["@upstash/context7-mcp"],
     },
+    // Boot server delivers per-session context (user profile, session
+    // history, project rules) as tool results on the first turn.
+    ...(bootServer ? { [bootServer.name]: bootServer } : {}),
   };
 };

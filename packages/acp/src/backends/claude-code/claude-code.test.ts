@@ -1,5 +1,8 @@
 import { test, expect, describe } from "bun:test";
-import { formatContextForPrompt, buildSdkOptions } from "./formatting";
+import {
+  formatContextForPrompt,
+  buildSdkOptions,
+} from "./formatting";
 import { buildMcpServers } from "./mcp-config";
 import type { CCBackendConfig } from "../../config";
 
@@ -57,15 +60,11 @@ const baseCc: CCBackendConfig = {
 
 describe("buildSdkOptions", () => {
   const mkOpts = (overrides?: {
-    contextMessages?: { role: "user" | "assistant"; content: string }[];
     systemPrompt?: string;
     cc?: CCBackendConfig;
     model?: string;
   }) =>
     buildSdkOptions({
-      contextMessages: overrides?.contextMessages ?? [
-        { role: "user" as const, content: "prev" },
-      ],
       systemPrompt: overrides?.systemPrompt ?? "<xml>prompt</xml>",
       cc: overrides?.cc ?? baseCc,
       workingDirectory: "/tmp/test",
@@ -74,16 +73,17 @@ describe("buildSdkOptions", () => {
       model: overrides?.model,
     });
 
-  test("concatenates context into system prompt", () => {
+  test("appends boot instruction to system prompt", () => {
     const opts = mkOpts();
     expect(opts.systemPrompt).toContain("<xml>prompt</xml>");
-    expect(opts.systemPrompt).toContain("<conversation_context>");
-    expect(opts.systemPrompt).toContain("[User]\nprev");
+    expect(opts.systemPrompt).toContain("<boot_sequence>");
+    expect(opts.systemPrompt).toContain("load_user_profile");
+    expect(opts.systemPrompt).toContain("load_project_rules");
+    expect(opts.systemPrompt).not.toContain("load_session_context");
   });
 
-  test("omits context from system prompt when messages are empty", () => {
-    const opts = mkOpts({ contextMessages: [] });
-    expect(opts.systemPrompt).toBe("<xml>prompt</xml>");
+  test("does not append conversation context to system prompt", () => {
+    const opts = mkOpts();
     expect(opts.systemPrompt).not.toContain("<conversation_context>");
   });
 
@@ -129,9 +129,10 @@ describe("buildSdkOptions", () => {
     expect(opts.model).toBeUndefined();
   });
 
-  test("sets persistSession to false", () => {
+  test("enables persistent sessions with continue", () => {
     const opts = mkOpts();
-    expect(opts.persistSession).toBe(false);
+    expect(opts.persistSession).toBe(true);
+    expect(opts.continue).toBe(true);
   });
 
   test("sets strictMcpConfig to true", () => {

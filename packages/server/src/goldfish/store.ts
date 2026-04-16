@@ -207,7 +207,12 @@ export async function createRelation(
     RELATE $from -> relates_to -> $to
     SET weight = $weight, relation_type = $type
     `,
-    { from: toRecordId(fromId), to: toRecordId(toId), weight, type: relationType },
+    {
+      from: toRecordId(fromId),
+      to: toRecordId(toId),
+      weight,
+      type: relationType,
+    },
   );
 
   log.debug(

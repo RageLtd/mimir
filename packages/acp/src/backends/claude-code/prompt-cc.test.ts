@@ -183,8 +183,7 @@ describe("end-to-end: assembled context → claude args + context", () => {
     expect(xml).toContain("Be direct.");
   });
 
-  test("buildSdkOptions includes context in system prompt and passes model/disallowedTools", () => {
-    const context = contextWithoutCurrentTurn(assembledMessages, currentQuery);
+  test("buildSdkOptions appends boot instruction and passes model/disallowedTools", () => {
     const xmlPrompt = toAnthropicXml(serverSystemPrompt);
     const cc: CCBackendConfig = {
       enabled: true,
@@ -195,7 +194,6 @@ describe("end-to-end: assembled context → claude args + context", () => {
     };
 
     const opts = buildSdkOptions({
-      contextMessages: context,
       systemPrompt: xmlPrompt,
       cc,
       model: "opus",
@@ -204,9 +202,12 @@ describe("end-to-end: assembled context → claude args + context", () => {
       userMemoryDbPath: "/tmp/test-memories.db",
     });
 
-    // Context is concatenated into system prompt
+    // Boot instruction appended (two tools, not three)
     expect(opts.systemPrompt).toContain(xmlPrompt);
-    expect(opts.systemPrompt).toContain("<conversation_context>");
+    expect(opts.systemPrompt).toContain("<boot_sequence>");
+    expect(opts.systemPrompt).toContain("load_user_profile");
+    expect(opts.systemPrompt).toContain("load_project_rules");
+    expect(opts.systemPrompt).not.toContain("load_session_context");
 
     // Model passed through
     expect(opts.model).toBe("opus");
@@ -215,13 +216,7 @@ describe("end-to-end: assembled context → claude args + context", () => {
     expect(opts.disallowedTools).toEqual(["Agent", "Monitor"]);
   });
 
-  test("first-message scenario: no context keeps system prompt clean", () => {
-    const context = contextWithoutCurrentTurn(
-      [{ role: "user" as const, content: "hello" }],
-      "hello",
-    );
-    expect(context).toHaveLength(0);
-
+  test("system prompt always includes boot instruction even on first message", () => {
     const cc: CCBackendConfig = {
       enabled: true,
       disallowedTools: [],
@@ -230,7 +225,6 @@ describe("end-to-end: assembled context → claude args + context", () => {
       anchorInterval: 6,
     };
     const opts = buildSdkOptions({
-      contextMessages: context,
       systemPrompt: "<system/>",
       cc,
       workingDirectory: "/tmp/test",
@@ -238,8 +232,44 @@ describe("end-to-end: assembled context → claude args + context", () => {
       userMemoryDbPath: "/tmp/test-memories.db",
     });
 
-    // No context → system prompt is just the base prompt
-    expect(opts.systemPrompt).toBe("<system/>");
-    expect(opts.systemPrompt).not.toContain("<conversation_context>");
+    // Boot instruction always present with two tools
+    expect(opts.systemPrompt).toContain("<boot_sequence>");
+    expect(opts.systemPrompt).toContain("load_user_profile");
+    expect(opts.systemPrompt).toContain("load_project_rules");
+    expect(opts.systemPrompt).not.toContain("load_session_context");
+  });
+
+  test("session context in system prompt survives through buildSdkOptions", () => {
+    const cc: CCBackendConfig = {
+      enabled: true,
+      disallowedTools: [],
+      permissionMode: "bypassPermissions",
+      models: {},
+      anchorInterval: 6,
+    };
+    // Simulate what prompt-cc.ts does: bake session context into systemPrompt
+    const xmlPrompt = toAnthropicXml(serverSystemPrompt);
+    const sessionContext =
+      "<conversation_context>\n[User]\nhello\n\n[Assistant]\nhi\n</conversation_context>";
+    const systemPromptWithContext = `${xmlPrompt}\n\n${sessionContext}`;
+
+    const opts = buildSdkOptions({
+      systemPrompt: systemPromptWithContext,
+      cc,
+      workingDirectory: "/tmp/test",
+      serverUrl: "http://localhost:3777",
+      userMemoryDbPath: "/tmp/test-memories.db",
+    });
+
+    // Session context appears between XML prompt and boot instruction
+    expect(opts.systemPrompt).toContain(xmlPrompt);
+    expect(opts.systemPrompt).toContain("<conversation_context>");
+    expect(opts.systemPrompt).toContain("<boot_sequence>");
+    // Verify ordering: XML prompt → session context → boot instruction
+    const xmlIdx = opts.systemPrompt!.indexOf(xmlPrompt);
+    const ctxIdx = opts.systemPrompt!.indexOf("<conversation_context>");
+    const bootIdx = opts.systemPrompt!.indexOf("<boot_sequence>");
+    expect(xmlIdx).toBeLessThan(ctxIdx);
+    expect(ctxIdx).toBeLessThan(bootIdx);
   });
 });

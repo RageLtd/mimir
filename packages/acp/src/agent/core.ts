@@ -226,6 +226,7 @@ export const createAgentCore = (
           library: deps.voiceAnchorLibrary,
           interval: deps.anchorInterval,
         },
+        appConfig.cc,
         promptBlocks,
       );
     }

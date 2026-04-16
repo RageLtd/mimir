@@ -22,6 +22,8 @@ export type CCBackendConfig = {
   readonly anchorInterval: number;
   /** Path to the canonical system prompt markdown file. */
   readonly systemPromptPath?: string;
+  /** Max conversation history messages injected via boot tools. Default 50. */
+  readonly maxConversationHistory?: number;
 };
 
 export type CopilotBackendConfig = {
@@ -118,6 +120,9 @@ export const loadConfig = (): MimirConfig => {
       models: { ...DEFAULT_CC_MODELS },
       anchorInterval: parseInt(process.env.ANCHOR_INTERVAL ?? "6", 10),
       systemPromptPath: process.env.MIMIR_SYSTEM_PROMPT_PATH,
+      maxConversationHistory: process.env.MIMIR_CC_MAX_HISTORY
+        ? parseInt(process.env.MIMIR_CC_MAX_HISTORY, 10)
+        : undefined,
     },
     copilot: {
       enabled: parseEnabled(process.env.MIMIR_COPILOT_ENABLED) ?? true,

@@ -38,7 +38,6 @@ export const createClaudeCodeBackend = (
     yield* runClaudeCode({
       prompt: options.prompt,
       promptBlocks: options.promptBlocks,
-      contextMessages: options.assembledMessages ?? [],
       systemPrompt: options.systemPrompt,
       workingDirectory: cwd,
       cc: deps.cc,
@@ -46,6 +45,7 @@ export const createClaudeCodeBackend = (
       userMemoryDbPath: deps.userMemoryDbPath,
       model,
       clientMcpServers: options.clientMcpServers,
+      bootServer: options.bootServer,
       signal: options.signal,
     });
   };

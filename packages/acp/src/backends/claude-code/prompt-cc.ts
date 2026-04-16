@@ -29,6 +29,8 @@ import { errMessage } from "../../util";
 import { createChildLogger, log } from "../../utils/log";
 import { toAnthropicXml } from "../../utils/markdown-to-xml";
 import type { Backend, BackendEvent } from "../types";
+import { type BootContent, createBootServer } from "./boot-tools";
+import { formatContextForPrompt } from "./formatting";
 import { formatAnchor, nextAnchor, type VoiceAnchor } from "./voice-anchors";
 
 export type VoiceAnchorOpts = {
@@ -282,31 +284,40 @@ export const promptViaClaudeCode = async (
     return { stopReason: "end_turn" };
   }
 
-  // Convert system prompt from markdown to Anthropic XML, then append
-  // project rules and user context. Both are client-side data that
-  // never leaves the machine — rules from the filesystem, user context
-  // from the local SQLite store.
-  const basePrompt = toAnthropicXml(context.systemPrompt);
-  const projectRules = session.projectRules;
-  const userContext = buildUserContext(memoryStore);
-
-  const xmlSystemPrompt = [basePrompt, projectRules, userContext]
-    .filter(Boolean)
-    .join("\n\n");
+  // Convert system prompt from markdown to Anthropic XML.
+  const xmlSystemPrompt = toAnthropicXml(context.systemPrompt);
 
   // The server's assembled messages include the context injection pair
   // (summaries + memories), historical turns, and the current user message.
   // Strip the current user message — it goes as the SDK prompt input.
-  // Everything else becomes structured context in the system prompt.
+  // Everything else becomes session context for the boot tool.
   const contextMessages = contextWithoutCurrentTurn(
     context.messages,
     promptText,
   );
 
+  // Session context (summaries, memories, prior turns from mimir-server)
+  // is injected into the system prompt instead of a boot tool result.
+  // This avoids the bloated tool result that replayed every turn.
+  const sessionContextBlock = formatContextForPrompt(contextMessages);
+  const systemPromptWithContext = sessionContextBlock
+    ? `${xmlSystemPrompt}\n\n${sessionContextBlock}`
+    : xmlSystemPrompt;
+
+  // Build boot content and create the in-process MCP server. Content is
+  // frozen at this point — each boot tool returns the same snapshot for
+  // the lifetime of the query.
+  const bootContent: BootContent = {
+    userContext: buildUserContext(memoryStore),
+    projectRules: session.projectRules,
+  };
+  const bootServer = createBootServer(bootContent);
+
   logger.info(
     {
       serverMessageCount: context.messages.length,
       contextMessageCount: contextMessages.length,
+      sessionMessageCount: session.messages.length,
       roles: contextMessages.map((m) => m.role),
     },
     "context assembled for CC backend",
@@ -356,12 +367,12 @@ export const promptViaClaudeCode = async (
     for await (const event of backend.run({
       prompt: sdkPrompt,
       promptBlocks: sdkBlocks,
-      systemPrompt: xmlSystemPrompt,
-      assembledMessages: contextMessages,
+      systemPrompt: systemPromptWithContext,
       messages: session.messages,
       tools: [],
       projectPath: session.projectPath,
       clientMcpServers: session.clientMcpServers,
+      bootServer,
       metadata: {},
       modelId: session.currentModelId,
       signal: abortController.signal,
