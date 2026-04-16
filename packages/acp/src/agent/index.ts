@@ -28,9 +28,9 @@ import { config } from "../config";
 import type { ContextClientConfig } from "../context-client";
 import {
   ccAvailable,
+  discoverCCModelsViaSdk,
   discoverCopilotModels,
   fetchServerModels,
-  getCCModelList,
   mergeModels,
 } from "../routing";
 import { createSessionStore } from "../store/sessions";
@@ -95,7 +95,8 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
     cartographer,
   );
 
-  // Discovered Copilot models — populated during init, read by buildModelsState.
+  // Discovered CC and Copilot models — populated during init, read by buildModelsState.
+  let discoveredCCModels: import("@agentclientprotocol/sdk").ModelInfo[] = [];
   let discoveredCopilotModels: import("@agentclientprotocol/sdk").ModelInfo[] =
     [];
 
@@ -215,13 +216,11 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
   };
 
   const buildModelsState = async (): Promise<acp.SessionModelState> => {
-    const ccConfig = router.runtime.ccEnabled
-      ? config.cc
-      : { ...config.cc, enabled: false };
-    const [serverModels, ccModels] = await Promise.all([
-      fetchServerModels(config.serverUrl, config.apiKey),
-      Promise.resolve(getCCModelList(ccConfig)),
-    ]);
+    const serverModels = await fetchServerModels(
+      config.serverUrl,
+      config.apiKey,
+    );
+    const ccModels = router.runtime.ccEnabled ? discoveredCCModels : [];
     const copilotModels = router.runtime.copilotEnabled
       ? discoveredCopilotModels
       : [];
@@ -240,10 +239,13 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
       // Resolve backend availability in parallel before accepting prompts.
       // Disables routing to backends whose CLIs aren't installed so users
       // can't pick a model that would crash on spawn.
-      const [ccResult, copilotResult] = await Promise.all([
+      const [ccResult, ccModelsResult, copilotResult] = await Promise.all([
         config.cc.enabled
           ? ccAvailable().then((available) => ({ available }))
           : Promise.resolve({ available: false }),
+        config.cc.enabled
+          ? discoverCCModelsViaSdk(config.cc)
+          : Promise.resolve([]),
         config.copilot.enabled
           ? discoverCopilotModels()
           : Promise.resolve({
@@ -254,8 +256,11 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
       ]);
 
       router.runtime.ccEnabled = ccResult.available;
+      discoveredCCModels = ccModelsResult;
       if (ccResult.available) {
-        logger.info("CC backend enabled");
+        logger.info(
+          `CC backend enabled (${ccModelsResult.length} models discovered)`,
+        );
       } else {
         logger.info(
           config.cc.enabled

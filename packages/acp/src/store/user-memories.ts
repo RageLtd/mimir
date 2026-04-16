@@ -78,12 +78,15 @@ export const createUserMemoryStore = (dbPath: string) => {
       )
       .all();
 
-  const addProfileEntry = (content: string) =>
-    db
+  const addProfileEntry = (content: string) => {
+    const row = db
       .query<UserProfileEntry, [string]>(
         "INSERT INTO user_profile (content) VALUES (?) RETURNING *",
       )
-      .get(content)!;
+      .get(content);
+    if (!row) throw new Error("INSERT INTO user_profile returned no row");
+    return row;
+  };
 
   const removeProfileEntry = (id: number) => {
     const result = db.query("DELETE FROM user_profile WHERE id = ?").run(id);
@@ -104,12 +107,15 @@ export const createUserMemoryStore = (dbPath: string) => {
       )
       .all(query);
 
-  const addMemory = (content: string) =>
-    db
+  const addMemory = (content: string) => {
+    const row = db
       .query<UserMemoryEntry, [string]>(
         "INSERT INTO user_memories (content) VALUES (?) RETURNING *",
       )
-      .get(content)!;
+      .get(content);
+    if (!row) throw new Error("INSERT INTO user_memories returned no row");
+    return row;
+  };
 
   const updateMemory = (id: number, content: string) =>
     db

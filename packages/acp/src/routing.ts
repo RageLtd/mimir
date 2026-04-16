@@ -13,6 +13,10 @@
 import type { ModelInfo } from "@agentclientprotocol/sdk";
 import { CopilotClient } from "@github/copilot-sdk";
 import type { CCBackendConfig } from "./config";
+
+// Re-export so callers don't need to reach into backends/.
+export { discoverCCModelsViaSdk } from "./backends/claude-code/models";
+
 import { errMessage } from "./util";
 import { createChildLogger, log } from "./utils/log";
 

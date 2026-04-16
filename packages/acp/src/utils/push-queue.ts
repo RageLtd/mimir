@@ -36,7 +36,9 @@ export const createPushQueue = <T>() => {
     },
     next() {
       if (buffer.length > 0) {
-        return Promise.resolve({ value: buffer.shift()!, done: false });
+        // Safe: length check guarantees shift() returns a value
+        const value = buffer.shift() as T;
+        return Promise.resolve({ value, done: false });
       }
       if (done) {
         return Promise.resolve({
