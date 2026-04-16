@@ -93,6 +93,7 @@ export const buildSdkOptions = (
     strictMcpConfig: true,
     persistSession: false,
     settingSources: [],
+    includePartialMessages: true,
     env: { ...process.env, ENABLE_TOOL_SEARCH: "false" },
   };
 

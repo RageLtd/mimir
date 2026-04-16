@@ -11,6 +11,7 @@ import {
   type Query,
   query,
   type SDKAssistantMessage,
+  type SDKPartialAssistantMessage,
   type SDKResultMessage,
   type SDKSystemMessage,
   type SDKUserMessage,
@@ -57,19 +58,22 @@ const stringifyToolResultContent = (content: unknown): string => {
   return "";
 };
 
-/** Translate an SDKAssistantMessage into BackendEvent(s). */
+/**
+ * Translate an SDKAssistantMessage into BackendEvent(s).
+ *
+ * With `includePartialMessages: true` the SDK streams text and thinking
+ * deltas via `stream_event` messages (see translateStreamEvent). The
+ * turn-final assistant message still arrives with the complete content
+ * including those same text/thinking blocks — re-emitting them here would
+ * double-render. Only tool_use blocks are yielded; they don't stream as
+ * deltas at a useful granularity, so the turn-final form is where they
+ * surface.
+ */
 function* translateAssistant(
   msg: SDKAssistantMessage,
 ): Generator<BackendEvent> {
   for (const block of msg.message.content ?? []) {
-    if (block.type === "text") {
-      yield { type: "text", text: block.text };
-    } else if (block.type === "thinking") {
-      yield {
-        type: "thinking",
-        text: (block as { thinking: string }).thinking,
-      };
-    } else if (block.type === "tool_use") {
+    if (block.type === "tool_use") {
       const tb = block as { id: string; name: string; input: unknown };
       yield {
         type: "tool_call",
@@ -79,6 +83,36 @@ function* translateAssistant(
         observeOnly: true,
       };
     }
+  }
+}
+
+/**
+ * Translate an SDKPartialAssistantMessage (stream_event) into BackendEvent(s).
+ *
+ * The inner `event` is an Anthropic `BetaRawMessageStreamEvent`. We emit
+ * incremental text for `text_delta` and incremental thinking for
+ * `thinking_delta`; everything else (message_start, content_block_start,
+ * input_json_delta, message_delta, message_stop, ping) is ignored. Tool
+ * input streaming via input_json_delta isn't worth the plumbing — the
+ * tool-call UI renders on the complete turn-final block.
+ */
+function* translateStreamEvent(
+  msg: SDKPartialAssistantMessage,
+): Generator<BackendEvent> {
+  const event = msg.event as { type?: string; delta?: unknown };
+  if (event.type !== "content_block_delta") return;
+  const delta = event.delta as {
+    type?: string;
+    text?: string;
+    thinking?: string;
+  };
+  if (delta.type === "text_delta" && typeof delta.text === "string") {
+    yield { type: "text", text: delta.text };
+  } else if (
+    delta.type === "thinking_delta" &&
+    typeof delta.thinking === "string"
+  ) {
+    yield { type: "thinking", text: delta.thinking };
   }
 }
 
@@ -172,9 +206,11 @@ export const runClaudeCode = async function* (
     });
   }
 
+  const sdkOptions = buildSdkOptions(options);
+
   const q = query({
     prompt: promptInput(),
-    options: { ...buildSdkOptions(options), abortController },
+    options: { ...sdkOptions, abortController },
   });
   activeQueries.add(q);
 
@@ -206,7 +242,14 @@ export const runClaudeCode = async function* (
       continue;
     }
 
-    // assistant message (complete turn)
+    // stream_event: partial assistant message (text/thinking deltas)
+    if (msg.type === "stream_event") {
+      yield* translateStreamEvent(msg as SDKPartialAssistantMessage);
+      continue;
+    }
+
+    // assistant message (complete turn) — tool_use blocks only; text and
+    // thinking have already been streamed via stream_event deltas.
     if (msg.type === "assistant") {
       const asst = msg as SDKAssistantMessage;
       sessionId = asst.session_id;
@@ -229,7 +272,7 @@ export const runClaudeCode = async function* (
       return;
     }
 
-    // All other message types (stream_event, compact_boundary, etc.) — skip
+    // All other message types (compact_boundary, etc.) — skip
     logger.debug({ type: msg.type }, "ignoring SDK message");
   }
 

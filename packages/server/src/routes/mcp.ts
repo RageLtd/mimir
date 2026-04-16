@@ -14,6 +14,7 @@
  *   { "mcpServers": { "mimir": { "type": "http", "url": "http://localhost:8080/mcp" } } }
  */
 
+import { asSchema } from "ai";
 import { Hono } from "hono";
 import { getMcpPublicTools } from "../agent-loop/server-tools";
 import { log } from "../util/logger";
@@ -68,7 +69,11 @@ async function dispatch(req: JsonRpcRequest): Promise<JsonRpcResponse | null> {
           tools: Object.entries(TOOLS).map(([name, t]) => ({
             name,
             description: t.description ?? name,
-            inputSchema: t.inputSchema.jsonSchema,
+            // asSchema() normalises both raw Zod schemas and jsonSchema()-wrapped
+            // schemas and exposes the JSON Schema representation at .jsonSchema.
+            // Accessing .jsonSchema directly on a raw Zod schema yields undefined,
+            // which breaks MCP clients that validate the tools/list response.
+            inputSchema: asSchema(t.inputSchema).jsonSchema,
           })),
         },
         id,
