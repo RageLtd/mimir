@@ -19,6 +19,9 @@ const mockGetMessagesSince = mock<() => Promise<unknown[]>>(() =>
 const mockStoreMemory = mock<() => Promise<string | null>>(() =>
   Promise.resolve(null),
 );
+const mockGetLastSummaries = mock<() => Promise<unknown[]>>(() =>
+  Promise.resolve([]),
+);
 
 // Mock the specific submodules that compaction.ts imports (not the barrel)
 mock.module("./message-log/compaction-state", () => ({
@@ -33,6 +36,7 @@ mock.module("./message-log/persistence", () => ({
 
 mock.module("../goldfish/store", () => ({
   storeMemory: mockStoreMemory,
+  getLastSummaries: mockGetLastSummaries,
 }));
 
 // Mock embedOne from goldfish/clients
@@ -111,6 +115,7 @@ describe("runCompaction", () => {
     mockFinishCompaction.mockClear();
     mockGetMessagesSince.mockClear();
     mockStoreMemory.mockClear();
+    mockGetLastSummaries.mockClear();
     mockFetch.mockClear();
     mockEmbedOne.mockClear();
   });
@@ -177,6 +182,91 @@ describe("runCompaction", () => {
         project: "global",
       }),
     );
+  });
+
+  test("uses delta prompt when previous summary exists", async () => {
+    const messages = Array(15).fill(null).flatMap((_, i) => [
+      { role: "user", content: `User message ${i} with enough content to pass filters` },
+      { role: "assistant", content: `Assistant response ${i} with sufficient length` },
+    ]);
+
+    mockStartCompaction.mockResolvedValueOnce(true);
+    mockGetCompactionState.mockResolvedValueOnce({
+      id: "compaction_state:global",
+      tokens_since_last: 250000,
+      is_compacting: false,
+      last_compaction: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    });
+    mockGetMessagesSince.mockResolvedValueOnce(messages);
+    mockGetLastSummaries.mockResolvedValueOnce([
+      { content: "Previous summary content", created_at: "2024-01-01T00:00:00Z" },
+    ]);
+    mockFetch.mockResolvedValueOnce({
+      json: () =>
+        Promise.resolve({
+          choices: [{ message: { content: "Delta summary" } }],
+          usage: { prompt_tokens: 200, completion_tokens: 30 },
+        }),
+    });
+    mockStoreMemory.mockResolvedValueOnce("memory:summary-2");
+
+    await runCompaction();
+
+    // Verify fetch was called with the delta prompt and previous summary in user content
+    expect(mockFetch.mock.calls.length).toBeGreaterThan(0);
+    const fetchCall = mockFetch.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(fetchCall[1].body as string);
+    const systemMsg = body.messages[0].content;
+    const userMsg = body.messages[1].content;
+
+    expect(systemMsg).toContain("previous summary already exists");
+    expect(userMsg).toContain("<previous_summary>");
+    expect(userMsg).toContain("Previous summary content");
+    expect(userMsg).toContain("<new_conversation>");
+  });
+
+  test("filters out context injection pair from conversation", async () => {
+    const messages = [
+      // Context injection pair — should be filtered
+      { role: "user", content: "Session context:\n<summaries>old stuff</summaries>" },
+      { role: "assistant", content: "Understood." },
+      // Real conversation — should be kept
+      ...Array(15).fill(null).flatMap((_, i) => [
+        { role: "user", content: `Real user message ${i} with enough content` },
+        { role: "assistant", content: `Real assistant response ${i} with length` },
+      ]),
+    ];
+
+    mockStartCompaction.mockResolvedValueOnce(true);
+    mockGetCompactionState.mockResolvedValueOnce({
+      id: "compaction_state:global",
+      tokens_since_last: 250000,
+      is_compacting: false,
+      last_compaction: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    });
+    mockGetMessagesSince.mockResolvedValueOnce(messages);
+    mockFetch.mockResolvedValueOnce({
+      json: () =>
+        Promise.resolve({
+          choices: [{ message: { content: "Clean summary" } }],
+          usage: { prompt_tokens: 200, completion_tokens: 30 },
+        }),
+    });
+    mockStoreMemory.mockResolvedValueOnce("memory:summary-3");
+
+    await runCompaction();
+
+    // Verify the context injection pair was NOT included in the conversation text
+    expect(mockFetch.mock.calls.length).toBeGreaterThan(0);
+    const fetchCall = mockFetch.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(fetchCall[1].body as string);
+    const userMsg = body.messages[1].content;
+
+    expect(userMsg).not.toContain("Session context:");
+    expect(userMsg).not.toContain("old stuff");
+    expect(userMsg).toContain("Real user message");
   });
 
   test("handles summarization failure gracefully", async () => {

@@ -199,7 +199,7 @@ describe("HookRegistry — PostToolUse", () => {
 
     registry.onPostToolUse((ctx) => {
       observed.push(ctx.result);
-      // void return — no modification
+      return undefined; // no modification
     });
 
     const result = await registry.runPostHooks({
@@ -256,7 +256,7 @@ describe("HookRegistry — stats", () => {
 
     registry.onPreToolUse(() => ({ action: "allow" }));
     registry.onPreToolUse(() => ({ action: "allow" }));
-    registry.onPostToolUse(() => {});
+    registry.onPostToolUse(() => undefined);
     registry.onLifecycle(() => {});
 
     expect(registry.stats).toEqual({ pre: 2, post: 1, lifecycle: 1 });

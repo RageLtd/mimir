@@ -29,7 +29,7 @@ function messageContentToString(content: unknown) {
 }
 
 import { embedOne } from "../goldfish/clients";
-import { storeMemory } from "../goldfish/store";
+import { getLastSummaries, storeMemory } from "../goldfish/store";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 import {
@@ -80,11 +80,13 @@ export async function runCompaction(modelId?: string): Promise<void> {
     }
 
     // Build conversation text for summarization
-    // Include ALL messages but truncate massive tool results
+    // Include ALL messages but truncate massive tool results.
+    // Skip the synthetic context injection pair — those are prior summaries
+    // echoed back into the conversation and would cause the summarizer to
+    // re-summarize already-covered material.
     const conversationText = messages
       .map((m) => {
         if (m.role === "tool") {
-          // Tool result — truncate to avoid context explosion
           const text = messageContentToString(m.content);
           if (text.length > 500) {
             return `${m.role}: ${text.slice(0, 500)}... [truncated]`;
@@ -92,9 +94,12 @@ export async function runCompaction(modelId?: string): Promise<void> {
           return `${m.role}: ${text}`;
         }
 
-        // User and assistant messages
         const text = messageContentToString(m.content);
         if (!text) return null;
+
+        // Skip context injection pair (summaries/memories injected at session start)
+        if (text.startsWith("Session context:")) return null;
+        if (m.role === "assistant" && text === "Understood.") return null;
 
         // Skip messages that are mostly tool result XML noise
         if (text.includes("<websearch>") || text.includes("<context7>"))
@@ -114,8 +119,17 @@ export async function runCompaction(modelId?: string): Promise<void> {
       return;
     }
 
+    // Fetch the most recent summary so the summarizer knows what's
+    // already been captured and can focus on genuinely new content
+    const previousSummaries = await getLastSummaries(1);
+    const previousSummary = previousSummaries[0]?.content ?? null;
+
     // Call memgen API for summarization
-    const summary = await summarizeConversation(conversationText, modelId);
+    const summary = await summarizeConversation(
+      conversationText,
+      modelId,
+      previousSummary,
+    );
 
     if (!summary) {
       log.error("summarization failed, skipping compaction");
@@ -187,6 +201,19 @@ const SUMMARIZATION_PROMPT = `You summarize conversations into concise context t
 
 Output a clear, dense summary in 2-4 paragraphs. Do not include pleasantries or meta-commentary.`;
 
+const DELTA_SUMMARIZATION_PROMPT = `You summarize conversations into concise context that preserves all important information for continuing the conversation. A previous summary already exists covering earlier conversation. Your job is to produce a NEW summary that captures only what happened SINCE that summary.
+
+Do NOT repeat information from the previous summary. Focus exclusively on:
+- New decisions made since the previous summary
+- Changes in task state or progress
+- New technical details (file paths, function names, architecture choices)
+- Newly unresolved questions or newly completed work
+- Any corrections to information in the previous summary
+
+If the previous summary contains an error or something that has since changed, note the correction. Otherwise, assume it is accurate and do not restate it.
+
+Output a clear, dense summary in 1-3 paragraphs covering ONLY the delta. Do not include pleasantries or meta-commentary.`;
+
 function resolveSummarizationModel(modelId?: string) {
   // Try the request model against the provider registry
   if (modelId) {
@@ -228,6 +255,7 @@ function resolveSummarizationModel(modelId?: string) {
 async function summarizeConversation(
   conversationText: string,
   modelId?: string,
+  previousSummary?: string | null,
 ): Promise<string | null> {
   const start = Date.now();
 
@@ -246,6 +274,16 @@ async function summarizeConversation(
     headers.Authorization = `Bearer ${apiKey}`;
   }
 
+  // When a previous summary exists, use the delta prompt so the model
+  // focuses on genuinely new content instead of re-summarizing old material
+  const systemPrompt = previousSummary
+    ? DELTA_SUMMARIZATION_PROMPT
+    : SUMMARIZATION_PROMPT;
+
+  const userContent = previousSummary
+    ? `<previous_summary>\n${previousSummary}\n</previous_summary>\n\n<new_conversation>\n${conversationText}\n</new_conversation>`
+    : conversationText;
+
   const [err, res] = await attempt(() =>
     fetch(`${baseUrl}/v1/chat/completions`, {
       method: "POST",
@@ -257,8 +295,8 @@ async function summarizeConversation(
         temperature: 0.1,
         max_tokens: 8192,
         messages: [
-          { role: "system", content: SUMMARIZATION_PROMPT },
-          { role: "user", content: conversationText },
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent },
         ],
       }),
     }).then((r) => r.json() as Promise<ChatCompletionResponse>),

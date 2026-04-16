@@ -16,5 +16,6 @@ export function registerAuditHook(registry: HookRegistry): void {
       },
       "tool_call_audit",
     );
+    return undefined;
   });
 }

@@ -1,5 +1,14 @@
+import { RecordId } from "surrealdb";
 import { getDb, queryFirst, queryOne } from "../db/surreal";
 import { log } from "../util/logger";
+
+/** Convert a string ID like "memory:abc123" to a SurrealDB RecordId.
+ *  Passes through RecordId objects unchanged — safe to call on query results. */
+function toRecordId(id: string | RecordId) {
+  if (id instanceof RecordId) return id;
+  const colonIdx = id.indexOf(":");
+  return new RecordId(id.slice(0, colonIdx), id.slice(colonIdx + 1));
+}
 
 export interface Memory {
   id?: string;
@@ -198,7 +207,7 @@ export async function createRelation(
     RELATE $from -> relates_to -> $to
     SET weight = $weight, relation_type = $type
     `,
-    { from: fromId, to: toId, weight, type: relationType },
+    { from: toRecordId(fromId), to: toRecordId(toId), weight, type: relationType },
   );
 
   log.debug(
@@ -370,9 +379,11 @@ export async function updateMemory(
 ): Promise<boolean> {
   const db = await getDb();
 
+  const rid = toRecordId(id);
+
   // Check existence
   const existing = await queryFirst<{ id: string }>(`SELECT id FROM $id`, {
-    id,
+    id: rid,
   });
   if (!existing) return false;
 
@@ -383,11 +394,11 @@ export async function updateMemory(
       embedding = $embedding,
       last_accessed = time::now(),
       confidence = 1.0`,
-    { id, content, embedding },
+    { id: rid, content, embedding },
   );
 
   // Remove old relations
-  await db.query(`DELETE relates_to WHERE in = $id OR out = $id`, { id });
+  await db.query(`DELETE relates_to WHERE in = $id OR out = $id`, { id: rid });
 
   log.info({ id, content }, "updated memory");
   return true;
@@ -396,10 +407,11 @@ export async function updateMemory(
 /** Delete a memory by ID */
 export async function deleteMemory(id: string): Promise<boolean> {
   const db = await getDb();
+  const rid = toRecordId(id);
   // Delete relations first
-  await db.query(`DELETE relates_to WHERE in = $id OR out = $id`, { id });
+  await db.query(`DELETE relates_to WHERE in = $id OR out = $id`, { id: rid });
   const result = await queryOne<{ id: string }>(`DELETE $id RETURN BEFORE`, {
-    id,
+    id: rid,
   });
   const deleted = result.length > 0;
   if (deleted) {
