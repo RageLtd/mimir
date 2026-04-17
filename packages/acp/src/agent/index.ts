@@ -16,6 +16,7 @@
 
 import * as acp from "@agentclientprotocol/sdk";
 import { createBackendRouter } from "../backends";
+import { checkForSdkUpdate } from "../backends/claude-code/sdk-updater";
 import {
   defaultSystemPromptPath,
   loadVoiceAnchors,
@@ -235,6 +236,15 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
       supportsTerminalOutput =
         params.clientCapabilities?._meta?.terminal_output === true;
       logger.info("terminal output supported:", supportsTerminalOutput);
+
+      // Fire-and-forget SDK update check. Runs in the background; the
+      // update (if any) takes effect on the next boot since the SDK module
+      // is already loaded into this process. Errors are logged, not thrown.
+      if (config.cc.enabled) {
+        checkForSdkUpdate().catch((err) =>
+          logger.warn("SDK update check failed:", err),
+        );
+      }
 
       // Resolve backend availability in parallel before accepting prompts.
       // Disables routing to backends whose CLIs aren't installed so users

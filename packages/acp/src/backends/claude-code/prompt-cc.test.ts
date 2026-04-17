@@ -266,9 +266,12 @@ describe("end-to-end: assembled context → claude args + context", () => {
     expect(opts.systemPrompt).toContain("<conversation_context>");
     expect(opts.systemPrompt).toContain("<boot_sequence>");
     // Verify ordering: XML prompt → session context → boot instruction
-    const xmlIdx = opts.systemPrompt!.indexOf(xmlPrompt);
-    const ctxIdx = opts.systemPrompt!.indexOf("<conversation_context>");
-    const bootIdx = opts.systemPrompt!.indexOf("<boot_sequence>");
+    if (typeof opts.systemPrompt !== "string") {
+      throw new Error("expected systemPrompt to be a string");
+    }
+    const xmlIdx = opts.systemPrompt.indexOf(xmlPrompt);
+    const ctxIdx = opts.systemPrompt.indexOf("<conversation_context>");
+    const bootIdx = opts.systemPrompt.indexOf("<boot_sequence>");
     expect(xmlIdx).toBeLessThan(ctxIdx);
     expect(ctxIdx).toBeLessThan(bootIdx);
   });
