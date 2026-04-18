@@ -4,13 +4,27 @@
 
 import type * as acp from "@agentclientprotocol/sdk";
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
+import type { Detector } from "../backends/claude-code/rule-hooks";
 import type { VoiceAnchorState } from "../backends/claude-code/voice-anchors";
+import type { ResolvedProject } from "../project/resolver";
 import type { ChatMessage } from "../server-client";
 
 export type SessionState = {
   sessionId: string;
   messages: ChatMessage[];
   projectPath: string;
+  /**
+   * Canonical server-side project identifier. Resolved at session start
+   * via git remote + POST /v1/projects/resolve; null when resolution
+   * failed (caller falls back to projectPath as the identifier).
+   */
+  projectId: string | null;
+  /**
+   * Full project record returned by the server — title, git_remote,
+   * technologies, etc. Available when projectId is set. Used for display
+   * and for including as metadata in outgoing server calls.
+   */
+  projectInfo: ResolvedProject | null;
   abortController: AbortController | null;
   /** Currently selected model id (drives backend routing per request). */
   currentModelId: string;
@@ -30,6 +44,13 @@ export type SessionState = {
   title: string | null;
   /** Formatted project rules (CLAUDE.md, .claude/rules/, etc.) for prompt injection. */
   projectRules: string | null;
+  /**
+   * Rule-detect sidecars loaded from `.claude/rules/**\/*.detect.ts` at
+   * session start. Wired into the CC backend's PreToolUse hook so the
+   * agent gets advisory nudges on known anti-patterns before an edit lands.
+   * Empty array when the project ships no sidecars.
+   */
+  ruleDetectors: readonly Detector[];
   /** MCP servers provided by the ACP client (e.g. Zed's ACP tools server). */
   clientMcpServers?: readonly acp.McpServer[];
   /**

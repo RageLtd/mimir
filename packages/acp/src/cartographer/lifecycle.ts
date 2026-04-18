@@ -43,10 +43,21 @@ export type CartographerManager = {
     name: string,
     args: Record<string, unknown>,
   ) => Promise<string>;
-  /** Trigger an auto-index for a project (fire-and-forget). */
-  readonly autoIndex: (projectPath: string) => void;
+  /**
+   * Trigger an auto-index for a project (fire-and-forget). The optional
+   * `getProjectId` accessor is called at sync time — the resolver may have
+   * completed between this invocation and the actual HTTP call, so we read
+   * the latest value rather than capturing a potentially null snapshot.
+   */
+  readonly autoIndex: (
+    projectPath: string,
+    getProjectId?: () => string | null,
+  ) => void;
   /** Trigger incremental change detection (fire-and-forget). */
-  readonly detectChanges: (projectPath: string) => void;
+  readonly detectChanges: (
+    projectPath: string,
+    getProjectId?: () => string | null,
+  ) => void;
   /** Kill all child processes. */
   readonly dispose: () => void;
 };
@@ -106,7 +117,10 @@ export const createCartographerManager = (
     return client.callTool(name, args);
   };
 
-  const autoIndex = (projectPath: string) => {
+  const autoIndex = (
+    projectPath: string,
+    getProjectId?: () => string | null,
+  ) => {
     // In --parse-only mode the binary has no DB access; it returns the
     // full index as JSON via the MCP tool result. We forward that JSON
     // directly to mimir-server's sync endpoint.
@@ -121,6 +135,7 @@ export const createCartographerManager = (
         await syncIndex(
           { serverUrl: config.serverUrl, apiKey: config.apiKey, logger },
           rawJson,
+          getProjectId?.() ?? null,
         );
       })
       .catch((err) => {
@@ -128,7 +143,10 @@ export const createCartographerManager = (
       });
   };
 
-  const detectChanges = (projectPath: string) => {
+  const detectChanges = (
+    projectPath: string,
+    getProjectId?: () => string | null,
+  ) => {
     // detect_changes returns a summary of what changed, not the full index.
     // If anything changed, trigger a full re-index and sync so the server
     // stays in step.
@@ -148,6 +166,7 @@ export const createCartographerManager = (
             await syncIndex(
               { serverUrl: config.serverUrl, apiKey: config.apiKey, logger },
               rawJson,
+              getProjectId?.() ?? null,
             );
           }
         }

@@ -17,6 +17,7 @@ import type {
 import type { CCBackendConfig } from "../../config";
 import { buildMcpServers } from "./mcp-config";
 import { supportsAdaptiveThinking } from "./model-capabilities";
+import { buildRuleHook, type Detector } from "./rule-hooks";
 
 /**
  * Format assembled context messages (summaries, memories, prior turns)
@@ -65,6 +66,13 @@ export type RunClaudeCodeOptions = {
    * (CC backend only). Omitted for models that don't advertise effort support.
    */
   readonly effort?: EffortLevel;
+  /**
+   * Rule-detect sidecars loaded from `.claude/rules/**\/*.detect.ts` in the
+   * project. When non-empty, they're wired into a PreToolUse hook that runs
+   * on every Edit/Write/MultiEdit and injects violation notices as
+   * `additionalContext`. Loaded once per session at newSession time.
+   */
+  readonly ruleDetectors?: readonly Detector[];
   readonly signal?: AbortSignal;
 };
 
@@ -97,6 +105,7 @@ export const buildSdkOptions = (
     | "bootServer"
     | "permissionMode"
     | "effort"
+    | "ruleDetectors"
   >,
 ) => {
   // System prompt arrives with session context already embedded (injected by
@@ -151,6 +160,14 @@ export const buildSdkOptions = (
   }
   if (options.effort) {
     sdkOptions.effort = options.effort;
+  }
+
+  // Rule-detect hooks — advisory nudges on known anti-patterns. Only
+  // attached when the project ships `.detect.ts` sidecars.
+  if (options.ruleDetectors && options.ruleDetectors.length > 0) {
+    sdkOptions.hooks = {
+      PreToolUse: buildRuleHook(options.ruleDetectors),
+    };
   }
 
   return sdkOptions;

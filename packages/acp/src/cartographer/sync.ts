@@ -17,38 +17,45 @@ export type CartographerSyncConfig = {
 
 /**
  * Post raw JSON from the cartographer binary to the server sync endpoint.
- * The binary's --parse-only output is forwarded as-is; no intermediate
- * type conversion needed.
+ * When `projectId` is provided, it's injected into the payload so the
+ * server keys cart records by the canonical project UUID. Otherwise the
+ * server falls back to using `rootPath` (legacy behaviour).
  */
 export const syncIndex = async (
   config: CartographerSyncConfig,
   rawJson: string,
-): Promise<{ readonly ok: boolean; readonly error?: string }> => {
+  projectId?: string | null,
+) => {
   const url = `${config.serverUrl}/v1/cartographer/sync`;
 
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
-      },
-      body: rawJson,
-    });
+  // Inject projectId into the payload when present — cheaper than a second
+  // round-trip and lets the server key cart records by UUID.
+  const body = projectId
+    ? JSON.stringify({ ...JSON.parse(rawJson), projectId })
+    : rawJson;
 
-    if (!response.ok) {
-      const body = await response.text();
-      config.logger.error(
-        `Cartographer sync failed: ${response.status} ${body}`,
-      );
-      return { ok: false, error: `${response.status}: ${body}` };
-    }
-
-    config.logger.info("Cartographer sync OK");
-    return { ok: true };
-  } catch (err) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
+    },
+    body,
+  }).catch((err) => {
     const message = errMessage(err);
     config.logger.error(`Cartographer sync error: ${message}`);
-    return { ok: false, error: message };
+    return null;
+  });
+  if (!response) return { ok: false, error: "network error" };
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => "");
+    config.logger.error(
+      `Cartographer sync failed: ${response.status} ${errText}`,
+    );
+    return { ok: false, error: `${response.status}: ${errText}` };
   }
+
+  config.logger.info("Cartographer sync OK");
+  return { ok: true };
 };

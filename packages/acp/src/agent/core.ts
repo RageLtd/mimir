@@ -8,6 +8,7 @@
 import type * as acp from "@agentclientprotocol/sdk";
 import type { BackendRouter } from "../backends";
 import { promptViaClaudeCode } from "../backends/claude-code/prompt-cc";
+import { loadRuleDetectors } from "../backends/claude-code/rule-hooks";
 import {
   createAnchorState,
   type VoiceAnchor,
@@ -17,6 +18,7 @@ import type { CartographerManager } from "../cartographer/lifecycle";
 import { formatRulesForPrompt, readProjectRules } from "../cartographer/rules";
 import type { MimirConfig } from "../config";
 import type { ContextClientConfig } from "../context-client";
+import { resolveProjectForPath } from "../project/resolver";
 import type { SessionStore } from "../store/sessions";
 import type { UserMemoryStore } from "../store/user-memories";
 import { errMessage } from "../util";
@@ -61,11 +63,14 @@ export const createAgentCore = (
       sessionId,
       messages: [],
       projectPath,
+      projectId: null,
+      projectInfo: null,
       abortController: null,
       currentModelId: appConfig.model,
       currentMode: DEFAULT_MODE,
       title: null,
       projectRules: null,
+      ruleDetectors: [],
       clientMcpServers,
       supportsTerminalOutput,
       voiceAnchors: createAnchorState(
@@ -82,9 +87,37 @@ export const createAgentCore = (
       })
       .catch((err) => logger.warn("failed to load project rules:", err));
 
+    // Load rule-detect sidecars asynchronously — advisory nudges wired into
+    // the CC backend's PreToolUse hook on the first prompt.
+    loadRuleDetectors(projectPath)
+      .then((detectors) => {
+        session.ruleDetectors = detectors;
+      })
+      .catch((err) => logger.warn("failed to load rule detectors:", err));
+
+    // Resolve the canonical project UUID via git remote + server get-or-create.
+    // Runs in parallel with other async session init; completes before the
+    // first prompt in practice. Null result falls back to projectPath as the
+    // server-facing identifier — preserves pre-resolver behaviour on failure.
+    resolveProjectForPath(
+      { serverUrl: appConfig.serverUrl, apiKey: appConfig.apiKey },
+      projectPath,
+    )
+      .then((project) => {
+        if (project) {
+          session.projectId = project.id;
+          session.projectInfo = project;
+          sessionStore.updateMeta(sessionId, { projectId: project.id });
+        }
+      })
+      .catch((err) =>
+        logger.warn("project resolver failed: %s", errMessage(err)),
+      );
+
     sessionStore.upsert(
       sessionId,
       projectPath,
+      null,
       appConfig.model,
       DEFAULT_MODE,
       null,
@@ -112,6 +145,8 @@ export const createAgentCore = (
       sessionId: persisted.session_id,
       messages: JSON.parse(persisted.messages),
       projectPath: persisted.project_path,
+      projectId: persisted.project_id,
+      projectInfo: null,
       abortController: null,
       currentModelId: persisted.model_id,
       currentMode: persisted.mode,
@@ -120,6 +155,7 @@ export const createAgentCore = (
         undefined,
       title: persisted.title,
       projectRules: null,
+      ruleDetectors: [],
       clientMcpServers,
       supportsTerminalOutput,
       voiceAnchors: createAnchorState(
@@ -135,6 +171,32 @@ export const createAgentCore = (
         session.projectRules = formatRulesForPrompt(entries);
       })
       .catch((err) => logger.warn("failed to load project rules:", err));
+
+    loadRuleDetectors(persisted.project_path)
+      .then((detectors) => {
+        session.ruleDetectors = detectors;
+      })
+      .catch((err) => logger.warn("failed to load rule detectors:", err));
+
+    // Re-resolve on restore so a renamed/moved project picks up changes and
+    // so we backfill projectInfo (which isn't persisted). If persisted id is
+    // already set, resolve will return the same record; negligible cost.
+    resolveProjectForPath(
+      { serverUrl: appConfig.serverUrl, apiKey: appConfig.apiKey },
+      persisted.project_path,
+    )
+      .then((project) => {
+        if (project) {
+          session.projectId = project.id;
+          session.projectInfo = project;
+          if (project.id !== persisted.project_id) {
+            sessionStore.updateMeta(sessionId, { projectId: project.id });
+          }
+        }
+      })
+      .catch((err) =>
+        logger.warn("project re-resolve on restore failed: %s", errMessage(err)),
+      );
 
     return session;
   };

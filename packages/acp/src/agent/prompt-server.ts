@@ -52,7 +52,7 @@ export const promptViaServer = async (
     abortController.signal,
   );
   const allTools: ToolDefinition[] = [...serverTools, ...userMemoryToolDefs];
-  const metadata = buildMetadata(session.projectPath);
+  const metadata = buildMetadata(session.projectPath, session.projectId);
 
   let turnCount = 0;
 

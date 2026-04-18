@@ -118,9 +118,14 @@ export const acpBlocksToAnthropicContent = (
     return [];
   });
 
-/** Build server request metadata from project path. */
+/**
+ * Build server request metadata for the server-backend path. Prefers the
+ * canonical project UUID when available; falls back to the filesystem path
+ * until the resolver completes (or when resolution failed entirely).
+ */
 export const buildMetadata = (
   projectPath: string,
-): Record<string, unknown> => ({
-  project: projectPath,
+  projectId: string | null,
+) => ({
+  project: projectId ?? projectPath,
 });

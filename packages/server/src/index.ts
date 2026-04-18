@@ -12,6 +12,7 @@ import { context } from "./routes/context";
 import { mcp } from "./routes/mcp";
 import { messages } from "./routes/messages";
 import { models as modelsRoute } from "./routes/models";
+import { projects } from "./routes/projects";
 import { systemPrompt } from "./routes/system-prompt";
 import { tools } from "./routes/tools";
 import { log } from "./util/logger";
@@ -106,6 +107,9 @@ app.route("/v1/messages", messages);
 // Cartographer and tools
 app.route("/v1/cartographer", cartographer);
 app.route("/v1/tools", tools);
+
+// Project registry
+app.route("/v1/projects", projects);
 
 // MCP server for Claude Code tool injection
 app.route("/mcp", mcp);

@@ -48,6 +48,7 @@ export const createClaudeCodeBackend = (
       bootServer: options.bootServer,
       permissionMode: options.permissionMode,
       effort: options.effort,
+      ruleDetectors: options.ruleDetectors,
       signal: options.signal,
     });
   };

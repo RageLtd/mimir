@@ -163,7 +163,10 @@ export const newSession = async (
   logger.info("new session:", session.sessionId, "cwd:", projectPath);
 
   const models = await fetchModelsState(deps);
-  deps.cartographer?.autoIndex(projectPath);
+  // getProjectId is read at sync time — the resolver runs in parallel with
+  // session init, so the UUID may be unavailable now but populated by the
+  // time cartographer actually posts the index.
+  deps.cartographer?.autoIndex(projectPath, () => session.projectId);
 
   // Sync session.currentModelId with whatever buildModelsState auto-selected,
   // so the in-memory state matches what Zed renders in the picker.

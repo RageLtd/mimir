@@ -24,6 +24,7 @@ import type {
   McpSdkServerConfigWithInstance,
   PermissionMode,
 } from "@anthropic-ai/claude-agent-sdk";
+import type { Detector } from "./claude-code/rule-hooks";
 import type { ChatMessage, ToolDefinition } from "../server-client";
 
 export type BackendEvent =
@@ -97,6 +98,11 @@ export type BackendRunOptions = {
 
   permissionMode?: PermissionMode;
   effort?: EffortLevel;
+  /**
+   * Rule-detect sidecars for the CC backend's PreToolUse hook. Ignored by
+   * backends other than claude-code. Passed through from the session state.
+   */
+  ruleDetectors?: readonly Detector[];
 };
 
 export type Backend = {

@@ -24,6 +24,13 @@ export const cartographer = new Hono();
  */
 type IndexPayload = {
   readonly rootPath: string;
+  /**
+   * Canonical project id from /v1/projects/resolve. When present, used as
+   * the key in cart_file / cart_import rows — stable across machines and
+   * path changes. When absent, we fall back to rootPath for back-compat
+   * with older clients.
+   */
+  readonly projectId?: string;
   readonly indexedAt: string;
   readonly files: readonly {
     readonly path: string;
@@ -69,15 +76,18 @@ cartographer.post("/sync", async (c) => {
     return c.json({ error: "Missing rootPath or files" }, 400);
   }
 
+  // Prefer the canonical project id; fall back to rootPath for back-compat.
+  const projectKey = payload.projectId ?? payload.rootPath;
+
   try {
     const db = await getDb();
 
     // Delete existing records for this project (full replace)
     await db.query(`DELETE cart_file WHERE project = $project`, {
-      project: payload.rootPath,
+      project: projectKey,
     });
     await db.query(`DELETE cart_import WHERE project = $project`, {
-      project: payload.rootPath,
+      project: projectKey,
     });
 
     // Insert new file records
@@ -99,7 +109,7 @@ cartographer.post("/sync", async (c) => {
           indexed_at: $indexed_at
         }`,
         {
-          project: payload.rootPath,
+          project: projectKey,
           file_path: file.path,
           language: file.language,
           symbols: JSON.stringify(file.symbols),
@@ -119,7 +129,7 @@ cartographer.post("/sync", async (c) => {
             indexed_at: $indexed_at
           }`,
           {
-            project: payload.rootPath,
+            project: projectKey,
             source_path: file.path,
             target_path: imp,
             symbols: JSON.stringify(
@@ -138,7 +148,8 @@ cartographer.post("/sync", async (c) => {
     const elapsed = Date.now() - start;
     log.info(
       {
-        project: payload.rootPath,
+        project: projectKey,
+        rootPath: payload.rootPath,
         files: payload.stats.totalFiles,
         symbols: payload.stats.totalSymbols,
         elapsed: `${elapsed}ms`,
@@ -148,14 +159,14 @@ cartographer.post("/sync", async (c) => {
 
     return c.json({
       ok: true,
-      project: payload.rootPath,
+      project: projectKey,
       files: payload.stats.totalFiles,
       symbols: payload.stats.totalSymbols,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error(
-      { error: msg, project: payload.rootPath },
+      { error: msg, project: projectKey },
       "cartographer sync failed",
     );
     return c.json({ error: msg }, 500);

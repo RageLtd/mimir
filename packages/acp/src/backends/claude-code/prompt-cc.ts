@@ -273,7 +273,7 @@ export const promptViaClaudeCode = async (
     context = await assembleContext(
       contextClient,
       promptText,
-      session.projectPath,
+      session.projectId ?? session.projectPath,
       abortController.signal,
     );
   } catch (err) {
@@ -395,6 +395,7 @@ export const promptViaClaudeCode = async (
       permissionMode:
         session.currentMode as import("@anthropic-ai/claude-agent-sdk").PermissionMode,
       effort: session.currentThoughtLevel,
+      ruleDetectors: session.ruleDetectors,
       signal: abortController.signal,
     })) {
       if (event.type === "tool_result") {
@@ -461,7 +462,10 @@ export const promptViaClaudeCode = async (
   }
 
   // Post-processing: persist + token report. Fire-and-forget.
-  const projectForServer = session.projectPath || "default";
+  // Prefer the canonical project UUID; fall back to path until the resolver
+  // completes (first-prompt race window) or when resolution failed entirely.
+  const projectForServer =
+    session.projectId ?? session.projectPath ?? "default";
   persistTurn(contextClient, session.messages.slice(-2), projectForServer, {
     totalCostUsd,
   }).catch((err) => logger.warn("persistTurn failed:", err));

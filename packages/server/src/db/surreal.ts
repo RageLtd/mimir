@@ -183,6 +183,21 @@ export async function initSchema(): Promise<void> {
     DEFINE FIELD IF NOT EXISTS git_head ON cart_git_state TYPE string;
     DEFINE FIELD IF NOT EXISTS indexed_at ON cart_git_state TYPE datetime DEFAULT time::now();
     DEFINE INDEX IF NOT EXISTS cart_git_state_project ON cart_git_state FIELDS project;
+
+    -- Projects (UUID-keyed; identity anchored to git_remote when available,
+    -- falling back to local_path). Other tables reference the record id
+    -- portion (after "project:") as their 'project' field.
+    DEFINE TABLE IF NOT EXISTS project SCHEMAFULL;
+    DEFINE FIELD IF NOT EXISTS title ON project TYPE string;
+    DEFINE FIELD IF NOT EXISTS description ON project TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS git_remote ON project TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS local_path ON project TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS technologies ON project TYPE array<string> DEFAULT [];
+    DEFINE FIELD IF NOT EXISTS purpose ON project TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS created_at ON project TYPE datetime DEFAULT time::now();
+    DEFINE FIELD IF NOT EXISTS updated_at ON project TYPE datetime DEFAULT time::now();
+    DEFINE INDEX IF NOT EXISTS project_git_remote ON project FIELDS git_remote UNIQUE;
+    DEFINE INDEX IF NOT EXISTS project_local_path ON project FIELDS local_path;
   `);
 
   log.info({ elapsed: `${Date.now() - start}ms` }, "schema initialized");
