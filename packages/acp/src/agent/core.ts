@@ -197,6 +197,23 @@ export const createAgentCore = (
     const abortController = new AbortController();
     session.abortController = abortController;
 
+    // Prepend a timestamp to the user's prompt so the model has ambient
+    // awareness of when each turn happened. Persisted into session.messages
+    // along with the original text — past turns keep their original stamps,
+    // giving the model temporal context across the conversation.
+    const stamp = new Date().toLocaleString("en-CA", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZoneName: "short",
+      hour12: false,
+    });
+
+    const stampedPrompt = `[${stamp}]\n${promptText}`;
+
     let backend: Backend;
     try {
       backend = router.forModel(session.currentModelId);
@@ -216,7 +233,7 @@ export const createAgentCore = (
     if (backend.kind === "claude-code") {
       return promptViaClaudeCode(
         session,
-        promptText,
+        stampedPrompt,
         conn,
         abortController,
         backend,
@@ -231,7 +248,7 @@ export const createAgentCore = (
     }
     return promptViaServer(
       session,
-      promptText,
+      stampedPrompt,
       conn,
       abortController,
       backend,
