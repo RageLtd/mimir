@@ -116,7 +116,7 @@ export const loadConfig = (): MimirConfig => {
         process.env.MIMIR_CC_PERMISSION_MODE ?? "bypassPermissions",
       workingDirectory: process.env.MIMIR_CC_WORKING_DIR,
       models: { ...DEFAULT_CC_MODELS },
-      anchorInterval: parseInt(process.env.ANCHOR_INTERVAL ?? "6", 10),
+      anchorInterval: parseInt(process.env.ANCHOR_INTERVAL ?? "20", 10),
       systemPromptPath: process.env.MIMIR_SYSTEM_PROMPT_PATH,
     },
     copilot: {

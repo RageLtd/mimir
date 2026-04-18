@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  advanceTurn,
   createAnchorState,
   formatAnchor,
   hashSessionStart,
@@ -199,6 +200,49 @@ describe("nextAnchor", () => {
     const step = nextAnchor(state, [], 1);
     expect(step.inject).toBe(false);
     expect(step.next.turnCount).toBe(1);
+  });
+});
+
+// ── advanceTurn ──
+
+describe("advanceTurn", () => {
+  test("is a no-op when weight is zero", () => {
+    const state = { turnCount: 5, lastAnchorTurn: 3, anchorIndex: 1 };
+    expect(advanceTurn(state, 0)).toBe(state);
+  });
+
+  test("is a no-op when weight is negative", () => {
+    const state = { turnCount: 5, lastAnchorTurn: 3, anchorIndex: 1 };
+    expect(advanceTurn(state, -2)).toBe(state);
+  });
+
+  test("advances turnCount by the weight when positive", () => {
+    const state = { turnCount: 5, lastAnchorTurn: 3, anchorIndex: 1 };
+    const next = advanceTurn(state, 4);
+    expect(next.turnCount).toBe(9);
+  });
+
+  test("preserves lastAnchorTurn and anchorIndex", () => {
+    const state = { turnCount: 5, lastAnchorTurn: 3, anchorIndex: 2 };
+    const next = advanceTurn(state, 10);
+    expect(next.lastAnchorTurn).toBe(3);
+    expect(next.anchorIndex).toBe(2);
+  });
+
+  test("a heavy turn advances past the interval and the next nextAnchor injects", () => {
+    // Start fresh. Base tick from nextAnchor + cycle weight from advanceTurn
+    // should accumulate past the interval, so the subsequent nextAnchor call
+    // (the follow-up developer turn) triggers an anchor.
+    let state = { turnCount: 0, lastAnchorTurn: 0, anchorIndex: 0 };
+    const firstTick = nextAnchor(state, library, 20);
+    expect(firstTick.inject).toBe(false);
+    state = firstTick.next;
+    // Simulate a 20-cycle heavy turn: commit (cycles - 1) = 19.
+    state = advanceTurn(state, 19);
+    expect(state.turnCount).toBe(20);
+    // Next developer turn should satisfy turnCount - lastAnchorTurn >= 20.
+    const nextTick = nextAnchor(state, library, 20);
+    expect(nextTick.inject).toBe(true);
   });
 });
 

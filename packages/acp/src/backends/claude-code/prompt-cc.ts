@@ -31,7 +31,12 @@ import { toAnthropicXml } from "../../utils/markdown-to-xml";
 import type { Backend, BackendEvent } from "../types";
 import { type BootContent, createBootServer } from "./boot-tools";
 import { formatContextForPrompt } from "./formatting";
-import { formatAnchor, nextAnchor, type VoiceAnchor } from "./voice-anchors";
+import {
+  advanceTurn,
+  formatAnchor,
+  nextAnchor,
+  type VoiceAnchor,
+} from "./voice-anchors";
 
 export type VoiceAnchorOpts = {
   readonly library: readonly VoiceAnchor[];
@@ -363,6 +368,14 @@ export const promptViaClaudeCode = async (
   let promptTokens: number | undefined;
   let totalCostUsd: number | undefined;
 
+  // Iteration-weighted turn counting for voice anchors. Each transition
+  // from tool_result → text/thinking marks a new generation cycle; parallel
+  // tool calls within a single generation don't inflate the count. Base
+  // weight of 1 was already committed by nextAnchor above; we commit the
+  // remainder (cycles - 1) after the loop.
+  let cycles = 1;
+  let inToolPhase = false;
+
   try {
     for await (const event of backend.run({
       prompt: sdkPrompt,
@@ -377,6 +390,16 @@ export const promptViaClaudeCode = async (
       modelId: session.currentModelId,
       signal: abortController.signal,
     })) {
+      if (event.type === "tool_result") {
+        inToolPhase = true;
+      } else if (
+        (event.type === "text" || event.type === "thinking") &&
+        inToolPhase
+      ) {
+        cycles++;
+        inToolPhase = false;
+      }
+
       await handleCCEvent(event, session, conn, (delta) => {
         assistantBuffer += delta;
       });
@@ -412,6 +435,22 @@ export const promptViaClaudeCode = async (
 
   if (assistantBuffer.length > 0) {
     session.messages.push({ role: "assistant", content: assistantBuffer });
+  }
+
+  // Commit the extra cycle weight. A conversational turn (no tools) stays
+  // at cycles=1 so this is a no-op; a tool-heavy turn advances the counter
+  // by however many generation cycles the model actually produced, which
+  // the next nextAnchor decision then reads.
+  if (cycles > 1) {
+    session.voiceAnchors = advanceTurn(session.voiceAnchors, cycles - 1);
+    logger.debug(
+      {
+        cycles,
+        turnCount: session.voiceAnchors.turnCount,
+        lastAnchorTurn: session.voiceAnchors.lastAnchorTurn,
+      },
+      "iteration-weighted turn advancement",
+    );
   }
 
   // Post-processing: persist + token report. Fire-and-forget.

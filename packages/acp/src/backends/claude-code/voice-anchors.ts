@@ -191,6 +191,27 @@ export const nextAnchor = (
 };
 
 /**
+ * Advance the turn counter by an explicit weight. Used by the CC backend
+ * to commit iteration-weighted turn advancement after the SDK loop ends —
+ * a base tick of 1 was already applied by nextAnchor at turn start, so the
+ * caller passes (cycles - 1) where cycles is the observed generation count.
+ *
+ * No-op when weight <= 0. Never touches lastAnchorTurn or anchorIndex — only
+ * nextAnchor's injection decision updates those.
+ */
+export const advanceTurn = (
+  state: VoiceAnchorState,
+  weight: number,
+): VoiceAnchorState => {
+  if (weight <= 0) return state;
+  return {
+    turnCount: state.turnCount + weight,
+    lastAnchorTurn: state.lastAnchorTurn,
+    anchorIndex: state.anchorIndex,
+  };
+};
+
+/**
  * Default path to the canonical system prompt. Resolved from this file's
  * location so the acp package doesn't need to know its install root. Override
  * with MIMIR_SYSTEM_PROMPT_PATH in config if the monorepo layout changes.
