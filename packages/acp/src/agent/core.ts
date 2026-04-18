@@ -22,8 +22,14 @@ import type { UserMemoryStore } from "../store/user-memories";
 import { errMessage } from "../util";
 import { createChildLogger, log } from "../utils/log";
 import { promptViaServer } from "./prompt-server";
-import { DEFAULT_MODE, SESSION_MODES } from "./session";
 import type { AgentCore, SessionState } from "./types";
+
+/**
+ * Default mode string for new sessions. Used as a backend-agnostic starting
+ * point — CC will resolve it against `isValidCCMode` which accepts `"default"`;
+ * server/Copilot don't read currentMode at all, so this is inert for them.
+ */
+const DEFAULT_MODE = "default";
 
 export type AgentCoreDeps = {
   /** Parsed Voice in Action library used by the CC anchor wrapper. */
@@ -82,6 +88,7 @@ export const createAgentCore = (
       appConfig.model,
       DEFAULT_MODE,
       null,
+      null,
       [],
     );
     return session;
@@ -108,6 +115,9 @@ export const createAgentCore = (
       abortController: null,
       currentModelId: persisted.model_id,
       currentMode: persisted.mode,
+      currentThoughtLevel:
+        (persisted.thought_level as SessionState["currentThoughtLevel"]) ??
+        undefined,
       title: persisted.title,
       projectRules: null,
       clientMcpServers,
@@ -150,13 +160,33 @@ export const createAgentCore = (
     return true;
   };
 
+  /**
+   * Accepts any non-empty mode id. Validation against the backend's mode
+   * catalogue happens one level up in `agent/index.ts:setSessionConfigOption`
+   * where the active backend's config-options module is already in scope.
+   * Keeping this method permissive avoids a cross-package import chain from
+   * core.ts to backend-specific mode lists.
+   */
   const setMode = (sessionId: string, modeId: string) => {
     const session = sessions.get(sessionId);
     if (!session) return false;
-    const valid = SESSION_MODES.some((m) => m.id === modeId);
-    if (!valid) return false;
+    if (!modeId) return false;
     session.currentMode = modeId;
     sessionStore.updateMeta(sessionId, { mode: modeId });
+    return true;
+  };
+
+  /**
+   * Same permissiveness rationale as `setMode` — the backend's config-options
+   * module is the authority on whether a given level is valid for the active
+   * model, and that check lives in `agent/index.ts`.
+   */
+  const setThoughtLevel = (sessionId: string, level: string) => {
+    const session = sessions.get(sessionId);
+    if (!session) return false;
+    if (!level) return false;
+    session.currentThoughtLevel = level as SessionState["currentThoughtLevel"];
+    sessionStore.updateMeta(sessionId, { thoughtLevel: level });
     return true;
   };
 
@@ -187,12 +217,12 @@ export const createAgentCore = (
         update: {
           sessionUpdate: "agent_message_chunk",
           content: {
-            type: "text",
+            type: "text" as const,
             text: "Error: session not found. Create a new session first.",
           },
         },
       });
-      return { stopReason: "end_turn" };
+      return { stopReason: "end_turn" as const };
     }
     const abortController = new AbortController();
     session.abortController = abortController;
@@ -224,10 +254,10 @@ export const createAgentCore = (
         sessionId,
         update: {
           sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: `Error: ${msg}` },
+          content: { type: "text" as const, text: `Error: ${msg}` },
         },
       });
-      return { stopReason: "end_turn" };
+      return { stopReason: "end_turn" as const };
     }
 
     if (backend.kind === "claude-code") {
@@ -281,6 +311,7 @@ export const createAgentCore = (
     listSessions,
     setModel,
     setMode,
+    setThoughtLevel,
     setTitle,
     persistMessages,
     compact,

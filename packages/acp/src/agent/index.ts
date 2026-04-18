@@ -1,22 +1,15 @@
 /**
- * ACP Agent factory — the public entry point.
+ * ACP Agent factory — the module manifest.
  *
  * Creates the ACP Agent implementation that Zed (or any ACP client)
- * connects to over stdio. Wires together session management, backend
- * routing, model/mode switching, and prompt dispatch.
- *
- * ACP session enrichment:
- *   - Session modes (code/ask/architect) via setSessionMode
- *   - Slash commands (/memory search, /memory list, etc.)
- *   - Thinking chunks streamed as agent_thought_chunk
- *   - Tool calls with kind, locations, and diff content
- *   - Incremental tool_call_update for status transitions
- *   - Embedded context (files, diagnostics) from editor
+ * connects to over stdio. This file is a thin wiring layer: it constructs
+ * the shared dependency record and maps each `acp.Agent` method to its
+ * handler in `./handlers.ts`. Implementation logic lives next to the handler
+ * or helper that owns it.
  */
 
-import * as acp from "@agentclientprotocol/sdk";
+import type * as acp from "@agentclientprotocol/sdk";
 import { createBackendRouter } from "../backends";
-import { checkForSdkUpdate } from "../backends/claude-code/sdk-updater";
 import {
   defaultSystemPromptPath,
   loadVoiceAnchors,
@@ -27,25 +20,12 @@ import {
 } from "../cartographer/lifecycle";
 import { config } from "../config";
 import type { ContextClientConfig } from "../context-client";
-import {
-  ccAvailable,
-  discoverCCModelsViaSdk,
-  discoverCopilotModels,
-  fetchServerModels,
-  mergeModels,
-} from "../routing";
 import { createSessionStore } from "../store/sessions";
 import { createUserMemoryStore } from "../store/user-memories";
 import { createChildLogger, log } from "../utils/log";
-import { formatContentBlocks } from "./content";
 import { createAgentCore } from "./core";
-import {
-  AVAILABLE_COMMANDS,
-  DEFAULT_MODE,
-  type ParsedCommand,
-  parseCommand,
-  SESSION_MODES,
-} from "./session";
+import type { HandlerDeps } from "./handlers";
+import * as handlers from "./handlers";
 
 const logger = createChildLogger(log, "agent");
 
@@ -69,11 +49,6 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
     systemPromptTtlMs: config.systemPromptTtlMs,
   };
 
-  // Captured from clientCapabilities during initialize — shared across sessions
-  // on this connection (one connection = one Zed window).
-  let supportsTerminalOutput = false;
-
-  // Cartographer lifecycle — spawns the Rust binary as an MCP child
   const cartographer: CartographerManager | null = config.cartographer.enabled
     ? createCartographerManager({
         binaryPath: config.cartographer.binaryPath,
@@ -89,456 +64,51 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
     router,
     contextClient,
     sessionStore,
-    {
-      voiceAnchorLibrary,
-      anchorInterval: config.cc.anchorInterval,
-    },
+    { voiceAnchorLibrary, anchorInterval: config.cc.anchorInterval },
     cartographer,
   );
 
-  // Discovered CC and Copilot models — populated during init, read by buildModelsState.
-  let discoveredCCModels: import("@agentclientprotocol/sdk").ModelInfo[] = [];
-  let discoveredCopilotModels: import("@agentclientprotocol/sdk").ModelInfo[] =
-    [];
+  // Mutable state held in the factory closure and exposed to handlers via
+  // getter/setter pairs. One connection = one Zed window, so this state is
+  // per-connection; handlers never see cross-connection leakage.
+  let supportsTerminalOutput = false;
+  let discoveredCCModels: readonly acp.ModelInfo[] = [];
+  let discoveredCopilotModels: readonly acp.ModelInfo[] = [];
 
-  // ── Command handler ──────────────────────────────────────────────────────
-  // Executes a parsed slash command and streams a response back to the editor.
-  // Returns a PromptResponse so the prompt handler can return it directly.
-
-  const handleCommand = async (
-    sessionId: string,
-    cmd: ParsedCommand,
-  ): Promise<acp.PromptResponse> => {
-    const reply = async (text: string): Promise<void> => {
-      await conn.sessionUpdate({
-        sessionId,
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text },
-        },
-      });
-    };
-
-    switch (cmd.type) {
-      case "model": {
-        if (!cmd.modelId) {
-          await reply("Usage: `/model <model-id>`");
-          return { stopReason: "end_turn" };
-        }
-        const ok = core.setModel(sessionId, cmd.modelId);
-        await reply(
-          ok ? `Model switched to \`${cmd.modelId}\`.` : "Session not found.",
-        );
-        return { stopReason: "end_turn" };
-      }
-
-      case "mode": {
-        if (!cmd.modeId) {
-          const list = SESSION_MODES.map((m) => `\`${m.id}\``).join(", ");
-          await reply(`Usage: \`/mode <id>\`\nAvailable modes: ${list}`);
-          return { stopReason: "end_turn" };
-        }
-        const ok = core.setMode(sessionId, cmd.modeId);
-        if (ok) {
-          await conn.sessionUpdate({
-            sessionId,
-            update: {
-              sessionUpdate: "current_mode_update",
-              currentModeId: cmd.modeId,
-            },
-          });
-          await reply(`Mode switched to **${cmd.modeId}**.`);
-        } else {
-          const list = SESSION_MODES.map((m) => `\`${m.id}\``).join(", ");
-          await reply(`Unknown mode \`${cmd.modeId}\`. Available: ${list}`);
-        }
-        return { stopReason: "end_turn" };
-      }
-
-      case "compact": {
-        core.compact(sessionId);
-        await reply("Session history cleared.");
-        return { stopReason: "end_turn" };
-      }
-
-      case "memory_search": {
-        if (!cmd.query) {
-          await reply("Usage: `/memory search <query>`");
-          return { stopReason: "end_turn" };
-        }
-        const results = memoryStore.searchMemories(cmd.query);
-        if (results.length === 0) {
-          await reply(`No memories found for "${cmd.query}".`);
-        } else {
-          const lines = results
-            .map((m) => `[#${m.id}] ${m.content}`)
-            .join("\n");
-          await reply(`**Memory search**: "${cmd.query}"\n\n${lines}`);
-        }
-        return { stopReason: "end_turn" };
-      }
-
-      case "memory_list": {
-        const memories = memoryStore.getMemories();
-        if (memories.length === 0) {
-          await reply("No memories stored.");
-        } else {
-          const lines = memories
-            .map((m) => `[#${m.id}] ${m.content}`)
-            .join("\n");
-          await reply(`**Memories** (${memories.length})\n\n${lines}`);
-        }
-        return { stopReason: "end_turn" };
-      }
-
-      case "memory_store": {
-        if (!cmd.fact) {
-          await reply("Usage: `/memory store <fact>`");
-          return { stopReason: "end_turn" };
-        }
-        const entry = memoryStore.addMemory(cmd.fact);
-        await reply(`Memory stored [#${entry.id}]: "${entry.content}"`);
-        return { stopReason: "end_turn" };
-      }
-
-      case "memory_delete": {
-        const id = parseInt(cmd.id, 10);
-        if (Number.isNaN(id)) {
-          await reply("Usage: `/memory delete <id>`\nID must be a number.");
-          return { stopReason: "end_turn" };
-        }
-        const deleted = memoryStore.deleteMemory(id);
-        await reply(
-          deleted ? `Memory #${id} deleted.` : `Memory #${id} not found.`,
-        );
-        return { stopReason: "end_turn" };
-      }
-    }
-  };
-
-  const buildModelsState = async (): Promise<acp.SessionModelState> => {
-    const serverModels = await fetchServerModels(
-      config.serverUrl,
-      config.apiKey,
-    );
-    const ccModels = router.runtime.ccEnabled ? discoveredCCModels : [];
-    const copilotModels = router.runtime.copilotEnabled
-      ? discoveredCopilotModels
-      : [];
-    const availableModels = mergeModels(serverModels, ccModels, copilotModels);
-    return { availableModels, currentModelId: config.model };
+  const deps: HandlerDeps = {
+    core,
+    conn,
+    config,
+    router,
+    memoryStore,
+    cartographer,
+    getSupportsTerminalOutput: () => supportsTerminalOutput,
+    setSupportsTerminalOutput: (v) => {
+      supportsTerminalOutput = v;
+    },
+    getDiscoveredCCModels: () => discoveredCCModels,
+    setDiscoveredCCModels: (ms) => {
+      discoveredCCModels = ms;
+    },
+    getDiscoveredCopilotModels: () => discoveredCopilotModels,
+    setDiscoveredCopilotModels: (ms) => {
+      discoveredCopilotModels = ms;
+    },
+    commandsEmitted: new Set<string>(),
   };
 
   return {
-    async initialize(params: acp.InitializeRequest) {
-      // Capture terminal output capability — Zed advertises this when it can
-      // render terminal widgets inside tool call chips.
-      supportsTerminalOutput =
-        params.clientCapabilities?._meta?.terminal_output === true;
-      logger.info("terminal output supported:", supportsTerminalOutput);
-
-      // Fire-and-forget SDK update check. Runs in the background; the
-      // update (if any) takes effect on the next boot since the SDK module
-      // is already loaded into this process. Errors are logged, not thrown.
-      if (config.cc.enabled) {
-        checkForSdkUpdate().catch((err) =>
-          logger.warn("SDK update check failed:", err),
-        );
-      }
-
-      // Resolve backend availability in parallel before accepting prompts.
-      // Disables routing to backends whose CLIs aren't installed so users
-      // can't pick a model that would crash on spawn.
-      const [ccResult, ccModelsResult, copilotResult] = await Promise.all([
-        config.cc.enabled
-          ? ccAvailable().then((available) => ({ available }))
-          : Promise.resolve({ available: false }),
-        config.cc.enabled
-          ? discoverCCModelsViaSdk(config.cc)
-          : Promise.resolve([]),
-        config.copilot.enabled
-          ? discoverCopilotModels()
-          : Promise.resolve({
-              available: false,
-              models: [],
-              modelMap: new Map<string, string>(),
-            }),
-      ]);
-
-      router.runtime.ccEnabled = ccResult.available;
-      discoveredCCModels = ccModelsResult;
-      if (ccResult.available) {
-        logger.info(
-          `CC backend enabled (${ccModelsResult.length} models discovered)`,
-        );
-      } else {
-        logger.info(
-          config.cc.enabled
-            ? "claude binary not found on PATH; disabling CC backend"
-            : "CC backend disabled by config",
-        );
-      }
-
-      router.runtime.copilotEnabled = copilotResult.available;
-      router.runtime.copilotModelMap = copilotResult.modelMap;
-      discoveredCopilotModels = copilotResult.models;
-      if (copilotResult.available) {
-        logger.info(
-          `Copilot backend enabled (${copilotResult.models.length} models discovered)`,
-        );
-      } else {
-        logger.info(
-          config.copilot.enabled
-            ? "Copilot CLI not available; disabling Copilot backend"
-            : "Copilot backend disabled by config",
-        );
-      }
-      return {
-        protocolVersion: acp.PROTOCOL_VERSION,
-        agentCapabilities: {
-          loadSession: true,
-          promptCapabilities: {
-            embeddedContext: true,
-          },
-          // Advertise that we accept HTTP and SSE MCP servers from the client.
-          // Stdio servers are also accepted but aren't part of McpCapabilities.
-          mcpCapabilities: {
-            http: true,
-            sse: true,
-          },
-          sessionCapabilities: {
-            list: {},
-          },
-        },
-      };
-    },
-
-    async newSession(params: acp.NewSessionRequest) {
-      // ACP spec: cwd MUST be an absolute path and MUST be used for the
-      // session regardless of where the agent subprocess was spawned.
-      const projectPath = params.cwd || process.cwd();
-      const session = core.newSession(
-        projectPath,
-        params.mcpServers,
-        supportsTerminalOutput,
-      );
-      logger.info("new session:", session.sessionId, "cwd:", projectPath);
-
-      const models = await buildModelsState().catch((err) => {
-        logger.warn("buildModelsState failed:", err);
-        return undefined;
-      });
-
-      // Send available commands after session creation
-      conn
-        .sessionUpdate({
-          sessionId: session.sessionId,
-          update: {
-            sessionUpdate: "available_commands_update",
-            availableCommands: AVAILABLE_COMMANDS,
-          },
-        })
-        .catch((err) => logger.warn("available_commands_update failed:", err));
-
-      // Auto-index the project with cartographer (fire-and-forget)
-      if (cartographer) {
-        cartographer.autoIndex(projectPath);
-      }
-
-      return {
-        sessionId: session.sessionId,
-        ...(models ? { models } : {}),
-        modes: {
-          availableModes: SESSION_MODES,
-          currentModeId: DEFAULT_MODE,
-        },
-      };
-    },
-
-    async unstable_setSessionModel(params: acp.SetSessionModelRequest) {
-      const ok = core.setModel(params.sessionId, params.modelId);
-      if (!ok) {
-        logger.warn("setSessionModel: unknown session", params.sessionId);
-      } else {
-        logger.info("model set:", params.sessionId, "→", params.modelId);
-      }
-      return {};
-    },
-
-    async setSessionMode(params: acp.SetSessionModeRequest) {
-      const ok = core.setMode(params.sessionId, params.modeId);
-      if (!ok) {
-        logger.warn(
-          "setSessionMode: unknown session or invalid mode",
-          params.sessionId,
-          params.modeId,
-        );
-      } else {
-        logger.info("mode set:", params.sessionId, "→", params.modeId);
-        // Notify the editor of the mode change
-        await conn.sessionUpdate({
-          sessionId: params.sessionId,
-          update: {
-            sessionUpdate: "current_mode_update",
-            currentModeId: params.modeId,
-          },
-        });
-      }
-      return {};
-    },
-
-    async loadSession(params: acp.LoadSessionRequest) {
-      const session = core.restoreSession(
-        params.sessionId,
-        params.mcpServers,
-        supportsTerminalOutput,
-      );
-      if (!session) {
-        logger.warn("loadSession: unknown session", params.sessionId);
-        // Return empty response — the client will likely fall back to newSession
-        return {};
-      }
-      logger.info(
-        "loadSession:",
-        params.sessionId,
-        `(${session.messages.length} messages)`,
-      );
-
-      const models = await buildModelsState().catch((err) => {
-        logger.warn("buildModelsState failed:", err);
-        return undefined;
-      });
-
-      // Re-advertise commands and current mode for this session
-      conn
-        .sessionUpdate({
-          sessionId: params.sessionId,
-          update: {
-            sessionUpdate: "available_commands_update",
-            availableCommands: AVAILABLE_COMMANDS,
-          },
-        })
-        .catch((err) =>
-          logger.warn("loadSession: available_commands_update failed:", err),
-        );
-
-      conn
-        .sessionUpdate({
-          sessionId: params.sessionId,
-          update: {
-            sessionUpdate: "current_mode_update",
-            currentModeId: session.currentMode,
-          },
-        })
-        .catch((err) =>
-          logger.warn("loadSession: current_mode_update failed:", err),
-        );
-
-      // Replay conversation history so the editor can render the transcript.
-      // We emit user/assistant turns only — tool calls and thinking are not
-      // replayed since the editor doesn't need them for display.
-      for (const msg of session.messages) {
-        if (msg.role === "user" && msg.content) {
-          conn
-            .sessionUpdate({
-              sessionId: params.sessionId,
-              update: {
-                sessionUpdate: "user_message_chunk",
-                content: { type: "text", text: msg.content },
-              },
-            })
-            .catch(() => {});
-        } else if (msg.role === "assistant" && msg.content) {
-          conn
-            .sessionUpdate({
-              sessionId: params.sessionId,
-              update: {
-                sessionUpdate: "agent_message_chunk",
-                content: { type: "text", text: msg.content },
-              },
-            })
-            .catch(() => {});
-        }
-      }
-
-      // Restore the session title if we have one
-      if (session.title) {
-        conn
-          .sessionUpdate({
-            sessionId: params.sessionId,
-            update: {
-              sessionUpdate: "session_info_update",
-              title: session.title,
-              updatedAt: new Date().toISOString(),
-            },
-          })
-          .catch(() => {});
-      }
-
-      return {
-        ...(models ? { models } : {}),
-        modes: {
-          availableModes: SESSION_MODES,
-          currentModeId: session.currentMode,
-        },
-      };
-    },
-
-    async listSessions(_params: acp.ListSessionsRequest) {
-      const persisted = core.listSessions();
-      return {
-        sessions: persisted.map((s) => ({
-          sessionId: s.session_id,
-          cwd: s.project_path,
-          title: s.title ?? undefined,
-          updatedAt: s.updated_at,
-        })),
-      };
-    },
-
-    async authenticate(_params: acp.AuthenticateRequest) {},
-
-    async prompt(params: acp.PromptRequest): Promise<acp.PromptResponse> {
-      const promptText = formatContentBlocks(params.prompt);
-      const cmd = parseCommand(promptText);
-      if (cmd) return handleCommand(params.sessionId, cmd);
-
-      const response = await core.prompt(
-        params.sessionId,
-        promptText,
-        conn,
-        params.prompt,
-      );
-
-      // Persist messages after each round-trip
-      core.persistMessages(params.sessionId);
-
-      // Generate and push a session title from the first user message if we
-      // don't have one yet. We truncate to 60 chars to keep it readable in
-      // Zed's session panel.
-      const session = core.getSession(params.sessionId);
-      if (session && !session.title) {
-        const title = promptText.slice(0, 60).replace(/\s+/g, " ").trim();
-        if (title) {
-          core.setTitle(params.sessionId, title);
-          conn
-            .sessionUpdate({
-              sessionId: params.sessionId,
-              update: {
-                sessionUpdate: "session_info_update",
-                title,
-                updatedAt: new Date().toISOString(),
-              },
-            })
-            .catch((err) => logger.warn("session_info_update failed:", err));
-        }
-      }
-
-      return response;
-    },
-
-    async cancel(params: acp.CancelNotification): Promise<void> {
-      core.cancel(params.sessionId);
-    },
+    initialize: (params) => handlers.initialize(deps, params),
+    newSession: (params) => handlers.newSession(deps, params),
+    loadSession: (params) => handlers.loadSession(deps, params),
+    listSessions: (params) => handlers.listSessions(deps, params),
+    authenticate: (params) => handlers.authenticate(deps, params),
+    prompt: (params) => handlers.prompt(deps, params),
+    cancel: (params) => handlers.cancel(deps, params),
+    setSessionMode: (params) => handlers.setSessionMode(deps, params),
+    setSessionConfigOption: (params) =>
+      handlers.setSessionConfigOption(deps, params),
+    unstable_setSessionModel: (params) =>
+      handlers.setSessionModel(deps, params),
   };
 };

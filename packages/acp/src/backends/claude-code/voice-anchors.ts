@@ -109,7 +109,7 @@ export const parseVoiceAnchors = (markdown: string): VoiceAnchor[] => {
 };
 
 /** Wrap an anchor in the recognised container tag for recency-slot injection. */
-export const formatAnchor = (anchor: VoiceAnchor): string =>
+export const formatAnchor = (anchor: VoiceAnchor) =>
   `<voice_anchor>\n${anchor.body}\n</voice_anchor>`;
 
 /**
@@ -117,10 +117,7 @@ export const formatAnchor = (anchor: VoiceAnchor): string =>
  * start at different points in the rotation so short sessions don't all
  * see the same first anchor.
  */
-export const hashSessionStart = (
-  sessionId: string,
-  libSize: number,
-): number => {
+export const hashSessionStart = (sessionId: string, libSize: number) => {
   if (libSize <= 0) return 0;
   let h = 2166136261;
   for (let i = 0; i < sessionId.length; i++) {
@@ -130,10 +127,7 @@ export const hashSessionStart = (
   return h % libSize;
 };
 
-export const createAnchorState = (
-  sessionId: string,
-  libSize: number,
-): VoiceAnchorState => ({
+export const createAnchorState = (sessionId: string, libSize: number) => ({
   turnCount: 0,
   lastAnchorTurn: 0,
   anchorIndex: hashSessionStart(sessionId, libSize),

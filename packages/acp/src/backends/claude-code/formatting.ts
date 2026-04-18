@@ -9,8 +9,10 @@
 
 import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk";
 import type {
+  EffortLevel,
   McpSdkServerConfigWithInstance,
   Options,
+  PermissionMode,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { CCBackendConfig } from "../../config";
 import { buildMcpServers } from "./mcp-config";
@@ -53,6 +55,16 @@ export type RunClaudeCodeOptions = {
   readonly clientMcpServers?: readonly McpServer[];
   /** In-process boot MCP server delivering per-session context as tool results. */
   readonly bootServer?: McpSdkServerConfigWithInstance;
+  /**
+   * Permission mode for this turn. Overrides `cc.permissionMode` from the
+   * startup config when provided — set by the session's mode selector.
+   */
+  readonly permissionMode?: PermissionMode;
+  /**
+   * Effort level for this turn. Set by the session's thought-level selector
+   * (CC backend only). Omitted for models that don't advertise effort support.
+   */
+  readonly effort?: EffortLevel;
   readonly signal?: AbortSignal;
 };
 
@@ -83,17 +95,25 @@ export const buildSdkOptions = (
     | "userMemoryDbPath"
     | "clientMcpServers"
     | "bootServer"
+    | "permissionMode"
+    | "effort"
   >,
 ) => {
   // System prompt arrives with session context already embedded (injected by
   // prompt-cc.ts). Boot instruction appended after it.
   const fullSystemPrompt = `${options.systemPrompt}\n\n${BOOT_INSTRUCTION}`;
 
+  // Turn-level permission mode overrides the startup default. This lets the
+  // session's mode selector take effect without restarting the ACP.
+  const permissionMode =
+    options.permissionMode ??
+    (options.cc.permissionMode as PermissionMode);
+
   const sdkOptions: Options = {
     cwd: options.workingDirectory,
     systemPrompt: fullSystemPrompt,
-    permissionMode: options.cc.permissionMode as Options["permissionMode"],
-    ...(options.cc.permissionMode === "bypassPermissions"
+    permissionMode,
+    ...(permissionMode === "bypassPermissions"
       ? { allowDangerouslySkipPermissions: true }
       : {}),
     mcpServers: buildMcpServers(
@@ -128,6 +148,9 @@ export const buildSdkOptions = (
   }
   if (options.model) {
     sdkOptions.model = options.model;
+  }
+  if (options.effort) {
+    sdkOptions.effort = options.effort;
   }
 
   return sdkOptions;

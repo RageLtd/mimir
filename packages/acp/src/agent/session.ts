@@ -1,28 +1,13 @@
 /**
- * Session modes, slash commands, and constants.
+ * Slash commands and parse logic.
+ *
+ * Session mode/thought-level catalogues no longer live here — each backend
+ * owns its own catalogue under `backends/<name>/config-options.ts`, and the
+ * agent layer dispatches through `buildSessionConfigOptions` in
+ * `agent/index.ts`.
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
-
-export const SESSION_MODES: acp.SessionMode[] = [
-  {
-    id: "code",
-    name: "Code",
-    description: "Full tool access — read, write, execute, search.",
-  },
-  {
-    id: "ask",
-    name: "Ask",
-    description: "Conversational only — no tool execution.",
-  },
-  {
-    id: "architect",
-    name: "Architect",
-    description: "Plan and reason about changes without modifying files.",
-  },
-];
-
-export const DEFAULT_MODE = "code";
 
 export const AVAILABLE_COMMANDS: acp.AvailableCommand[] = [
   {

@@ -4,7 +4,12 @@ import { createMimirAgent } from "./src/agent";
 const input = Bun.stdin.stream();
 const output = new WritableStream<Uint8Array>({
   write(chunk) {
-    Bun.write(Bun.stdout, chunk);
+    return new Promise<void>((resolve, reject) => {
+      process.stdout.write(chunk, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
   },
 });
 

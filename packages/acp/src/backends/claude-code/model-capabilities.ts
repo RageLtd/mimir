@@ -3,9 +3,8 @@
  *
  * Populated once at startup by `discoverCCModelsViaSdk()` after it receives
  * the SDK's `supportedModels()` response. Read synchronously by
- * `buildSdkOptions()` to shape the `thinking` config per model — adaptive
- * mode for capable models (Opus 4.7, Opus 4.6, Sonnet 4.6, Mythos), enabled
- * mode for older ones that still require a fixed `budgetTokens`.
+ * `buildSdkOptions()` to shape the `thinking` config per model, and by
+ * `config-options.ts` to build the backend-native thought-level selector.
  *
  * Keyed by the CLI alias (`"opus"`, `"sonnet"`, `"haiku"`) — identical to
  * the string passed through as `Options.model`. Bracketed context variants
@@ -13,8 +12,11 @@
  * strips any `[...]` suffix before matching.
  */
 
+import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
+
 type Capability = {
   readonly supportsAdaptiveThinking: boolean;
+  readonly supportedEffortLevels: readonly EffortLevel[];
 };
 
 const capabilities = new Map<string, Capability>();
@@ -23,12 +25,14 @@ export const setModelCapabilities = (
   models: readonly {
     value: string;
     supportsAdaptiveThinking?: boolean;
+    supportedEffortLevels?: readonly EffortLevel[];
   }[],
 ) => {
   capabilities.clear();
   for (const m of models) {
     capabilities.set(m.value, {
       supportsAdaptiveThinking: m.supportsAdaptiveThinking === true,
+      supportedEffortLevels: m.supportedEffortLevels ?? [],
     });
   }
 };
@@ -55,6 +59,23 @@ export const supportsAdaptiveThinking = (
   if (!modelAlias) return undefined;
   return capabilities.get(stripVariantSuffix(modelAlias))
     ?.supportsAdaptiveThinking;
+};
+
+/**
+ * Return the effort levels declared as supported by the model.
+ *
+ * - Non-empty array — use these as the thought-level selector options.
+ * - Empty array / `undefined` — the model didn't advertise effort support,
+ *   and the caller should omit the thought-level selector entirely.
+ */
+export const supportedEffortLevels = (
+  modelAlias: string | undefined,
+): readonly EffortLevel[] => {
+  if (!modelAlias) return [];
+  return (
+    capabilities.get(stripVariantSuffix(modelAlias))?.supportedEffortLevels ??
+    []
+  );
 };
 
 /** Test helper — clears the module-level cache between cases. */

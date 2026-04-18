@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import {
   resetModelCapabilitiesForTests,
   setModelCapabilities,
+  supportedEffortLevels,
   supportsAdaptiveThinking,
 } from "./model-capabilities";
 
@@ -69,5 +70,44 @@ describe("model-capabilities", () => {
     ]);
     expect(supportsAdaptiveThinking("opus")).toBeUndefined();
     expect(supportsAdaptiveThinking("sonnet")).toBe(true);
+  });
+
+  test("supportedEffortLevels returns the advertised levels for a known model", () => {
+    setModelCapabilities([
+      {
+        value: "opus",
+        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+      },
+    ]);
+    expect(supportedEffortLevels("opus")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+  });
+
+  test("supportedEffortLevels returns an empty array when the model lacks the capability", () => {
+    setModelCapabilities([{ value: "haiku" }]);
+    expect(supportedEffortLevels("haiku")).toEqual([]);
+  });
+
+  test("supportedEffortLevels strips variant suffixes before lookup", () => {
+    setModelCapabilities([
+      {
+        value: "opus",
+        supportedEffortLevels: ["high", "xhigh", "max"],
+      },
+    ]);
+    expect(supportedEffortLevels("opus[1m]")).toEqual(["high", "xhigh", "max"]);
+  });
+
+  test("supportedEffortLevels returns empty for unknown aliases or undefined input", () => {
+    setModelCapabilities([
+      { value: "opus", supportedEffortLevels: ["high"] },
+    ]);
+    expect(supportedEffortLevels("unknown")).toEqual([]);
+    expect(supportedEffortLevels(undefined)).toEqual([]);
   });
 });

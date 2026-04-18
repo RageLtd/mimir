@@ -2,7 +2,7 @@
 ## Code Style
 
 - No OOP. Plain functions, modules, data-over-abstraction. No classes unless the API demands it (e.g. ACP SDK's Agent interface requires a class).
-- No explicit function return types — let TypeScript infer.
+- No explicit function return types — let TypeScript infer. See `.claude/rules/coding/return-types.md` for the why and the exceptions.
 - No type casts (`as`) — if you need one, the types are wrong. The exception is serialisation boundaries (`JSON.parse`, `response.json()`, protocol fields typed as `unknown`) where TypeScript genuinely cannot know the shape without a runtime validation library. Casts at these boundaries are acceptable; casts inside the codebase are not.
 - "Less code more gooder."
 

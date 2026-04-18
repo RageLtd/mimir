@@ -46,6 +46,8 @@ export const createClaudeCodeBackend = (
       model,
       clientMcpServers: options.clientMcpServers,
       bootServer: options.bootServer,
+      permissionMode: options.permissionMode,
+      effort: options.effort,
       signal: options.signal,
     });
   };

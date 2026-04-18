@@ -19,7 +19,11 @@
  */
 
 import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk";
-import type { McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  EffortLevel,
+  McpSdkServerConfigWithInstance,
+  PermissionMode,
+} from "@anthropic-ai/claude-agent-sdk";
 import type { ChatMessage, ToolDefinition } from "../server-client";
 
 export type BackendEvent =
@@ -90,6 +94,9 @@ export type BackendRunOptions = {
   readonly signal?: AbortSignal;
   /** Resolved model id. CC backend uses this to derive --model. */
   readonly modelId: string;
+
+  permissionMode?: PermissionMode;
+  effort?: EffortLevel;
 };
 
 export type Backend = {

@@ -10,7 +10,6 @@
  * back to the static alias list when the SDK doesn't respond.
  */
 
-import type { ModelInfo } from "@agentclientprotocol/sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { CCBackendConfig } from "../../config";
 import { CC_PREFIX, getCCModelList } from "../../routing";
@@ -32,7 +31,7 @@ const DISCOVERY_TIMEOUT_MS = 15_000;
 export const discoverCCModelsViaSdk = async (
   cc: CCBackendConfig,
   timeoutMs = DISCOVERY_TIMEOUT_MS,
-): Promise<ModelInfo[]> => {
+) => {
   async function* emptyPrompt() {
     // Intentionally yields nothing — we only need the subprocess alive
     // long enough for supportedModels().

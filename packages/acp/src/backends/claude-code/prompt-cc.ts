@@ -249,8 +249,8 @@ export const contextWithoutCurrentTurn = (
 const blocksWithAnchor = (
   anchorText: string,
   blocks: readonly acp.ContentBlock[],
-): readonly acp.ContentBlock[] => [
-  { type: "text", text: `${anchorText}\n\n` },
+) => [
+  { type: "text", text: `${anchorText}\n\n` } as acp.ContentBlock,
   ...blocks,
 ];
 
@@ -264,7 +264,7 @@ export const promptViaClaudeCode = async (
   memoryStore: UserMemoryStore,
   anchorOpts: VoiceAnchorOpts,
   promptBlocks?: readonly acp.ContentBlock[],
-): Promise<acp.PromptResponse> => {
+) => {
   // Single call to mimir-server assembles the full context: system prompt,
   // Goldfish memories, summaries, historical turns from DB, and the current
   // user message as the final entry.
@@ -286,7 +286,7 @@ export const promptViaClaudeCode = async (
         content: { type: "text", text: `Context assembly failed: ${msg}` },
       },
     });
-    return { stopReason: "end_turn" };
+    return { stopReason: "end_turn" as const };
   }
 
   // Convert system prompt from markdown to Anthropic XML.
@@ -388,6 +388,13 @@ export const promptViaClaudeCode = async (
       bootServer,
       metadata: {},
       modelId: session.currentModelId,
+      // Session-level mode/thought-level selections flow through to the SDK
+      // on each turn. Type assertion on currentMode narrows the persisted
+      // string to the SDK's PermissionMode union — validation happened at
+      // the agent/index.ts setSessionConfigOption boundary.
+      permissionMode:
+        session.currentMode as import("@anthropic-ai/claude-agent-sdk").PermissionMode,
+      effort: session.currentThoughtLevel,
       signal: abortController.signal,
     })) {
       if (event.type === "tool_result") {
@@ -421,16 +428,16 @@ export const promptViaClaudeCode = async (
           });
         }
       } else if (event.type === "error") {
-        return { stopReason: "end_turn" };
+        return { stopReason: "end_turn" as const };
       }
     }
   } catch (err) {
     if (abortController.signal.aborted) {
-      return { stopReason: "cancelled" };
+      return { stopReason: "cancelled" as const };
     }
     const msg = errMessage(err);
     logger.error("CC backend error:", msg);
-    return { stopReason: "end_turn" };
+    return { stopReason: "end_turn" as const };
   }
 
   if (assistantBuffer.length > 0) {
@@ -468,5 +475,5 @@ export const promptViaClaudeCode = async (
     ).catch((err) => logger.warn("reportTokenUsage failed:", err));
   }
 
-  return { stopReason: "end_turn" };
+  return { stopReason: "end_turn" as const };
 };

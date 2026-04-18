@@ -102,22 +102,22 @@ export const promptViaServer = async (
               content: { type: "text", text: `Error: ${event.error}` },
             },
           });
-          return { stopReason: "end_turn" };
+          return { stopReason: "end_turn" as const };
         } else if (event.type === "finish") {
           // fall through to post-stream tool execution
         }
       }
     } catch (err) {
       if (abortController.signal.aborted) {
-        return { stopReason: "cancelled" };
+        return { stopReason: "cancelled" as const };
       }
       const msg = errMessage(err);
       logger.error("Agent loop error:", msg);
-      return { stopReason: "end_turn" };
+      return { stopReason: "end_turn" as const };
     }
 
     if (pendingToolCalls.length === 0) {
-      return { stopReason: "end_turn" };
+      return { stopReason: "end_turn" as const };
     }
 
     // Push assistant turn with tool_calls
@@ -200,5 +200,5 @@ export const promptViaServer = async (
   if (turnCount >= MAX_TURNS) {
     logger.warn("Max turns reached:", MAX_TURNS);
   }
-  return { stopReason: "end_turn" };
+  return { stopReason: "end_turn" as const };
 };

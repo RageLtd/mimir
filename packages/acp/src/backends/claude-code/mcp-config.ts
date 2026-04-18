@@ -20,7 +20,7 @@ const isStdioServer = (server: McpServer): server is McpServerStdio =>
   "command" in server;
 
 /** Converts an ACP McpServer to the SDK's McpServerConfig shape. */
-const acpServerToConfigEntry = (server: McpServer): McpServerConfig => {
+const acpServerToConfigEntry = (server: McpServer) => {
   if (isStdioServer(server)) {
     const env = Object.fromEntries(
       (server.env ?? []).map((e) => [e.name, e.value]),
@@ -60,7 +60,7 @@ export const buildMcpServers = (
   userMemoryDbPath: string,
   clientMcpServers?: readonly McpServer[],
   bootServer?: McpSdkServerConfigWithInstance,
-): Record<string, McpServerConfig> => {
+) => {
   const clientEntries: Record<string, McpServerConfig> = {};
   for (const server of clientMcpServers ?? []) {
     clientEntries[server.name] = acpServerToConfigEntry(server);
@@ -92,5 +92,5 @@ export const buildMcpServers = (
     // Boot server delivers per-session context (user profile, session
     // history, project rules) as tool results on the first turn.
     ...(bootServer ? { [bootServer.name]: bootServer } : {}),
-  };
+  } satisfies Record<string, McpServerConfig>;
 };

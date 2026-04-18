@@ -19,7 +19,6 @@ import {
 import { acpBlocksToAnthropicContent } from "../../agent/content";
 import { errMessage } from "../../util";
 import { createChildLogger, log } from "../../utils/log";
-import type { BackendEvent } from "../types";
 import { buildSdkOptions, type RunClaudeCodeOptions } from "./formatting";
 
 const logger = createChildLogger(log, "cc-runner");
@@ -42,7 +41,7 @@ process.on("SIGTERM", shutdownAll);
 process.on("SIGINT", shutdownAll);
 
 /** Extract text from a tool_result content field. */
-const stringifyToolResultContent = (content: unknown): string => {
+const stringifyToolResultContent = (content: unknown) => {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return content
@@ -69,14 +68,12 @@ const stringifyToolResultContent = (content: unknown): string => {
  * deltas at a useful granularity, so the turn-final form is where they
  * surface.
  */
-function* translateAssistant(
-  msg: SDKAssistantMessage,
-): Generator<BackendEvent> {
+function* translateAssistant(msg: SDKAssistantMessage) {
   for (const block of msg.message.content ?? []) {
     if (block.type === "tool_use") {
       const tb = block as { id: string; name: string; input: unknown };
       yield {
-        type: "tool_call",
+        type: "tool_call" as const,
         id: tb.id,
         name: tb.name,
         input: (tb.input ?? {}) as Record<string, unknown>,
@@ -96,9 +93,7 @@ function* translateAssistant(
  * input streaming via input_json_delta isn't worth the plumbing — the
  * tool-call UI renders on the complete turn-final block.
  */
-function* translateStreamEvent(
-  msg: SDKPartialAssistantMessage,
-): Generator<BackendEvent> {
+function* translateStreamEvent(msg: SDKPartialAssistantMessage) {
   const event = msg.event as { type?: string; delta?: unknown };
   if (event.type !== "content_block_delta") return;
   const delta = event.delta as {
@@ -107,17 +102,17 @@ function* translateStreamEvent(
     thinking?: string;
   };
   if (delta.type === "text_delta" && typeof delta.text === "string") {
-    yield { type: "text", text: delta.text };
+    yield { type: "text" as const, text: delta.text };
   } else if (
     delta.type === "thinking_delta" &&
     typeof delta.thinking === "string"
   ) {
-    yield { type: "thinking", text: delta.thinking };
+    yield { type: "thinking" as const, text: delta.thinking };
   }
 }
 
 /** Translate an SDKUserMessage (tool results) into BackendEvent(s). */
-function* translateUser(msg: SDKUserMessage): Generator<BackendEvent> {
+function* translateUser(msg: SDKUserMessage) {
   const content = msg.message?.content;
   if (!Array.isArray(content)) return;
   for (const part of content) {
@@ -132,7 +127,7 @@ function* translateUser(msg: SDKUserMessage): Generator<BackendEvent> {
         content: unknown;
       };
       yield {
-        type: "tool_result",
+        type: "tool_result" as const,
         id: tr.tool_use_id,
         output: stringifyToolResultContent(tr.content),
         observeOnly: true,
@@ -145,7 +140,7 @@ function* translateUser(msg: SDKUserMessage): Generator<BackendEvent> {
 function* translateResult(
   msg: SDKResultMessage,
   sessionId: string | undefined,
-): Generator<BackendEvent> {
+) {
   const usage = msg.usage;
   const promptTokens =
     (usage?.input_tokens ?? 0) +
@@ -153,11 +148,11 @@ function* translateResult(
     (usage?.cache_creation_input_tokens ?? 0);
 
   if (msg.subtype !== "success") {
-    yield { type: "error", error: msg.errors.join("; ") };
+    yield { type: "error" as const, error: msg.errors.join("; ") };
   }
 
   yield {
-    type: "finish",
+    type: "finish" as const,
     sessionId,
     stopReason: msg.subtype,
     promptTokens,
@@ -178,9 +173,7 @@ const safeNext = async <T>(
   return { ok: true, data: result };
 };
 
-export const runClaudeCode = async function* (
-  options: RunClaudeCodeOptions,
-): AsyncGenerator<BackendEvent> {
+export const runClaudeCode = async function* (options: RunClaudeCodeOptions) {
   // Build the user message content parts. Use promptBlocks if available
   // (preserves images); fall back to plain text.
   const contentParts =
@@ -222,7 +215,7 @@ export const runClaudeCode = async function* (
 
     if (!next.ok) {
       if (!abortController.signal.aborted) {
-        yield { type: "error", error: next.error };
+        yield { type: "error" as const, error: next.error };
       }
       break;
     }
@@ -235,7 +228,7 @@ export const runClaudeCode = async function* (
       const init = msg as SDKSystemMessage;
       sessionId = init.session_id;
       yield {
-        type: "init",
+        type: "init" as const,
         sessionId: init.session_id,
         tools: init.tools ?? [],
       };
@@ -277,5 +270,5 @@ export const runClaudeCode = async function* (
   }
 
   activeQueries.delete(q);
-  yield { type: "finish", sessionId };
+  yield { type: "finish" as const, sessionId };
 };
