@@ -2,96 +2,68 @@
  * Rule-hooks unit tests.
  *
  * Covers:
- *   - extractEditTarget: pulls filePath + content from tool input variants
- *   - runDetectors: collects violations, swallows detector throws
- *   - formatFindings: produces null when empty, readable nudge otherwise
- *   - buildRuleHook: returns PreToolUse matcher with additionalContext
- *     only when findings exist
+ *   - runDetectors: tool + glob filtering, violation collection, crash isolation
+ *   - formatFindings: null on empty; rule-name/path/line/snippet formatting;
+ *     inlined rule markdown body
+ *   - buildRuleHook: PreToolUse matcher returns additionalContext only when
+ *     a detector found a violation
  *
- * Loader/import paths are covered by an integration test elsewhere; unit
- * tests stay in-process and don't touch the filesystem.
+ * Loader/import paths are covered separately — the unit tests here don't
+ * touch the filesystem.
  */
 
 import { describe, expect, test } from "bun:test";
 import {
   buildRuleHook,
   type Detector,
-  extractEditTarget,
   formatFindings,
   runDetectors,
+  type RuleDetectionInput,
   type Violation,
 } from "./rule-hooks";
 
 const mkDetector = (
   name: string,
-  fn: (input: { content?: string; filePath?: string }) => Violation[] | null,
-  ruleContent: string | null = null,
+  fn: (input: RuleDetectionInput) => Violation[] | null,
+  opts: {
+    ruleContent?: string | null;
+    globs?: readonly string[];
+    tools?: readonly string[];
+  } = {},
 ): Detector => ({
   name,
   rulePath: `.claude/rules/${name}.md`,
-  ruleContent,
+  ruleContent: opts.ruleContent ?? null,
+  globs: opts.globs ?? [],
+  tools: opts.tools ?? [],
   detect: fn,
 });
 
-describe("extractEditTarget", () => {
-  test("Edit pulls file_path + new_string", () => {
-    expect(
-      extractEditTarget("Edit", {
-        file_path: "/tmp/foo.ts",
-        old_string: "a",
-        new_string: "b",
-      }),
-    ).toEqual({ filePath: "/tmp/foo.ts", content: "b" });
-  });
-
-  test("Write pulls file_path + content", () => {
-    expect(
-      extractEditTarget("Write", {
-        file_path: "/tmp/foo.ts",
-        content: "hello world",
-      }),
-    ).toEqual({ filePath: "/tmp/foo.ts", content: "hello world" });
-  });
-
-  test("MultiEdit concatenates new_strings", () => {
-    expect(
-      extractEditTarget("MultiEdit", {
-        file_path: "/tmp/foo.ts",
-        edits: [
-          { old_string: "a", new_string: "alpha" },
-          { old_string: "b", new_string: "beta" },
-        ],
-      }),
-    ).toEqual({ filePath: "/tmp/foo.ts", content: "alpha\nbeta" });
-  });
-
-  test("ignores non-edit tools", () => {
-    expect(extractEditTarget("Bash", { command: "ls" })).toEqual({
-      filePath: undefined,
-      content: undefined,
-    });
-  });
-
-  test("missing file_path returns undefined", () => {
-    expect(extractEditTarget("Edit", { new_string: "foo" })).toEqual({
-      filePath: undefined,
-      content: "foo",
-    });
-  });
+const mkHookEvent = (tool_name: string, tool_input: Record<string, unknown>) => ({
+  hook_event_name: "PreToolUse",
+  tool_name,
+  tool_input,
 });
 
 describe("runDetectors", () => {
   test("collects violations from each detector", async () => {
-    const d1 = mkDetector("rule-a", (i) =>
-      i.content?.includes("bad") ? [{ message: "found bad" }] : null,
-    );
-    const d2 = mkDetector("rule-b", (i) =>
-      i.content?.includes("worse") ? [{ message: "found worse" }] : null,
-    );
-    const findings = await runDetectors([d1, d2], "Edit", {
-      file_path: "/x.ts",
-      new_string: "bad code, worse code",
+    const d1 = mkDetector("rule-a", (input) => {
+      const ti = input.hookEvent.tool_input as Record<string, unknown>;
+      const s = typeof ti.new_string === "string" ? ti.new_string : "";
+      return s.includes("bad") ? [{ message: "found bad" }] : null;
     });
+    const d2 = mkDetector("rule-b", (input) => {
+      const ti = input.hookEvent.tool_input as Record<string, unknown>;
+      const s = typeof ti.new_string === "string" ? ti.new_string : "";
+      return s.includes("worse") ? [{ message: "found worse" }] : null;
+    });
+    const findings = await runDetectors(
+      [d1, d2],
+      mkHookEvent("Edit", {
+        file_path: "/x.ts",
+        new_string: "bad code, worse code",
+      }),
+    );
     expect(findings).toHaveLength(2);
     const names = findings.map((f) => f.detector.name);
     expect(names).toEqual(["rule-a", "rule-b"]);
@@ -99,10 +71,10 @@ describe("runDetectors", () => {
 
   test("omits detectors with no violations", async () => {
     const d = mkDetector("rule-a", () => []);
-    const findings = await runDetectors([d], "Edit", {
-      file_path: "/x.ts",
-      new_string: "clean",
-    });
+    const findings = await runDetectors(
+      [d],
+      mkHookEvent("Edit", { file_path: "/x.ts", new_string: "clean" }),
+    );
     expect(findings).toEqual([]);
   });
 
@@ -111,13 +83,72 @@ describe("runDetectors", () => {
       throw new Error("boom");
     });
     const d2 = mkDetector("working", () => [{ message: "ok" }]);
-    const findings = await runDetectors([d1, d2], "Edit", {
-      file_path: "/x.ts",
-      new_string: "anything",
-    });
+    const findings = await runDetectors(
+      [d1, d2],
+      mkHookEvent("Edit", { file_path: "/x.ts", new_string: "anything" }),
+    );
     expect(findings).toHaveLength(1);
     const names = findings.map((f) => f.detector.name);
     expect(names).toEqual(["working"]);
+  });
+
+  test("filters by tools — Bash-only detector skips Edit", async () => {
+    const d = mkDetector("bash-only", () => [{ message: "fired" }], {
+      tools: ["Bash"],
+    });
+    const findings = await runDetectors(
+      [d],
+      mkHookEvent("Edit", { file_path: "/x.ts", new_string: "anything" }),
+    );
+    expect(findings).toEqual([]);
+  });
+
+  test("filters by tools — Bash-only detector fires on Bash", async () => {
+    const d = mkDetector("bash-only", () => [{ message: "fired" }], {
+      tools: ["Bash"],
+    });
+    const findings = await runDetectors(
+      [d],
+      mkHookEvent("Bash", { command: "ls" }),
+    );
+    expect(findings).toHaveLength(1);
+  });
+
+  test("filters by globs — TS-only detector skips .py file", async () => {
+    const d = mkDetector("ts-only", () => [{ message: "fired" }], {
+      globs: ["*.ts", "*.tsx"],
+    });
+    const findings = await runDetectors(
+      [d],
+      mkHookEvent("Edit", { file_path: "/src/foo.py", new_string: "x" }),
+    );
+    expect(findings).toEqual([]);
+  });
+
+  test("filters by globs — TS-only detector fires on nested .ts", async () => {
+    const d = mkDetector("ts-only", () => [{ message: "fired" }], {
+      globs: ["*.ts"],
+    });
+    const findings = await runDetectors(
+      [d],
+      mkHookEvent("Edit", {
+        file_path: "/deeply/nested/dir/foo.ts",
+        new_string: "x",
+      }),
+    );
+    expect(findings).toHaveLength(1);
+  });
+
+  test("detectors with empty globs run on any path", async () => {
+    const d = mkDetector("any-path", () => [{ message: "fired" }]);
+    const findings = await runDetectors(
+      [d],
+      mkHookEvent("Edit", {
+        file_path: "/anything.whatever",
+        new_string: "x",
+      }),
+    );
+    expect(findings).toHaveLength(1);
   });
 });
 
@@ -147,16 +178,11 @@ describe("formatFindings", () => {
   });
 
   test("inlines rule markdown content when detector has it", () => {
-    const detector = mkDetector(
-      "return-types",
-      () => [],
-      "# No Explicit Return Type Annotations\n\nLet TypeScript infer.",
-    );
+    const detector = mkDetector("return-types", () => [], {
+      ruleContent: "# No Explicit Return Type Annotations\n\nLet TypeScript infer.",
+    });
     const out = formatFindings([
-      {
-        detector,
-        violations: [{ message: "flagged", line: 1 }],
-      },
+      { detector, violations: [{ message: "flagged", line: 1 }] },
     ]);
     expect(out).toContain("--- rule content ---");
     expect(out).toContain("# No Explicit Return Type Annotations");
@@ -165,16 +191,14 @@ describe("formatFindings", () => {
   });
 
   test("omits rule content block when detector has none", () => {
-    const detector = mkDetector("return-types", () => [], null);
+    const detector = mkDetector("return-types", () => [], {
+      ruleContent: null,
+    });
     const out = formatFindings([
-      {
-        detector,
-        violations: [{ message: "flagged", line: 1 }],
-      },
+      { detector, violations: [{ message: "flagged", line: 1 }] },
     ]);
     expect(out).not.toContain("--- rule content ---");
     expect(out).not.toContain("--- end rule ---");
-    // Violation header + body still rendered without the rule block.
     expect(out).toContain("return-types");
     expect(out).toContain("flagged");
   });
@@ -187,11 +211,7 @@ describe("buildRuleHook", () => {
     const matcher = matchers[0];
     if (!matcher || !matcher.hooks[0]) throw new Error("no hook returned");
     const result = await matcher.hooks[0](
-      {
-        hook_event_name: "PreToolUse",
-        tool_name: "Edit",
-        tool_input: { file_path: "/x.ts", new_string: "clean" },
-      },
+      mkHookEvent("Edit", { file_path: "/x.ts", new_string: "clean" }),
       undefined,
       { signal: new AbortController().signal },
     );
@@ -208,11 +228,7 @@ describe("buildRuleHook", () => {
     const matcher = matchers[0];
     if (!matcher || !matcher.hooks[0]) throw new Error("no hook returned");
     const result = await matcher.hooks[0](
-      {
-        hook_event_name: "PreToolUse",
-        tool_name: "Edit",
-        tool_input: { file_path: "/x.ts", new_string: "bad" },
-      },
+      mkHookEvent("Edit", { file_path: "/x.ts", new_string: "bad" }),
       undefined,
       { signal: new AbortController().signal },
     );

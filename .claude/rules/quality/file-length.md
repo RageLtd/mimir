@@ -1,5 +1,6 @@
 ---
-globs: ["*.ts", "*.tsx", "*.js", "*.jsx", "*.rs", "*.go", "*.py"]
+globs: ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mts", "*.mjs", "*.rs", "*.go", "*.py"]
+tools: ["Edit", "Write", "MultiEdit"]
 ---
 # File Length
 

@@ -1,35 +1,22 @@
 /**
  * Mechanical detector for the "File Length" rule.
- * Paired with file-length.md. Flags edits that produce (or enlarge) files
- * past the 500-line cap.
+ * Paired with file-length.md. Flags edits that produce (or enlarge)
+ * files past the 500-line cap.
  *
- * Three modes:
- *   - Write: count newlines in `content` — final file length is known.
- *   - Edit: read the target from disk, replace `old_string` with
- *     `new_string`, count lines of the result. If the file doesn't exist
- *     yet (first Write via Edit isn't possible, but guard anyway), skip.
- *   - MultiEdit: apply each edit sequentially on the in-memory buffer,
- *     then count.
- *
- * Async detector — reads from disk. The rule-hooks runner awaits.
+ * Scope: the paired .md frontmatter declares which file types apply.
+ * This detector handles Write / Edit / MultiEdit by reading the target
+ * file from disk (when present) and computing the post-edit line count.
  */
 
-interface DetectInput {
-  readonly toolName: string;
-  readonly toolInput: Record<string, unknown>;
-  readonly filePath?: string;
-  readonly content?: string;
-}
+import {
+  getToolInput,
+  type RuleDetectionInput,
+  type Violation,
+} from "../detection-helpers";
 
 const LIMIT = 500;
 
 const countLines = (s: string) => s.split("\n").length;
-
-const shouldScan = (filePath?: string) => {
-  if (!filePath) return false;
-  // Broadly applicable: TS, JS, Rust, Go, Python. Not binary files.
-  return /\.(ts|tsx|mts|mjs|js|jsx|rs|go|py)$/.test(filePath);
-};
 
 const readFile = async (path: string) => {
   const file = Bun.file(path);
@@ -38,80 +25,63 @@ const readFile = async (path: string) => {
   return file.text();
 };
 
-const projectedLengthForEdit = async (
+const projectedLinesForWrite = (toolInput: Record<string, unknown>) =>
+  typeof toolInput.content === "string" ? countLines(toolInput.content) : null;
+
+const projectedLinesForEdit = async (
   filePath: string,
-  oldString: string,
-  newString: string,
+  toolInput: Record<string, unknown>,
 ) => {
+  const oldString = toolInput.old_string;
+  const newString = toolInput.new_string;
+  if (typeof oldString !== "string" || typeof newString !== "string") return null;
   const current = await readFile(filePath);
-  if (current === null) return null;
-  // Conservative: only replace if old_string actually appears. If it
-  // doesn't, the edit will fail — skip flagging.
-  if (!current.includes(oldString)) return null;
-  const after = current.replace(oldString, newString);
-  return countLines(after);
+  if (current === null || !current.includes(oldString)) return null;
+  return countLines(current.replace(oldString, newString));
 };
 
-const projectedLengthForMultiEdit = async (
+const projectedLinesForMultiEdit = async (
   filePath: string,
-  edits: ReadonlyArray<{ old_string: string; new_string: string }>,
+  toolInput: Record<string, unknown>,
 ) => {
+  if (!Array.isArray(toolInput.edits)) return null;
   let buf = await readFile(filePath);
   if (buf === null) return null;
-  for (const edit of edits) {
-    if (!buf.includes(edit.old_string)) return null;
-    buf = buf.replace(edit.old_string, edit.new_string);
+  for (const e of toolInput.edits) {
+    if (!e || typeof e !== "object") return null;
+    const oldString = (e as { old_string?: unknown }).old_string;
+    const newString = (e as { new_string?: unknown }).new_string;
+    if (typeof oldString !== "string" || typeof newString !== "string") return null;
+    if (!buf.includes(oldString)) return null;
+    buf = buf.replace(oldString, newString);
   }
   return countLines(buf);
 };
 
-const extractMultiEdits = (toolInput: Record<string, unknown>) => {
-  if (!Array.isArray(toolInput.edits)) return null;
-  const out: Array<{ old_string: string; new_string: string }> = [];
-  for (const e of toolInput.edits) {
-    if (!e || typeof e !== "object") return null;
-    const old_string = (e as { old_string?: unknown }).old_string;
-    const new_string = (e as { new_string?: unknown }).new_string;
-    if (typeof old_string !== "string" || typeof new_string !== "string") {
-      return null;
-    }
-    out.push({ old_string, new_string });
-  }
-  return out;
-};
-
-const detect = async (input: DetectInput) => {
-  if (!shouldScan(input.filePath)) return [];
+export default async (input: RuleDetectionInput) => {
   const filePath = input.filePath;
   if (!filePath) return [];
+  const toolName =
+    typeof input.hookEvent.tool_name === "string"
+      ? input.hookEvent.tool_name
+      : "";
+  const toolInput = getToolInput(input);
 
   let finalLines: number | null = null;
-
-  if (input.toolName === "Write") {
-    if (typeof input.content !== "string") return [];
-    finalLines = countLines(input.content);
-  } else if (input.toolName === "Edit") {
-    const oldString = input.toolInput.old_string;
-    const newString = input.toolInput.new_string;
-    if (typeof oldString !== "string" || typeof newString !== "string")
-      return [];
-    finalLines = await projectedLengthForEdit(filePath, oldString, newString);
-  } else if (input.toolName === "MultiEdit") {
-    const edits = extractMultiEdits(input.toolInput);
-    if (!edits) return [];
-    finalLines = await projectedLengthForMultiEdit(filePath, edits);
-  } else {
-    return [];
+  if (toolName === "Write") {
+    finalLines = projectedLinesForWrite(toolInput);
+  } else if (toolName === "Edit") {
+    finalLines = await projectedLinesForEdit(filePath, toolInput);
+  } else if (toolName === "MultiEdit") {
+    finalLines = await projectedLinesForMultiEdit(filePath, toolInput);
   }
 
-  if (finalLines === null) return [];
-  if (finalLines <= LIMIT) return [];
+  if (finalLines === null || finalLines <= LIMIT) return [];
 
-  return [
+  const violations: Violation[] = [
     {
       message: `File would be ${finalLines} lines after this edit (limit: ${LIMIT}). See the paired rule.`,
     },
   ];
+  return violations;
 };
-
-export default detect;

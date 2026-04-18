@@ -1,3 +1,7 @@
+---
+globs: ["**/package.json", "**/Cargo.toml", "**/go.mod", "**/pyproject.toml"]
+tools: ["Edit", "Write", "MultiEdit"]
+---
 # Dependency Management (CRITICAL)
 
 **Do not manually edit dependency lists in manifest files.** Use the language's package manager for all dependency operations:

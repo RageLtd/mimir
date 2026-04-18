@@ -1,45 +1,21 @@
 /**
  * Mechanical detector for the "Dependency Management" rule (CRITICAL).
- * Paired with dependencies.md. Flags direct edits to dependency sections
- * of manifest files, steering the agent back to the language's package
- * manager CLI (`bun add`, `cargo add`, `go get`, `uv add`).
+ * Paired with dependencies.md.
  *
- * Detection is two-layered:
- *   1. filePath matches a known manifest file
- *   2. content contains a dependency-section key or a version-looking value
- *
- * The second layer cuts false positives on unrelated manifest edits (e.g.
- * changing a `"scripts"` entry in package.json is fine — only dep sections
- * are gated). For TOML files this is trickier because [dependencies] and
- * version specs can appear far apart; we flag any edit that touches a
- * version-looking string inside a .toml/.json manifest as a reasonable
- * approximation.
+ * Scope: the paired .md frontmatter declares manifest globs, so this
+ * detector only runs on package.json / Cargo.toml / go.mod / pyproject.toml.
+ * From there it scans the incoming content for dependency-section signals
+ * and flags any edit that touches them.
  */
 
-interface DetectInput {
-  readonly toolName: string;
-  readonly toolInput: Record<string, unknown>;
-  readonly filePath?: string;
-  readonly content?: string;
-}
+import {
+  getIncomingContent,
+  getToolInput,
+  type RuleDetectionInput,
+  type Violation,
+} from "../detection-helpers";
 
-const MANIFEST_PATTERNS: Array<{ re: RegExp; kind: string }> = [
-  { re: /(^|\/)package\.json$/, kind: "package.json" },
-  { re: /(^|\/)Cargo\.toml$/, kind: "Cargo.toml" },
-  { re: /(^|\/)go\.mod$/, kind: "go.mod" },
-  { re: /(^|\/)pyproject\.toml$/, kind: "pyproject.toml" },
-];
-
-const manifestKind = (filePath: string) => {
-  for (const { re, kind } of MANIFEST_PATTERNS) {
-    if (re.test(filePath)) return kind;
-  }
-  return null;
-};
-
-// Per-manifest patterns that strongly indicate a dependency-section touch.
-// Each regex runs against the CONTENT of the edit (new_string for Edit,
-// full content for Write). A single hit is enough to flag.
+/** Per-manifest patterns that strongly indicate a dependency-section touch. */
 const DEP_SIGNALS: Record<string, RegExp[]> = {
   "package.json": [
     /"(?:dependencies|devDependencies|peerDependencies|optionalDependencies)"\s*:/,
@@ -57,28 +33,35 @@ const DEP_SIGNALS: Record<string, RegExp[]> = {
   ],
 };
 
-const detect = (input: DetectInput) => {
+const manifestKind = (filePath: string) => {
+  if (filePath.endsWith("package.json")) return "package.json";
+  if (filePath.endsWith("Cargo.toml")) return "Cargo.toml";
+  if (filePath.endsWith("go.mod")) return "go.mod";
+  if (filePath.endsWith("pyproject.toml")) return "pyproject.toml";
+  return null;
+};
+
+export default (input: RuleDetectionInput) => {
   if (!input.filePath) return [];
   const kind = manifestKind(input.filePath);
   if (!kind) return [];
-  if (!input.content) return [];
+  const content = getIncomingContent(getToolInput(input));
+  if (!content) return [];
 
   const signals = DEP_SIGNALS[kind] ?? [];
+  const violations: Violation[] = [];
   for (const re of signals) {
-    const match = re.exec(input.content);
+    const match = re.exec(content);
     if (match) {
-      // Derive an approximate line number from match index for better nudge UX.
-      const lineNum = input.content.slice(0, match.index).split("\n").length;
-      return [
-        {
-          message: `Direct edit to ${kind} dependency section — use the package manager CLI instead (see paired rule).`,
-          line: lineNum,
-          snippet: match[0].slice(0, 80).trim(),
-        },
-      ];
+      const line = content.slice(0, match.index).split("\n").length;
+      violations.push({
+        message: `Direct edit to ${kind} dependency section — use the package manager CLI instead (see paired rule).`,
+        line,
+        snippet: match[0].slice(0, 80).trim(),
+      });
+      // Single violation per tool call is enough to nudge — don't spam.
+      return violations;
     }
   }
-  return [];
+  return violations;
 };
-
-export default detect;

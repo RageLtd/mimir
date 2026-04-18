@@ -1,3 +1,6 @@
+---
+tools: ["Bash"]
+---
 # No Pipe Swallowing
 
 Do not pipe command output directly into `head`, `tail`, `grep`, `wc`, or other filters. If the command fails, the pipe silently swallows stderr or returns misleading results.
