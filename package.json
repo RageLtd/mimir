@@ -15,10 +15,10 @@
     "acp:build": "bun run --filter @mimir/acp build"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.11",
+    "@biomejs/biome": "^2.4.12",
     "@types/bun": "latest"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.113"
+    "@anthropic-ai/claude-agent-sdk": "^0.2.114"
   }
 }

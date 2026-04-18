@@ -16,6 +16,7 @@ import type { CCBackendConfig } from "../../config";
 import { CC_PREFIX, getCCModelList } from "../../routing";
 import { errMessage } from "../../util";
 import { createChildLogger, log } from "../../utils/log";
+import { setModelCapabilities } from "./model-capabilities";
 
 const logger = createChildLogger(log, "cc-models");
 
@@ -92,6 +93,12 @@ export const discoverCCModelsViaSdk = async (
   }
 
   if (models.length === 0) return getCCModelList(cc);
+
+  // Preserve capability flags (supportsAdaptiveThinking, etc.) in the
+  // module-level cache before we transform to the narrower ACP ModelInfo
+  // shape. buildSdkOptions reads this cache per-request to pick the right
+  // thinking config.
+  setModelCapabilities(models);
 
   logger.info(`discovered ${models.length} CC models from SDK subprocess`);
   return models.map((m) => ({

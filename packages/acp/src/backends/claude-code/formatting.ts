@@ -14,6 +14,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { CCBackendConfig } from "../../config";
 import { buildMcpServers } from "./mcp-config";
+import { supportsAdaptiveThinking } from "./model-capabilities";
 
 /**
  * Format assembled context messages (summaries, memories, prior turns)
@@ -83,7 +84,7 @@ export const buildSdkOptions = (
     | "clientMcpServers"
     | "bootServer"
   >,
-): Options => {
+) => {
   // System prompt arrives with session context already embedded (injected by
   // prompt-cc.ts). Boot instruction appended after it.
   const fullSystemPrompt = `${options.systemPrompt}\n\n${BOOT_INSTRUCTION}`;
@@ -106,6 +107,19 @@ export const buildSdkOptions = (
     continue: true,
     settingSources: [],
     includePartialMessages: true,
+    // Thinking mode shaped per-model from the capability cache populated at
+    // startup by discoverCCModelsViaSdk. Undefined (unknown/discovery-failed)
+    // defaults to adaptive — the forward-looking pick for the current
+    // Anthropic catalogue, where adaptive-capable models dominate. Known
+    // legacy models fall back to enabled mode with an explicit budget.
+    thinking:
+      supportsAdaptiveThinking(options.model) === false
+        ? {
+            type: "enabled",
+            display: "summarized",
+            budgetTokens: 31999,
+          }
+        : { type: "adaptive", display: "summarized" },
     env: { ...process.env, ENABLE_TOOL_SEARCH: "false" },
   };
 
