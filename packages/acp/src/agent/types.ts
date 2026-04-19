@@ -6,6 +6,7 @@ import type * as acp from "@agentclientprotocol/sdk";
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import type { Detector } from "../backends/claude-code/rule-hooks";
 import type { VoiceAnchorState } from "../backends/claude-code/voice-anchors";
+import type { ClientMcpManager } from "../client-mcp/manager";
 import type { ResolvedProject } from "../project/resolver";
 import type { ChatMessage } from "../server-client";
 
@@ -46,18 +47,30 @@ export type SessionState = {
   projectRules: string | null;
   /**
    * Rule-detect sidecars loaded from `.claude/rules/**\/*.detect.ts` at
-   * session start. Wired into the CC backend's PreToolUse hook so the
-   * agent gets advisory nudges on known anti-patterns before an edit lands.
-   * Empty array when the project ships no sidecars.
+   * session start. Advisory nudges are injected when violations are
+   * detected — in the CC backend via PreToolUse hooks, in the server
+   * backend by appending findings to the tool result. Empty array when
+   * the project ships no sidecars.
    */
   ruleDetectors: readonly Detector[];
   /** MCP servers provided by the ACP client (e.g. Zed's ACP tools server). */
   clientMcpServers?: readonly acp.McpServer[];
   /**
-   * Whether the ACP client supports terminal output via _meta.terminal_*.
-   * Set from clientCapabilities._meta.terminal_output during initialize.
+   * Live MCP client connections for `clientMcpServers` entries — used by
+   * the server backend path to expose those tools to mimir-server and
+   * dispatch calls back through them. The CC backend ignores this; it
+   * hands `clientMcpServers` directly to the Claude Agent SDK, which opens
+   * its own connections. Null only for pre-existing sessions restored
+   * before this field was introduced.
    */
-  supportsTerminalOutput: boolean;
+  clientMcp: ClientMcpManager | null;
+  /**
+   * Capabilities advertised by the client during initialize.
+   * Determines which client tools (fs_read_text_file, fs_write_text_file,
+   * create_terminal) are offered to the model, and whether terminal output
+   * is supported via _meta.terminal_*.
+   */
+  clientCapabilities: acp.ClientCapabilities;
   /**
    * Voice anchor rotation state for the CC backend. Counters tick once per
    * developer-initiated ACP prompt, never per SDK tool-result turn. Unused
@@ -70,7 +83,7 @@ export type AgentCore = {
   newSession: (
     projectPath: string,
     clientMcpServers?: readonly acp.McpServer[],
-    supportsTerminalOutput?: boolean,
+    clientCapabilities?: acp.ClientCapabilities,
   ) => SessionState;
   /**
    * Restore a previously persisted session into the in-memory map.
@@ -79,7 +92,7 @@ export type AgentCore = {
   restoreSession: (
     sessionId: string,
     clientMcpServers?: readonly acp.McpServer[],
-    supportsTerminalOutput?: boolean,
+    clientCapabilities?: acp.ClientCapabilities,
   ) => SessionState | null;
   getSession: (sessionId: string) => SessionState | undefined;
   listSessions: () => import("../store/sessions").PersistedSession[];

@@ -14,9 +14,7 @@ import {
   appendModelMessage,
   finishCompaction,
   getCompactionState,
-  getLastModelMessage,
   getModelMessagesSince,
-  getRecentModelMessages,
   startCompaction,
   updateTokenCount,
 } from "./index";
@@ -201,96 +199,6 @@ describe("message-log", () => {
   });
 
   // -----------------------------------------------------------------------
-  // getRecentModelMessages
-  // -----------------------------------------------------------------------
-
-  describe("getRecentModelMessages", () => {
-    test("returns messages reversed to chronological order", async () => {
-      // DB returns DESC (newest first) — function reverses to oldest first
-      queryOneMock.mockResolvedValueOnce([
-        {
-          id: "m3",
-          project: "p",
-          role: "assistant",
-          content: '"third"',
-          created_at: "2024-01-03",
-        },
-        {
-          id: "m2",
-          project: "p",
-          role: "user",
-          content: '"second"',
-          created_at: "2024-01-02",
-        },
-        {
-          id: "m1",
-          project: "p",
-          role: "user",
-          content: '"first"',
-          created_at: "2024-01-01",
-        },
-      ]);
-
-      const result = await getRecentModelMessages(10);
-
-      expect(result).toHaveLength(3);
-      // After reversal: first → m1, second → m2, third → m3
-      expect(result[0]!.role).toBe("user");
-      expect((result[0]! as ModelMessage & { content: string }).content).toBe("first");
-      expect(result[2]!.role).toBe("assistant");
-      expect((result[2]! as ModelMessage & { content: string }).content).toBe("third");
-    });
-
-    test("returns empty array on error", async () => {
-      queryOneMock.mockRejectedValueOnce(new Error("DB error"));
-
-      const result = await getRecentModelMessages(10);
-
-      expect(result).toEqual([]);
-    });
-
-    test("returns empty array when no messages exist", async () => {
-      queryOneMock.mockResolvedValueOnce([]);
-
-      const result = await getRecentModelMessages(10);
-
-      expect(result).toEqual([]);
-    });
-
-    test("parses tool messages with content arrays", async () => {
-      queryOneMock.mockResolvedValueOnce([
-        {
-          id: "m1",
-          project: "p",
-          role: "tool",
-          content: JSON.stringify([
-            {
-              type: "tool-result",
-              toolCallId: "call_42",
-              toolName: "bash",
-              output: { type: "text", value: "result data" },
-            },
-          ]),
-          created_at: "2024-01-01",
-        },
-      ]);
-
-      const result = await getRecentModelMessages(5);
-
-      expect(result[0]!.role).toBe("tool");
-      const content = (result[0]! as ModelMessage & { content: unknown[] }).content;
-      expect(content).toEqual([
-        {
-          type: "tool-result",
-          toolCallId: "call_42",
-          toolName: "bash",
-          output: { type: "text", value: "result data" },
-        },
-      ]);
-    });
-  });
-
-  // -----------------------------------------------------------------------
   // getModelMessagesSince
   // -----------------------------------------------------------------------
 
@@ -338,35 +246,6 @@ describe("message-log", () => {
         { since: string },
       ];
       expect(params.since).toBe("2024-06-15T12:30:00.000Z");
-    });
-  });
-
-  // -----------------------------------------------------------------------
-  // getLastModelMessage
-  // -----------------------------------------------------------------------
-
-  describe("getLastModelMessage", () => {
-    test("returns the most recent message", async () => {
-      queryFirstMock.mockResolvedValueOnce({
-        id: "m1",
-        project: "p",
-        role: "user",
-        content: '"latest"',
-        created_at: "2024-01-03",
-      });
-
-      const msg = await getLastModelMessage();
-
-      expect(msg?.role).toBe("user");
-      expect((msg as ModelMessage & { content: string })?.content).toBe("latest");
-    });
-
-    test("returns null when log is empty", async () => {
-      queryFirstMock.mockResolvedValueOnce(null);
-
-      const msg = await getLastModelMessage();
-
-      expect(msg).toBeNull();
     });
   });
 

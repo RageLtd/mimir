@@ -13,10 +13,7 @@
 
 import { Hono } from "hono";
 import { runCompaction } from "../agent-loop/compaction";
-import {
-  getModelMessagesSince,
-  getRecentModelMessages,
-} from "../agent-loop/message-log";
+import { getLastNModelMessages } from "../agent-loop/message-log";
 import { updateTokenCount } from "../agent-loop/message-log/compaction-state";
 import { modelContentToString } from "../agent-loop/message-log/message-utils";
 import { config } from "../config";
@@ -195,21 +192,11 @@ context.post("/assemble", async (c) => {
     const today = new Date().toISOString().split("T")[0] ?? "";
     const systemPrompt = rawPrompt.replace("{{DATE}}", today);
 
-    // Mirror context-assembly middleware: messages since last summary,
-    // or full history when no summaries exist yet.
-    let recentMessages: Awaited<ReturnType<typeof getRecentModelMessages>>;
-    if (summaries.length > 0 && summaries[0]?.created_at) {
-      recentMessages = await getModelMessagesSince(
-        new Date(summaries[0].created_at),
-      );
-      if (recentMessages.length > config.context.keepRecentMessages) {
-        recentMessages = recentMessages.slice(
-          -config.context.keepRecentMessages,
-        );
-      }
-    } else {
-      recentMessages = await getRecentModelMessages();
-    }
+    // Mirror context-assembly middleware: last N raw messages, always.
+    // Summaries are additive — they never replace raw recent history.
+    const recentMessages = await getLastNModelMessages(
+      config.context.keepRecentMessages,
+    );
 
     // Build context injection pair
     const contextParts: string[] = [];

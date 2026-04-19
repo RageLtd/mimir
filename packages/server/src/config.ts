@@ -99,41 +99,7 @@ export const config = {
     ),
     /** Keep this many recent conversation turns after compaction */
     keepRecentMessages: parseInt(Bun.env.CONTEXT_KEEP_RECENT ?? "50", 10),
-    /** Keep this many recent tool results; older ones are pruned before sending to LLM */
-    keepRecentToolResults: parseInt(
-      Bun.env.CONTEXT_KEEP_RECENT_TOOL_RESULTS ?? "20",
-      10,
-    ),
   },
-
-  /** Hooks — behavioral enforcement */
-  hooks: {
-    /** Enable the audit logger (default: true) */
-    auditLog: Bun.env.HOOKS_AUDIT_LOG !== "false",
-    /** Enable the destructive action guard (default: true) */
-    destructiveGuard: Bun.env.HOOKS_DESTRUCTIVE_GUARD !== "false",
-    /** Enable the tool hierarchy enforcer (default: true) */
-    hierarchyEnforcer: Bun.env.HOOKS_HIERARCHY_ENFORCER !== "false",
-    /** Enable background task auto-detection (default: true) */
-    backgroundTaskManager: Bun.env.HOOKS_BACKGROUND_TASKS !== "false",
-    /** Enable Cartographer post-edit trigger (default: true) */
-    cartographerTrigger: Bun.env.HOOKS_CARTOGRAPHER_TRIGGER !== "false",
-    /** Enable flailing detection (default: true) */
-    flailingDetection: Bun.env.HOOKS_FLAILING_DETECTION !== "false",
-  },
-
-  /** Flailing detection — intervene when model is stuck in loops */
-  flailing: {
-    /** Score threshold to trigger a nudge (0.0 - 1.0) */
-    nudgeThreshold: parseFloat(Bun.env.FLAILING_NUDGE_THRESHOLD ?? "0.6"),
-    /** Max nudges before stronger denial message */
-    maxNudges: parseInt(Bun.env.FLAILING_MAX_NUDGES ?? "4", 10),
-    /** Rolling window size for tool call history */
-    windowSize: parseInt(Bun.env.FLAILING_WINDOW_SIZE ?? "20", 10),
-  },
-
-  /** Conversation TTL in days (prune older conversations on startup) */
-  conversationTtlDays: parseInt(Bun.env.CONVERSATION_TTL_DAYS ?? "30", 10),
 
   /** System prompt — loaded from markdown file */
   systemPromptPath: Bun.env.SYSTEM_PROMPT_PATH ?? "./system-prompt.md",

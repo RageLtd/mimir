@@ -71,9 +71,9 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
   // Mutable state held in the factory closure and exposed to handlers via
   // getter/setter pairs. One connection = one Zed window, so this state is
   // per-connection; handlers never see cross-connection leakage.
-  let supportsTerminalOutput = false;
   let discoveredCCModels: readonly acp.ModelInfo[] = [];
   let discoveredCopilotModels: readonly acp.ModelInfo[] = [];
+  let clientCapabilities: acp.ClientCapabilities = {};
 
   const deps: HandlerDeps = {
     core,
@@ -82,9 +82,9 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
     router,
     memoryStore,
     cartographer,
-    getSupportsTerminalOutput: () => supportsTerminalOutput,
-    setSupportsTerminalOutput: (v) => {
-      supportsTerminalOutput = v;
+    getClientCapabilities: () => clientCapabilities,
+    setClientCapabilities: (caps) => {
+      clientCapabilities = caps;
     },
     getDiscoveredCCModels: () => discoveredCCModels,
     setDiscoveredCCModels: (ms) => {

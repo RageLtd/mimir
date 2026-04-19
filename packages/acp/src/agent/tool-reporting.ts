@@ -181,17 +181,3 @@ export const buildToolCallContent = (
 
   return undefined;
 };
-
-// ── Client tool classification ──
-
-const CLIENT_FS_TOOLS = new Set([
-  "fs_read_text_file",
-  "fs_write_text_file",
-  "read_text_file",
-  "write_text_file",
-]);
-
-const CLIENT_TERMINAL_TOOLS = new Set(["create_terminal", "terminal"]);
-
-export const isClientTool = (name: string) =>
-  CLIENT_FS_TOOLS.has(name) || CLIENT_TERMINAL_TOOLS.has(name);

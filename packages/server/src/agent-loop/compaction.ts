@@ -215,10 +215,26 @@ If the previous summary contains an error or something that has since changed, n
 Output a clear, dense summary in 1-3 paragraphs covering ONLY the delta. Do not include pleasantries or meta-commentary.`;
 
 function resolveSummarizationModel(modelId?: string) {
-  // Try the request model against the provider registry
+  // Prefer the small model for summarization — it's cheaper, faster,
+  // and perfectly adequate for utility tasks. Fall back to the request
+  // model only when no small model is configured.
+  const smallModel = getSmallModelConfig();
+  if (smallModel) {
+    return {
+      baseUrl: smallModel.baseUrl,
+      apiKey: smallModel.apiKey || undefined,
+      model: smallModel.model,
+    };
+  }
+
+  // No small model configured — try the request model as a last resort
   if (modelId) {
     const providerCfg = getProviderConfigForModel(modelId);
     if (providerCfg) {
+      log.info(
+        { modelId },
+        "no small model configured, using request model for summarization",
+      );
       return {
         baseUrl: providerCfg.baseUrl,
         apiKey: providerCfg.apiKey,
@@ -227,29 +243,13 @@ function resolveSummarizationModel(modelId?: string) {
           : modelId,
       };
     }
-    // Model is client-side (e.g. claude-code/opus, copilot/gpt-4o) —
-    // fall through to small model below
-    log.info(
-      { modelId },
-      "request model not in registry, falling back to small model",
-    );
   }
 
-  // Fall back to the small model — always appropriate for utility tasks
-  const smallModel = getSmallModelConfig();
-  if (!smallModel) {
-    log.warn(
-      { modelId },
-      "no provider config and no small model configured, skipping summarization",
-    );
-    return null;
-  }
-
-  return {
-    baseUrl: smallModel.baseUrl,
-    apiKey: smallModel.apiKey || undefined,
-    model: smallModel.model,
-  };
+  log.warn(
+    { modelId },
+    "no provider config and no small model configured, skipping summarization",
+  );
+  return null;
 }
 
 async function summarizeConversation(

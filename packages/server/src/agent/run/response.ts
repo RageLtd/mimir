@@ -7,11 +7,13 @@
 import type { LanguageModelV3Message } from "@ai-sdk/provider";
 import {
   extractMemoriesFromResponse,
+  persistAssistantTurn,
   triggerCompactionIfNeeded,
 } from "../../agent-loop/post-processing";
 import { SERVER_TOOL_NAMES } from "../../agent-loop/server-tools";
 import type { MimirContext } from "../../middleware/types";
 import { log } from "../../util/logger";
+import { enqueueLlmCall } from "../queue";
 import {
   agentLoop,
   appendServerStepToPrompt,
@@ -49,7 +51,13 @@ export function streamingResponse(
 
   const readable = new ReadableStream({
     start(controller) {
-      agentLoop(model, baseOptions, ctx, controller, emitSSE)
+      // Serialize through the LLM-call queue — one brain, one voice at a
+      // time. Concurrent requests wait their turn, keeping the log
+      // coherent (an assistant reply never lands next to a user message
+      // it wasn't responding to).
+      enqueueLlmCall(() =>
+        agentLoop(model, baseOptions, ctx, controller, emitSSE),
+      )
         .catch((err) => {
           log.error({ err }, "agent loop error");
           const msg = err instanceof Error ? err.message : "Agent loop error";
@@ -76,6 +84,18 @@ export function streamingResponse(
 // ---------------------------------------------------------------------------
 
 export async function nonStreamingResponse(
+  model: Model,
+  baseOptions: ReturnType<typeof buildCallOptions>,
+  ctx: MimirContext,
+) {
+  // Serialize non-streaming calls through the same queue as streaming —
+  // one brain, one in-flight inference at a time.
+  return enqueueLlmCall(() =>
+    nonStreamingResponseImpl(model, baseOptions, ctx),
+  );
+}
+
+async function nonStreamingResponseImpl(
   model: Model,
   baseOptions: ReturnType<typeof buildCallOptions>,
   ctx: MimirContext,
@@ -155,6 +175,11 @@ export async function nonStreamingResponse(
     await executeServerTools(prompt, serverCalls, ctx);
     lastToolCalls = [];
   }
+
+  // Persist the final assistant turn — server owns its own writes.
+  persistAssistantTurn(lastText, lastToolCalls, ctx.project).catch((err) =>
+    log.error({ err }, "persistAssistantTurn failed (non-streaming)"),
+  );
 
   // Post-processing
   triggerCompactionIfNeeded(

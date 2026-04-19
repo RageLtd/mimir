@@ -1,29 +1,37 @@
 /**
- * Phase 6: Single Brain Architecture
+ * Global append-only message log — the single-brain conversation store.
  *
- * Global append-only message log. One continuous log for all projects,
- * with project as metadata for context scoping.
+ * There is one continuous conversation across all clients, all projects,
+ * all time. The DB is the source of truth. Clients are UI shells over the
+ * same brain.
  *
- * Key design:
- * - Array-based record ID: message_log:[project, timestamp]
- * - Efficient time-range queries for context assembly
- * - Token-based compaction triggers
- * - Async summarization (no request latency impact)
+ * Write side:
+ *   - `appendTrailingTurn`  — server backend path. Extracts the trailing
+ *                             user/tool block from a client's request and
+ *                             appends it (with retry idempotency).
+ *   - `appendAssistantOutput` — server owns its own writes. Called at the
+ *                               end of an LLM turn in the server backend.
+ *   - `appendTurn`          — CC persist endpoint. CC tracks its delta
+ *                             client-side; server just appends with retry
+ *                             idempotency.
  *
- * Global scope:
- * - Message log queries are global (no project filter)
- * - Memory search is global (cross-project knowledge transfer)
- * - Compaction state is singular (one global log to compact)
- * - Project field is metadata for display, not a filter
+ * Read side:
+ *   - `getLastNModelMessages(N)` is the canonical read for context
+ *     assembly. Summaries sit alongside — never in place of — raw
+ *     messages in the prompt.
  *
- * TODO: TTL cleanup for old messages. The message_log table grows unbounded.
- * A scheduled job should delete messages older than the earliest summary's
- * last_message_id. Deferred until heartbeat/maintenance task infrastructure
- * is in place.
+ * Implementation notes:
+ *   - Array-based record ID: `message_log:[project, timestamp_ns]`
+ *   - `project` is metadata for display; reads are unscoped (global)
+ *   - Token-based compaction triggers are handled in compaction-state.ts
+ *
+ * TODO: TTL cleanup for old messages. The log grows unbounded today;
+ * a maintenance job can prune entries older than the oldest active
+ * summary once the log reaches tens of thousands of entries.
  */
 
 import type { ModelMessage } from "@ai-sdk/provider-utils";
-import { getDb, queryFirst, queryOne } from "../../db/surreal";
+import { getDb, queryOne } from "../../db/surreal";
 import { log } from "../../util/logger";
 import { attempt } from "../../util/result";
 import {
@@ -102,141 +110,180 @@ function fingerprint(msg: ModelMessage) {
 }
 
 /**
- * Append only truly new messages from the client.
+ * Extract the trailing `user` / `tool` block from a client's request.
  *
- * The client sends the full conversation history every time. We find where
- * new messages begin by matching the last few persisted messages (as a
- * sequence) against the client array.
+ * Under the single-brain model, the client contributes only its trailing new
+ * input each turn — either a user message or one-or-more tool-result messages
+ * following a server-emitted assistant tool_call. Everything earlier in the
+ * client's `messages` array is informational context the server already
+ * knows about (or can ignore — the DB is source of truth).
  *
- * Sequence matching (not single-message) prevents false anchors from
- * duplicate content (e.g. reading the same file twice). A sequence of 3
- * consecutive fingerprints is astronomically unlikely to repeat.
- *
- * This approach works across clients (each client only sends its own
- * history, DB may have messages from other clients) and doesn't break
- * when server tool steps are present in the DB.
+ * Walks from the end, collecting consecutive `user` or `tool` messages.
+ * Stops as soon as an assistant message appears (those are server outputs,
+ * already persisted when they streamed).
  */
-export async function appendNewMessages(
-  clientMessages: ModelMessage[],
+export function extractTrailingTurn(clientMessages: readonly ModelMessage[]) {
+  const trailing: ModelMessage[] = [];
+  for (let i = clientMessages.length - 1; i >= 0; i--) {
+    const msg = clientMessages[i];
+    if (!msg) break;
+    if (msg.role === "user" || msg.role === "tool") {
+      trailing.unshift(msg);
+    } else {
+      break;
+    }
+  }
+  return trailing;
+}
+
+/**
+ * Append a client's trailing turn to the global log.
+ *
+ * Server-owned single-brain write path:
+ *   - Walks the client's request from the end, collecting the trailing
+ *     contiguous user/tool block (see `extractTrailingTurn`).
+ *   - Idempotency: if the DB's tail already matches the trailing block by
+ *     role+content hash, the request is a retry — skip the append.
+ *   - Otherwise append each message in order using `appendModelMessage`.
+ *
+ * Returns the ids of appended messages (empty array for no-op / retry).
+ *
+ * This REPLACES `appendNewMessages` for the `/v1/chat/completions` path.
+ * The CC-backend persist endpoint still uses `appendNewMessages` because it
+ * ships whole conversations including assistant outputs the server never
+ * saw.
+ */
+export async function appendTrailingTurn(
+  clientMessages: readonly ModelMessage[],
   project: string,
 ) {
-  if (clientMessages.length === 0) {
-    return [];
-  }
-
-  // Get the last few messages from the DB for sequence matching.
-  // We use 3 messages as a sequence anchor — enough to avoid false
-  // matches from duplicate content, cheap enough to query.
-  const ANCHOR_SIZE = 3;
-  const dbRecent = await getLastModelMessages(ANCHOR_SIZE);
-
-  let startIndex = 0;
-
-  if (dbRecent.length > 0) {
-    // Build fingerprints for the DB anchor sequence
-    const dbFingerprints = dbRecent.map(fingerprint);
-
-    // Scan the client array backwards looking for the anchor sequence.
-    // We're looking for the LAST occurrence to handle any duplicates.
-    const clientFingerprints = clientMessages.map(fingerprint);
-
-    for (
-      let i = clientFingerprints.length - dbFingerprints.length;
-      i >= 0;
-      i--
-    ) {
-      const slice = clientFingerprints.slice(i, i + dbFingerprints.length);
-      if (slice.every((fp, idx) => fp === dbFingerprints[idx])) {
-        startIndex = i + dbFingerprints.length;
-        break;
-      }
-    }
-
-    // If no sequence match found, try matching just the last DB message
-    // (handles cases where DB has fewer messages than ANCHOR_SIZE)
-    if (startIndex === 0 && dbFingerprints.length > 0) {
-      const lastFp = dbFingerprints[dbFingerprints.length - 1];
-      for (let i = clientFingerprints.length - 1; i >= 0; i--) {
-        if (clientFingerprints[i] === lastFp) {
-          startIndex = i + 1;
-          break;
-        }
-      }
-    }
-  }
-
-  const newMessages = clientMessages.slice(startIndex);
-
-  if (newMessages.length === 0) {
+  const trailing = extractTrailingTurn(clientMessages);
+  if (trailing.length === 0) {
     log.debug(
-      { clientCount: clientMessages.length, dbCount: dbRecent.length },
-      "appendNewMessages: no new messages",
+      { clientCount: clientMessages.length },
+      "appendTrailingTurn: no trailing user/tool block",
     );
     return [];
   }
 
-  log.debug(
-    {
-      clientCount: clientMessages.length,
-      startIndex,
-      appending: newMessages.length,
-      roles: newMessages.map((m) => m.role),
-    },
-    "appendNewMessages: appending new messages",
-  );
+  // Idempotency: check if the DB tail already matches the trailing block.
+  // Fetch the last N messages (same length as the trailing block) and
+  // compare fingerprints in order. If identical, skip — this is a retry.
+  const dbTail = await getLastModelMessages(trailing.length);
+  if (dbTail.length === trailing.length) {
+    const dbFps = dbTail.map(fingerprint);
+    const trailingFps = trailing.map(fingerprint);
+    const allMatch = dbFps.every((fp, idx) => fp === trailingFps[idx]);
+    if (allMatch) {
+      log.debug(
+        { count: trailing.length },
+        "appendTrailingTurn: trailing block matches DB tail, skipping (retry)",
+      );
+      return [];
+    }
+  }
 
-  const appendedIds = [];
-  for (const message of newMessages) {
+  const appendedIds: (string | null)[] = [];
+  for (const message of trailing) {
     const id = await appendModelMessage(message, project);
     appendedIds.push(id ?? null);
   }
 
   log.info(
-    { appended: appendedIds.length, project },
-    "appendNewMessages complete",
+    {
+      project,
+      appended: appendedIds.length,
+      roles: trailing.map((m) => m.role),
+    },
+    "appendTrailingTurn complete",
   );
   return appendedIds;
 }
 
 /**
- * Get recent messages from the global log, ordered by timestamp.
- * Used for context assembly when no summaries exist yet.
+ * Append a single assistant output to the global log.
+ *
+ * Called at the end of an LLM turn in the server backend path — the server
+ * owns its own writes. Persists the assistant text plus any tool_call parts
+ * as one `role: "assistant"` entry. On cancel / error mid-stream, callers
+ * should NOT invoke this; the user's input remains in the log unanswered
+ * and the next request will append cleanly after it.
  */
-export async function getRecentModelMessages(
-  limit?: number,
-): Promise<ModelMessage[]> {
-  const start = Date.now();
+export async function appendAssistantOutput(
+  message: ModelMessage,
+  project: string,
+) {
+  if (message.role !== "assistant") {
+    log.warn(
+      { role: message.role },
+      "appendAssistantOutput called with non-assistant message",
+    );
+    return null;
+  }
+  const id = await appendModelMessage(message, project);
+  log.info({ project, id }, "appendAssistantOutput: assistant turn persisted");
+  return id;
+}
 
-  const query = limit
-    ? `SELECT * FROM message_log ORDER BY created_at DESC LIMIT $limit`
-    : `SELECT * FROM message_log ORDER BY created_at DESC`;
+/**
+ * Append a known turn delta to the global log.
+ *
+ * Used by the CC persist endpoint (`/v1/messages/persist`): the CC backend
+ * runs inference locally via the Claude Agent SDK, tracks its own message
+ * history, and ships the last-N of that history per turn. The delta is
+ * already chosen client-side — the server just appends it.
+ *
+ * Retry idempotency: if the DB's tail already matches the incoming delta
+ * by role+content hash, skip the append. Handles duplicate POSTs and CC
+ * reconnect-replay scenarios.
+ *
+ * Unlike `appendTrailingTurn`, this helper does NOT filter by role —
+ * assistant messages from CC's own inference are a legitimate part of the
+ * delta and must be persisted (mimir-server never saw them emitted).
+ */
+export async function appendTurn(
+  messages: readonly ModelMessage[],
+  project: string,
+) {
+  if (messages.length === 0) return [];
 
-  const [err, entries] = await attempt(() =>
-    queryOne<MessageRow>(query, limit ? { limit } : undefined),
-  );
-
-  if (err) {
-    log.error({ err, limit }, "failed to get recent messages");
-    return [];
+  // Retry idempotency — compare the incoming delta against the DB tail.
+  const dbTail = await getLastModelMessages(messages.length);
+  if (dbTail.length === messages.length) {
+    const dbFps = dbTail.map(fingerprint);
+    const msgFps = messages.map(fingerprint);
+    const allMatch = dbFps.every((fp, idx) => fp === msgFps[idx]);
+    if (allMatch) {
+      log.debug(
+        { count: messages.length, project },
+        "appendTurn: delta matches DB tail, skipping (retry)",
+      );
+      return [];
+    }
   }
 
-  // Reverse to get chronological order (oldest first)
-  const messages = entries.reverse().map(rowToModelMessage);
+  const appendedIds: (string | null)[] = [];
+  for (const message of messages) {
+    const id = await appendModelMessage(message, project);
+    appendedIds.push(id ?? null);
+  }
 
-  log.debug(
+  log.info(
     {
-      count: messages.length,
-      elapsed: `${Date.now() - start}ms`,
+      appended: appendedIds.length,
+      project,
+      roles: messages.map((m) => m.role),
     },
-    "retrieved recent messages",
+    "appendTurn complete",
   );
-
-  return messages;
+  return appendedIds;
 }
 
 /**
  * Get messages since a specific timestamp from the global log.
- * Used for context assembly after the last summary.
+ * Used by the async compaction path to gather the tail since the last
+ * summary for summarization. Not used on the read path — context
+ * assembly uses `getLastNModelMessages`.
  */
 export async function getModelMessagesSince(
   since: Date,
@@ -275,14 +322,15 @@ export async function getModelMessagesSince(
 }
 
 /**
- * Get the last message from the global log.
- * Used to determine the starting point for new messages.
+ * Get the last N messages from the global log, in chronological order.
+ *
+ * This is the canonical read for context assembly under the single-brain
+ * model: always return the last N raw messages regardless of summary
+ * state. Summaries sit alongside these messages in the prompt, never in
+ * place of them.
  */
-export async function getLastModelMessage(): Promise<ModelMessage | null> {
-  const entry = await queryFirst<MessageRow>(
-    `SELECT * FROM message_log ORDER BY created_at DESC LIMIT 1`,
-  );
-  return entry ? rowToModelMessage(entry) : null;
+export async function getLastNModelMessages(count: number) {
+  return getLastModelMessages(count);
 }
 
 /**

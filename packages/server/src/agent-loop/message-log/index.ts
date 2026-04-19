@@ -19,9 +19,11 @@ export {
   rowToModelMessage,
 } from "./message-utils";
 export {
+  appendAssistantOutput,
   appendModelMessage,
-  appendNewMessages,
-  getLastModelMessage,
+  appendTrailingTurn,
+  appendTurn,
+  extractTrailingTurn,
+  getLastNModelMessages,
   getModelMessagesSince,
-  getRecentModelMessages,
 } from "./persistence";

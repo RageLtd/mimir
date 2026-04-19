@@ -10,8 +10,8 @@
 import type * as acp from "@agentclientprotocol/sdk";
 import { isValidCCMode } from "../backends/claude-code/config-options";
 import type { UserMemoryStore } from "../store/user-memories";
-import type { AgentCore, SessionState } from "./types";
 import type { ParsedCommand } from "./session";
+import type { AgentCore, SessionState } from "./types";
 
 export type CommandDeps = {
   readonly core: AgentCore;
@@ -56,15 +56,12 @@ const runModel = async (
   return END_TURN;
 };
 
-const listActiveModes = (
-  deps: CommandDeps,
-  sessionId: string,
-): string => {
+const listActiveModes = (deps: CommandDeps, sessionId: string): string => {
   const session = deps.core.getSession(sessionId);
   if (!session) return "(session not found)";
-  const opt = deps.buildSessionConfigOptions(session).find(
-    (o) => o.id === "mode",
-  );
+  const opt = deps
+    .buildSessionConfigOptions(session)
+    .find((o) => o.id === "mode");
   if (!opt || opt.type !== "select") {
     return "(none — backend has no mode catalogue)";
   }

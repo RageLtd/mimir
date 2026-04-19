@@ -75,7 +75,7 @@ const rowToProject = (row: ProjectRow) => ({
 });
 
 const deriveTitle = (input: ResolveInput) => {
-  if (input.title && input.title.trim()) return input.title.trim();
+  if (input.title?.trim()) return input.title.trim();
   if (input.gitRemote) {
     // Extract "owner/repo" or "repo" from common remote URL shapes.
     const match = input.gitRemote.match(/([^/:]+\/[^/]+?)(?:\.git)?$/);
@@ -188,7 +188,8 @@ export async function updateProject(id: string, patch: UpdateInput) {
   const fields: Record<string, unknown> = { updated_at: new Date() };
   if (patch.title !== undefined) fields.title = patch.title;
   if (patch.description !== undefined) fields.description = patch.description;
-  if (patch.technologies !== undefined) fields.technologies = patch.technologies;
+  if (patch.technologies !== undefined)
+    fields.technologies = patch.technologies;
   if (patch.purpose !== undefined) fields.purpose = patch.purpose;
 
   const row = await queryFirst<ProjectRow>(

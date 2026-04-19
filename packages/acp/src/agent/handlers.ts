@@ -44,8 +44,8 @@ export type HandlerDeps = ModelResolutionDeps & {
   readonly router: BackendRouter;
   readonly memoryStore: UserMemoryStore;
   readonly cartographer: CartographerManager | null;
-  readonly getSupportsTerminalOutput: () => boolean;
-  readonly setSupportsTerminalOutput: (v: boolean) => void;
+  readonly getClientCapabilities: () => acp.ClientCapabilities;
+  readonly setClientCapabilities: (caps: acp.ClientCapabilities) => void;
   readonly setDiscoveredCCModels: (ms: readonly acp.ModelInfo[]) => void;
   readonly setDiscoveredCopilotModels: (ms: readonly acp.ModelInfo[]) => void;
   /** Tracks which sessions have already received available_commands_update,
@@ -61,10 +61,8 @@ export const initialize = async (
   params: acp.InitializeRequest,
 ): Promise<acp.InitializeResponse> => {
   const { config, router } = deps;
-  deps.setSupportsTerminalOutput(
-    params.clientCapabilities?._meta?.terminal_output === true,
-  );
-  logger.info("terminal output supported:", deps.getSupportsTerminalOutput());
+  deps.setClientCapabilities(params.clientCapabilities ?? {});
+  logger.info("client capabilities:", params.clientCapabilities);
 
   if (config.cc.enabled) {
     checkForSdkUpdate().catch((err) =>
@@ -158,7 +156,7 @@ export const newSession = async (
   const session = deps.core.newSession(
     projectPath,
     params.mcpServers,
-    deps.getSupportsTerminalOutput(),
+    deps.getClientCapabilities(),
   );
   logger.info("new session:", session.sessionId, "cwd:", projectPath);
 
@@ -237,7 +235,7 @@ export const loadSession = async (
   const session = deps.core.restoreSession(
     params.sessionId,
     params.mcpServers,
-    deps.getSupportsTerminalOutput(),
+    deps.getClientCapabilities(),
   );
   if (!session) {
     logger.warn("loadSession: unknown session", params.sessionId);

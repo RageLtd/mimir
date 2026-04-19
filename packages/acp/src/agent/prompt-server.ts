@@ -20,12 +20,15 @@ import {
 } from "../tools/user-memory";
 import { errMessage } from "../util";
 import { createChildLogger, log } from "../utils/log";
-import { executeClientTool } from "./client-tools";
+import {
+  clientToolDefs,
+  clientToolNames,
+  executeClientTool,
+} from "./client-tools";
 import { buildMetadata } from "./content";
 import {
   buildToolCallContent,
   extractLocations,
-  isClientTool,
   toolKindFor,
   toolTitle,
 } from "./tool-reporting";
@@ -47,11 +50,19 @@ export const promptViaServer = async (
 ): Promise<acp.PromptResponse> => {
   session.messages.push({ role: "user", content: promptText });
 
-  const serverTools = await getTools(
-    { baseUrl: appConfig.serverUrl, apiKey: appConfig.apiKey },
-    abortController.signal,
-  );
-  const allTools: ToolDefinition[] = [...serverTools, ...userMemoryToolDefs];
+  const [serverTools, clientMcpTools] = await Promise.all([
+    getTools(
+      { baseUrl: appConfig.serverUrl, apiKey: appConfig.apiKey },
+      abortController.signal,
+    ),
+    session.clientMcp?.getToolDefs() ?? Promise.resolve([] as ToolDefinition[]),
+  ]);
+  const allTools: ToolDefinition[] = [
+    ...serverTools,
+    ...userMemoryToolDefs,
+    ...clientToolDefs,
+    ...clientMcpTools,
+  ];
   const metadata = buildMetadata(session.projectPath, session.projectId);
 
   let turnCount = 0;
@@ -163,13 +174,21 @@ export const promptViaServer = async (
           logger.error("Cartographer tool error:", msg);
           resultContent = `Error executing ${tc.name}: ${msg}`;
         }
-      } else if (isClientTool(tc.name)) {
+      } else if (clientToolNames.has(tc.name)) {
         resultContent = await executeClientTool(
           tc.name,
           tc.input,
           session.sessionId,
           conn,
         );
+      } else if (session.clientMcp?.owns(tc.name)) {
+        resultContent = await session.clientMcp
+          .callTool(tc.name, tc.input)
+          .catch((err) => {
+            const msg = errMessage(err);
+            logger.error("Client MCP tool error:", msg);
+            return `Error executing ${tc.name}: ${msg}`;
+          });
       } else {
         logger.warn("Unknown tool call:", tc.name);
         resultContent = `Tool ${tc.name} is not available in this adapter.`;

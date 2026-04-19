@@ -11,11 +11,7 @@
  */
 
 import { Hono } from "hono";
-import {
-  getProject,
-  resolveProject,
-  updateProject,
-} from "../projects/store";
+import { getProject, resolveProject, updateProject } from "../projects/store";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 

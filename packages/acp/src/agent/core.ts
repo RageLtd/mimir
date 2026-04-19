@@ -16,6 +16,7 @@ import {
 import type { Backend } from "../backends/types";
 import type { CartographerManager } from "../cartographer/lifecycle";
 import { formatRulesForPrompt, readProjectRules } from "../cartographer/rules";
+import { createClientMcpManager } from "../client-mcp/manager";
 import type { MimirConfig } from "../config";
 import type { ContextClientConfig } from "../context-client";
 import { resolveProjectForPath } from "../project/resolver";
@@ -56,7 +57,7 @@ export const createAgentCore = (
   const newSession = (
     projectPath: string,
     clientMcpServers?: readonly acp.McpServer[],
-    supportsTerminalOutput = false,
+    clientCapabilities: acp.ClientCapabilities = {},
   ): SessionState => {
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const session: SessionState = {
@@ -72,7 +73,8 @@ export const createAgentCore = (
       projectRules: null,
       ruleDetectors: [],
       clientMcpServers,
-      supportsTerminalOutput,
+      clientMcp: createClientMcpManager(sessionId, clientMcpServers),
+      clientCapabilities,
       voiceAnchors: createAnchorState(
         sessionId,
         deps.voiceAnchorLibrary.length,
@@ -130,13 +132,22 @@ export const createAgentCore = (
   const restoreSession = (
     sessionId: string,
     clientMcpServers?: readonly acp.McpServer[],
-    supportsTerminalOutput = false,
+    clientCapabilities: acp.ClientCapabilities = {},
   ): SessionState | null => {
-    // Already live in this process — just update runtime fields
+    // Already live in this process — just update runtime fields.
+    // If the caller replaces the MCP server list we rebuild the manager
+    // so the new connection set reflects the new config.
     const existing = sessions.get(sessionId);
     if (existing) {
+      if (existing.clientMcpServers !== clientMcpServers) {
+        existing.clientMcp?.close().catch(() => {});
+        existing.clientMcp = createClientMcpManager(
+          sessionId,
+          clientMcpServers,
+        );
+      }
       existing.clientMcpServers = clientMcpServers;
-      existing.supportsTerminalOutput = supportsTerminalOutput;
+      existing.clientCapabilities = clientCapabilities;
       return existing;
     }
     const persisted = sessionStore.get(sessionId);
@@ -157,7 +168,8 @@ export const createAgentCore = (
       projectRules: null,
       ruleDetectors: [],
       clientMcpServers,
-      supportsTerminalOutput,
+      clientMcp: createClientMcpManager(persisted.session_id, clientMcpServers),
+      clientCapabilities,
       voiceAnchors: createAnchorState(
         persisted.session_id,
         deps.voiceAnchorLibrary.length,
@@ -195,7 +207,10 @@ export const createAgentCore = (
         }
       })
       .catch((err) =>
-        logger.warn("project re-resolve on restore failed: %s", errMessage(err)),
+        logger.warn(
+          "project re-resolve on restore failed: %s",
+          errMessage(err),
+        ),
       );
 
     return session;
@@ -360,6 +375,7 @@ export const createAgentCore = (
   const dispose = () => {
     for (const session of sessions.values()) {
       session.abortController?.abort();
+      session.clientMcp?.close().catch(() => {});
     }
     memoryStore.close();
     sessionStore.close();

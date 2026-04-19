@@ -38,7 +38,9 @@ import { createChildLogger, log } from "../../utils/log";
 const pathJoin = (...parts: string[]) =>
   parts
     .filter((p) => p.length > 0)
-    .map((p, i) => (i === 0 ? p.replace(/\/+$/, "") : p.replace(/^\/+|\/+$/g, "")))
+    .map((p, i) =>
+      i === 0 ? p.replace(/\/+$/, "") : p.replace(/^\/+|\/+$/g, ""),
+    )
     .join("/");
 
 const pathDirname = (p: string) => {
@@ -55,7 +57,11 @@ const pathRelative = (from: string, to: string) => {
   const fromParts = from.split("/").filter(Boolean);
   const toParts = to.split("/").filter(Boolean);
   let i = 0;
-  while (i < fromParts.length && i < toParts.length && fromParts[i] === toParts[i]) {
+  while (
+    i < fromParts.length &&
+    i < toParts.length &&
+    fromParts[i] === toParts[i]
+  ) {
     i++;
   }
   const up = Array(fromParts.length - i).fill("..");

@@ -55,21 +55,7 @@ mock.module("../config", () => ({
       maxTokens: 262144,
       compactionThreshold: 0.8,
       keepRecentMessages: 50,
-      keepRecentToolResults: 20,
       responseReserve: 8192,
-    },
-    hooks: {
-      auditLog: false,
-      destructiveGuard: false,
-      hierarchyEnforcer: false,
-      backgroundTaskManager: false,
-      cartographerTrigger: false,
-      flailingDetection: false,
-    },
-    flailing: {
-      nudgeThreshold: 0.6,
-      maxNudges: 4,
-      windowSize: 20,
     },
     smallModel: {
       baseUrl: "http://localhost:11434",
@@ -80,12 +66,21 @@ mock.module("../config", () => ({
   },
 }));
 
-// Mock provider-registry - this is what summarizeConversation uses now
-mock.module("./provider-registry", () => ({
-  getProviderConfigForModel: () => ({
-    baseUrl: "https://api.test.com",
-    apiKey: "test-key",
-  }),
+// Mock provider/query - this is what summarizeConversation uses for model resolution
+const mockGetSmallModelConfig = mock<() => { baseUrl: string; apiKey: string; model: string } | null>(() => ({
+  baseUrl: "http://localhost:11434",
+  apiKey: "",
+  model: "qwen3.5:9b",
+}));
+
+const mockGetProviderConfigForModel = mock<(modelId: string) => { baseUrl: string; apiKey: string } | undefined>(() => ({
+  baseUrl: "https://api.test.com",
+  apiKey: "test-key",
+}));
+
+mock.module("./provider/query", () => ({
+  getSmallModelConfig: mockGetSmallModelConfig,
+  getProviderConfigForModel: mockGetProviderConfigForModel,
 }));
 
 // Mock fetch globally
@@ -118,6 +113,8 @@ describe("runCompaction", () => {
     mockGetLastSummaries.mockClear();
     mockFetch.mockClear();
     mockEmbedOne.mockClear();
+    mockGetSmallModelConfig.mockClear();
+    mockGetProviderConfigForModel.mockClear();
   });
 
   test("does nothing if compaction already in progress", async () => {
@@ -267,6 +264,83 @@ describe("runCompaction", () => {
     expect(userMsg).not.toContain("Session context:");
     expect(userMsg).not.toContain("old stuff");
     expect(userMsg).toContain("Real user message");
+  });
+
+  test("uses small model for summarization even when request model is provided", async () => {
+    const messages = Array(15).fill(null).flatMap((_, i) => [
+      { role: "user", content: `User message ${i} with enough content to pass filters` },
+      { role: "assistant", content: `Assistant response ${i} with sufficient length` },
+    ]);
+
+    mockStartCompaction.mockResolvedValueOnce(true);
+    mockGetCompactionState.mockResolvedValueOnce({
+      id: "compaction_state:global",
+      tokens_since_last: 250000,
+      is_compacting: false,
+      last_compaction: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    });
+    mockGetMessagesSince.mockResolvedValueOnce(messages);
+    mockFetch.mockResolvedValueOnce({
+      json: () =>
+        Promise.resolve({
+          choices: [{ message: { content: "Small model summary" } }],
+          usage: { prompt_tokens: 200, completion_tokens: 30 },
+        }),
+    });
+    mockStoreMemory.mockResolvedValueOnce("memory:summary-small");
+
+    // Pass a request model — should still use the small model
+    await runCompaction("claude-code/opus");
+
+    const fetchCall = mockFetch.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(fetchCall[1].body as string);
+
+    // Should use the small model, not the request model
+    expect(body.model).toBe("qwen3.5:9b");
+    // Should hit the small model endpoint, not the request model's provider
+    expect(fetchCall[0]).toContain("localhost:11434");
+  });
+
+  test("falls back to request model when no small model configured", async () => {
+    const messages = Array(15).fill(null).flatMap((_, i) => [
+      { role: "user", content: `User message ${i} with enough content to pass filters` },
+      { role: "assistant", content: `Assistant response ${i} with sufficient length` },
+    ]);
+
+    // Simulate no small model configured
+    mockGetSmallModelConfig.mockReturnValueOnce(null);
+    mockGetProviderConfigForModel.mockReturnValueOnce({
+      baseUrl: "https://vllm.test.com/v1",
+      apiKey: "vllm-key",
+    });
+
+    mockStartCompaction.mockResolvedValueOnce(true);
+    mockGetCompactionState.mockResolvedValueOnce({
+      id: "compaction_state:global",
+      tokens_since_last: 250000,
+      is_compacting: false,
+      last_compaction: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    });
+    mockGetMessagesSince.mockResolvedValueOnce(messages);
+    mockFetch.mockResolvedValueOnce({
+      json: () =>
+        Promise.resolve({
+          choices: [{ message: { content: "Fallback summary" } }],
+          usage: { prompt_tokens: 200, completion_tokens: 30 },
+        }),
+    });
+    mockStoreMemory.mockResolvedValueOnce("memory:summary-fallback");
+
+    await runCompaction("vllm/llama3");
+
+    const fetchCall = mockFetch.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(fetchCall[1].body as string);
+
+    // Should fall back to the request model's provider
+    expect(body.model).toBe("llama3");
+    expect(fetchCall[0]).toContain("vllm.test.com");
   });
 
   test("handles summarization failure gracefully", async () => {

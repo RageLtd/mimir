@@ -165,10 +165,7 @@ cartographer.post("/sync", async (c) => {
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.error(
-      { error: msg, project: projectKey },
-      "cartographer sync failed",
-    );
+    log.error({ error: msg, project: projectKey }, "cartographer sync failed");
     return c.json({ error: msg }, 500);
   }
 });

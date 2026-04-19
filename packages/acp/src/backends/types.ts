@@ -24,8 +24,8 @@ import type {
   McpSdkServerConfigWithInstance,
   PermissionMode,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { Detector } from "./claude-code/rule-hooks";
 import type { ChatMessage, ToolDefinition } from "../server-client";
+import type { Detector } from "./claude-code/rule-hooks";
 
 export type BackendEvent =
   | {

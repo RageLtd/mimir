@@ -39,9 +39,7 @@ const readInstalledVersion = async () => {
   if (typeof mainUrl !== "string") return null;
 
   const pkgJsonPath = join(dirname(fileURLToPath(mainUrl)), "package.json");
-  const pkg = await Bun.file(pkgJsonPath)
-    .json()
-    .catch(errMessage);
+  const pkg = await Bun.file(pkgJsonPath).json().catch(errMessage);
   if (typeof pkg === "string" || typeof pkg !== "object" || pkg === null) {
     return null;
   }

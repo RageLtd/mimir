@@ -7,11 +7,15 @@
  * mimir-acp fetches this to build its ACP tool manifest, combining
  * server tools + client tools + local user memory tools.
  *
- * This is a static manifest — tool definitions don't change at runtime.
- * The tools are executed by the agent loop in src/agent-loop/.
+ * Tool definitions are generated dynamically from getMcpPublicTools()
+ * so the manifest stays in sync with the actual server-side tool set.
+ * Internal tools (approval) and dynamic MCP tools (to avoid loops)
+ * are excluded.
  */
 
+import { asSchema } from "ai";
 import { Hono } from "hono";
+import { getMcpPublicTools } from "../agent-loop/server-tools";
 
 export const tools = new Hono();
 
@@ -29,163 +33,33 @@ type ToolDef = {
 };
 
 /**
- * Server-side tool definitions.
- * These are executed by the agent loop, not forwarded to the client.
+ * Convert an AI SDK ToolSet to OpenAI-format tool definitions.
+ * Strips execute functions and converts Zod/jsonSchema inputs to plain JSON Schema.
+ * Callers should pass getMcpPublicTools() which already excludes internal
+ * and loop-prone tool groups (approval, MCP).
  */
-const SERVER_TOOLS: ToolDef[] = [
-  {
-    type: "function",
-    function: {
-      name: "goldfish_search",
-      description:
-        "Search long-term conversation memories. Use this to find relevant context from past conversations, user preferences, or project knowledge that was explicitly stored.",
-      parameters: {
-        type: "object",
-        properties: {
-          query: {
-            type: "string",
-            description: "Search query to match against stored memories",
-          },
-          limit: {
-            type: "integer",
-            description: "Maximum number of results to return (default: 5)",
-          },
-        },
-        required: ["query"],
+function toolSetToOpenAI(
+  toolSet: ReturnType<typeof getMcpPublicTools>,
+): ToolDef[] {
+  return Object.entries(toolSet).map(([name, toolDef]) => {
+    const schema = asSchema(toolDef.inputSchema);
+    // Strip $schema from the JSON Schema — it's not needed by consumers
+    // and can cause validation issues with some providers.
+    const { $schema, ...parameters } = schema.jsonSchema as Record<
+      string,
+      unknown
+    >;
+
+    return {
+      type: "function" as const,
+      function: {
+        name,
+        description: toolDef.description ?? `Tool: ${name}`,
+        parameters,
       },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "goldfish_store",
-      description:
-        "Store information in long-term memory for future conversations. Use this when the user explicitly asks to remember something, or when you learn important context that should persist.",
-      parameters: {
-        type: "object",
-        properties: {
-          content: {
-            type: "string",
-            description: "The information to store in memory",
-          },
-          category: {
-            type: "string",
-            description:
-              "Optional category: 'preference', 'project', 'personal', 'technical', etc.",
-          },
-        },
-        required: ["content"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "cartographer_search",
-      description:
-        "Search the codebase index for files, symbols, or imports. Use this to find where something is defined, what files import a module, or locate code by symbol name.",
-      parameters: {
-        type: "object",
-        properties: {
-          query: {
-            type: "string",
-            description: "Search query — matches file paths and symbol names",
-          },
-          limit: {
-            type: "integer",
-            description: "Maximum number of results (default: 10)",
-          },
-        },
-        required: ["query"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "cartographer_file_info",
-      description:
-        "Get detailed information about a specific file: symbols, imports, and dependents. Use this to understand a file's role in the codebase.",
-      parameters: {
-        type: "object",
-        properties: {
-          file_path: {
-            type: "string",
-            description: "Path to the file to analyze",
-          },
-        },
-        required: ["file_path"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "cartographer_query",
-      description:
-        "Walk the import graph from entry points. Returns dependencies and dependents up to a specified depth. Use this to understand code relationships and impact analysis.",
-      parameters: {
-        type: "object",
-        properties: {
-          entry_points: {
-            type: "array",
-            items: { type: "string" },
-            description: "File paths or symbol names to start from",
-          },
-          max_depth: {
-            type: "integer",
-            description: "Maximum hops to traverse (default: 2)",
-          },
-          max_results: {
-            type: "integer",
-            description: "Maximum files to return (default: 20)",
-          },
-        },
-        required: ["entry_points"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "project_memory_search",
-      description:
-        "Search memories scoped to the current project (Goldfish) — architectural decisions, conventions, session summaries, pending work on THIS codebase. Distinct from user_memory_search which stores facts about the developer themselves.",
-      parameters: {
-        type: "object",
-        properties: {
-          query: {
-            type: "string",
-            description: "Search query",
-          },
-          limit: {
-            type: "integer",
-            description: "Maximum results (default: 10)",
-          },
-        },
-        required: ["query"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "project_memory_store",
-      description:
-        "Persist a project-scoped fact to Goldfish memory. Use for architectural decisions, conventions, session summaries, and reasoning about THIS codebase. Facts about the developer themselves belong in user_memory_store.",
-      parameters: {
-        type: "object",
-        properties: {
-          content: {
-            type: "string",
-            description: "The fact to remember",
-          },
-        },
-        required: ["content"],
-      },
-    },
-  },
-];
+    };
+  });
+}
 
 /**
  * GET /v1/tools
@@ -193,7 +67,8 @@ const SERVER_TOOLS: ToolDef[] = [
  * Returns the server tool manifest.
  */
 tools.get("/", (c) => {
-  return c.json(SERVER_TOOLS);
+  const publicTools = getMcpPublicTools();
+  return c.json(toolSetToOpenAI(publicTools));
 });
 
 /**
@@ -203,7 +78,9 @@ tools.get("/", (c) => {
  */
 tools.get("/:name", (c) => {
   const name = c.req.param("name");
-  const tool = SERVER_TOOLS.find((t) => t.function.name === name);
+  const publicTools = getMcpPublicTools();
+  const manifest = toolSetToOpenAI(publicTools);
+  const tool = manifest.find((t) => t.function.name === name);
 
   if (!tool) {
     return c.json({ error: `Tool not found: ${name}` }, 404);

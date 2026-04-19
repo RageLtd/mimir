@@ -115,8 +115,7 @@ export const buildSdkOptions = (
   // Turn-level permission mode overrides the startup default. This lets the
   // session's mode selector take effect without restarting the ACP.
   const permissionMode =
-    options.permissionMode ??
-    (options.cc.permissionMode as PermissionMode);
+    options.permissionMode ?? (options.cc.permissionMode as PermissionMode);
 
   const sdkOptions: Options = {
     cwd: options.workingDirectory,

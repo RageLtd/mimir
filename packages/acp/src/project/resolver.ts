@@ -84,9 +84,9 @@ export const resolveProjectForPath = async (
     return null;
   }
 
-  const payload = (await response.json().catch(() => null)) as
-    | { project?: ResolvedProject }
-    | null;
+  const payload = (await response.json().catch(() => null)) as {
+    project?: ResolvedProject;
+  } | null;
   const project = payload?.project ?? null;
   if (!project || typeof project.id !== "string") {
     logger.warn(

@@ -3,10 +3,11 @@
  *
  * POST /v1/messages/persist
  *
- * Receives conversation turns from mimir-acp (CC backend) and persists
- * them to the global message log via the canonical appendNewMessages()
- * sequence-matching dedup path. Keeps goldfish, compaction, and memory
- * extraction working when inference happens via Claude Code.
+ * Receives the trailing turn delta from the CC backend — CC runs inference
+ * locally via the Claude Agent SDK and ships the last-N of its local
+ * message history per turn (`session.messages.slice(-2)` as of writing).
+ * The delta is already chosen client-side, so the server just appends it
+ * to the global log with retry idempotency.
  *
  * Body:
  *   { messages: ModelMessage[], project: string }
@@ -18,7 +19,7 @@
 import type { ModelMessage } from "@ai-sdk/provider-utils";
 import { Hono } from "hono";
 import { modelContentToString } from "../agent-loop/message-log/message-utils";
-import { appendNewMessages } from "../agent-loop/message-log/persistence";
+import { appendTurn } from "../agent-loop/message-log/persistence";
 import { extractMemoriesFromResponse } from "../agent-loop/post-processing";
 import { requestLog } from "../util/logger";
 
@@ -55,7 +56,7 @@ messages.post("/persist", async (c) => {
   }
 
   try {
-    const ids = await appendNewMessages(body.messages, body.project);
+    const ids = await appendTurn(body.messages, body.project);
 
     if (typeof body.totalCostUsd === "number" && body.totalCostUsd > 0) {
       log.info(

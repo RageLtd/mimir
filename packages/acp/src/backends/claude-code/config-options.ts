@@ -23,7 +23,8 @@ const BASE_MODES: {
   {
     id: "default",
     name: "Default",
-    description: "Standard permission behaviour — prompts on dangerous operations.",
+    description:
+      "Standard permission behaviour — prompts on dangerous operations.",
   },
   {
     id: "acceptEdits",
@@ -107,7 +108,8 @@ export const buildCCConfigOptions = (
   }
 
   const currentThoughtLevel =
-    ctx.currentThoughtLevel && efforts.includes(ctx.currentThoughtLevel as EffortLevel)
+    ctx.currentThoughtLevel &&
+    efforts.includes(ctx.currentThoughtLevel as EffortLevel)
       ? ctx.currentThoughtLevel
       : efforts.includes(DEFAULT_CC_THOUGHT_LEVEL)
         ? DEFAULT_CC_THOUGHT_LEVEL
@@ -130,9 +132,7 @@ export const buildCCConfigOptions = (
 
 /** Is the given string a valid CC permission mode id (including `bypassPermissions`)? */
 export const isValidCCMode = (id: string): id is PermissionMode => {
-  return (
-    BASE_MODES.some((m) => m.id === id) || id === BYPASS_MODE.id
-  );
+  return BASE_MODES.some((m) => m.id === id) || id === BYPASS_MODE.id;
 };
 
 /** Is the given string a valid effort level for the active model? */

@@ -26,7 +26,10 @@ const runGitOrigin = async (projectPath: string) => {
   const stdout = await new Response(proc.stdout).text();
   const code = await proc.exited;
   if (code !== 0) return null;
-  const trimmed = stdout.trim().replace(/\.git$/, "").replace(/\/$/, "");
+  const trimmed = stdout
+    .trim()
+    .replace(/\.git$/, "")
+    .replace(/\/$/, "");
   return trimmed || null;
 };
 

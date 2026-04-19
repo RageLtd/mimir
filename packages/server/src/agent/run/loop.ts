@@ -22,6 +22,7 @@ import type {
 } from "@ai-sdk/provider";
 import {
   extractMemoriesFromResponse,
+  persistAssistantTurn,
   triggerCompactionIfNeeded,
 } from "../../agent-loop/post-processing";
 import { SERVER_TOOL_NAMES } from "../../agent-loop/server-tools";
@@ -48,6 +49,14 @@ export async function agentLoop(
   const prompt: LanguageModelV3Message[] = [...(baseOptions.prompt ?? [])];
   let lastStepInputTokens = 0;
   let lastAssistantText = "";
+  // Final assistant output destined for the client — accumulated here so
+  // we can persist it to the global log once the turn ends. Server-tool
+  // internal iterations are NOT persisted (they're ephemeral by design).
+  let finalClientToolCalls: Array<{
+    toolCallId: string;
+    toolName: string;
+    input: string;
+  }> = [];
 
   for (let step = 0; step < MAX_AGENT_STEPS; step++) {
     log.debug({ step, promptMessages: prompt.length }, "agent step");
@@ -144,6 +153,7 @@ export async function agentLoop(
 
     // Client tool calls → emit and stop
     if (clientCalls.length > 0) {
+      finalClientToolCalls = clientCalls;
       let i = 0;
       for (const tc of clientCalls) {
         emitSSE(
@@ -177,6 +187,16 @@ export async function agentLoop(
     );
     await executeServerTools(prompt, serverCalls, ctx);
   }
+
+  // Persist the final assistant turn — server owns its own writes.
+  // Fire-and-forget; logs on failure but never blocks the response.
+  persistAssistantTurn(
+    lastAssistantText,
+    finalClientToolCalls,
+    ctx.project,
+  ).catch((err) =>
+    log.error({ err }, "persistAssistantTurn failed (streaming)"),
+  );
 
   // Post-processing (fire-and-forget)
   triggerCompactionIfNeeded(

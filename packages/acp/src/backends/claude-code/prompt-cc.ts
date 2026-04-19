@@ -132,7 +132,8 @@ const handleCCEvent = async (
       update: {
         _meta: {
           claudeCode: { toolName: event.name },
-          ...(isBash && session.supportsTerminalOutput
+          ...(isBash &&
+          session.clientCapabilities._meta?.terminal_output === true
             ? { terminal_info: { terminal_id: event.id } }
             : {}),
         },
@@ -143,7 +144,7 @@ const handleCCEvent = async (
         kind,
         status: "pending" as const,
         content:
-          isBash && session.supportsTerminalOutput
+          isBash && session.clientCapabilities._meta?.terminal_output === true
             ? [{ type: "terminal" as const, terminalId: event.id }]
             : [],
         ...(locations ? { locations } : {}),
@@ -162,7 +163,7 @@ const handleCCEvent = async (
       toolName === "create_terminal" ||
       toolName === "terminal";
 
-    if (isBash && session.supportsTerminalOutput) {
+    if (isBash && session.clientCapabilities._meta?.terminal_output === true) {
       await conn.sessionUpdate({
         sessionId: session.sessionId,
         update: {

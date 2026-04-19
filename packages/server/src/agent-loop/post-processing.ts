@@ -1,46 +1,28 @@
-import type { ModelMessage, StepResult, ToolSet, TypedToolCall } from "ai";
+import type {
+  AssistantContent,
+  ModelMessage,
+  ToolSet,
+  TypedToolCall,
+} from "ai";
 
 import { extractAndStoreMemories } from "../goldfish/memory";
 import { log } from "../util/logger";
 import { runCompaction } from "./compaction";
-import { updateTokenCount } from "./message-log/index";
+import { appendAssistantOutput, updateTokenCount } from "./message-log/index";
 import { SERVER_TOOL_NAMES } from "./server-tools";
 
 /**
  * Post-processing shared between streaming and non-streaming agent runs.
  *
- * After the LLM response completes (whether via generateText or streamText),
- * three things need to happen:
- * 1. Persist server-side tool calls/results to the message log
- * 2. Update token count and trigger compaction if needed (fire-and-forget)
- * 3. Extract and store memories from the conversation (fire-and-forget)
+ * After the LLM response completes, three things happen:
+ *   1. Persist the final assistant output (persistAssistantTurn)
+ *   2. Update token count and trigger compaction if needed (fire-and-forget)
+ *   3. Extract and store memories from the conversation (fire-and-forget)
  *
- * Extracted here so runAgent and the streaming handler don't duplicate
- * the same logic.
+ * Server-tool internal iterations are NOT persisted — they're ephemeral
+ * by design. Only the final assistant output that crosses the server→client
+ * boundary goes into the global log.
  */
-
-// ---------------------------------------------------------------------------
-// Step persistence
-// ---------------------------------------------------------------------------
-
-/**
- * Persist server-side tool calls and results from each agent step.
- *
- * NOTE: Server tool steps are NOT persisted to the message log.
- * They are ephemeral — executed within the agent loop, their results
- * feed into the next model turn, and only the final assistant response
- * matters for conversation history. Persisting them would break the
- * count-based dedup in appendNewMessages (two writers to the same DB).
- *
- * This function is kept as a no-op stub for future use if we switch
- * to content-hash-based dedup.
- */
-export async function persistServerToolSteps<TOOLS extends ToolSet>(
-  _steps: Array<StepResult<TOOLS>>,
-  _project: string,
-): Promise<void> {
-  // Intentionally empty — see comment above
-}
 
 // ---------------------------------------------------------------------------
 // Compaction
@@ -71,6 +53,57 @@ export function triggerCompactionIfNeeded(
       }
     })
     .catch((err) => log.error({ err }, "failed to update token count"));
+}
+
+// ---------------------------------------------------------------------------
+// Final assistant output persistence
+// ---------------------------------------------------------------------------
+
+/**
+ * Persist the final assistant output at the end of an LLM turn.
+ *
+ * Server-owned single-brain write: the server writes its own emissions
+ * (assistant text plus any client-destined tool_call parts) to the global
+ * log. Client requests only contribute trailing user/tool messages; the
+ * assistant side of the conversation is always server-written.
+ *
+ * Fire-and-forget at call sites — persistence failure must not fail the
+ * response. Errors are logged. Returns immediately when there's no text
+ * and no tool calls (e.g., cancellation before any emission).
+ */
+export async function persistAssistantTurn(
+  text: string,
+  toolCalls: Array<{ toolCallId: string; toolName: string; input: string }>,
+  project: string | null | undefined,
+) {
+  const clientToolCalls = toolCalls.filter(
+    (tc) => !SERVER_TOOL_NAMES.has(tc.toolName),
+  );
+  const hasText = text.trim().length > 0;
+  const hasToolCalls = clientToolCalls.length > 0;
+  if (!hasText && !hasToolCalls) return;
+
+  // Tool-call inputs are kept as raw JSON strings here — DB storage uses
+  // JSON.stringify on content regardless, and clients reconstructing
+  // history via the read path get the same shape either way.
+  const parts: AssistantContent = [];
+  if (hasText) parts.push({ type: "text", text });
+  for (const tc of clientToolCalls) {
+    parts.push({
+      type: "tool-call",
+      toolCallId: tc.toolCallId,
+      toolName: tc.toolName,
+      input: tc.input,
+    });
+  }
+
+  const message: ModelMessage = {
+    role: "assistant",
+    content: parts,
+  };
+  await appendAssistantOutput(message, project ?? "default").catch((err) =>
+    log.error({ err }, "failed to persist assistant turn"),
+  );
 }
 
 // ---------------------------------------------------------------------------

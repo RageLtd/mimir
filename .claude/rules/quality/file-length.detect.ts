@@ -34,7 +34,8 @@ const projectedLinesForEdit = async (
 ) => {
   const oldString = toolInput.old_string;
   const newString = toolInput.new_string;
-  if (typeof oldString !== "string" || typeof newString !== "string") return null;
+  if (typeof oldString !== "string" || typeof newString !== "string")
+    return null;
   const current = await readFile(filePath);
   if (current === null || !current.includes(oldString)) return null;
   return countLines(current.replace(oldString, newString));
@@ -51,7 +52,8 @@ const projectedLinesForMultiEdit = async (
     if (!e || typeof e !== "object") return null;
     const oldString = (e as { old_string?: unknown }).old_string;
     const newString = (e as { new_string?: unknown }).new_string;
-    if (typeof oldString !== "string" || typeof newString !== "string") return null;
+    if (typeof oldString !== "string" || typeof newString !== "string")
+      return null;
     if (!buf.includes(oldString)) return null;
     buf = buf.replace(oldString, newString);
   }
