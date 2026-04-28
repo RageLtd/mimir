@@ -29,16 +29,26 @@ export type RuntimeState = {
   copilotModelMap: Map<string, string>;
 };
 
+/**
+ * Result shape from `forModel`. `ok: true` carries the backend; `ok: false`
+ * carries the human-readable reason (typically: the matching backend is
+ * disabled). Callers surface `error` to the user on failure rather than
+ * catching a thrown exception — see error-handling rule.
+ */
+export type RouteResult =
+  | { readonly ok: true; readonly backend: Backend }
+  | { readonly ok: false; readonly error: string };
+
 export type BackendRouter = {
   /** Return the backend that should serve the given model id. */
-  readonly forModel: (modelId: string) => Backend;
+  readonly forModel: (modelId: string) => RouteResult;
   readonly server: Backend;
   readonly cc: Backend;
   readonly copilot: Backend;
   readonly runtime: RuntimeState;
 };
 
-export const createBackendRouter = (config: MimirConfig): BackendRouter => {
+export const createBackendRouter = (config: MimirConfig) => {
   const serverConfig: ServerClientConfig = {
     baseUrl: config.serverUrl,
     apiKey: config.apiKey,
@@ -62,24 +72,26 @@ export const createBackendRouter = (config: MimirConfig): BackendRouter => {
     copilotModelMap: new Map(),
   };
 
-  const forModel = (modelId: string): Backend => {
+  const forModel = (modelId: string) => {
     if (isCCModel(modelId)) {
       if (!runtime.ccEnabled) {
-        throw new Error(
-          `Model ${modelId} requires the Claude Code backend, which is disabled.`,
-        );
+        return {
+          ok: false as const,
+          error: `Model ${modelId} requires the Claude Code backend, which is disabled.`,
+        };
       }
-      return cc;
+      return { ok: true as const, backend: cc };
     }
     if (isCopilotModel(modelId)) {
       if (!runtime.copilotEnabled) {
-        throw new Error(
-          `Model ${modelId} requires the Copilot backend, which is disabled.`,
-        );
+        return {
+          ok: false as const,
+          error: `Model ${modelId} requires the Copilot backend, which is disabled.`,
+        };
       }
-      return copilot;
+      return { ok: true as const, backend: copilot };
     }
-    return server;
+    return { ok: true as const, backend: server };
   };
 
   return { forModel, server, cc, copilot, runtime };

@@ -13,10 +13,6 @@
 import type { ModelInfo } from "@agentclientprotocol/sdk";
 import { CopilotClient } from "@github/copilot-sdk";
 import type { CCBackendConfig } from "./config";
-
-// Re-export so callers don't need to reach into backends/.
-export { discoverCCModelsViaSdk } from "./backends/claude-code/models";
-
 import { errMessage } from "./util";
 import { createChildLogger, log } from "./utils/log";
 
@@ -49,20 +45,21 @@ export const getCCModelList = (cc: CCBackendConfig) => {
 
 /** Detect whether the `claude` binary is on PATH. */
 export const ccAvailable = async () => {
-  try {
-    const proc = Bun.spawn(["claude", "--version"], {
-      stdout: "ignore",
-      stderr: "ignore",
+  // Wrap Bun.spawn in Promise.resolve so synchronous throws (binary not
+  // found) become a rejection we can handle without try/catch.
+  const code = await Promise.resolve()
+    .then(
+      () =>
+        Bun.spawn(["claude", "--version"], {
+          stdout: "ignore",
+          stderr: "ignore",
+        }).exited,
+    )
+    .catch((err) => {
+      logger.debug("claude binary not found:", errMessage(err));
+      return -1;
     });
-    const code = await proc.exited;
-    return code === 0;
-  } catch (err) {
-    logger.debug(
-      "claude binary not found:",
-      err instanceof Error ? err.message : String(err),
-    );
-    return false;
-  }
+  return code === 0;
 };
 
 // ── Server model list fetch + merge ──
@@ -82,30 +79,34 @@ export const fetchServerModels = async (
   apiKey: string,
   signal?: AbortSignal,
 ) => {
-  try {
-    const headers: Record<string, string> = apiKey
-      ? { Authorization: `Bearer ${apiKey}` }
-      : {};
-    const res = await fetch(`${serverUrl}/v1/models`, { headers, signal });
-    if (!res.ok) {
-      logger.warn(
-        `server model fetch failed: ${res.status} ${res.statusText} (${serverUrl}/v1/models)`,
-      );
-      return [];
-    }
-    const body = (await res.json()) as { data?: ServerModelEntry[] };
-    const models = (body.data ?? []).map((m) => ({
-      modelId: m.id,
-      name: m.id,
-      description: m.owned_by ? `Provider: ${m.owned_by}` : undefined,
-    }));
-    logger.info(`fetched ${models.length} models from mimir-server`);
-    return models;
-  } catch (err) {
-    const msg = errMessage(err);
-    logger.warn(`server model fetch failed: ${msg} (${serverUrl}/v1/models)`);
+  const url = `${serverUrl}/v1/models`;
+  const headers: Record<string, string> = apiKey
+    ? { Authorization: `Bearer ${apiKey}` }
+    : {};
+  const res = await fetch(url, { headers, signal }).catch(errMessage);
+  if (typeof res === "string") {
+    logger.warn(`server model fetch failed: ${res} (${url})`);
     return [];
   }
+  if (!res.ok) {
+    logger.warn(
+      `server model fetch failed: ${res.status} ${res.statusText} (${url})`,
+    );
+    return [];
+  }
+  const body = await res.json().catch(errMessage);
+  if (typeof body === "string") {
+    logger.warn(`server model fetch — invalid JSON: ${body} (${url})`);
+    return [];
+  }
+  const data = (body as { data?: ServerModelEntry[] }).data ?? [];
+  const models = data.map((m) => ({
+    modelId: m.id,
+    name: m.id,
+    description: m.owned_by ? `Provider: ${m.owned_by}` : undefined,
+  }));
+  logger.info(`fetched ${models.length} models from mimir-server`);
+  return models;
 };
 
 // ── Copilot routing ──
@@ -135,40 +136,54 @@ export const getCopilotModelFlag = (
  * `copilot/`, plus a map from suffix → SDK model id for routing.
  * Returns empty results on failure so other backends are still available.
  */
+const EMPTY_COPILOT_RESULT = {
+  available: false,
+  models: [] as ModelInfo[],
+  modelMap: new Map<string, string>(),
+};
+
 export const discoverCopilotModels = async () => {
   const client = new CopilotClient();
-  try {
-    await client.start();
-    const models = await client.listModels();
-    await client.stop();
 
-    const modelMap = new Map<string, string>();
-    const modelList: ModelInfo[] = models.map((m) => {
-      modelMap.set(m.id, m.id);
-      return {
-        modelId: `${COPILOT_PREFIX}${m.id}`,
-        name: `Copilot (${m.name ?? m.id})`,
-        description: m.capabilities?.limits?.max_context_window_tokens
-          ? `Context: ${m.capabilities.limits.max_context_window_tokens} tokens`
-          : undefined,
-      };
-    });
-
-    logger.info(`discovered ${modelList.length} Copilot models`);
-    return { available: true, models: modelList, modelMap };
-  } catch (err) {
-    logger.debug("Copilot CLI not available:", errMessage(err));
-    try {
-      await client.stop();
-    } catch {
-      // Client may not have started successfully.
-    }
-    return {
-      available: false,
-      models: [] as ModelInfo[],
-      modelMap: new Map<string, string>(),
-    };
+  const startErr = await client.start().then(
+    () => undefined,
+    (err) => errMessage(err),
+  );
+  if (startErr !== undefined) {
+    logger.debug("Copilot CLI not available:", startErr);
+    return EMPTY_COPILOT_RESULT;
   }
+
+  const listed = await client.listModels().then(
+    (models) => ({ ok: true as const, models }),
+    (err) => ({ ok: false as const, error: errMessage(err) }),
+  );
+  // Best-effort cleanup; client.stop() may itself reject if start half-completed.
+  await client
+    .stop()
+    .catch((err) =>
+      logger.debug("Copilot client.stop failed:", errMessage(err)),
+    );
+
+  if (!listed.ok) {
+    logger.debug("Copilot listModels failed:", listed.error);
+    return EMPTY_COPILOT_RESULT;
+  }
+
+  const modelMap = new Map<string, string>();
+  const modelList: ModelInfo[] = listed.models.map((m) => {
+    modelMap.set(m.id, m.id);
+    return {
+      modelId: `${COPILOT_PREFIX}${m.id}`,
+      name: `Copilot (${m.name ?? m.id})`,
+      description: m.capabilities?.limits?.max_context_window_tokens
+        ? `Context: ${m.capabilities.limits.max_context_window_tokens} tokens`
+        : undefined,
+    };
+  });
+
+  logger.info(`discovered ${modelList.length} Copilot models`);
+  return { available: true, models: modelList, modelMap };
 };
 
 // ── Model merging ──

@@ -9,12 +9,7 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
-import {
-  buildToolCallContent,
-  extractLocations,
-  toolKindFor,
-  toolTitle,
-} from "../../agent/tool-reporting";
+import { emitAgentText } from "../../agent/lifecycle-helpers";
 import type { SessionState } from "../../agent/types";
 import {
   type AssembledMessage,
@@ -28,8 +23,9 @@ import { buildUserContext } from "../../tools/user-memory";
 import { errMessage } from "../../util";
 import { createChildLogger, log } from "../../utils/log";
 import { toAnthropicXml } from "../../utils/markdown-to-xml";
-import type { Backend, BackendEvent } from "../types";
+import type { Backend } from "../types";
 import { type BootContent, createBootServer } from "./boot-tools";
+import { type CcToolCallInfo, handleCCEvent } from "./event-handler";
 import { formatContextForPrompt } from "./formatting";
 import {
   advanceTurn,
@@ -44,186 +40,6 @@ export type VoiceAnchorOpts = {
 };
 
 const logger = createChildLogger(log, "prompt-cc");
-
-/** Maps tool call IDs to tool names + args so tool_result events can build rich content. */
-const ccToolCallInfo = new Map<
-  string,
-  { name: string; input: Record<string, unknown> }
->();
-
-/** Translate TodoWrite input into an ACP plan session update. */
-const emitPlanUpdate = async (
-  session: SessionState,
-  conn: acp.AgentSideConnection,
-  todos: readonly { content: string; status: string; activeForm?: string }[],
-) => {
-  await conn.sessionUpdate({
-    sessionId: session.sessionId,
-    update: {
-      sessionUpdate: "plan",
-      entries: todos.map((t) => ({
-        content:
-          t.activeForm && t.status === "in_progress" ? t.activeForm : t.content,
-        status: t.status as "pending" | "in_progress" | "completed",
-        priority: "medium" as const,
-      })),
-    },
-  });
-};
-
-const handleCCEvent = async (
-  event: BackendEvent,
-  session: SessionState,
-  conn: acp.AgentSideConnection,
-  onText: (delta: string) => void,
-): Promise<void> => {
-  if (event.type === "text") {
-    onText(event.text);
-    await conn.sessionUpdate({
-      sessionId: session.sessionId,
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: event.text },
-      },
-    });
-    return;
-  }
-
-  if (event.type === "thinking") {
-    await conn.sessionUpdate({
-      sessionId: session.sessionId,
-      update: {
-        sessionUpdate: "agent_thought_chunk",
-        content: { type: "text", text: event.text },
-      },
-    });
-    return;
-  }
-
-  if (event.type === "tool_call") {
-    ccToolCallInfo.set(event.id, {
-      name: event.name,
-      input: event.input,
-    });
-
-    // TodoWrite → emit an ACP plan update alongside the normal tool card.
-    if (event.name === "TodoWrite" && Array.isArray(event.input.todos)) {
-      await emitPlanUpdate(
-        session,
-        conn,
-        event.input.todos as {
-          content: string;
-          status: string;
-          activeForm?: string;
-        }[],
-      );
-    }
-
-    const kind = toolKindFor(event.name);
-    const locations = extractLocations(event.name, event.input);
-    const title = toolTitle(event.name, event.input);
-    const isBash =
-      event.name === "Bash" ||
-      event.name === "create_terminal" ||
-      event.name === "terminal";
-
-    await conn.sessionUpdate({
-      sessionId: session.sessionId,
-      update: {
-        _meta: {
-          claudeCode: { toolName: event.name },
-          ...(isBash &&
-          session.clientCapabilities._meta?.terminal_output === true
-            ? { terminal_info: { terminal_id: event.id } }
-            : {}),
-        },
-        sessionUpdate: "tool_call",
-        toolCallId: event.id,
-        title,
-        rawInput: event.input,
-        kind,
-        status: "pending" as const,
-        content:
-          isBash && session.clientCapabilities._meta?.terminal_output === true
-            ? [{ type: "terminal" as const, terminalId: event.id }]
-            : [],
-        ...(locations ? { locations } : {}),
-      },
-    });
-    return;
-  }
-
-  if (event.type === "tool_result") {
-    const info = ccToolCallInfo.get(event.id);
-    const toolName = info?.name ?? event.id;
-
-    const updateTitle = info ? toolTitle(info.name, info.input) : toolName;
-    const isBash =
-      toolName === "Bash" ||
-      toolName === "create_terminal" ||
-      toolName === "terminal";
-
-    if (isBash && session.clientCapabilities._meta?.terminal_output === true) {
-      await conn.sessionUpdate({
-        sessionId: session.sessionId,
-        update: {
-          _meta: {
-            terminal_output: { terminal_id: event.id, data: event.output },
-          },
-          sessionUpdate: "tool_call_update",
-          toolCallId: event.id,
-        },
-      });
-      await conn.sessionUpdate({
-        sessionId: session.sessionId,
-        update: {
-          _meta: {
-            claudeCode: { toolName },
-            terminal_exit: {
-              terminal_id: event.id,
-              exit_code: 0,
-              signal: null,
-            },
-          },
-          sessionUpdate: "tool_call_update",
-          toolCallId: event.id,
-          title: updateTitle,
-          rawOutput: event.output,
-          status: "completed" as const,
-          content: [{ type: "terminal" as const, terminalId: event.id }],
-        },
-      });
-    } else {
-      const content = info
-        ? buildToolCallContent(toolName, info.input, event.output)
-        : undefined;
-      await conn.sessionUpdate({
-        sessionId: session.sessionId,
-        update: {
-          _meta: { claudeCode: { toolName } },
-          sessionUpdate: "tool_call_update",
-          toolCallId: event.id,
-          title: updateTitle,
-          rawOutput: event.output,
-          status: "completed" as const,
-          ...(content ? { content } : {}),
-        },
-      });
-    }
-    return;
-  }
-
-  if (event.type === "error") {
-    logger.error("CC error:", event.error);
-    await conn.sessionUpdate({
-      sessionId: session.sessionId,
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: `Error: ${event.error}` },
-      },
-    });
-  }
-};
 
 /**
  * Strip the trailing user message from the assembled array when it
@@ -255,38 +71,48 @@ const blocksWithAnchor = (
   ...blocks,
 ];
 
-export const promptViaClaudeCode = async (
-  session: SessionState,
-  promptText: string,
-  conn: acp.AgentSideConnection,
-  abortController: AbortController,
-  backend: Backend,
-  contextClient: ContextClientConfig,
-  memoryStore: UserMemoryStore,
-  anchorOpts: VoiceAnchorOpts,
-  promptBlocks?: readonly acp.ContentBlock[],
-) => {
+export type PromptViaClaudeCodeOptions = {
+  readonly session: SessionState;
+  readonly promptText: string;
+  readonly conn: acp.AgentSideConnection;
+  readonly abortController: AbortController;
+  readonly backend: Backend;
+  readonly contextClient: ContextClientConfig;
+  readonly memoryStore: UserMemoryStore;
+  readonly anchorOpts: VoiceAnchorOpts;
+  readonly promptBlocks?: readonly acp.ContentBlock[];
+};
+
+export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
+  const {
+    session,
+    promptText,
+    conn,
+    abortController,
+    backend,
+    contextClient,
+    memoryStore,
+    anchorOpts,
+    promptBlocks,
+  } = opts;
   // Single call to mimir-server assembles the full context: system prompt,
   // Goldfish memories, summaries, historical turns from DB, and the current
-  // user message as the final entry.
-  let context: Awaited<ReturnType<typeof assembleContext>>;
-  try {
-    context = await assembleContext(
-      contextClient,
-      promptText,
-      session.projectId ?? session.projectPath,
-      abortController.signal,
+  // user message as the final entry. Errors here mean the server is
+  // unreachable or returned a malformed payload — surface to the user and
+  // end the turn rather than letting an undefined `context` cascade.
+  const context = await assembleContext(
+    contextClient,
+    promptText,
+    session.projectId ?? session.projectPath,
+    abortController.signal,
+  ).catch(errMessage);
+  if (typeof context === "string") {
+    logger.error("assembleContext failed:", context);
+    await emitAgentText(
+      conn,
+      session.sessionId,
+      `Context assembly failed: ${context}`,
     );
-  } catch (err) {
-    const msg = errMessage(err);
-    logger.error("assembleContext failed:", msg);
-    await conn.sessionUpdate({
-      sessionId: session.sessionId,
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: `Context assembly failed: ${msg}` },
-      },
-    });
     return { stopReason: "end_turn" as const };
   }
 
@@ -369,6 +195,11 @@ export const promptViaClaudeCode = async (
   let promptTokens: number | undefined;
   let totalCostUsd: number | undefined;
 
+  // Per-invocation tool-call registry. Lives in this closure so each
+  // promptViaClaudeCode call has its own — was a module-level Map that
+  // leaked across sessions (latent collision risk + unbounded growth).
+  const toolCallInfo: CcToolCallInfo = new Map();
+
   // Iteration-weighted turn counting for voice anchors. Each transition
   // from tool_result → text/thinking marks a new generation cycle; parallel
   // tool calls within a single generation don't inflate the count. Base
@@ -377,8 +208,13 @@ export const promptViaClaudeCode = async (
   let cycles = 1;
   let inToolPhase = false;
 
-  try {
-    for await (const event of backend.run({
+  // Manually drive the backend's async iterator with `.next().catch()` so
+  // abort signals and real errors surface as a discriminated outcome
+  // rather than a thrown exception. Either way we end the turn — but the
+  // explicit `string` (=> errMessage) vs `IteratorResult` branching keeps
+  // the path to each `return { stopReason }` visible at the call site.
+  const iter = backend
+    .run({
       prompt: sdkPrompt,
       promptBlocks: sdkBlocks,
       systemPrompt: systemPromptWithContext,
@@ -398,48 +234,60 @@ export const promptViaClaudeCode = async (
       effort: session.currentThoughtLevel,
       ruleDetectors: session.ruleDetectors,
       signal: abortController.signal,
-    })) {
-      if (event.type === "tool_result") {
-        inToolPhase = true;
-      } else if (
-        (event.type === "text" || event.type === "thinking") &&
-        inToolPhase
-      ) {
-        cycles++;
-        inToolPhase = false;
-      }
+    })
+    [Symbol.asyncIterator]();
 
-      await handleCCEvent(event, session, conn, (delta) => {
+  while (true) {
+    const step = await iter.next().catch(errMessage);
+    if (typeof step === "string") {
+      if (abortController.signal.aborted) {
+        return { stopReason: "cancelled" as const };
+      }
+      logger.error("CC backend error:", step);
+      return { stopReason: "end_turn" as const };
+    }
+    if (step.done) break;
+    const event = step.value;
+
+    if (event.type === "tool_result") {
+      inToolPhase = true;
+    } else if (
+      (event.type === "text" || event.type === "thinking") &&
+      inToolPhase
+    ) {
+      cycles++;
+      inToolPhase = false;
+    }
+
+    await handleCCEvent({
+      event,
+      session,
+      conn,
+      toolCallInfo,
+      onText: (delta) => {
         assistantBuffer += delta;
-      });
+      },
+    });
 
-      if (event.type === "finish") {
-        promptTokens = event.promptTokens;
-        totalCostUsd = event.cost;
-        if (typeof promptTokens === "number" && promptTokens > 0) {
-          await conn.sessionUpdate({
-            sessionId: session.sessionId,
-            update: {
-              sessionUpdate: "usage_update",
-              used: promptTokens,
-              size: 200_000,
-              ...(typeof totalCostUsd === "number"
-                ? { cost: { amount: totalCostUsd, currency: "USD" } }
-                : {}),
-            },
-          });
-        }
-      } else if (event.type === "error") {
-        return { stopReason: "end_turn" as const };
+    if (event.type === "finish") {
+      promptTokens = event.promptTokens;
+      totalCostUsd = event.cost;
+      if (typeof promptTokens === "number" && promptTokens > 0) {
+        await conn.sessionUpdate({
+          sessionId: session.sessionId,
+          update: {
+            sessionUpdate: "usage_update",
+            used: promptTokens,
+            size: 200_000,
+            ...(typeof totalCostUsd === "number"
+              ? { cost: { amount: totalCostUsd, currency: "USD" } }
+              : {}),
+          },
+        });
       }
+    } else if (event.type === "error") {
+      return { stopReason: "end_turn" as const };
     }
-  } catch (err) {
-    if (abortController.signal.aborted) {
-      return { stopReason: "cancelled" as const };
-    }
-    const msg = errMessage(err);
-    logger.error("CC backend error:", msg);
-    return { stopReason: "end_turn" as const };
   }
 
   if (assistantBuffer.length > 0) {

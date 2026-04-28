@@ -26,6 +26,7 @@ import {
   executeClientTool,
 } from "./client-tools";
 import { buildMetadata } from "./content";
+import { emitAgentText } from "./lifecycle-helpers";
 import {
   buildToolCallContent,
   extractLocations,
@@ -38,16 +39,28 @@ const logger = createChildLogger(log, "prompt-server");
 
 const MAX_TURNS = 50;
 
-export const promptViaServer = async (
-  session: SessionState,
-  promptText: string,
-  conn: acp.AgentSideConnection,
-  abortController: AbortController,
-  backend: Backend,
-  appConfig: MimirConfig,
-  memoryStore: UserMemoryStore,
-  cartographer?: CartographerManager | null,
-): Promise<acp.PromptResponse> => {
+export type PromptViaServerOptions = {
+  readonly session: SessionState;
+  readonly promptText: string;
+  readonly conn: acp.AgentSideConnection;
+  readonly abortController: AbortController;
+  readonly backend: Backend;
+  readonly appConfig: MimirConfig;
+  readonly memoryStore: UserMemoryStore;
+  readonly cartographer?: CartographerManager | null;
+};
+
+export const promptViaServer = async (opts: PromptViaServerOptions) => {
+  const {
+    session,
+    promptText,
+    conn,
+    abortController,
+    backend,
+    appConfig,
+    memoryStore,
+    cartographer,
+  } = opts;
   session.messages.push({ role: "user", content: promptText });
 
   const [serverTools, clientMcpTools] = await Promise.all([
@@ -91,13 +104,7 @@ export const promptViaServer = async (
         if (event.type === "text") {
           hasContent = true;
           contentBuffer += event.text;
-          await conn.sessionUpdate({
-            sessionId: session.sessionId,
-            update: {
-              sessionUpdate: "agent_message_chunk",
-              content: { type: "text", text: event.text },
-            },
-          });
+          await emitAgentText(conn, session.sessionId, event.text);
         } else if (event.type === "tool_call" && !event.observeOnly) {
           pendingToolCalls.push({
             id: event.id,
@@ -106,13 +113,7 @@ export const promptViaServer = async (
           });
         } else if (event.type === "error") {
           logger.error("Backend error:", event.error);
-          await conn.sessionUpdate({
-            sessionId: session.sessionId,
-            update: {
-              sessionUpdate: "agent_message_chunk",
-              content: { type: "text", text: `Error: ${event.error}` },
-            },
-          });
+          await emitAgentText(conn, session.sessionId, `Error: ${event.error}`);
           return { stopReason: "end_turn" as const };
         } else if (event.type === "finish") {
           // fall through to post-stream tool execution

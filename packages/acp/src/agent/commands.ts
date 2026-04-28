@@ -10,6 +10,7 @@
 import type * as acp from "@agentclientprotocol/sdk";
 import { isValidCCMode } from "../backends/claude-code/config-options";
 import type { UserMemoryStore } from "../store/user-memories";
+import { emitAgentText } from "./lifecycle-helpers";
 import type { ParsedCommand } from "./session";
 import type { AgentCore, SessionState } from "./types";
 
@@ -29,13 +30,7 @@ const reply = async (
   sessionId: string,
   text: string,
 ) => {
-  await conn.sessionUpdate({
-    sessionId,
-    update: {
-      sessionUpdate: "agent_message_chunk",
-      content: { type: "text", text },
-    },
-  });
+  await emitAgentText(conn, sessionId, text);
 };
 
 const runModel = async (
@@ -198,7 +193,7 @@ export const handleCommand = async (
   deps: CommandDeps,
   sessionId: string,
   cmd: ParsedCommand,
-): Promise<acp.PromptResponse> => {
+) => {
   switch (cmd.type) {
     case "model":
       return runModel(deps, sessionId, cmd.modelId);

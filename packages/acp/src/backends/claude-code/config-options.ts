@@ -81,9 +81,7 @@ export type CCConfigOptionsContext = {
   readonly bypassPermissionsAllowed: boolean;
 };
 
-export const buildCCConfigOptions = (
-  ctx: CCConfigOptionsContext,
-): acp.SessionConfigOption[] => {
+export const buildCCConfigOptions = (ctx: CCConfigOptionsContext) => {
   const modes = ctx.bypassPermissionsAllowed
     ? [...BASE_MODES, BYPASS_MODE]
     : BASE_MODES;

@@ -13,26 +13,27 @@ import {
   isValidCCMode,
   isValidThoughtLevel,
 } from "../backends/claude-code/config-options";
+import { discoverCCModelsViaSdk } from "../backends/claude-code/models";
 import { checkForSdkUpdate } from "../backends/claude-code/sdk-updater";
 import type { CartographerManager } from "../cartographer/lifecycle";
 import type { MimirConfig } from "../config";
-import {
-  ccAvailable,
-  discoverCCModelsViaSdk,
-  discoverCopilotModels,
-} from "../routing";
+import { ccAvailable, discoverCopilotModels } from "../routing";
 import type { UserMemoryStore } from "../store/user-memories";
 import { createChildLogger, log } from "../utils/log";
 import { handleCommand } from "./commands";
 import { formatContentBlocks } from "./content";
 import {
-  buildModelConfigOption,
-  buildModelsState,
+  maybeEmitCommandsList,
+  maybeSetSessionTitle,
+  replayHistoryToEditor,
+} from "./lifecycle-helpers";
+import {
   buildSessionConfigOptions,
   ccAliasFor,
+  composeSessionResponse,
   type ModelResolutionDeps,
 } from "./model-resolution";
-import { AVAILABLE_COMMANDS, parseCommand } from "./session";
+import { parseCommand } from "./session";
 import type { AgentCore } from "./types";
 
 const logger = createChildLogger(log, "handlers");
@@ -59,7 +60,7 @@ export type HandlerDeps = ModelResolutionDeps & {
 export const initialize = async (
   deps: HandlerDeps,
   params: acp.InitializeRequest,
-): Promise<acp.InitializeResponse> => {
+) => {
   const { config, router } = deps;
   deps.setClientCapabilities(params.clientCapabilities ?? {});
   logger.info("client capabilities:", params.clientCapabilities);
@@ -120,38 +121,10 @@ export const initialize = async (
 
 // ── session lifecycle ───────────────────────────────────────────────────────
 
-const fetchModelsState = async (deps: HandlerDeps) =>
-  buildModelsState(deps).catch((err) => {
-    logger.warn("buildModelsState failed:", err);
-    return undefined;
-  });
-
-const emitCommandsList = (deps: HandlerDeps, sessionId: string) => {
-  deps.conn
-    .sessionUpdate({
-      sessionId,
-      update: {
-        sessionUpdate: "available_commands_update",
-        availableCommands: AVAILABLE_COMMANDS,
-      },
-    })
-    .catch((err) => logger.warn("available_commands_update failed:", err));
-};
-
-/** Emit the commands list once per session. Called from newSession
- *  (deferred via setTimeout(0) so the response is sent first) and
- *  loadSession. Deduplication via commandsEmitted prevents double-sends
- *  when both paths hit the same session. */
-const maybeEmitCommandsList = (deps: HandlerDeps, sessionId: string) => {
-  if (deps.commandsEmitted.has(sessionId)) return;
-  deps.commandsEmitted.add(sessionId);
-  emitCommandsList(deps, sessionId);
-};
-
 export const newSession = async (
   deps: HandlerDeps,
   params: acp.NewSessionRequest,
-): Promise<acp.NewSessionResponse> => {
+) => {
   const projectPath = params.cwd || process.cwd();
   const session = deps.core.newSession(
     projectPath,
@@ -160,28 +133,23 @@ export const newSession = async (
   );
   logger.info("new session:", session.sessionId, "cwd:", projectPath);
 
-  const models = await fetchModelsState(deps);
   // getProjectId is read at sync time — the resolver runs in parallel with
   // session init, so the UUID may be unavailable now but populated by the
   // time cartographer actually posts the index.
   deps.cartographer?.autoIndex(projectPath, () => session.projectId);
 
-  // Sync session.currentModelId with whatever buildModelsState auto-selected,
-  // so the in-memory state matches what Zed renders in the picker.
+  // Pass the freshly-created session's currentModelId as preferred so that
+  // when MIMIR_MODEL is unset and we fall back to the first discovered
+  // model, the configOptions response and the session state agree on what's
+  // selected. Sync session state to whatever buildModelsState resolved.
+  const { models, configOptions } = await composeSessionResponse(
+    deps,
+    session,
+    session.currentModelId,
+  );
   if (models?.currentModelId) {
     deps.core.setModel(session.sessionId, models.currentModelId);
   }
-
-  // Compose the full configOptions list: backend-native mode + thought_level
-  // selectors first, model selector last. Zed's newer UI reads model
-  // selection from configOptions with category "model" when any
-  // configOptions are present, so we always include it when models are
-  // available — otherwise the picker disappears.
-  const backendOptions = buildSessionConfigOptions(deps, session);
-  const configOptions =
-    models && models.availableModels.length > 0 && models.currentModelId
-      ? [...backendOptions, buildModelConfigOption(models)]
-      : backendOptions;
   logger.info("newSession configOptions:", configOptions.length, "entries");
 
   // Emit available_commands_update after all async work completes so the
@@ -189,7 +157,11 @@ export const newSession = async (
   // the session/new response as a microtask. Placing this before the first
   // await races the client, which hasn't registered the session yet and
   // discards the notification as "failed to get session".
-  setTimeout(() => maybeEmitCommandsList(deps, session.sessionId), 0);
+  setTimeout(
+    () =>
+      maybeEmitCommandsList(deps.conn, deps.commandsEmitted, session.sessionId),
+    0,
+  );
 
   return {
     sessionId: session.sessionId,
@@ -198,40 +170,10 @@ export const newSession = async (
   };
 };
 
-const replayHistoryToEditor = (
-  deps: HandlerDeps,
-  sessionId: string,
-  messages: readonly { role: string; content: string | null }[],
-) => {
-  for (const msg of messages) {
-    if (msg.role === "user" && msg.content) {
-      deps.conn
-        .sessionUpdate({
-          sessionId,
-          update: {
-            sessionUpdate: "user_message_chunk",
-            content: { type: "text", text: msg.content },
-          },
-        })
-        .catch(() => {});
-    } else if (msg.role === "assistant" && msg.content) {
-      deps.conn
-        .sessionUpdate({
-          sessionId,
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: msg.content },
-          },
-        })
-        .catch(() => {});
-    }
-  }
-};
-
 export const loadSession = async (
   deps: HandlerDeps,
   params: acp.LoadSessionRequest,
-): Promise<acp.LoadSessionResponse> => {
+) => {
   const session = deps.core.restoreSession(
     params.sessionId,
     params.mcpServers,
@@ -247,8 +189,14 @@ export const loadSession = async (
     `(${session.messages.length} messages)`,
   );
 
-  const models = await fetchModelsState(deps);
-  maybeEmitCommandsList(deps, params.sessionId);
+  // Pass the persisted session's currentModelId so the picker reflects the
+  // user's prior selection rather than reverting to the env-var default.
+  const { models, configOptions } = await composeSessionResponse(
+    deps,
+    session,
+    session.currentModelId,
+  );
+  maybeEmitCommandsList(deps.conn, deps.commandsEmitted, params.sessionId);
 
   deps.conn
     .sessionUpdate({
@@ -262,7 +210,7 @@ export const loadSession = async (
       logger.warn("loadSession: current_mode_update failed:", err),
     );
 
-  replayHistoryToEditor(deps, params.sessionId, session.messages);
+  replayHistoryToEditor(deps.conn, params.sessionId, session.messages);
 
   if (session.title) {
     deps.conn
@@ -274,14 +222,11 @@ export const loadSession = async (
           updatedAt: new Date().toISOString(),
         },
       })
-      .catch(() => {});
+      .catch((err) =>
+        logger.debug("loadSession: session_info_update failed:", err),
+      );
   }
 
-  const backendOptions = buildSessionConfigOptions(deps, session);
-  const configOptions =
-    models && models.availableModels.length > 0 && models.currentModelId
-      ? [...backendOptions, buildModelConfigOption(models)]
-      : backendOptions;
   logger.info("loadSession configOptions:", configOptions.length, "entries");
   return {
     ...(models ? { models } : {}),
@@ -292,7 +237,7 @@ export const loadSession = async (
 export const listSessions = async (
   deps: HandlerDeps,
   _params: acp.ListSessionsRequest,
-): Promise<acp.ListSessionsResponse> => {
+) => {
   const persisted = deps.core.listSessions();
   return {
     sessions: persisted.map((s) => ({
@@ -309,7 +254,7 @@ export const listSessions = async (
 export const setSessionModel = async (
   deps: HandlerDeps,
   params: acp.SetSessionModelRequest,
-): Promise<acp.SetSessionModelResponse> => {
+) => {
   const ok = deps.core.setModel(params.sessionId, params.modelId);
   if (!ok) {
     logger.warn("setSessionModel: unknown session", params.sessionId);
@@ -341,7 +286,7 @@ export const setSessionModel = async (
 export const setSessionMode = async (
   deps: HandlerDeps,
   params: acp.SetSessionModeRequest,
-): Promise<acp.SetSessionModeResponse> => {
+) => {
   const ok = deps.core.setMode(params.sessionId, params.modeId);
   if (!ok) {
     logger.warn(
@@ -380,7 +325,9 @@ const applyModeChange = async (
         currentModeId: value,
       },
     })
-    .catch(() => {});
+    .catch((err) =>
+      logger.debug("applyModeChange: current_mode_update failed:", err),
+    );
   logger.info("mode set:", sessionId, "→", value);
 };
 
@@ -401,7 +348,7 @@ const applyThoughtLevelChange = (
 export const setSessionConfigOption = async (
   deps: HandlerDeps,
   params: acp.SetSessionConfigOptionRequest,
-): Promise<acp.SetSessionConfigOptionResponse> => {
+) => {
   const session = deps.core.getSession(params.sessionId);
   if (!session) {
     logger.warn("setSessionConfigOption: unknown session", params.sessionId);
@@ -431,14 +378,15 @@ export const setSessionConfigOption = async (
     logger.warn("setSessionConfigOption: unknown configId", params.configId);
   }
 
-  // Recompute the full configOptions including the refreshed model selector
-  // (the thought-level entries may have changed if the model switched).
-  const models = await fetchModelsState(deps);
-  const backendOptions = buildSessionConfigOptions(deps, session);
-  const configOptions =
-    models && models.availableModels.length > 0 && models.currentModelId
-      ? [...backendOptions, buildModelConfigOption(models)]
-      : backendOptions;
+  // Pass the just-updated session.currentModelId so the model selector's
+  // currentValue reflects the user's choice. Without this, picking a model
+  // appears to revert in Zed because the response advertises the env-var
+  // default instead.
+  const { configOptions } = await composeSessionResponse(
+    deps,
+    session,
+    session.currentModelId,
+  );
   logger.info(
     "setSessionConfigOption configOptions:",
     configOptions.length,
@@ -449,32 +397,7 @@ export const setSessionConfigOption = async (
 
 // ── prompt ──────────────────────────────────────────────────────────────────
 
-const maybeSetSessionTitle = (
-  deps: HandlerDeps,
-  sessionId: string,
-  promptText: string,
-) => {
-  const session = deps.core.getSession(sessionId);
-  if (!session || session.title) return;
-  const title = promptText.slice(0, 60).replace(/\s+/g, " ").trim();
-  if (!title) return;
-  deps.core.setTitle(sessionId, title);
-  deps.conn
-    .sessionUpdate({
-      sessionId,
-      update: {
-        sessionUpdate: "session_info_update",
-        title,
-        updatedAt: new Date().toISOString(),
-      },
-    })
-    .catch((err) => logger.warn("session_info_update failed:", err));
-};
-
-export const prompt = async (
-  deps: HandlerDeps,
-  params: acp.PromptRequest,
-): Promise<acp.PromptResponse> => {
+export const prompt = async (deps: HandlerDeps, params: acp.PromptRequest) => {
   const promptText = formatContentBlocks(params.prompt);
   const cmd = parseCommand(promptText);
   if (cmd) {
@@ -498,18 +421,18 @@ export const prompt = async (
   );
 
   deps.core.persistMessages(params.sessionId);
-  maybeSetSessionTitle(deps, params.sessionId, promptText);
+  maybeSetSessionTitle(deps.core, deps.conn, params.sessionId, promptText);
   return response;
 };
 
 export const cancel = async (
   deps: HandlerDeps,
   params: acp.CancelNotification,
-): Promise<void> => {
+) => {
   deps.core.cancel(params.sessionId);
 };
 
 export const authenticate = async (
   _deps: HandlerDeps,
   _params: acp.AuthenticateRequest,
-): Promise<acp.AuthenticateResponse> => ({});
+) => ({});

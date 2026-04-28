@@ -165,12 +165,11 @@ function* translateResult(
 type SafeOk<T> = { ok: true; data: IteratorResult<T> };
 type SafeErr = { ok: false; error: string };
 
-const safeNext = async <T>(
-  iter: AsyncIterator<T>,
-): Promise<SafeOk<T> | SafeErr> => {
+const safeNext = async <T>(iter: AsyncIterator<T>) => {
   const result = await iter.next().catch(errMessage);
-  if (typeof result === "string") return { ok: false, error: result };
-  return { ok: true, data: result };
+  if (typeof result === "string")
+    return { ok: false as const, error: result } satisfies SafeErr;
+  return { ok: true as const, data: result } satisfies SafeOk<T>;
 };
 
 export const runClaudeCode = async function* (options: RunClaudeCodeOptions) {

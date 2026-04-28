@@ -193,10 +193,7 @@ export const nextAnchor = (
  * No-op when weight <= 0. Never touches lastAnchorTurn or anchorIndex — only
  * nextAnchor's injection decision updates those.
  */
-export const advanceTurn = (
-  state: VoiceAnchorState,
-  weight: number,
-): VoiceAnchorState => {
+export const advanceTurn = (state: VoiceAnchorState, weight: number) => {
   if (weight <= 0) return state;
   return {
     turnCount: state.turnCount + weight,
@@ -212,16 +209,14 @@ export const advanceTurn = (
  *
  * packages/acp/src/backends/claude-code → packages/server/system-prompt.md
  */
-export const defaultSystemPromptPath = (): string =>
+export const defaultSystemPromptPath = () =>
   `${import.meta.dir}/../../../../server/system-prompt.md`;
 
 /**
  * Read and parse the system prompt from disk. Throws if the file is missing
  * or the Voice in Action section can't be located — loud failure by design.
  */
-export const loadVoiceAnchors = async (
-  filePath: string,
-): Promise<VoiceAnchor[]> => {
+export const loadVoiceAnchors = async (filePath: string) => {
   const text = await Bun.file(filePath).text();
   return parseVoiceAnchors(text);
 };

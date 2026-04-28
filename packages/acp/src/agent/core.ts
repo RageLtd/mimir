@@ -13,7 +13,6 @@ import {
   createAnchorState,
   type VoiceAnchor,
 } from "../backends/claude-code/voice-anchors";
-import type { Backend } from "../backends/types";
 import type { CartographerManager } from "../cartographer/lifecycle";
 import { formatRulesForPrompt, readProjectRules } from "../cartographer/rules";
 import { createClientMcpManager } from "../client-mcp/manager";
@@ -24,6 +23,7 @@ import type { SessionStore } from "../store/sessions";
 import type { UserMemoryStore } from "../store/user-memories";
 import { errMessage } from "../util";
 import { createChildLogger, log } from "../utils/log";
+import { emitAgentText } from "./lifecycle-helpers";
 import { promptViaServer } from "./prompt-server";
 import type { AgentCore, SessionState } from "./types";
 
@@ -43,6 +43,48 @@ export type AgentCoreDeps = {
 
 const logger = createChildLogger(log, "core");
 
+/**
+ * Kick off the three async loaders that hydrate a session's
+ * project-derived state (rules, rule-detect sidecars, canonical project
+ * UUID). Each runs independently and writes its result back to `session`
+ * when ready. Errors are logged at warn level and don't propagate — the
+ * session is usable without these completing, just with reduced features
+ * (no rule context in the prompt, no detector advisory nudges, falls back
+ * to projectPath as the server-facing identifier).
+ *
+ * Called from both `newSession` (with `onResolved` to persist the project
+ * UUID) and `restoreSession` (with `onResolved` that only persists when
+ * the resolved id changed). Centralising it here means the shape of
+ * "what makes a session ready" lives in one place.
+ */
+const kickOffSessionInit = (
+  session: SessionState,
+  projectPath: string,
+  serverUrl: string,
+  apiKey: string,
+  onResolved: (project: import("../project/resolver").ResolvedProject) => void,
+) => {
+  readProjectRules(projectPath)
+    .then((entries) => {
+      session.projectRules = formatRulesForPrompt(entries);
+    })
+    .catch((err) => logger.warn("failed to load project rules:", err));
+
+  loadRuleDetectors(projectPath)
+    .then((detectors) => {
+      session.ruleDetectors = detectors;
+    })
+    .catch((err) => logger.warn("failed to load rule detectors:", err));
+
+  resolveProjectForPath({ serverUrl, apiKey }, projectPath)
+    .then((project) => {
+      if (project) onResolved(project);
+    })
+    .catch((err) =>
+      logger.warn("project resolver failed: %s", errMessage(err)),
+    );
+};
+
 export const createAgentCore = (
   appConfig: MimirConfig,
   memoryStore: UserMemoryStore,
@@ -51,14 +93,14 @@ export const createAgentCore = (
   sessionStore: SessionStore,
   deps: AgentCoreDeps,
   cartographer?: CartographerManager | null,
-): AgentCore => {
+) => {
   const sessions = new Map<string, SessionState>();
 
   const newSession = (
     projectPath: string,
     clientMcpServers?: readonly acp.McpServer[],
     clientCapabilities: acp.ClientCapabilities = {},
-  ): SessionState => {
+  ) => {
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const session: SessionState = {
       sessionId,
@@ -82,39 +124,17 @@ export const createAgentCore = (
     };
     sessions.set(sessionId, session);
 
-    // Load project rules asynchronously — they'll be ready by the first prompt
-    readProjectRules(projectPath)
-      .then((entries) => {
-        session.projectRules = formatRulesForPrompt(entries);
-      })
-      .catch((err) => logger.warn("failed to load project rules:", err));
-
-    // Load rule-detect sidecars asynchronously — advisory nudges wired into
-    // the CC backend's PreToolUse hook on the first prompt.
-    loadRuleDetectors(projectPath)
-      .then((detectors) => {
-        session.ruleDetectors = detectors;
-      })
-      .catch((err) => logger.warn("failed to load rule detectors:", err));
-
-    // Resolve the canonical project UUID via git remote + server get-or-create.
-    // Runs in parallel with other async session init; completes before the
-    // first prompt in practice. Null result falls back to projectPath as the
-    // server-facing identifier — preserves pre-resolver behaviour on failure.
-    resolveProjectForPath(
-      { serverUrl: appConfig.serverUrl, apiKey: appConfig.apiKey },
+    kickOffSessionInit(
+      session,
       projectPath,
-    )
-      .then((project) => {
-        if (project) {
-          session.projectId = project.id;
-          session.projectInfo = project;
-          sessionStore.updateMeta(sessionId, { projectId: project.id });
-        }
-      })
-      .catch((err) =>
-        logger.warn("project resolver failed: %s", errMessage(err)),
-      );
+      appConfig.serverUrl,
+      appConfig.apiKey,
+      (project) => {
+        session.projectId = project.id;
+        session.projectInfo = project;
+        sessionStore.updateMeta(sessionId, { projectId: project.id });
+      },
+    );
 
     sessionStore.upsert(
       sessionId,
@@ -133,14 +153,18 @@ export const createAgentCore = (
     sessionId: string,
     clientMcpServers?: readonly acp.McpServer[],
     clientCapabilities: acp.ClientCapabilities = {},
-  ): SessionState | null => {
+  ) => {
     // Already live in this process — just update runtime fields.
     // If the caller replaces the MCP server list we rebuild the manager
     // so the new connection set reflects the new config.
     const existing = sessions.get(sessionId);
     if (existing) {
       if (existing.clientMcpServers !== clientMcpServers) {
-        existing.clientMcp?.close().catch(() => {});
+        existing.clientMcp
+          ?.close()
+          .catch((err) =>
+            logger.debug("clientMcp.close on rebuild failed:", err),
+          );
         existing.clientMcp = createClientMcpManager(
           sessionId,
           clientMcpServers,
@@ -177,47 +201,28 @@ export const createAgentCore = (
     };
     sessions.set(sessionId, session);
 
-    // Load project rules asynchronously
-    readProjectRules(persisted.project_path)
-      .then((entries) => {
-        session.projectRules = formatRulesForPrompt(entries);
-      })
-      .catch((err) => logger.warn("failed to load project rules:", err));
-
-    loadRuleDetectors(persisted.project_path)
-      .then((detectors) => {
-        session.ruleDetectors = detectors;
-      })
-      .catch((err) => logger.warn("failed to load rule detectors:", err));
-
-    // Re-resolve on restore so a renamed/moved project picks up changes and
-    // so we backfill projectInfo (which isn't persisted). If persisted id is
-    // already set, resolve will return the same record; negligible cost.
-    resolveProjectForPath(
-      { serverUrl: appConfig.serverUrl, apiKey: appConfig.apiKey },
+    // Re-resolve on restore so a renamed/moved project picks up changes
+    // and so we backfill projectInfo (which isn't persisted). The
+    // onResolved callback only writes to disk when the id has changed —
+    // negligible cost when it matches.
+    kickOffSessionInit(
+      session,
       persisted.project_path,
-    )
-      .then((project) => {
-        if (project) {
-          session.projectId = project.id;
-          session.projectInfo = project;
-          if (project.id !== persisted.project_id) {
-            sessionStore.updateMeta(sessionId, { projectId: project.id });
-          }
+      appConfig.serverUrl,
+      appConfig.apiKey,
+      (project) => {
+        session.projectId = project.id;
+        session.projectInfo = project;
+        if (project.id !== persisted.project_id) {
+          sessionStore.updateMeta(sessionId, { projectId: project.id });
         }
-      })
-      .catch((err) =>
-        logger.warn(
-          "project re-resolve on restore failed: %s",
-          errMessage(err),
-        ),
-      );
+      },
+    );
 
     return session;
   };
 
-  const getSession = (sessionId: string): SessionState | undefined =>
-    sessions.get(sessionId);
+  const getSession = (sessionId: string) => sessions.get(sessionId);
 
   const listSessions = () => sessionStore.list();
 
@@ -285,20 +290,15 @@ export const createAgentCore = (
     promptText: string,
     conn: acp.AgentSideConnection,
     promptBlocks?: readonly acp.ContentBlock[],
-  ): Promise<acp.PromptResponse> => {
+  ) => {
     const session = getSession(sessionId);
     if (!session) {
       logger.error("prompt: unknown session", sessionId);
-      await conn.sessionUpdate({
+      await emitAgentText(
+        conn,
         sessionId,
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: {
-            type: "text" as const,
-            text: "Error: session not found. Create a new session first.",
-          },
-        },
-      });
+        "Error: session not found. Create a new session first.",
+      );
       return { stopReason: "end_turn" as const };
     }
     const abortController = new AbortController();
@@ -321,48 +321,40 @@ export const createAgentCore = (
 
     const stampedPrompt = `[${stamp}]\n${promptText}`;
 
-    let backend: Backend;
-    try {
-      backend = router.forModel(session.currentModelId);
-    } catch (err) {
-      const msg = errMessage(err);
-      logger.error("Backend routing failed:", msg);
-      await conn.sessionUpdate({
-        sessionId,
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text" as const, text: `Error: ${msg}` },
-        },
-      });
+    const route = router.forModel(session.currentModelId);
+    if (!route.ok) {
+      logger.error("Backend routing failed:", route.error);
+      await emitAgentText(conn, sessionId, `Error: ${route.error}`);
       return { stopReason: "end_turn" as const };
     }
+    const backend = route.backend;
 
     if (backend.kind === "claude-code") {
-      return promptViaClaudeCode(
+      return promptViaClaudeCode({
         session,
-        stampedPrompt,
+        promptText: stampedPrompt,
         conn,
         abortController,
         backend,
         contextClient,
         memoryStore,
-        {
+        anchorOpts: {
           library: deps.voiceAnchorLibrary,
           interval: deps.anchorInterval,
         },
         promptBlocks,
-      );
+      });
     }
-    return promptViaServer(
+    return promptViaServer({
       session,
-      stampedPrompt,
+      promptText: stampedPrompt,
       conn,
       abortController,
       backend,
       appConfig,
       memoryStore,
       cartographer,
-    );
+    });
   };
 
   const cancel = (sessionId: string) => {
@@ -375,7 +367,11 @@ export const createAgentCore = (
   const dispose = () => {
     for (const session of sessions.values()) {
       session.abortController?.abort();
-      session.clientMcp?.close().catch(() => {});
+      session.clientMcp
+        ?.close()
+        .catch((err) =>
+          logger.debug("clientMcp.close on dispose failed:", err),
+        );
     }
     memoryStore.close();
     sessionStore.close();

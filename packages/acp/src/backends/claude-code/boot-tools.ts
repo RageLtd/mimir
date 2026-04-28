@@ -63,9 +63,7 @@ const buildProfileResult = (userContext: string | null) => {
  * side effects. Session context is now injected directly into the
  * system prompt instead of via a boot tool.
  */
-const createBootServer = (
-  content: BootContent,
-): McpSdkServerConfigWithInstance => {
+const createBootServer = (content: BootContent) => {
   const profileText = buildProfileResult(content.userContext);
   const rulesText =
     content.projectRules || "No project rules found in this codebase.";

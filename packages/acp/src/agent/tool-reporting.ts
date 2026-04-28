@@ -49,8 +49,7 @@ const TOOL_KIND_MAP: Record<string, acp.ToolKind> = {
   user_profile_remove: "delete",
 };
 
-export const toolKindFor = (name: string): acp.ToolKind =>
-  TOOL_KIND_MAP[name] ?? "other";
+export const toolKindFor = (name: string) => TOOL_KIND_MAP[name] ?? "other";
 
 // ── Title extraction ──
 
@@ -83,7 +82,7 @@ export const toolTitle = (name: string, args: Record<string, unknown>) => {
 export const extractLocations = (
   _name: string,
   args: Record<string, unknown>,
-): acp.ToolCallLocation[] | undefined => {
+) => {
   const path = args.path ?? args.file_path ?? args.filePath;
   if (typeof path !== "string") return undefined;
   const line =
@@ -97,12 +96,23 @@ export const extractLocations = (
 
 // ── Diff content builders ──
 
+const diffContent = (path: string, oldText: string | null, newText: string) => [
+  { type: "diff" as const, path, oldText, newText },
+];
+
+const textContent = (text: string) => [
+  {
+    type: "content" as const,
+    content: { type: "text" as const, text },
+  },
+];
+
 /** Build rich tool call content (diffs, terminal output) for tool results. */
 export const buildToolCallContent = (
   name: string,
   args: Record<string, unknown>,
   result: string,
-): acp.ToolCallContent[] | undefined => {
+) => {
   // Write operations → diff content
   if (
     name === "fs_write_text_file" ||
@@ -111,14 +121,7 @@ export const buildToolCallContent = (
   ) {
     const path = (args.path ?? args.file_path) as string | undefined;
     if (path && typeof args.content === "string") {
-      return [
-        {
-          type: "diff",
-          path,
-          oldText: null,
-          newText: args.content as string,
-        },
-      ];
+      return diffContent(path, null, args.content as string);
     }
   }
 
@@ -126,14 +129,11 @@ export const buildToolCallContent = (
   if (name === "Edit") {
     const path = (args.file_path ?? args.path) as string | undefined;
     if (path) {
-      return [
-        {
-          type: "diff",
-          path,
-          oldText: (args.old_string as string) ?? null,
-          newText: (args.new_string as string) ?? "",
-        },
-      ];
+      return diffContent(
+        path,
+        (args.old_string as string) ?? null,
+        (args.new_string as string) ?? "",
+      );
     }
   }
 
@@ -143,15 +143,7 @@ export const buildToolCallContent = (
   if (name === "Bash" || name === "create_terminal" || name === "terminal") {
     const output = result.trim();
     if (output.length > 0) {
-      return [
-        {
-          type: "content",
-          content: {
-            type: "text",
-            text: `\`\`\`console\n${output}\n\`\`\``,
-          },
-        },
-      ];
+      return textContent(`\`\`\`console\n${output}\n\`\`\``);
     }
   }
 
@@ -161,9 +153,7 @@ export const buildToolCallContent = (
     name === "fs_read_text_file" ||
     name === "read_text_file"
   ) {
-    if (result.length > 0) {
-      return [{ type: "content", content: { type: "text", text: result } }];
-    }
+    if (result.length > 0) return textContent(result);
   }
 
   // Search / fetch tools → surface results as text
@@ -174,9 +164,7 @@ export const buildToolCallContent = (
     name === "WebSearch" ||
     name === "web_search"
   ) {
-    if (result.length > 0) {
-      return [{ type: "content", content: { type: "text", text: result } }];
-    }
+    if (result.length > 0) return textContent(result);
   }
 
   return undefined;

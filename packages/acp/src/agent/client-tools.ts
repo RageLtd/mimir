@@ -113,7 +113,7 @@ export const executeClientTool = async (
   args: Record<string, unknown>,
   sessionId: string,
   conn: acp.AgentSideConnection,
-): Promise<string> => {
+) => {
   try {
     if (name === "fs_read_text_file" || name === "read_text_file") {
       const result = await conn.readTextFile({

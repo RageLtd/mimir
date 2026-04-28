@@ -61,36 +61,36 @@ export const buildMcpServers = (
   clientMcpServers?: readonly McpServer[],
   bootServer?: McpSdkServerConfigWithInstance,
 ) => {
-  const clientEntries: Record<string, McpServerConfig> = {};
-  for (const server of clientMcpServers ?? []) {
-    clientEntries[server.name] = acpServerToConfigEntry(server);
-  }
-
   // Resolve built-in MCP server scripts relative to this file.
   const userMemoryScript = new URL(
     "../../tools/user-memory-mcp.ts",
     import.meta.url,
   ).pathname;
 
-  return {
-    // Client-provided servers first so mimir's own servers always win on
-    // name collision (mimir and context7 are reserved names).
-    ...clientEntries,
-    "user-memory": {
-      command: "bun",
-      args: [userMemoryScript],
-      env: { MIMIR_USER_MEMORY_DB: userMemoryDbPath },
-    },
-    mimir: {
-      type: "http",
-      url: `${serverUrl}/mcp`,
-    },
-    context7: {
-      command: "bunx",
-      args: ["@upstash/context7-mcp"],
-    },
-    // Boot server delivers per-session context (user profile, session
-    // history, project rules) as tool results on the first turn.
-    ...(bootServer ? { [bootServer.name]: bootServer } : {}),
-  } satisfies Record<string, McpServerConfig>;
+  // Type as `Record<string, McpServerConfig>` so callers can index by
+  // arbitrary client-supplied server names without TypeScript narrowing
+  // the result to the literal keys defined inline below. A `satisfies`
+  // clause would lock the inferred type to those literal keys and hide
+  // dynamic entries (the original test failures came from this).
+  const servers: Record<string, McpServerConfig> = {};
+
+  // Client-provided servers go in first so mimir's own servers can
+  // overwrite them on name collision (mimir and context7 are reserved).
+  for (const server of clientMcpServers ?? []) {
+    servers[server.name] = acpServerToConfigEntry(server);
+  }
+
+  servers["user-memory"] = {
+    command: "bun",
+    args: [userMemoryScript],
+    env: { MIMIR_USER_MEMORY_DB: userMemoryDbPath },
+  };
+  servers.mimir = { type: "http", url: `${serverUrl}/mcp` };
+  servers.context7 = { command: "bunx", args: ["@upstash/context7-mcp"] };
+
+  // Boot server delivers per-session context (user profile, session
+  // history, project rules) as tool results on the first turn.
+  if (bootServer) servers[bootServer.name] = bootServer;
+
+  return servers;
 };
