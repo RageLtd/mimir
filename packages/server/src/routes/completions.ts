@@ -8,7 +8,6 @@
  * as typed objects through the middleware pipeline. No more ad-hoc JSON transforms.
  */
 
-import type { ModelMessage } from "ai";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { runAgent } from "../agent/run";
@@ -23,136 +22,11 @@ import type {
   OpenAIToolDef,
 } from "../middleware/types";
 import { injectUserProfile } from "../middleware/user-profile";
-import { log as baseLog, requestLog } from "../util/logger";
+import { requestLog } from "../util/logger";
+import { normalizeMessages } from "./openai-format";
 
-/**
- * Convert OpenAI-format messages to AI SDK ModelMessage format.
- *
- * This is the format bridge between what clients (OpenCode/Zed) send
- * (OpenAI chat completions format) and what the AI SDK expects (ModelMessage).
- *
- * Key differences:
- * - System messages: OpenAI allows array content, AI SDK requires string
- * - Tool messages: OpenAI uses { role: "tool", tool_call_id, content },
- *   AI SDK expects { role: "tool", content: [{ type: "tool-result", ... }] }
- * - Tool messages without tool_call_id: some clients send bare tool results
- *   as { role: "tool", content: [...] } — these get converted to user messages
- *   since we can't reconstruct the required toolCallId/toolName
- */
-function normalizeMessages(messages: unknown[]): ModelMessage[] {
-  const rawMessages = messages as Array<{
-    role: string;
-    content: unknown;
-    tool_call_id?: string;
-    tool_calls?: Array<{
-      id: string;
-      type: string;
-      function: { name: string; arguments: string };
-    }>;
-  }>;
-
-  // Build a lookup from tool_call_id → toolName by scanning assistant messages.
-  // OpenAI format only puts tool_call_id on tool results (no name), so we
-  // resolve the name from the preceding assistant message's tool_calls array.
-  const toolCallIdToName = new Map<string, string>();
-  for (const msg of rawMessages) {
-    if (msg.role === "assistant" && msg.tool_calls?.length) {
-      for (const tc of msg.tool_calls) {
-        toolCallIdToName.set(tc.id, tc.function.name);
-      }
-    }
-  }
-
-  return rawMessages.map((msg): ModelMessage => {
-    // System messages: AI SDK requires string content, not arrays
-    if (msg.role === "system") {
-      if (Array.isArray(msg.content)) {
-        const text = (msg.content as Array<{ type?: string; text?: string }>)
-          .filter((p) => p.type === "text")
-          .map((p) => p.text)
-          .join("\n");
-        return { role: "system", content: text };
-      }
-      return { role: "system", content: String(msg.content ?? "") };
-    }
-
-    // Tool messages with tool_call_id: proper OpenAI tool result
-    if (msg.role === "tool" && msg.tool_call_id) {
-      const text = extractTextContent(msg.content);
-      const resolvedName = toolCallIdToName.get(msg.tool_call_id) ?? "unknown";
-      return {
-        role: "tool",
-        content: [
-          {
-            type: "tool-result",
-            toolCallId: msg.tool_call_id,
-            toolName: resolvedName,
-            output: { type: "text", value: text },
-          },
-        ],
-      } as ModelMessage;
-    }
-
-    // Tool messages WITHOUT tool_call_id: can't satisfy ModelMessage schema.
-    // Convert to user message to preserve the content without crashing.
-    if (msg.role === "tool" && !msg.tool_call_id) {
-      const text = extractTextContent(msg.content);
-      return { role: "user", content: `[Tool output]: ${text}` };
-    }
-
-    // Assistant messages with tool_calls: convert to AI SDK format
-    if (msg.role === "assistant" && msg.tool_calls?.length) {
-      const parts: Array<{ type: string; [key: string]: unknown }> = [];
-
-      // Add text content if present
-      const text = extractTextContent(msg.content);
-      if (text) {
-        parts.push({ type: "text", text });
-      }
-
-      // Add tool call parts
-      for (const tc of msg.tool_calls) {
-        parts.push({
-          type: "tool-call",
-          toolCallId: tc.id,
-          toolName: tc.function.name,
-          input: safeParseJSON(tc.function.arguments ?? "{}"),
-        });
-      }
-
-      return { role: "assistant", content: parts } as ModelMessage;
-    }
-
-    // User/Assistant messages: pass through as-is
-    // The AI SDK accepts both string and array content for these roles
-    return msg as ModelMessage;
-  });
-}
-
-/** Extract text from either a string or array-of-parts content field */
-function extractTextContent(content: unknown) {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return (content as Array<{ type?: string; text?: string }>)
-      .filter((p) => p.type === "text" && p.text)
-      .map((p) => p.text)
-      .join("\n");
-  }
-  return String(content ?? "");
-}
-
-/** Safely parse JSON arguments, returning the string as-is on failure */
-function safeParseJSON(str: string) {
-  try {
-    return JSON.parse(str);
-  } catch (err) {
-    baseLog.debug(
-      { err: err instanceof Error ? err.message : String(err) },
-      "safeParseJSON failed, returning raw string",
-    );
-    return str;
-  }
-}
+// Message format translation (OpenAI ↔ AI SDK ModelMessage) lives in
+// ./openai-format.ts so this file reads as routing logic.
 
 /**
  * Generate a correlation ID for request logging.
@@ -254,11 +128,11 @@ completions.post("/v1/chat/completions", async (c) => {
   log.info(
     {
       beforeRoles: req.messages.map(
-        (m: ModelMessage) =>
+        (m) =>
           `${m.role}:${typeof m.content === "string" ? "string" : "array"}`,
       ),
       afterRoles: normalized.map(
-        (m: ModelMessage) =>
+        (m) =>
           `${m.role}:${typeof m.content === "string" ? "string" : "array"}`,
       ),
     },

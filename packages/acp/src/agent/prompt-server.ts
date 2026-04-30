@@ -90,8 +90,11 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
     let contentBuffer = "";
     let hasContent = false;
 
-    try {
-      for await (const event of backend.run({
+    // Manually drive the backend stream — same pattern as prompt-cc.ts.
+    // `iter.next().catch(errMessage)` makes abort vs real error explicit
+    // without try/catch wrapping the whole loop.
+    const iter = backend
+      .run({
         prompt: promptText,
         systemPrompt: "",
         messages: session.messages,
@@ -100,33 +103,41 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
         metadata,
         modelId: session.currentModelId,
         signal: abortController.signal,
-      })) {
-        if (event.type === "text") {
-          hasContent = true;
-          contentBuffer += event.text;
-          await emitAgentText(conn, session.sessionId, event.text);
-        } else if (event.type === "tool_call" && !event.observeOnly) {
-          pendingToolCalls.push({
-            id: event.id,
-            name: event.name,
-            input: event.input,
-          });
-        } else if (event.type === "error") {
-          logger.error("Backend error:", event.error);
-          await emitAgentText(conn, session.sessionId, `Error: ${event.error}`);
-          return { stopReason: "end_turn" as const };
-        } else if (event.type === "finish") {
-          // fall through to post-stream tool execution
+      })
+      [Symbol.asyncIterator]();
+
+    let streamErrored = false;
+    while (true) {
+      const step = await iter.next().catch(errMessage);
+      if (typeof step === "string") {
+        if (abortController.signal.aborted) {
+          return { stopReason: "cancelled" as const };
         }
+        logger.error("Agent loop error:", step);
+        return { stopReason: "end_turn" as const };
       }
-    } catch (err) {
-      if (abortController.signal.aborted) {
-        return { stopReason: "cancelled" as const };
+      if (step.done) break;
+      const event = step.value;
+
+      if (event.type === "text") {
+        hasContent = true;
+        contentBuffer += event.text;
+        await emitAgentText(conn, session.sessionId, event.text);
+      } else if (event.type === "tool_call" && !event.observeOnly) {
+        pendingToolCalls.push({
+          id: event.id,
+          name: event.name,
+          input: event.input,
+        });
+      } else if (event.type === "error") {
+        logger.error("Backend error:", event.error);
+        await emitAgentText(conn, session.sessionId, `Error: ${event.error}`);
+        streamErrored = true;
+        break;
       }
-      const msg = errMessage(err);
-      logger.error("Agent loop error:", msg);
-      return { stopReason: "end_turn" as const };
+      // event.type === "finish" falls through to post-stream tool execution
     }
+    if (streamErrored) return { stopReason: "end_turn" as const };
 
     if (pendingToolCalls.length === 0) {
       return { stopReason: "end_turn" as const };
@@ -168,12 +179,19 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
         const result = executeUserMemoryTool(memoryStore, tc.name, tc.input);
         resultContent = result.content;
       } else if (cartographer && isLocalCartographerTool(tc.name)) {
-        try {
-          resultContent = await cartographer.executeTool(tc.name, tc.input);
-        } catch (err) {
-          const msg = errMessage(err);
-          logger.error("Cartographer tool error:", msg);
-          resultContent = `Error executing ${tc.name}: ${msg}`;
+        // Two-arg .then() to preserve success-vs-error distinction without
+        // try/catch — errMessage() narrows thrown Errors to a string, and
+        // we wrap the success path in `{ ok: true }` so the caller can tell
+        // a real "" tool output apart from a raised exception.
+        const outcome = await cartographer.executeTool(tc.name, tc.input).then(
+          (data) => ({ ok: true as const, data }),
+          (err) => ({ ok: false as const, error: errMessage(err) }),
+        );
+        if (outcome.ok) {
+          resultContent = outcome.data;
+        } else {
+          logger.error("Cartographer tool error:", outcome.error);
+          resultContent = `Error executing ${tc.name}: ${outcome.error}`;
         }
       } else if (clientToolNames.has(tc.name)) {
         resultContent = await executeClientTool(
