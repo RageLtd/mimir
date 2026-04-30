@@ -77,6 +77,17 @@ export type SessionState = {
    * for the mimir-server backend path.
    */
   voiceAnchors: VoiceAnchorState;
+  /**
+   * One-shot flag — when true, the next CC `query()` invocation runs with
+   * `continue: false` so the Claude Agent SDK opens a fresh session (and
+   * fresh MCP connections). Cleared after that turn. The SDK doesn't
+   * handle `notifications/tools/list_changed` mid-session, so this is the
+   * mechanism for picking up newly-available tools after an MCP server
+   * completes OAuth or otherwise changes its tool advertisement.
+   * Triggered by the `/reload-mcp` slash command. Unused for non-CC
+   * backends.
+   */
+  ccNeedsFreshSession?: boolean;
 };
 
 export type AgentCore = {
@@ -97,6 +108,13 @@ export type AgentCore = {
   getSession: (sessionId: string) => SessionState | undefined;
   listSessions: () => import("../store/sessions").PersistedSession[];
   setModel: (sessionId: string, modelId: string) => boolean;
+  /**
+   * Flag the session so the next CC turn runs `query()` with `continue:
+   * false` — used by `/reload-mcp` to pick up newly-available MCP tools
+   * after a server completes OAuth. No-op when the session is unknown or
+   * routed to a non-CC backend.
+   */
+  markCcNeedsFreshSession: (sessionId: string) => boolean;
   setMode: (sessionId: string, modeId: string) => boolean;
   setThoughtLevel: (sessionId: string, level: string) => boolean;
   setTitle: (sessionId: string, title: string) => void;

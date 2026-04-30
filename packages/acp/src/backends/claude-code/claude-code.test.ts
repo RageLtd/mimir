@@ -135,6 +135,42 @@ describe("buildSdkOptions", () => {
     expect(opts.continue).toBe(true);
   });
 
+  test("sets continue:false when resumeSession is false", () => {
+    const opts = buildSdkOptions({
+      systemPrompt: "<xml>prompt</xml>",
+      cc: baseCc,
+      workingDirectory: "/tmp/test",
+      serverUrl: "http://localhost:3777",
+      userMemoryDbPath: "/tmp/test-memories.db",
+      resumeSession: false,
+    });
+    expect(opts.continue).toBe(false);
+    expect(opts.persistSession).toBe(true);
+  });
+
+  test("keeps continue:true when resumeSession is undefined", () => {
+    const opts = buildSdkOptions({
+      systemPrompt: "<xml>prompt</xml>",
+      cc: baseCc,
+      workingDirectory: "/tmp/test",
+      serverUrl: "http://localhost:3777",
+      userMemoryDbPath: "/tmp/test-memories.db",
+    });
+    expect(opts.continue).toBe(true);
+  });
+
+  test("keeps continue:true when resumeSession is true", () => {
+    const opts = buildSdkOptions({
+      systemPrompt: "<xml>prompt</xml>",
+      cc: baseCc,
+      workingDirectory: "/tmp/test",
+      serverUrl: "http://localhost:3777",
+      userMemoryDbPath: "/tmp/test-memories.db",
+      resumeSession: true,
+    });
+    expect(opts.continue).toBe(true);
+  });
+
   test("sets strictMcpConfig to true", () => {
     const opts = mkOpts();
     expect(opts.strictMcpConfig).toBe(true);

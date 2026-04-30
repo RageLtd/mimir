@@ -9,7 +9,7 @@
 
 import type { CCBackendConfig } from "../../config";
 import { getCCModelFlag, isCCModel } from "../../routing";
-import type { Backend, BackendEvent, BackendRunOptions } from "../types";
+import type { Backend, BackendRunOptions } from "../types";
 import { runClaudeCode } from "./runner";
 
 export type ClaudeCodeBackendDeps = {
@@ -22,12 +22,8 @@ export type ClaudeCodeBackendDeps = {
   readonly defaultCwd: string;
 };
 
-export const createClaudeCodeBackend = (
-  deps: ClaudeCodeBackendDeps,
-): Backend => {
-  const run = async function* (
-    options: BackendRunOptions,
-  ): AsyncGenerator<BackendEvent> {
+export const createClaudeCodeBackend = (deps: ClaudeCodeBackendDeps) => {
+  const run = async function* (options: BackendRunOptions) {
     const cwd =
       deps.cc.workingDirectory ?? options.projectPath ?? deps.defaultCwd;
 
@@ -49,9 +45,10 @@ export const createClaudeCodeBackend = (
       permissionMode: options.permissionMode,
       effort: options.effort,
       ruleDetectors: options.ruleDetectors,
+      resumeSession: options.resumeSession,
       signal: options.signal,
     });
   };
 
-  return { kind: "claude-code", run };
+  return { kind: "claude-code" as const, run } satisfies Backend;
 };

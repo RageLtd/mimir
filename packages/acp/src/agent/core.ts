@@ -25,14 +25,14 @@ import { errMessage } from "../util";
 import { createChildLogger, log } from "../utils/log";
 import { emitAgentText } from "./lifecycle-helpers";
 import { promptViaServer } from "./prompt-server";
-import type { AgentCore, SessionState } from "./types";
+import type { SessionState } from "./types";
 
 /**
  * Default mode string for new sessions. Used as a backend-agnostic starting
  * point — CC will resolve it against `isValidCCMode` which accepts `"default"`;
  * server/Copilot don't read currentMode at all, so this is inert for them.
  */
-const DEFAULT_MODE = "default";
+const DEFAULT_MODE = "auto";
 
 export type AgentCoreDeps = {
   /** Parsed Voice in Action library used by the CC anchor wrapper. */
@@ -242,6 +242,13 @@ export const createAgentCore = (
     return true;
   };
 
+  const markCcNeedsFreshSession = (sessionId: string) => {
+    const session = sessions.get(sessionId);
+    if (!session) return false;
+    session.ccNeedsFreshSession = true;
+    return true;
+  };
+
   /**
    * Accepts any non-empty mode id. Validation against the backend's mode
    * catalogue happens one level up in `agent/index.ts:setSessionConfigOption`
@@ -389,6 +396,7 @@ export const createAgentCore = (
     setTitle,
     persistMessages,
     compact,
+    markCcNeedsFreshSession,
     prompt,
     cancel,
     dispose,

@@ -200,6 +200,19 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
   // leaked across sessions (latent collision risk + unbounded growth).
   const toolCallInfo: CcToolCallInfo = new Map();
 
+  // One-shot fresh-session flag: when set (typically by /reload-mcp
+  // after an OAuth flow), this turn runs `query()` with `continue: false`
+  // so the SDK opens a new session and reconnects MCP servers. We read
+  // and clear before calling backend.run so the next turn defaults back
+  // to the rolling-context behaviour.
+  const freshSession = session.ccNeedsFreshSession === true;
+  if (freshSession) {
+    session.ccNeedsFreshSession = false;
+    logger.info(
+      "ccNeedsFreshSession set — running this turn with continue:false to reconnect MCP servers",
+    );
+  }
+
   // Iteration-weighted turn counting for voice anchors. Each transition
   // from tool_result → text/thinking marks a new generation cycle; parallel
   // tool calls within a single generation don't inflate the count. Base
@@ -233,6 +246,7 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
         session.currentMode as import("@anthropic-ai/claude-agent-sdk").PermissionMode,
       effort: session.currentThoughtLevel,
       ruleDetectors: session.ruleDetectors,
+      resumeSession: freshSession ? false : undefined,
       signal: abortController.signal,
     })
     [Symbol.asyncIterator]();

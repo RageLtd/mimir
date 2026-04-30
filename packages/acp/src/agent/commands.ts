@@ -9,6 +9,8 @@
 
 import type * as acp from "@agentclientprotocol/sdk";
 import { isValidCCMode } from "../backends/claude-code/config-options";
+import { authenticateServer } from "../mcp-config/auth-injector";
+import { probeHttpServer } from "../mcp-config/probe";
 import type { UserMemoryStore } from "../store/user-memories";
 import { emitAgentText } from "./lifecycle-helpers";
 import type { ParsedCommand } from "./session";
@@ -107,6 +109,111 @@ const runMode = async (
 const runCompact = async (deps: CommandDeps, sessionId: string) => {
   deps.core.compact(sessionId);
   await reply(deps.conn, sessionId, "Session history cleared.");
+  return END_TURN;
+};
+
+const runMcpReload = async (deps: CommandDeps, sessionId: string) => {
+  const ok = deps.core.markCcNeedsFreshSession(sessionId);
+  if (!ok) {
+    await reply(deps.conn, sessionId, "Session not found.");
+    return END_TURN;
+  }
+  await reply(
+    deps.conn,
+    sessionId,
+    "MCP servers will reconnect on your next prompt — newly-available tools (e.g. after an OAuth flow) will become visible then.",
+  );
+  return END_TURN;
+};
+
+const runMcpList = async (deps: CommandDeps, sessionId: string) => {
+  const session = deps.core.getSession(sessionId);
+  if (!session) {
+    await reply(deps.conn, sessionId, "Session not found.");
+    return END_TURN;
+  }
+  const servers = session.clientMcpServers ?? [];
+  if (servers.length === 0) {
+    await reply(
+      deps.conn,
+      sessionId,
+      "No MCP servers configured for this session.",
+    );
+    return END_TURN;
+  }
+  // Probe HTTP servers in parallel — total wait is the slowest server's
+  // round-trip rather than the sum. Stdio servers aren't probed (spawning
+  // the binary just to count tools is heavier than the value warrants).
+  const lines = await Promise.all(
+    servers.map(async (s) => {
+      if ("command" in s) {
+        return `- **${s.name}** (stdio: \`${s.command}\`)`;
+      }
+      const result = await probeHttpServer(s);
+      if (result.ok) {
+        // Tool count is the honest signal — a server returning ~2 tools
+        // is almost certainly bootstrap-only (auth tools), and the user
+        // can run `/mcp auth <name>` to expand the toolset.
+        return `- **${s.name}** (${s.type}: ${s.url}) — ${result.toolCount} tool${result.toolCount === 1 ? "" : "s"}`;
+      }
+      const hint =
+        result.reason === "unauthorized"
+          ? ` — run \`/mcp auth ${s.name}\``
+          : "";
+      return `- **${s.name}** (${s.type}: ${s.url}) — connection failed: ${result.message}${hint}`;
+    }),
+  );
+  await reply(
+    deps.conn,
+    sessionId,
+    `**MCP servers** (${servers.length})\n\n${lines.join("\n")}`,
+  );
+  return END_TURN;
+};
+
+const runMcpAuth = async (
+  deps: CommandDeps,
+  sessionId: string,
+  name: string,
+) => {
+  if (!name) {
+    await reply(
+      deps.conn,
+      sessionId,
+      "Usage: `/mcp auth <server-name>`\nUse `/mcp list` to see configured servers.",
+    );
+    return END_TURN;
+  }
+  const session = deps.core.getSession(sessionId);
+  if (!session) {
+    await reply(deps.conn, sessionId, "Session not found.");
+    return END_TURN;
+  }
+  const servers = session.clientMcpServers ?? [];
+  await reply(
+    deps.conn,
+    sessionId,
+    `Starting OAuth flow for **${name}** — your browser should open shortly. Approve the request and return here; the next prompt will pick up the authenticated tools.`,
+  );
+  const result = await authenticateServer(servers, name);
+  if (!result.ok) {
+    await reply(
+      deps.conn,
+      sessionId,
+      `OAuth flow for **${name}** failed: ${result.error}`,
+    );
+    return END_TURN;
+  }
+  // Replace the session's MCP server list with the bearer-injected version
+  // and force the next CC turn to open a fresh SDK session so the
+  // newly-authenticated server's tool list appears in the namespace.
+  session.clientMcpServers = result.servers;
+  deps.core.markCcNeedsFreshSession(sessionId);
+  await reply(
+    deps.conn,
+    sessionId,
+    `**${name}** authenticated. Tools will become visible on your next prompt.`,
+  );
   return END_TURN;
 };
 
@@ -209,5 +316,11 @@ export const handleCommand = async (
       return runMemoryStore(deps, sessionId, cmd.fact);
     case "memory_delete":
       return runMemoryDelete(deps, sessionId, cmd.id);
+    case "mcp_list":
+      return runMcpList(deps, sessionId);
+    case "mcp_reload":
+      return runMcpReload(deps, sessionId);
+    case "mcp_auth":
+      return runMcpAuth(deps, sessionId, cmd.name);
   }
 };

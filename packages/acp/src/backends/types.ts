@@ -103,6 +103,13 @@ export type BackendRunOptions = {
    * backends other than claude-code. Passed through from the session state.
    */
   ruleDetectors?: readonly Detector[];
+  /**
+   * When `false`, the CC backend runs `query()` with `continue: false` for
+   * this single invocation — fresh SDK session, fresh MCP connections.
+   * Unused by other backends. Default behaviour (omitted or `true`) keeps
+   * the existing `continue: true` rolling-context behaviour.
+   */
+  resumeSession?: boolean;
 };
 
 export type Backend = {

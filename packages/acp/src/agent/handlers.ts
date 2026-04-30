@@ -17,6 +17,8 @@ import { discoverCCModelsViaSdk } from "../backends/claude-code/models";
 import { checkForSdkUpdate } from "../backends/claude-code/sdk-updater";
 import type { CartographerManager } from "../cartographer/lifecycle";
 import type { MimirConfig } from "../config";
+import { injectStoredTokens } from "../mcp-config/auth-injector";
+import { loadMcpConfig, mergeMcpServers } from "../mcp-config/file-reader";
 import { ccAvailable, discoverCopilotModels } from "../routing";
 import type { UserMemoryStore } from "../store/user-memories";
 import { createChildLogger, log } from "../utils/log";
@@ -126,9 +128,19 @@ export const newSession = async (
   params: acp.NewSessionRequest,
 ) => {
   const projectPath = params.cwd || process.cwd();
+  // Load `.mcp.json` from project root + global config and merge with the
+  // client-supplied list. Client entries (Zed's `context_servers`) win on
+  // name collision so an interactive UI override always beats the file.
+  const fileServers = await loadMcpConfig(projectPath);
+  const mergedServers = mergeMcpServers(fileServers, params.mcpServers);
+  // Attach Bearer headers from any prior OAuth flows that persisted
+  // tokens to disk. Servers without persisted tokens pass through —
+  // the user runs `/mcp list` to see real status (tool counts) and
+  // `/mcp auth <name>` to authenticate on demand.
+  const authedServers = await injectStoredTokens(mergedServers);
   const session = deps.core.newSession(
     projectPath,
-    params.mcpServers,
+    authedServers,
     deps.getClientCapabilities(),
   );
   logger.info("new session:", session.sessionId, "cwd:", projectPath);
@@ -174,9 +186,27 @@ export const loadSession = async (
   deps: HandlerDeps,
   params: acp.LoadSessionRequest,
 ) => {
-  const session = deps.core.restoreSession(
+  // First-pass restore so we have an authoritative `projectPath` for the
+  // `.mcp.json` lookup — works for both warm (already in-memory) and cold
+  // (restored from sessionStore) paths.
+  const initialSession = deps.core.restoreSession(
     params.sessionId,
     params.mcpServers,
+    deps.getClientCapabilities(),
+  );
+  if (!initialSession) {
+    logger.warn("loadSession: unknown session", params.sessionId);
+    return {};
+  }
+  // Re-load `.mcp.json` so edits to the file (or its global counterpart)
+  // take effect when a session resumes. The second restoreSession call is
+  // hot-path-only (in-memory) and idempotent when servers are unchanged.
+  const fileServers = await loadMcpConfig(initialSession.projectPath);
+  const mergedServers = mergeMcpServers(fileServers, params.mcpServers);
+  const authedServers = await injectStoredTokens(mergedServers);
+  const session = deps.core.restoreSession(
+    params.sessionId,
+    authedServers,
     deps.getClientCapabilities(),
   );
   if (!session) {

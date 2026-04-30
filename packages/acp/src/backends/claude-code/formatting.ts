@@ -73,6 +73,15 @@ export type RunClaudeCodeOptions = {
    * `additionalContext`. Loaded once per session at newSession time.
    */
   readonly ruleDetectors?: readonly Detector[];
+  /**
+   * When `false`, the SDK runs `query()` with `continue: false` for this
+   * single invocation — fresh session, fresh MCP connections. Used by
+   * `/reload-mcp` to pick up newly-available tools after an MCP server
+   * completes OAuth, since the SDK doesn't honour mid-session
+   * `notifications/tools/list_changed`. Default behaviour (omitted or
+   * `true`) keeps the rolling-context `continue: true` semantic.
+   */
+  readonly resumeSession?: boolean;
   readonly signal?: AbortSignal;
 };
 
@@ -106,6 +115,7 @@ export const buildSdkOptions = (
     | "permissionMode"
     | "effort"
     | "ruleDetectors"
+    | "resumeSession"
   >,
 ) => {
   // System prompt arrives with session context already embedded (injected by
@@ -132,7 +142,11 @@ export const buildSdkOptions = (
     ),
     strictMcpConfig: true,
     persistSession: true,
-    continue: true,
+    // `continue: false` for this turn forces a fresh SDK session — fresh
+    // MCP connections, no rolled-over context. Used by /reload-mcp after
+    // OAuth flows. Default (undefined or true) keeps the existing
+    // rolling-context behaviour.
+    continue: options.resumeSession === false ? false : true,
     settingSources: [],
     includePartialMessages: true,
     // Thinking mode shaped per-model from the capability cache populated at
