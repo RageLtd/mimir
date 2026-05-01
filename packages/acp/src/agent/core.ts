@@ -149,6 +149,21 @@ export const createAgentCore = (
     return session;
   };
 
+  const replaceMcpServers = (
+    sessionId: string,
+    newServers: readonly acp.McpServer[],
+  ) => {
+    const session = sessions.get(sessionId);
+    if (!session) return false;
+    if (session.clientMcpServers === newServers) return true;
+    session.clientMcp
+      ?.close()
+      .catch((err) => logger.debug("clientMcp.close on rebuild failed:", err));
+    session.clientMcp = createClientMcpManager(sessionId, newServers);
+    session.clientMcpServers = newServers;
+    return true;
+  };
+
   const restoreSession = (
     sessionId: string,
     clientMcpServers?: readonly acp.McpServer[],
@@ -160,17 +175,8 @@ export const createAgentCore = (
     const existing = sessions.get(sessionId);
     if (existing) {
       if (existing.clientMcpServers !== clientMcpServers) {
-        existing.clientMcp
-          ?.close()
-          .catch((err) =>
-            logger.debug("clientMcp.close on rebuild failed:", err),
-          );
-        existing.clientMcp = createClientMcpManager(
-          sessionId,
-          clientMcpServers,
-        );
+        replaceMcpServers(sessionId, clientMcpServers ?? []);
       }
-      existing.clientMcpServers = clientMcpServers;
       existing.clientCapabilities = clientCapabilities;
       return existing;
     }
@@ -391,6 +397,7 @@ export const createAgentCore = (
     getSession,
     listSessions,
     setModel,
+    replaceMcpServers,
     setMode,
     setThoughtLevel,
     setTitle,

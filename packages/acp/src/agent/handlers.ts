@@ -17,8 +17,7 @@ import { discoverCCModelsViaSdk } from "../backends/claude-code/models";
 import { checkForSdkUpdate } from "../backends/claude-code/sdk-updater";
 import type { CartographerManager } from "../cartographer/lifecycle";
 import type { MimirConfig } from "../config";
-import { injectStoredTokens } from "../mcp-config/auth-injector";
-import { loadMcpConfig, mergeMcpServers } from "../mcp-config/file-reader";
+import { assembleClientMcpServers } from "../mcp-config/assemble";
 import { ccAvailable, discoverCopilotModels } from "../routing";
 import type { UserMemoryStore } from "../store/user-memories";
 import { createChildLogger, log } from "../utils/log";
@@ -128,21 +127,20 @@ export const newSession = async (
   params: acp.NewSessionRequest,
 ) => {
   const projectPath = params.cwd || process.cwd();
-  // Load `.mcp.json` from project root + global config and merge with the
-  // client-supplied list. Client entries (Zed's `context_servers`) win on
-  // name collision so an interactive UI override always beats the file.
-  const fileServers = await loadMcpConfig(projectPath);
-  const mergedServers = mergeMcpServers(fileServers, params.mcpServers);
-  // Attach Bearer headers from any prior OAuth flows that persisted
-  // tokens to disk. Servers without persisted tokens pass through —
-  // the user runs `/mcp list` to see real status (tool counts) and
-  // `/mcp auth <name>` to authenticate on demand.
-  const authedServers = await injectStoredTokens(mergedServers);
+  // Compose `.mcp.json` (project + global) with the client-supplied list and
+  // attach Bearer headers from any prior OAuth flows. Snapshot the original
+  // client-supplied list on the session so `/mcp reload` can re-merge against
+  // it later without losing UI-configured Zed entries.
+  const authedServers = await assembleClientMcpServers(
+    projectPath,
+    params.mcpServers,
+  );
   const session = deps.core.newSession(
     projectPath,
     authedServers,
     deps.getClientCapabilities(),
   );
+  session.clientSuppliedMcpServers = params.mcpServers;
   logger.info("new session:", session.sessionId, "cwd:", projectPath);
 
   // getProjectId is read at sync time — the resolver runs in parallel with
@@ -198,12 +196,14 @@ export const loadSession = async (
     logger.warn("loadSession: unknown session", params.sessionId);
     return {};
   }
-  // Re-load `.mcp.json` so edits to the file (or its global counterpart)
-  // take effect when a session resumes. The second restoreSession call is
-  // hot-path-only (in-memory) and idempotent when servers are unchanged.
-  const fileServers = await loadMcpConfig(initialSession.projectPath);
-  const mergedServers = mergeMcpServers(fileServers, params.mcpServers);
-  const authedServers = await injectStoredTokens(mergedServers);
+  // Re-assemble the effective server list so edits to `.mcp.json` (or its
+  // global counterpart) and freshly-completed OAuth flows take effect on
+  // resume. The second restoreSession call is hot-path-only (in-memory) and
+  // idempotent when servers are unchanged.
+  const authedServers = await assembleClientMcpServers(
+    initialSession.projectPath,
+    params.mcpServers,
+  );
   const session = deps.core.restoreSession(
     params.sessionId,
     authedServers,
@@ -213,6 +213,7 @@ export const loadSession = async (
     logger.warn("loadSession: unknown session", params.sessionId);
     return {};
   }
+  session.clientSuppliedMcpServers = params.mcpServers;
   logger.info(
     "loadSession:",
     params.sessionId,

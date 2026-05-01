@@ -53,8 +53,21 @@ export type SessionState = {
    * the project ships no sidecars.
    */
   ruleDetectors: readonly Detector[];
-  /** MCP servers provided by the ACP client (e.g. Zed's ACP tools server). */
+  /**
+   * Effective MCP server list for this session — `.mcp.json` entries merged
+   * with the client-supplied list (Zed's `context_servers`, on collision
+   * client wins) and then auth-injected with any persisted Bearer tokens.
+   * This is what gets handed to the SDK / client-MCP manager. Refreshed by
+   * `/mcp reload` so edits to `.mcp.json` and freshly-completed OAuth flows
+   * take effect on the next prompt.
+   */
   clientMcpServers?: readonly acp.McpServer[];
+  /**
+   * The raw, unmodified `params.mcpServers` value the ACP client sent on
+   * `session/new` or `session/load`. Snapshotted so `/mcp reload` can re-merge
+   * `.mcp.json` against it without losing any UI-configured Zed entries.
+   */
+  clientSuppliedMcpServers?: readonly acp.McpServer[];
   /**
    * Live MCP client connections for `clientMcpServers` entries — used by
    * the server backend path to expose those tools to mimir-server and
@@ -115,6 +128,18 @@ export type AgentCore = {
    * routed to a non-CC backend.
    */
   markCcNeedsFreshSession: (sessionId: string) => boolean;
+  /**
+   * Replace the session's effective MCP server list. Closes the existing
+   * client-MCP manager (if any) and rebuilds it against the new list so
+   * subsequent server-backend tool calls hit fresh connections. No-op when
+   * the session is unknown. Used by `loadSession` (when the client provides
+   * a different list on resume) and `/mcp reload` (after re-reading
+   * `.mcp.json` and re-injecting tokens).
+   */
+  replaceMcpServers: (
+    sessionId: string,
+    newServers: readonly acp.McpServer[],
+  ) => boolean;
   setMode: (sessionId: string, modeId: string) => boolean;
   setThoughtLevel: (sessionId: string, level: string) => boolean;
   setTitle: (sessionId: string, title: string) => void;

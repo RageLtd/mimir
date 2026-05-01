@@ -9,6 +9,7 @@
 
 import type * as acp from "@agentclientprotocol/sdk";
 import { isValidCCMode } from "../backends/claude-code/config-options";
+import { assembleClientMcpServers } from "../mcp-config/assemble";
 import { authenticateServer } from "../mcp-config/auth-injector";
 import { probeHttpServer } from "../mcp-config/probe";
 import type { UserMemoryStore } from "../store/user-memories";
@@ -113,15 +114,26 @@ const runCompact = async (deps: CommandDeps, sessionId: string) => {
 };
 
 const runMcpReload = async (deps: CommandDeps, sessionId: string) => {
-  const ok = deps.core.markCcNeedsFreshSession(sessionId);
-  if (!ok) {
+  const session = deps.core.getSession(sessionId);
+  if (!session) {
     await reply(deps.conn, sessionId, "Session not found.");
     return END_TURN;
   }
+  // Re-read `.mcp.json` (project + global), re-merge with the original
+  // client-supplied list snapshotted at session start, and re-inject any
+  // persisted Bearer tokens. Replace the session's effective list and rebuild
+  // the client-MCP manager so the server backend gets fresh connections; the
+  // CC backend gets fresh ones via the rotation flag below.
+  const authedServers = await assembleClientMcpServers(
+    session.projectPath,
+    session.clientSuppliedMcpServers,
+  );
+  deps.core.replaceMcpServers(sessionId, authedServers);
+  deps.core.markCcNeedsFreshSession(sessionId);
   await reply(
     deps.conn,
     sessionId,
-    "MCP servers will reconnect on your next prompt — newly-available tools (e.g. after an OAuth flow) will become visible then.",
+    `Re-scanned \`.mcp.json\` — ${authedServers.length} server${authedServers.length === 1 ? "" : "s"} configured. MCP servers will reconnect on your next prompt; newly-available tools (e.g. after an OAuth flow) will become visible then.`,
   );
   return END_TURN;
 };
