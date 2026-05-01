@@ -23,6 +23,7 @@
  * the newly-available tools on its next prompt.
  */
 
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { errMessage } from "../util";
@@ -215,9 +216,10 @@ export const runOAuthFlow = async (options: OAuthFlowOptions) => {
   );
 
   if (!connectResult.ok) {
-    const isUnauthorized =
-      connectResult.error instanceof Error &&
-      connectResult.error.name === "UnauthorizedError";
+    // The MCP SDK's `UnauthorizedError` extends Error but doesn't set
+    // `this.name`, so name-string matching always misses. `instanceof`
+    // is the durable check.
+    const isUnauthorized = connectResult.error instanceof UnauthorizedError;
     if (!isUnauthorized) {
       await callback.stop();
       const message = errMessage(connectResult.error);
@@ -255,24 +257,14 @@ export const runOAuthFlow = async (options: OAuthFlowOptions) => {
         error: finishResult.error,
       } satisfies OAuthFlowResult;
     }
-    // Reconnect with the now-authenticated transport. We don't strictly
-    // need this for our use case (we just want the tokens persisted), but
-    // it surfaces any post-auth connection failures cleanly.
-    const reconnectResult = await client.connect(transport).then(
-      () => ({ ok: true as const }),
-      (err: unknown) => ({ ok: false as const, error: errMessage(err) }),
-    );
-    if (!reconnectResult.ok) {
-      logger.warn(
-        "%s: reconnect after auth failed — %s",
-        options.serverName,
-        reconnectResult.error,
-      );
-      return {
-        ok: false,
-        error: reconnectResult.error,
-      } satisfies OAuthFlowResult;
-    }
+    // No reconnect needed — `finishAuth` has persisted the tokens via
+    // `saveTokens`, which is the only side effect we care about. The
+    // Claude Agent SDK opens its own connection later using the
+    // Authorization header we'll inject from disk. Calling
+    // `client.connect(transport)` again here throws because the
+    // transport's already started, and a fresh transport+client just
+    // to surface "post-auth connection works" duplicates work the
+    // CC SDK is about to do anyway.
   } else {
     // Stored tokens were valid — happy path with no browser interaction.
     await callback.stop();
