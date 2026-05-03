@@ -100,12 +100,64 @@ const DEFAULT_DISALLOWED = [
   "WebSearch",
 ];
 
+// Extras the CC backend should surface in the model selector ON TOP OF
+// what the SDK's `supportedModels()` returns. The SDK advertises a
+// short curated list (default/sonnet/haiku as of writing); these entries
+// fill in things the SDK won't list but the underlying API accepts:
+// specific Opus / Sonnet versions and the undocumented `opusplan`
+// hybrid alias.
+//
+// Sourced against the Anthropic platform docs
+// (https://platform.claude.com/docs/en/api/cli/messages) which lists
+// `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6` as
+// accepted model strings, plus the `opusplan` hybrid alias documented
+// in https://code.claude.com/docs/en/model-config (uses opus during
+// plan mode, switches to sonnet for execution — undocumented in the
+// SDK's `supportedModels()` but accepted by `/model`).
+//
+// `claude-mythos-preview` is gated to a tiny set of security partners
+// and intentionally omitted — listing it in the selector would dangle
+// an unreachable option in front of every other user.
+//
+// Opus 4.6/4.7 default to 1M context, so the legacy `opus[1m]`/
+// `sonnet[1m]` bracket-syntax aliases are no longer included — the
+// bracket form was for the pre-4.6 era where 1M was opt-in.
+//
+// Keys are the suffix shown in the selector (`claude-code/<key>`);
+// values are the model string passed to the SDK's `model` option.
+// Users can extend or replace via MIMIR_CC_EXTRA_MODELS.
 const DEFAULT_CC_MODELS: Record<string, string> = {
-  opus: "opus",
-  sonnet: "sonnet",
-  haiku: "haiku",
-  "opus-1m": "opus[1m]",
-  "sonnet-1m": "sonnet[1m]",
+  "opus-4-7": "claude-opus-4-7",
+  "opus-4-6": "claude-opus-4-6",
+  "sonnet-4-6": "claude-sonnet-4-6",
+  opusplan: "opusplan",
+};
+
+/**
+ * Parse `MIMIR_CC_EXTRA_MODELS` into a `<suffix>:<model>` map. Format:
+ *
+ *   MIMIR_CC_EXTRA_MODELS=opus-4-6:claude-opus-4-6,opus-snap:claude-opus-4-7-20251201
+ *
+ * Comma-separated entries; each entry is `<suffix>:<model>`. Whitespace
+ * is trimmed. When unset, defaults to the curated `DEFAULT_CC_MODELS`
+ * map. When set, REPLACES the defaults — set to an empty string to disable
+ * extras entirely. Exported for unit testing.
+ */
+export const parseExtraModels = (raw: string | undefined) => {
+  if (raw === undefined) return DEFAULT_CC_MODELS;
+  if (raw.trim().length === 0) return {};
+  const out: Record<string, string> = {};
+  for (const entry of raw.split(",")) {
+    const trimmed = entry.trim();
+    if (trimmed.length === 0) continue;
+    const colon = trimmed.indexOf(":");
+    if (colon < 0) continue;
+    const suffix = trimmed.slice(0, colon).trim();
+    const model = trimmed.slice(colon + 1).trim();
+    if (suffix.length === 0 || model.length === 0) continue;
+    out[suffix] = model;
+  }
+  return out;
 };
 
 const parseDisallowed = (raw: string | undefined): string[] => {
@@ -163,7 +215,7 @@ export const loadConfig = () => {
       permissionMode:
         process.env.MIMIR_CC_PERMISSION_MODE ?? "bypassPermissions",
       workingDirectory: process.env.MIMIR_CC_WORKING_DIR,
-      models: { ...DEFAULT_CC_MODELS },
+      models: parseExtraModels(process.env.MIMIR_CC_EXTRA_MODELS),
       anchorInterval: parseInt(process.env.ANCHOR_INTERVAL ?? "20", 10),
       systemPromptPath: process.env.MIMIR_SYSTEM_PROMPT_PATH,
       maxTurns: parsePositiveNumber(process.env.MIMIR_CC_MAX_TURNS),

@@ -33,12 +33,35 @@ export const getCCModelFlag = (modelId: string, cc: CCBackendConfig) => {
   return cc.models[suffix] ?? suffix;
 };
 
-/** Synthetic ModelInfo entries for the CC models the user has mapped. */
+/**
+ * Convert a `cc.models` suffix into a friendly display name. Replaces
+ * digit-dash-digit with the dotted form (`opus-4-6` → `opus-4.6`),
+ * splits on dashes/underscores, titlecases each word.
+ *
+ *   prettifyModelSuffix("opus-4-6")   → "Opus 4.6"
+ *   prettifyModelSuffix("sonnet-4-6") → "Sonnet 4.6"
+ *   prettifyModelSuffix("opusplan")   → "Opusplan"
+ *
+ * Exported for unit testing.
+ */
+export const prettifyModelSuffix = (suffix: string) => {
+  const dotted = suffix.replace(/(\d)-(\d)/g, "$1.$2");
+  return dotted
+    .split(/[-_\s]/)
+    .map((w) => (w.length > 0 ? w[0]!.toUpperCase() + w.slice(1) : ""))
+    .join(" ");
+};
+
+/**
+ * Synthetic ModelInfo entries for the CC `cc.models` extras map.
+ * Format mirrors the server backend's `<Friendly Name> (<Provider>)`
+ * shape so all backends present consistently in the editor's selector.
+ */
 export const getCCModelList = (cc: CCBackendConfig) => {
   if (!cc.enabled) return [];
   return Object.keys(cc.models).map((suffix) => ({
     modelId: `${CC_PREFIX}${suffix}`,
-    name: `Claude Code (${suffix})`,
+    name: `${prettifyModelSuffix(suffix)} (Claude Code)`,
     description: `Routed through the Claude Code Agent SDK (model: ${cc.models[suffix]})`,
   }));
 };

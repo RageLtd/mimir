@@ -9,6 +9,7 @@ import {
   getCopilotModelFlag,
   getCCModelList,
   mergeModels,
+  prettifyModelSuffix,
   titlecaseProviderId,
 } from "./routing";
 import type { CCBackendConfig } from "./config";
@@ -56,18 +57,18 @@ describe("getCCModelFlag", () => {
 });
 
 describe("getCCModelList", () => {
-  test("returns ModelInfo entries for configured models", () => {
+  test("returns ModelInfo entries with `<Model> (Claude Code)` shape", () => {
     const cc: CCBackendConfig = {
       enabled: true,
       disallowedTools: [],
       permissionMode: "bypassPermissions",
-      models: { opus: "claude-opus-4-20250514" },
+      models: { "opus-4-6": "claude-opus-4-6" },
       anchorInterval: 6,
-      };
+    };
     const list = getCCModelList(cc);
     expect(list).toHaveLength(1);
-    expect(list[0]!.modelId).toBe("claude-code/opus");
-    expect(list[0]!.name).toContain("opus");
+    expect(list[0]!.modelId).toBe("claude-code/opus-4-6");
+    expect(list[0]!.name).toBe("Opus 4.6 (Claude Code)");
   });
 
   test("returns empty list when disabled", () => {
@@ -176,6 +177,27 @@ describe("mergeModels", () => {
 });
 
 // ── Server model display ──
+
+describe("prettifyModelSuffix", () => {
+  test("dashes between digits become dots; suffix words titlecase", () => {
+    expect(prettifyModelSuffix("opus-4-6")).toBe("Opus 4.6");
+    expect(prettifyModelSuffix("opus-4-7")).toBe("Opus 4.7");
+    expect(prettifyModelSuffix("sonnet-4-6")).toBe("Sonnet 4.6");
+  });
+
+  test("single-word suffixes get titlecased", () => {
+    expect(prettifyModelSuffix("opusplan")).toBe("Opusplan");
+    expect(prettifyModelSuffix("haiku")).toBe("Haiku");
+  });
+
+  test("underscores split too", () => {
+    expect(prettifyModelSuffix("foo_bar")).toBe("Foo Bar");
+  });
+
+  test("empty string round-trips empty", () => {
+    expect(prettifyModelSuffix("")).toBe("");
+  });
+});
 
 describe("titlecaseProviderId", () => {
   test("titlecases dash-separated provider ids", () => {

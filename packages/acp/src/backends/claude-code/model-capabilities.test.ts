@@ -110,4 +110,122 @@ describe("model-capabilities", () => {
     expect(supportedEffortLevels("unknown")).toEqual([]);
     expect(supportedEffortLevels(undefined)).toEqual([]);
   });
+
+  // ── Family fallback ──────────────────────────────────────────────
+  // User-extras (`opus-4-6`, `claude-opus-4-7`, `opusplan`) inherit
+  // capabilities from the SDK base alias for their family when the
+  // direct lookup misses. This is what makes the thought-level
+  // selector show up for hand-added model entries.
+
+  test("family fallback: opus-4-6 inherits from `opus` when present", () => {
+    setModelCapabilities([
+      {
+        value: "opus",
+        supportsAdaptiveThinking: true,
+        supportedEffortLevels: ["high", "xhigh", "max"],
+      },
+    ]);
+    expect(supportsAdaptiveThinking("opus-4-6")).toBe(true);
+    expect(supportedEffortLevels("opus-4-6")).toEqual([
+      "high",
+      "xhigh",
+      "max",
+    ]);
+  });
+
+  test("family fallback: opus-4-6 inherits from `default` when SDK uses that key", () => {
+    // Reflects the current SDK reality — `supportedModels()` returns
+    // `default` for the latest opus, not `opus`.
+    setModelCapabilities([
+      {
+        value: "default",
+        supportsAdaptiveThinking: true,
+        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+      },
+    ]);
+    expect(supportsAdaptiveThinking("opus-4-6")).toBe(true);
+    expect(supportedEffortLevels("opus-4-6")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+  });
+
+  test("family fallback: full model id (claude-opus-4-7) resolves to opus", () => {
+    setModelCapabilities([
+      {
+        value: "default",
+        supportsAdaptiveThinking: true,
+        supportedEffortLevels: ["high", "xhigh", "max"],
+      },
+    ]);
+    expect(supportedEffortLevels("claude-opus-4-7")).toEqual([
+      "high",
+      "xhigh",
+      "max",
+    ]);
+  });
+
+  test("family fallback: opusplan maps to the opus family", () => {
+    setModelCapabilities([
+      {
+        value: "default",
+        supportsAdaptiveThinking: true,
+        supportedEffortLevels: ["high", "xhigh", "max"],
+      },
+    ]);
+    expect(supportedEffortLevels("opusplan")).toEqual([
+      "high",
+      "xhigh",
+      "max",
+    ]);
+  });
+
+  test("family fallback: sonnet-4-6 inherits from `sonnet`", () => {
+    setModelCapabilities([
+      {
+        value: "sonnet",
+        supportsAdaptiveThinking: true,
+        supportedEffortLevels: ["low", "medium", "high", "max"],
+      },
+    ]);
+    expect(supportedEffortLevels("sonnet-4-6")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "max",
+    ]);
+    expect(supportedEffortLevels("claude-sonnet-4-6")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "max",
+    ]);
+  });
+
+  test("family fallback: aliases with no recognised family return empty", () => {
+    setModelCapabilities([
+      {
+        value: "opus",
+        supportedEffortLevels: ["high"],
+      },
+    ]);
+    expect(supportedEffortLevels("claude-2")).toEqual([]);
+    expect(supportsAdaptiveThinking("claude-2")).toBeUndefined();
+  });
+
+  test("family fallback: returns empty when the family's base alias isn't cached either", () => {
+    // Cache has sonnet only; a user-extra in the opus family with no
+    // opus or default cached should report no capabilities.
+    setModelCapabilities([
+      {
+        value: "sonnet",
+        supportedEffortLevels: ["high"],
+      },
+    ]);
+    expect(supportedEffortLevels("opus-4-6")).toEqual([]);
+    expect(supportsAdaptiveThinking("opus-4-6")).toBeUndefined();
+  });
 });

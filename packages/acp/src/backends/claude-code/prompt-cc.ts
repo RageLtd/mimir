@@ -7,11 +7,11 @@
  * first-turn gating) but not cross-turn working memory.
  *
  * The cross-turn channels:
- *   - First turn only: assembleContext → system prompt + session context text
- *     → boot tools → SDK receives complete context snapshot + boot server.
- *   - Subsequent turns: SDK's `continue: true` maintains conversation
- *     continuity automatically; no assembleContext, no boot server creation.
- *   - `session.projectRules` is the immutable system prompt anchor.
+ *   - First turn: assembleContext → full system prompt + session context
+ *     + boot tools. XML-converted with model override.
+ *   - Subsequent turns: getSystemPrompt (TTL-cached) → full system prompt,
+ *     XML-converted with model override. SDK's `continue: true` handles
+ *     conversation continuity; no boot server needed.
  *
  * `session.bootSequenceDone` gates the first-turn assembly. Initialised to
  * `false` in newSession/restoreSession (core.ts). Set to `true` only after
@@ -29,6 +29,7 @@ import {
   type AssembledMessage,
   assembleContext,
   type ContextClientConfig,
+  getSystemPrompt,
   persistTurn,
   reportTokenUsage,
 } from "../../context-client";
@@ -99,6 +100,11 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
   session.messages.push({ role: "user", content: promptText });
   const isFirstTurn = !session.bootSequenceDone;
 
+  // Always fetch the full system prompt. On the first turn we need the
+  // complete assembled context (messages, memories, summaries) for the boot
+  // tools. On subsequent turns we only need the system prompt — the SDK
+  // carries conversation context via continue:true. getSystemPrompt is
+  // TTL-cached so this is near-free on most turns.
   let bootServer: ReturnType<typeof createBootServer> | undefined;
   let xmlSystemPrompt: string;
 
@@ -141,9 +147,16 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
       "CC boot sequence assembled",
     );
   } else {
-    // Subsequent turns: use projectRules as minimal system prompt.
-    // SDK's continue:true handles conversation continuity.
-    xmlSystemPrompt = toAnthropicXml(session.projectRules ?? "");
+    try {
+      const systemPrompt = await getSystemPrompt(
+        contextClient,
+        abortController.signal,
+      );
+      xmlSystemPrompt = toAnthropicXml(systemPrompt);
+    } catch (err) {
+      logger.warn("system prompt fetch failed, using projectRules fallback:", err);
+      xmlSystemPrompt = toAnthropicXml(session.projectRules ?? "");
+    }
   }
 
   // Voice anchor decision. Counter ticks once per ACP prompt (developer-
