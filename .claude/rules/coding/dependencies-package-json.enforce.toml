@@ -1,0 +1,15 @@
+id = "coding/dependencies-package-json"
+body = "./dependencies.md"
+enabled = true
+event = "file"
+message = "Direct edit to package.json dependency section — use `bun add`/`bun remove` (see paired rule)."
+
+[[conditions]]
+field = "file_path"
+operator = "regex_match"
+pattern = '''(^|/)package\.json$'''
+
+[[conditions]]
+field = "new_text"
+operator = "regex_match"
+pattern = '''"(?:dependencies|devDependencies|peerDependencies|optionalDependencies)"\s*:'''

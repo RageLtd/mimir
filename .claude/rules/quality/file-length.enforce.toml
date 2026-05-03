@@ -1,0 +1,6 @@
+id = "quality/file-length"
+body = "./file-length.md"
+enabled = true
+event = "file"
+detector = "builtin:file-length"
+detector_args = { limit = 500 }

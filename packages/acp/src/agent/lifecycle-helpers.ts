@@ -10,6 +10,7 @@
 import type * as acp from "@agentclientprotocol/sdk";
 import { getContextWindow } from "../backends/claude-code/context-window-cache";
 import { isCCModel } from "../routing";
+import { formatLoadErrors, type LoadError } from "../rules";
 import { createChildLogger, log } from "../utils/log";
 import { AVAILABLE_COMMANDS } from "./session";
 import type { AgentCore } from "./types";
@@ -155,6 +156,32 @@ export const emitUsageUpdate = (
       },
     })
     .catch((err) => logger.debug("usage_update failed:", err));
+
+/**
+ * Surface rule-loader errors to the editor at session start. The loader
+ * fails loudly per design — every broken `.enforce.toml` becomes a
+ * `LoadError`; this helper renders them all into one
+ * `agent_message_chunk` so the developer sees them immediately rather
+ * than discovering each when the corresponding rule should have fired.
+ *
+ * Wrapped in `setTimeout` so the emit runs on the next macrotask after
+ * `session/new` returns — emitting before the client registers the
+ * session loses the notification (same race as `maybeEmitCommandsList`
+ * and the initial `usage_update`).
+ */
+export const surfaceRuleLoadErrors = (
+  conn: acp.AgentSideConnection,
+  sessionId: string,
+  errors: readonly LoadError[],
+) => {
+  const text = formatLoadErrors(errors);
+  if (!text) return;
+  setTimeout(() => {
+    emitAgentText(conn, sessionId, text).catch((err) =>
+      logger.warn("rule load-error emission failed:", err),
+    );
+  }, 0);
+};
 
 /**
  * Set the session title to a normalised slice of the first user prompt

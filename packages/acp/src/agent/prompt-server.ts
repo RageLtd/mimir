@@ -24,6 +24,7 @@ import type { Backend } from "../backends/types";
 import type { CartographerManager } from "../cartographer/lifecycle";
 import { isLocalCartographerTool } from "../cartographer/lifecycle";
 import type { MimirConfig } from "../config";
+import { runAndFormat } from "../rules";
 import { getTools, type ToolDefinition } from "../server-client";
 import type { UserMemoryStore } from "../store/user-memories";
 import {
@@ -218,6 +219,18 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
         },
       });
 
+      // Rule-detector intercept — backend-agnostic engine evaluates
+      // session.rules against this tool call and (if any fired) returns
+      // a formatted nudge. Tool execution proceeds either way (warn-only
+      // semantics matching the CC backend); findings get prepended to
+      // the tool_result so the model reads the violation text alongside
+      // the actual output. Empty `session.rules` makes this a no-op.
+      const ruleNudge = await runAndFormat(session.rules, {
+        toolName: tc.name,
+        toolInput: tc.input,
+        projectPath: session.projectPath,
+      });
+
       let resultContent: string;
       if (userMemoryToolNames.has(tc.name)) {
         const result = executeUserMemoryTool(memoryStore, tc.name, tc.input);
@@ -257,21 +270,32 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
         resultContent = `Tool ${tc.name} is not available in this adapter.`;
       }
 
+      // Prepend any rule-violation nudge to the tool result so the
+      // model reads it before the actual output. Separator keeps the
+      // boundary visible to both the model and any human reviewing the
+      // transcript.
+      const finalResult = ruleNudge
+        ? `${ruleNudge}\n\n---\n\n${resultContent}`
+        : resultContent;
+
       session.messages.push({
         role: "tool",
-        content: resultContent,
+        content: finalResult,
         tool_call_id: tc.id,
         name: tc.name,
       });
 
-      // Incremental update — only send changed fields
-      const content = buildToolCallContent(tc.name, tc.input, resultContent);
+      // Incremental update — `rawOutput` carries the same value the
+      // model just received (rule nudge prepended when present), so the
+      // editor's tool-result view stays in sync with what the next
+      // assistant turn will see.
+      const content = buildToolCallContent(tc.name, tc.input, finalResult);
       await conn.sessionUpdate({
         sessionId: session.sessionId,
         update: {
           sessionUpdate: "tool_call_update",
           toolCallId: tc.id,
-          rawOutput: { content: resultContent },
+          rawOutput: { content: finalResult },
           status: "completed" as const,
           ...(content ? { content } : {}),
         },

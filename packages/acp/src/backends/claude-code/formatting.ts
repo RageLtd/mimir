@@ -15,10 +15,11 @@ import type {
   PermissionMode,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { CCBackendConfig } from "../../config";
+import type { RuleEntry } from "../../rules";
 import { isValidCCMode } from "./config-options";
 import { buildMcpServers } from "./mcp-config";
 import { supportsAdaptiveThinking } from "./model-capabilities";
-import { buildRuleHook, type Detector } from "./rule-hooks";
+import { buildRuleHook } from "./rule-hooks";
 
 /**
  * Format assembled context messages as structured text for the
@@ -48,7 +49,7 @@ export type RunClaudeCodeOptions = {
   readonly bootServer?: McpSdkServerConfigWithInstance;
   readonly permissionMode?: PermissionMode;
   readonly effort?: EffortLevel;
-  readonly ruleDetectors?: readonly Detector[];
+  readonly rules?: readonly RuleEntry[];
   readonly signal?: AbortSignal;
 };
 
@@ -83,7 +84,7 @@ export const buildSdkOptions = (
     | "bootServer"
     | "permissionMode"
     | "effort"
-    | "ruleDetectors"
+    | "rules"
   >,
 ) => {
   const systemPrompt = `${options.systemPrompt}\n\n${BOOT_INSTRUCTION}`;
@@ -165,9 +166,9 @@ export const buildSdkOptions = (
   if (typeof options.cc.maxBudgetUsd === "number") {
     sdkOptions.maxBudgetUsd = options.cc.maxBudgetUsd;
   }
-  if (options.ruleDetectors && options.ruleDetectors.length > 0) {
+  if (options.rules && options.rules.length > 0) {
     sdkOptions.hooks = {
-      PreToolUse: buildRuleHook(options.ruleDetectors),
+      PreToolUse: buildRuleHook(options.rules),
     };
   }
 

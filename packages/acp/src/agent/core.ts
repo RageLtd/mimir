@@ -8,7 +8,6 @@
 import type * as acp from "@agentclientprotocol/sdk";
 import type { BackendRouter } from "../backends";
 import { promptViaClaudeCode } from "../backends/claude-code/prompt-cc";
-import { loadRuleDetectors } from "../backends/claude-code/rule-hooks";
 import {
   createAnchorState,
   type VoiceAnchor,
@@ -19,6 +18,7 @@ import { createClientMcpManager } from "../client-mcp/manager";
 import type { MimirConfig } from "../config";
 import type { ContextClientConfig } from "../context-client";
 import { resolveProjectForPath } from "../project/resolver";
+import { type LoadError, loadRules } from "../rules";
 import type { SessionStore } from "../store/sessions";
 import type { UserMemoryStore } from "../store/user-memories";
 import { errMessage } from "../util";
@@ -63,6 +63,7 @@ const kickOffSessionInit = (
   serverUrl: string,
   apiKey: string,
   onResolved: (project: import("../project/resolver").ResolvedProject) => void,
+  onRuleErrors?: (errors: readonly LoadError[]) => void,
 ) => {
   readProjectRules(projectPath)
     .then((entries) => {
@@ -70,11 +71,23 @@ const kickOffSessionInit = (
     })
     .catch((err) => logger.warn("failed to load project rules:", err));
 
-  loadRuleDetectors(projectPath)
-    .then((detectors) => {
-      session.ruleDetectors = detectors;
+  // Eager rule loading + error surfacing. Successful entries land in
+  // `session.rules`; any LoadErrors get handed to `onRuleErrors` (the
+  // agent layer wires this to a session_update so the developer sees
+  // every broken `.enforce.toml` once at session start, not when the
+  // rule should have fired).
+  loadRules(projectPath)
+    .then(({ rules, errors }) => {
+      session.rules = rules;
+      if (errors.length > 0) {
+        logger.warn(
+          { count: errors.length, projectPath },
+          "rule loader surfaced errors",
+        );
+        if (onRuleErrors) onRuleErrors(errors);
+      }
     })
-    .catch((err) => logger.warn("failed to load rule detectors:", err));
+    .catch((err) => logger.warn("failed to load rules:", err));
 
   resolveProjectForPath({ serverUrl, apiKey }, projectPath)
     .then((project) => {
@@ -100,6 +113,7 @@ export const createAgentCore = (
     projectPath: string,
     clientMcpServers?: readonly acp.McpServer[],
     clientCapabilities: acp.ClientCapabilities = {},
+    onRuleErrors?: (errors: readonly LoadError[]) => void,
   ) => {
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const session: SessionState = {
@@ -113,7 +127,7 @@ export const createAgentCore = (
       currentMode: DEFAULT_MODE,
       title: null,
       projectRules: null,
-      ruleDetectors: [],
+      rules: [],
       clientMcpServers,
       clientMcp: createClientMcpManager(sessionId, clientMcpServers),
       clientCapabilities,
@@ -135,6 +149,7 @@ export const createAgentCore = (
         session.projectInfo = project;
         sessionStore.updateMeta(sessionId, { projectId: project.id });
       },
+      onRuleErrors,
     );
 
     sessionStore.upsert(
@@ -169,6 +184,7 @@ export const createAgentCore = (
     sessionId: string,
     clientMcpServers?: readonly acp.McpServer[],
     clientCapabilities: acp.ClientCapabilities = {},
+    onRuleErrors?: (errors: readonly LoadError[]) => void,
   ) => {
     // Already live in this process — just update runtime fields.
     // If the caller replaces the MCP server list we rebuild the manager
@@ -197,7 +213,7 @@ export const createAgentCore = (
         undefined,
       title: persisted.title,
       projectRules: null,
-      ruleDetectors: [],
+      rules: [],
       clientMcpServers,
       clientMcp: createClientMcpManager(persisted.session_id, clientMcpServers),
       clientCapabilities,
@@ -225,6 +241,7 @@ export const createAgentCore = (
           sessionStore.updateMeta(sessionId, { projectId: project.id });
         }
       },
+      onRuleErrors,
     );
 
     return session;

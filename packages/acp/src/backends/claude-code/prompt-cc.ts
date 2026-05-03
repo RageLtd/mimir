@@ -202,7 +202,7 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
         ? session.currentMode
         : undefined,
       effort: session.currentThoughtLevel,
-      ruleDetectors: session.ruleDetectors,
+      rules: session.rules,
       signal: abortController.signal,
     })
     [Symbol.asyncIterator]();

@@ -1,0 +1,10 @@
+id = "coding/return-types"
+body = "./return-types.md"
+enabled = true
+event = "file"
+exclude_globs = ["*.d.ts", "*.test.*", "*.spec.*"]
+
+[[conditions]]
+field = "new_text"
+operator = "regex_match"
+pattern = '''\)\s*:\s*(?:\{[^}]*\}|\[[^\]]*\]|[A-Za-z_][\w<>\s,|&[\]?{}()]*?)\s*(?:=>|\{)'''

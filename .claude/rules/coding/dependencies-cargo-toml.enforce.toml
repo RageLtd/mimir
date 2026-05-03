@@ -1,0 +1,15 @@
+id = "coding/dependencies-cargo-toml"
+body = "./dependencies.md"
+enabled = true
+event = "file"
+message = "Direct edit to Cargo.toml dependency section — use `cargo add`/`cargo remove` (see paired rule)."
+
+[[conditions]]
+field = "file_path"
+operator = "regex_match"
+pattern = '''(^|/)Cargo\.toml$'''
+
+[[conditions]]
+field = "new_text"
+operator = "regex_match"
+pattern = '''\[(?:dependencies|dev-dependencies|build-dependencies|workspace\.dependencies)\]'''

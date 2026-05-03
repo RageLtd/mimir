@@ -1,0 +1,17 @@
+id = "safety/no-pipe-swallowing"
+body = "./no-pipe-swallowing.md"
+enabled = true
+event = "bash"
+message = "Command pipes into `${1}` — stderr will be swallowed. See the paired rule."
+
+[[conditions]]
+field = "command"
+operator = "regex_match"
+pattern = '''\|\s*(head|tail|grep|wc|awk|sed)\b'''
+
+# Suppress when the command explicitly redirects stderr before the pipe
+# (`2>file` or `2>&1`). Same heuristic the legacy detector used.
+[[negative_conditions]]
+field = "command"
+operator = "regex_match"
+pattern = '''2>[^&]?\S+|2>&1'''

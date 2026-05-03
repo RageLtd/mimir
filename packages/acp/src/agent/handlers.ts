@@ -29,6 +29,7 @@ import {
   maybeEmitCommandsList,
   maybeSetSessionTitle,
   replayHistoryToEditor,
+  surfaceRuleLoadErrors,
 } from "./lifecycle-helpers";
 import {
   buildSessionConfigOptions,
@@ -141,6 +142,7 @@ export const newSession = async (
     projectPath,
     authedServers,
     deps.getClientCapabilities(),
+    (errors) => surfaceRuleLoadErrors(deps.conn, session.sessionId, errors),
   );
   session.clientSuppliedMcpServers = params.mcpServers;
   logger.info("new session:", session.sessionId, "cwd:", projectPath);
@@ -215,6 +217,7 @@ export const loadSession = async (
     params.sessionId,
     authedServers,
     deps.getClientCapabilities(),
+    (errors) => surfaceRuleLoadErrors(deps.conn, params.sessionId, errors),
   );
   if (!session) {
     logger.warn("loadSession: unknown session", params.sessionId);

@@ -1,0 +1,10 @@
+id = "coding/functional-style"
+body = "./functional-style.md"
+enabled = true
+event = "file"
+exclude_globs = ["*.d.ts"]
+
+[[conditions]]
+field = "new_text"
+operator = "regex_match"
+pattern = '''(?m)^(?:export\s+(?:default\s+)?)?(?:abstract\s+)?class\s+[A-Z]\w*\b'''

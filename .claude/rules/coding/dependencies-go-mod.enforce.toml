@@ -1,0 +1,15 @@
+id = "coding/dependencies-go-mod"
+body = "./dependencies.md"
+enabled = true
+event = "file"
+message = "Direct edit to go.mod require block — use `go get`/`go mod tidy` (see paired rule)."
+
+[[conditions]]
+field = "file_path"
+operator = "regex_match"
+pattern = '''(^|/)go\.mod$'''
+
+[[conditions]]
+field = "new_text"
+operator = "regex_match"
+pattern = '''(?m)^\s*require\s+'''

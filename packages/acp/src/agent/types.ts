@@ -4,10 +4,10 @@
 
 import type * as acp from "@agentclientprotocol/sdk";
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
-import type { Detector } from "../backends/claude-code/rule-hooks";
 import type { VoiceAnchorState } from "../backends/claude-code/voice-anchors";
 import type { ClientMcpManager } from "../client-mcp/manager";
 import type { ResolvedProject } from "../project/resolver";
+import type { LoadError, RuleEntry } from "../rules";
 import type { ChatMessage } from "../server-client";
 
 export type SessionState = {
@@ -22,7 +22,7 @@ export type SessionState = {
   currentThoughtLevel?: EffortLevel;
   title: string | null;
   projectRules: string | null;
-  ruleDetectors: readonly Detector[];
+  rules: readonly RuleEntry[];
   clientMcpServers?: readonly acp.McpServer[];
   clientSuppliedMcpServers?: readonly acp.McpServer[];
   clientMcp: ClientMcpManager | null;
@@ -37,11 +37,13 @@ export type AgentCore = {
     projectPath: string,
     clientMcpServers?: readonly acp.McpServer[],
     clientCapabilities?: acp.ClientCapabilities,
+    onRuleErrors?: (errors: readonly LoadError[]) => void,
   ) => SessionState;
   restoreSession: (
     sessionId: string,
     clientMcpServers?: readonly acp.McpServer[],
     clientCapabilities?: acp.ClientCapabilities,
+    onRuleErrors?: (errors: readonly LoadError[]) => void,
   ) => SessionState | null;
   getSession: (sessionId: string) => SessionState | undefined;
   listSessions: () => import("../store/sessions").PersistedSession[];

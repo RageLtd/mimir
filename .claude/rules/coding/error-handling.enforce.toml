@@ -1,0 +1,10 @@
+id = "coding/error-handling"
+body = "./error-handling.md"
+enabled = true
+event = "file"
+exclude_globs = ["*.d.ts", "*.test.*", "*.spec.*"]
+
+[[conditions]]
+field = "new_text"
+operator = "regex_match"
+pattern = '''\btry\s*\{'''
