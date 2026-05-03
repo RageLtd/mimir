@@ -68,6 +68,41 @@ type ServerModelEntry = {
   id: string;
   object?: string;
   owned_by?: string;
+  /** Human-readable model name from provider-data (e.g. "Kimi K2.5"). */
+  display_name?: string;
+  /** Human-readable provider name from provider-data (e.g. "OpenCode Go"). */
+  provider_name?: string;
+};
+
+/**
+ * Titlecase fallback for `owned_by` when the server didn't include a
+ * `provider_name`. Splits on dashes and underscores, capitalises each
+ * part. Keeps unknown providers visually distinct from registered ones
+ * without requiring a client-side provider catalogue.
+ *
+ * Exported for unit testing.
+ */
+export const titlecaseProviderId = (id: string) =>
+  id
+    .split(/[-_]/g)
+    .map((part) =>
+      part.length > 0 ? part[0]!.toUpperCase() + part.slice(1) : "",
+    )
+    .join(" ");
+
+/**
+ * Compose the `name` field shown in the editor's model selector.
+ * `display_name (provider_name)` when both are present; falls back to
+ * `display_name` (no parenthetical), or `id (provider)` when only the
+ * provider is known, or just `id` for entries with no enrichment.
+ *
+ * Exported for unit testing.
+ */
+export const composeServerModelName = (m: ServerModelEntry) => {
+  const display = m.display_name ?? m.id;
+  if (!m.owned_by) return display;
+  const provider = m.provider_name ?? titlecaseProviderId(m.owned_by);
+  return `${display} (${provider})`;
 };
 
 /**
@@ -102,7 +137,7 @@ export const fetchServerModels = async (
   const data = (body as { data?: ServerModelEntry[] }).data ?? [];
   const models = data.map((m) => ({
     modelId: m.id,
-    name: m.id,
+    name: composeServerModelName(m),
     description: m.owned_by ? `Provider: ${m.owned_by}` : undefined,
   }));
   logger.info(`fetched ${models.length} models from mimir-server`);

@@ -80,6 +80,17 @@ export const config = {
     apiKey: Bun.env.ZEN_API_KEY ?? "",
     baseUrl: Bun.env.ZEN_BASE_URL ?? "https://opencode.ai/zen/v1",
     goBaseUrl: Bun.env.ZEN_GO_BASE_URL ?? "https://opencode.ai/zen/go/v1",
+    /**
+     * Whether to advertise OpenCode Go (`opencode-go` provider) models in
+     * `/v1/models`. Opt-in via `ZEN_GO_ENABLED=true`. Defaults to `false`
+     * because Go models share `OPENCODE_API_KEY` with regular Zen models —
+     * the registry initialises the Go provider whenever the key is present,
+     * but most accounts don't carry a Go subscription, so showing those
+     * models in the editor's selector would advertise things the user
+     * can't actually invoke. Users with a Go subscription set the env var
+     * to surface them.
+     */
+    goEnabled: (Bun.env.ZEN_GO_ENABLED ?? "false") === "true",
   },
 
   /** OpenRouter — multi-provider gateway (OpenAI-compatible) */

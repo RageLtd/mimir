@@ -6,6 +6,7 @@
  */
 
 import type { EmbeddingModel } from "ai";
+import providerData from "../../../provider-data.json";
 import { config } from "../../config";
 import { log } from "../../util/logger";
 import {
@@ -119,6 +120,37 @@ export function getModelMetadata(modelId: string): ModelEntry | undefined {
     : modelId;
   return modelMetadata.get(bareId) ?? modelMetadata.get(modelId);
 }
+
+/**
+ * Get the human-readable display name for a model from provider-data.
+ * Falls back to undefined when the model isn't in the registry — caller
+ * should display the raw id in that case.
+ */
+export function getModelDisplayName(modelId: string) {
+  return getModelMetadata(modelId)?.name;
+}
+
+/**
+ * Get the human-readable display name for a provider from provider-data.
+ * Looks up `providerData[providerId].name`. Returns undefined when the
+ * provider isn't registered (e.g. ad-hoc owned_by values from external
+ * APIs); caller should fall back to titlecasing the providerId.
+ */
+export function getProviderDisplayName(providerId: string) {
+  return providerDisplayNames.get(providerId);
+}
+
+// Build the display-name map once at module load. Keys are providerIds
+// from provider-data.json; values are the `name` field.
+const providerDisplayNames = (() => {
+  const map = new Map<string, string>();
+  for (const [id, entry] of Object.entries(
+    providerData as Record<string, { name?: string }>,
+  )) {
+    if (typeof entry.name === "string") map.set(id, entry.name);
+  }
+  return map;
+})();
 
 /**
  * Get provider ID for a model.

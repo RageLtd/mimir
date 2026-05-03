@@ -2,12 +2,14 @@ import { test, expect, describe } from "bun:test";
 import {
   CC_PREFIX,
   COPILOT_PREFIX,
+  composeServerModelName,
   isCCModel,
   isCopilotModel,
   getCCModelFlag,
   getCopilotModelFlag,
   getCCModelList,
   mergeModels,
+  titlecaseProviderId,
 } from "./routing";
 import type { CCBackendConfig } from "./config";
 
@@ -170,5 +172,68 @@ describe("mergeModels", () => {
       "copilot/y",
       "s1",
     ]);
+  });
+});
+
+// ── Server model display ──
+
+describe("titlecaseProviderId", () => {
+  test("titlecases dash-separated provider ids", () => {
+    expect(titlecaseProviderId("opencode-go")).toBe("Opencode Go");
+    expect(titlecaseProviderId("openrouter")).toBe("Openrouter");
+  });
+
+  test("titlecases underscore-separated ids", () => {
+    expect(titlecaseProviderId("ollama_cloud")).toBe("Ollama Cloud");
+  });
+
+  test("handles empty parts gracefully", () => {
+    expect(titlecaseProviderId("--")).toBe("  ");
+  });
+});
+
+describe("composeServerModelName", () => {
+  test("display + provider when both present", () => {
+    expect(
+      composeServerModelName({
+        id: "glm-4.6",
+        display_name: "GLM 4.6",
+        owned_by: "opencode-go",
+        provider_name: "OpenCode Go",
+      }),
+    ).toBe("GLM 4.6 (OpenCode Go)");
+  });
+
+  test("falls back to titlecasing owned_by when provider_name missing", () => {
+    expect(
+      composeServerModelName({
+        id: "glm-4.6",
+        display_name: "GLM 4.6",
+        owned_by: "opencode-go",
+      }),
+    ).toBe("GLM 4.6 (Opencode Go)");
+  });
+
+  test("uses id when display_name missing", () => {
+    expect(
+      composeServerModelName({
+        id: "raw-model-id",
+        owned_by: "openrouter",
+        provider_name: "OpenRouter",
+      }),
+    ).toBe("raw-model-id (OpenRouter)");
+  });
+
+  test("returns just display when no owned_by", () => {
+    expect(
+      composeServerModelName({
+        id: "x",
+        display_name: "X Display",
+      }),
+    ).toBe("X Display");
+  });
+
+  test("falls back to id when nothing else is present", () => {
+    expect(composeServerModelName({ id: "raw" })).toBe("raw");
   });
 });

@@ -6,6 +6,10 @@
  */
 
 import { Hono } from "hono";
+import {
+  getModelDisplayName,
+  getProviderDisplayName,
+} from "../agent-loop/provider/query";
 import { listModels } from "../agent/provider-registry";
 import { config, OPENROUTER_API_URL } from "../config";
 import { attempt } from "../util/result";
@@ -21,7 +25,51 @@ interface ModelEntry {
   object: string;
   created: number;
   owned_by: string;
+  /**
+   * Human-readable model name from `provider-data.json` when available
+   * (e.g. "Kimi K2.5"). ACP clients use this for the dropdown label;
+   * absent → client falls back to `id`. Optional in the response since
+   * Zen / OpenRouter / arbitrary upstreams don't carry it.
+   */
+  display_name?: string;
+  /**
+   * Human-readable provider name from `provider-data.json`'s top-level
+   * `name` field (e.g. "OpenCode Go"). ACP clients display this in the
+   * model selector parenthetical; absent → client titlecases `owned_by`.
+   */
+  provider_name?: string;
 }
+
+/**
+ * Convenience helper: titlecase an `owned_by` provider id when no
+ * friendly name is registered in `provider-data.json`. Used by the
+ * server's enrichment pass below; the ACP also has its own fallback,
+ * but doing it here keeps the wire payload self-describing.
+ */
+const titlecaseProviderId = (id: string) =>
+  id
+    .split(/[-_]/g)
+    .map((part) =>
+      part.length > 0 ? part[0]!.toUpperCase() + part.slice(1) : "",
+    )
+    .join(" ");
+
+/**
+ * Augment a raw `ModelEntry` with `display_name` / `provider_name` from
+ * provider-data lookups. Pure function — passes the entry through
+ * unchanged when no enrichments are available.
+ */
+const enrichEntry = (entry: ModelEntry): ModelEntry => {
+  const display_name = getModelDisplayName(entry.id);
+  const provider_name =
+    getProviderDisplayName(entry.owned_by) ??
+    titlecaseProviderId(entry.owned_by);
+  return {
+    ...entry,
+    ...(display_name ? { display_name } : {}),
+    ...(provider_name ? { provider_name } : {}),
+  };
+};
 
 // Zen model list cache (refreshed every 5 minutes)
 let zenModelsCache: ModelEntry[] = [];
@@ -100,10 +148,15 @@ models.get("/v1/models", async (c) => {
     getOpenRouterModels(),
   ]);
 
-  // Add provider registry models (chutes, opencode, etc.)
+  // Add provider registry models (chutes, opencode, etc.). Skip
+  // `opencode-go` entries when ZEN_GO_ENABLED is false — Go models share
+  // OPENCODE_API_KEY with regular Zen models, so the registry initialises
+  // them whenever the key is present; users without a Go subscription
+  // need to opt out explicitly.
   const registryModels: ModelEntry[] = [];
   const allModels = listModels();
   for (const { modelId, providerId } of allModels) {
+    if (providerId === "opencode-go" && !config.zen.goEnabled) continue;
     registryModels.push({
       id: modelId,
       object: "model",
@@ -112,8 +165,12 @@ models.get("/v1/models", async (c) => {
     });
   }
 
-  return c.json({
-    object: "list",
-    data: [local, ...zenModels, ...orModels, ...registryModels],
-  });
+  // Enrich every entry with `display_name` / `provider_name` so ACP
+  // clients can render `"<Friendly Name> (<Provider>)"` without their own
+  // provider-data lookup.
+  const data = [local, ...zenModels, ...orModels, ...registryModels].map(
+    enrichEntry,
+  );
+
+  return c.json({ object: "list", data });
 });
