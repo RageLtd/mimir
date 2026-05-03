@@ -44,6 +44,12 @@ export const AVAILABLE_COMMANDS: acp.AvailableCommand[] = [
       "MCP server operations: `list` shows configured servers with auth status; `reload` reconnects on the next prompt; `auth <name>` runs an OAuth flow for a server.",
     input: { hint: "list | reload | auth <server>" },
   },
+  {
+    name: "rules",
+    description:
+      "Rule-engine operations: `generate` scans `.claude/rules/` for rule body markdowns that lack `.enforce.toml` files and asks the model to generate enforcement specs for the mechanical ones.",
+    input: { hint: "generate" },
+  },
 ];
 
 // ── Command parsing ──
@@ -58,7 +64,8 @@ export type ParsedCommand =
   | { type: "memory_delete"; id: string }
   | { type: "mcp_list" }
   | { type: "mcp_reload" }
-  | { type: "mcp_auth"; name: string };
+  | { type: "mcp_auth"; name: string }
+  | { type: "rules_generate" };
 
 /**
  * Parse a slash command from user input.
@@ -117,6 +124,18 @@ export const parseCommand = (text: string) => {
           };
         case "delete":
           return { type: "memory_delete" as const, id: parts[2] ?? "" };
+        default:
+          return null;
+      }
+    }
+    case "rules": {
+      // `/rules <verb>` — namespace for rule-engine operations. Today only
+      // `generate` is supported; more verbs (list, validate, disable) are
+      // possible future additions.
+      const sub = parts[1]?.toLowerCase() ?? "";
+      switch (sub) {
+        case "generate":
+          return { type: "rules_generate" as const };
         default:
           return null;
       }

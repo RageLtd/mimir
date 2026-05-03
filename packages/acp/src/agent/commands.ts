@@ -8,12 +8,17 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
+import * as path from "node:path";
 import { isValidCCMode } from "../backends/claude-code/config-options";
 import { assembleClientMcpServers } from "../mcp-config/assemble";
 import { authenticateServer } from "../mcp-config/auth-injector";
 import { probeHttpServer } from "../mcp-config/probe";
 import type { UserMemoryStore } from "../store/user-memories";
 import { emitAgentText } from "./lifecycle-helpers";
+import {
+  buildRulesGeneratePrompt,
+  findOrphanedRuleBodies,
+} from "./rules-generate";
 import type { ParsedCommand } from "./session";
 import type { AgentCore, SessionState } from "./types";
 
@@ -308,6 +313,43 @@ const runMemoryDelete = async (
   return END_TURN;
 };
 
+const runRulesGenerate = async (deps: CommandDeps, sessionId: string) => {
+  const session = deps.core.getSession(sessionId);
+  if (!session) {
+    await emitAgentText(deps.conn, sessionId, "Session not found.");
+    return END_TURN;
+  }
+
+  const rulesDir = path.join(session.projectPath, ".claude/rules");
+  const orphaned = await findOrphanedRuleBodies(rulesDir);
+
+  if (orphaned.length === 0) {
+    await emitAgentText(
+      deps.conn,
+      sessionId,
+      "All rule bodies under `.claude/rules/` already have paired `.enforce.toml` files. Nothing to generate.",
+    );
+    return END_TURN;
+  }
+
+  // Status line so the user sees we're working before model output streams.
+  // The synthetic prompt itself is invisible to them — only the model's
+  // response (file writes via tool calls, summary at the end) is visible.
+  await emitAgentText(
+    deps.conn,
+    sessionId,
+    `Found ${orphaned.length} rule${orphaned.length === 1 ? "" : "s"} without enforcement. Asking the model to read each and generate \`.enforce.toml\` files where warranted.\n\n`,
+  );
+
+  // Dispatch via the normal prompt path so the model gets full tool
+  // access (Read, Write, Edit) and the session transcript captures the
+  // generation as a regular assistant turn. Returning the prompt's
+  // response shape keeps the slash-command contract identical to the
+  // other handlers.
+  const syntheticPrompt = buildRulesGeneratePrompt(orphaned);
+  return deps.core.prompt(sessionId, syntheticPrompt, deps.conn);
+};
+
 export const handleCommand = async (
   deps: CommandDeps,
   sessionId: string,
@@ -334,5 +376,7 @@ export const handleCommand = async (
       return runMcpReload(deps, sessionId);
     case "mcp_auth":
       return runMcpAuth(deps, sessionId, cmd.name);
+    case "rules_generate":
+      return runRulesGenerate(deps, sessionId);
   }
 };
