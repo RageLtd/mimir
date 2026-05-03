@@ -7,8 +7,8 @@
  * flat and individually reviewable.
  */
 
-import type * as acp from "@agentclientprotocol/sdk";
 import * as path from "node:path";
+import type * as acp from "@agentclientprotocol/sdk";
 import { isValidCCMode } from "../backends/claude-code/config-options";
 import { assembleClientMcpServers } from "../mcp-config/assemble";
 import { authenticateServer } from "../mcp-config/auth-injector";

@@ -12,8 +12,9 @@
  * not know about hooks, SSE, or which tool-execution mechanism is in
  * play — it operates on rule data.
  */
-import { Glob } from "bun";
+
 import * as path from "node:path";
+import { Glob } from "bun";
 import { resolveBuiltin } from "./builtins";
 import { applyMessageTemplate, formatFindings } from "./format";
 import {

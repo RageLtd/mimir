@@ -132,13 +132,13 @@ describe("buildSdkOptions", () => {
     expect(opts.model).toBeUndefined();
   });
 
-  test("enables continue and persistSession (SDK session mode)", () => {
+  test("does not set continue or persistSession (streaming-input mode)", () => {
     const opts = mkOpts();
-    // SDK maintains session context across turns with persistSession: true,
-    // continue: true. This enables the boot tools cache and conversation
-    // continuity that per-turn mode cannot provide.
-    expect(opts.continue).toBe(true);
-    expect(opts.persistSession).toBe(true);
+    // Continuity comes from the long-lived streaming-input Query, not from
+    // disk-backed JSONL replay. Setting either field would re-introduce the
+    // per-turn re-send of full transcript that streamInput is meant to fix.
+    expect(opts.continue).toBeUndefined();
+    expect(opts.persistSession).toBeUndefined();
   });
 
   test("sets strictMcpConfig to true", () => {

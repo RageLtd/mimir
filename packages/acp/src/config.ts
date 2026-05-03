@@ -218,8 +218,14 @@ export const loadConfig = () => {
       models: parseExtraModels(process.env.MIMIR_CC_EXTRA_MODELS),
       anchorInterval: parseInt(process.env.ANCHOR_INTERVAL ?? "20", 10),
       systemPromptPath: process.env.MIMIR_SYSTEM_PROMPT_PATH,
-      maxTurns: parsePositiveNumber(process.env.MIMIR_CC_MAX_TURNS),
-      maxBudgetUsd: parsePositiveNumber(process.env.MIMIR_CC_MAX_BUDGET_USD),
+      // Defaults bound the SDK's internal tool loop within a single ACP
+      // prompt. Without them, a runaway loop has been observed at 40+ inner
+      // model calls / 77M cumulative cached prompt tokens / $40+ per turn.
+      // The cap is per-ACP-prompt, not per-session — normal turns sit well
+      // under both ceilings.
+      maxTurns: parsePositiveNumber(process.env.MIMIR_CC_MAX_TURNS) ?? 50,
+      maxBudgetUsd:
+        parsePositiveNumber(process.env.MIMIR_CC_MAX_BUDGET_USD) ?? 10,
     },
     copilot: {
       enabled: parseBool(process.env.MIMIR_COPILOT_ENABLED, true),

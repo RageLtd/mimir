@@ -5,12 +5,13 @@
  * internal modules (matcher, builtins, format, loader, runner) stay
  * private to the engine.
  */
-export { loadRules } from "./loader";
-export { runRules, runAndFormat, eventMatchesTool } from "./runner";
+
 export { formatFindings, formatLoadErrors } from "./format";
+export { loadRules } from "./loader";
+export { eventMatchesTool, runAndFormat, runRules } from "./runner";
 export type {
-  Condition,
   CompiledCondition,
+  Condition,
   DetectorContext,
   Finding,
   LoadError,

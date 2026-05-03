@@ -24,6 +24,7 @@ import type {
   McpSdkServerConfigWithInstance,
   PermissionMode,
 } from "@anthropic-ai/claude-agent-sdk";
+import type { SessionState } from "../agent/types";
 import type { RuleEntry } from "../rules";
 import type { ChatMessage, ToolDefinition } from "../server-client";
 
@@ -101,6 +102,13 @@ export type BackendRunOptions = {
    * prompt-server.ts. Empty array = no enforcement.
    */
   rules?: readonly RuleEntry[];
+  /**
+   * The CC backend uses this to manage the long-lived streaming-input
+   * Query stored on `SessionState.ccQuery`: first turn creates it,
+   * subsequent turns push new SDKUserMessages into the existing stream.
+   * Other backends ignore this field.
+   */
+  session?: SessionState;
 };
 
 export type Backend = {

@@ -1,12 +1,17 @@
 /**
- * Core Claude Code runner using the Agent SDK.
+ * Core Claude Code runner using the Agent SDK in streaming-input mode.
  *
- * Uses `query()` from @anthropic-ai/claude-agent-sdk to run Claude Code,
- * translates SDK message types to the normalized BackendEvent stream.
- * The SDK handles subprocess spawning, auth, and session management
- * internally — no temp files or NDJSON parsing needed.
+ * One Query is created at session start and reused across ACP prompts.
+ * New user messages are pushed into a long-lived AsyncIterable that the
+ * SDK drains; the subprocess and conversation state stay resident, so
+ * subsequent turns don't re-spawn the CLI or replay the JSONL transcript.
+ *
+ * Per-turn cancellation is `q.interrupt()` (interrupts the current turn
+ * but keeps the subprocess alive). `q.close()` is reserved for full
+ * session teardown (compact, dispose).
  */
 
+import type { ContentBlock } from "@agentclientprotocol/sdk";
 import {
   type Query,
   query,
@@ -18,26 +23,87 @@ import {
 import { acpBlocksToAnthropicContent } from "../../agent/content";
 import { errMessage } from "../../util";
 import { createChildLogger, log } from "../../utils/log";
+import type { BackendEvent } from "../types";
 import { buildSdkOptions, type RunClaudeCodeOptions } from "./formatting";
 
 const logger = createChildLogger(log, "cc-runner");
 
+/** Build the Anthropic content array for a single user message. */
+const buildUserContent = (
+  prompt: string,
+  promptBlocks: readonly ContentBlock[] | undefined,
+) =>
+  promptBlocks && promptBlocks.length > 0
+    ? acpBlocksToAnthropicContent(promptBlocks)
+    : [{ type: "text" as const, text: prompt }];
+
+/** Wrap content in the SDKUserMessage envelope the SDK expects. */
+export const buildUserMessage = (
+  prompt: string,
+  promptBlocks: readonly ContentBlock[] | undefined,
+) =>
+  ({
+    type: "user",
+    message: {
+      role: "user",
+      content: buildUserContent(prompt, promptBlocks),
+    },
+    parent_tool_use_id: null,
+  }) satisfies SDKUserMessage;
+
 /**
- * Tracks active Query instances so they can be closed on process shutdown.
- * Per-request cancellation uses abortController (interrupts the current
- * turn); close() is reserved for agent termination.
+ * An async iterable backed by an internal queue. `push` appends a value;
+ * the iterable yields values FIFO and parks on a Promise when empty. `close`
+ * ends the iteration after draining.
+ *
+ * The SDK's streaming-input mode reads from this iterable for the lifetime
+ * of the Query — pushing a new SDKUserMessage triggers the next turn.
  */
-const activeQueries = new Set<Query>();
+export const createMessageQueue = () => {
+  const queue: SDKUserMessage[] = [];
+  let resolveNext: (() => void) | null = null;
+  let closed = false;
 
-const shutdownAll = () => {
-  for (const q of activeQueries) {
-    q.close();
-  }
-  activeQueries.clear();
+  const wake = () => {
+    if (resolveNext) {
+      const r = resolveNext;
+      resolveNext = null;
+      r();
+    }
+  };
+
+  const push = (msg: SDKUserMessage) => {
+    if (closed) {
+      logger.warn("push on closed queue — message dropped");
+      return;
+    }
+    queue.push(msg);
+    wake();
+  };
+
+  const close = () => {
+    closed = true;
+    wake();
+  };
+
+  const iterable: AsyncIterable<SDKUserMessage> = {
+    async *[Symbol.asyncIterator]() {
+      for (;;) {
+        const head = queue.shift();
+        if (head !== undefined) {
+          yield head;
+          continue;
+        }
+        if (closed) return;
+        await new Promise<void>((resolve) => {
+          resolveNext = resolve;
+        });
+      }
+    },
+  };
+
+  return { iterable, push, close };
 };
-
-process.on("SIGTERM", shutdownAll);
-process.on("SIGINT", shutdownAll);
 
 /**
  * Extract text from a tool_result content field. The Anthropic API allows
@@ -224,44 +290,36 @@ const safeNext = async <T>(iter: AsyncIterator<T>) => {
   return { ok: true as const, data: result } satisfies SafeOk<T>;
 };
 
-export const runClaudeCode = async function* (options: RunClaudeCodeOptions) {
-  // Build the user message content parts. Use promptBlocks if available
-  // (preserves images); fall back to plain text.
-  const contentParts =
-    options.promptBlocks && options.promptBlocks.length > 0
-      ? acpBlocksToAnthropicContent(options.promptBlocks)
-      : [{ type: "text" as const, text: options.prompt }];
+export type CcSession = {
+  readonly query: Query;
+  readonly push: (msg: SDKUserMessage) => void;
+  /**
+   * Long-lived BackendEvent stream. Yields events as the SDK produces them
+   * for every turn. A `finish` event marks a turn boundary; the generator
+   * keeps running and waits for the next pushed user message. The generator
+   * exits only when the underlying SDK iterator ends (Query closed) or errors.
+   */
+  readonly events: AsyncGenerator<BackendEvent>;
+};
 
-  // Streaming input: yield a single user message then close the generator.
-  async function* promptInput() {
-    yield {
-      type: "user" as const,
-      message: { role: "user" as const, content: contentParts },
-      parent_tool_use_id: null,
-    };
-  }
+/**
+ * Create a long-lived CC session. The first user message is pushed
+ * immediately so the first turn fires. Subsequent turns are driven by
+ * calling `push` with a new SDKUserMessage. Cancellation must go through
+ * `query.interrupt()`; full teardown through `query.close()`.
+ */
+export const startClaudeCodeSession = (options: RunClaudeCodeOptions) => {
+  const { iterable, push, close: closeQueue } = createMessageQueue();
 
-  // abortController interrupts the current turn without tearing down the session.
-  // Full session cleanup happens only on agent shutdown via activeQueries.
-  const abortController = new AbortController();
-  if (options.signal) {
-    options.signal.addEventListener("abort", () => abortController.abort(), {
-      once: true,
-    });
-  }
+  push(buildUserMessage(options.prompt, options.promptBlocks));
 
   const sdkOptions = buildSdkOptions(options);
 
   const q = query({
-    prompt: promptInput(),
-    options: { ...sdkOptions, abortController },
+    prompt: iterable,
+    options: sdkOptions,
   });
-  activeQueries.add(q);
 
-  // systemPrompt is either a single string or an array of blocks (with the
-  // SYSTEM_PROMPT_DYNAMIC_BOUNDARY sentinel separating the cacheable prefix
-  // from the dynamic suffix). Sum char counts so the log line is meaningful
-  // either way.
   const sp = sdkOptions.systemPrompt;
   const systemPromptChars = Array.isArray(sp)
     ? sp.reduce(
@@ -277,7 +335,6 @@ export const runClaudeCode = async function* (options: RunClaudeCodeOptions) {
     {
       model: sdkOptions.model,
       cwd: sdkOptions.cwd,
-      persistSession: sdkOptions.persistSession,
       settingSources: sdkOptions.settingSources,
       skills: sdkOptions.skills,
       plugins: sdkOptions.plugins,
@@ -287,104 +344,97 @@ export const runClaudeCode = async function* (options: RunClaudeCodeOptions) {
       systemPromptBlockCount,
       includePartialMessages: sdkOptions.includePartialMessages,
     },
-    "CC SDK query() created, starting iteration",
+    "CC SDK query() created (streaming input), starting iteration",
   );
 
-  const iter = q[Symbol.asyncIterator]();
-  let sessionId: string | undefined;
+  const events = (async function* () {
+    const iter = q[Symbol.asyncIterator]();
+    let sessionId: string | undefined;
 
-  for (;;) {
-    const next = await safeNext(iter);
+    for (;;) {
+      const next = await safeNext(iter);
 
-    if (!next.ok) {
-      if (!abortController.signal.aborted) {
-        logger.error(
-          { error: next.error },
-          "CC SDK iterator error (not aborted)",
-        );
+      if (!next.ok) {
+        logger.error({ error: next.error }, "CC SDK iterator error");
         yield { type: "error" as const, error: next.error };
-      } else {
-        logger.info("CC SDK iterator error after abort — expected");
+        break;
       }
-      break;
-    }
 
-    if (next.data.done) {
-      logger.info({ sessionId }, "CC SDK iterator completed (done=true)");
-      break;
-    }
-    const msg = next.data.value;
+      if (next.data.done) {
+        logger.info({ sessionId }, "CC SDK iterator completed (done=true)");
+        break;
+      }
+      const msg = next.data.value;
 
-    // system:init
-    if (msg.type === "system" && msg.subtype === "init") {
-      sessionId = msg.session_id;
-      // Log what the SDK actually loaded for this turn. The init message is
-      // the only place where tool/skill/plugin/slash-command counts surface;
-      // capturing them lets us spot when settings (skills:[], plugins:[],
-      // disallowedTools) aren't taking effect — e.g. a fresh CC release that
-      // ignores one of them and re-introduces ten extra skills.
-      logger.info(
-        {
+      if (msg.type === "system" && msg.subtype === "init") {
+        sessionId = msg.session_id;
+        logger.info(
+          {
+            sessionId: msg.session_id,
+            claudeCodeVersion: msg.claude_code_version,
+            model: msg.model,
+            permissionMode: msg.permissionMode,
+            tools: msg.tools ?? [],
+            toolCount: (msg.tools ?? []).length,
+            mcpServers: (msg.mcp_servers ?? []).map((s) => ({
+              name: s.name,
+              status: s.status,
+            })),
+            slashCommandCount: (msg.slash_commands ?? []).length,
+            skills: msg.skills ?? [],
+            skillCount: (msg.skills ?? []).length,
+            plugins: (msg.plugins ?? []).map((p) => p.name),
+            pluginCount: (msg.plugins ?? []).length,
+          },
+          "CC SDK init",
+        );
+        yield {
+          type: "init" as const,
           sessionId: msg.session_id,
-          claudeCodeVersion: msg.claude_code_version,
-          model: msg.model,
-          permissionMode: msg.permissionMode,
           tools: msg.tools ?? [],
-          toolCount: (msg.tools ?? []).length,
-          mcpServers: (msg.mcp_servers ?? []).map((s) => ({
-            name: s.name,
-            status: s.status,
-          })),
-          slashCommandCount: (msg.slash_commands ?? []).length,
-          skills: msg.skills ?? [],
-          skillCount: (msg.skills ?? []).length,
-          plugins: (msg.plugins ?? []).map((p) => p.name),
-          pluginCount: (msg.plugins ?? []).length,
-        },
-        "CC SDK init",
-      );
-      yield {
-        type: "init" as const,
-        sessionId: msg.session_id,
-        tools: msg.tools ?? [],
-      };
-      continue;
+        };
+        continue;
+      }
+
+      if (msg.type === "stream_event") {
+        yield* translateStreamEvent(msg);
+        continue;
+      }
+
+      if (msg.type === "assistant") {
+        sessionId = msg.session_id;
+        yield* translateAssistant(msg);
+        continue;
+      }
+
+      if (msg.type === "user" && !("isReplay" in msg)) {
+        yield* translateUser(msg);
+        continue;
+      }
+
+      // result is a turn boundary — yield finish but DO NOT exit the
+      // generator. The SDK continues to wait on the streaming input
+      // iterable for the next user message.
+      if (msg.type === "result") {
+        sessionId = msg.session_id;
+        yield* translateResult(msg, sessionId, sdkOptions.model);
+        continue;
+      }
+
+      logger.info({ type: msg.type, sessionId }, "ignoring SDK message");
     }
 
-    // stream_event: partial assistant message (text/thinking deltas)
-    if (msg.type === "stream_event") {
-      yield* translateStreamEvent(msg);
-      continue;
-    }
+    closeQueue();
+  })();
 
-    // assistant message (complete turn) — tool_use blocks only; text and
-    // thinking have already been streamed via stream_event deltas.
-    if (msg.type === "assistant") {
-      sessionId = msg.session_id;
-      yield* translateAssistant(msg);
-      continue;
-    }
+  return { query: q, push, events };
+};
 
-    // user message (tool results from CC's internal loop)
-    if (msg.type === "user" && !("isReplay" in msg)) {
-      yield* translateUser(msg);
-      continue;
-    }
-
-    // result (final)
-    if (msg.type === "result") {
-      sessionId = msg.session_id;
-      yield* translateResult(msg, sessionId, sdkOptions.model);
-      activeQueries.delete(q);
-      return;
-    }
-
-    // All other message types — log at info so they're visible in
-    // acp.log by default.
-    logger.info({ type: msg.type, sessionId }, "ignoring SDK message");
-  }
-
-  logger.info({ sessionId }, "CC SDK loop ended — yielding finish");
-  activeQueries.delete(q);
-  yield { type: "finish" as const, sessionId };
+/** Push a new user message into an existing CC session. */
+export const feedClaudeCodeMessage = (
+  push: (msg: SDKUserMessage) => void,
+  prompt: string,
+  promptBlocks: readonly ContentBlock[] | undefined,
+) => {
+  push(buildUserMessage(prompt, promptBlocks));
 };

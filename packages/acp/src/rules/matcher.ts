@@ -18,11 +18,7 @@
  * module is purely synchronous and never has to deal with malformed
  * patterns at evaluation time.
  */
-import type {
-  CompiledCondition,
-  DetectorContext,
-  Violation,
-} from "./types";
+import type { CompiledCondition, DetectorContext, Violation } from "./types";
 
 /**
  * Resolve a field name against the tool-call context. Returns the

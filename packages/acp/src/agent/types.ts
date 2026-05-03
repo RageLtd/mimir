@@ -3,8 +3,13 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
-import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  EffortLevel,
+  Query,
+  SDKUserMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import type { VoiceAnchorState } from "../backends/claude-code/voice-anchors";
+import type { BackendEvent } from "../backends/types";
 import type { ClientMcpManager } from "../client-mcp/manager";
 import type { ResolvedProject } from "../project/resolver";
 import type { LoadError, RuleEntry } from "../rules";
@@ -30,6 +35,36 @@ export type SessionState = {
   voiceAnchors: VoiceAnchorState;
   /** First turn only: assembleContext + boot server. Subsequent: SDK handles continuity. */
   bootSequenceDone: boolean;
+  /**
+   * CC backend: live Query handle from a streaming-input query(). Held across
+   * ACP prompts so the subprocess and conversation state are reused instead of
+   * rebuilt each turn. Null until the first prompt creates it; nulled on
+   * compact/dispose and on effort changes (which require Query recreation
+   * since the SDK has no setEffort).
+   */
+  ccQuery: Query | null;
+  /**
+   * CC backend: pushes a new SDKUserMessage into the long-lived async iterable
+   * feeding ccQuery. Paired 1:1 with ccQuery — both null or both set.
+   */
+  ccUserStreamPush: ((msg: SDKUserMessage) => void) | null;
+  /**
+   * CC backend: long-lived BackendEvent stream from the streaming-input
+   * Query. Paused between turns at the await on the SDK iterator. The
+   * adapter drains it until each turn's `finish` event. Paired 1:1 with
+   * ccQuery — both null or both set.
+   */
+  ccEvents: AsyncGenerator<BackendEvent> | null;
+  /**
+   * CC backend: snapshot of (modelId, mode, effort) at the time ccQuery was
+   * created. Used by prompt-cc to detect mid-session changes and apply
+   * setModel/setPermissionMode, or to recreate the Query when effort changes.
+   */
+  ccQueryConfig: {
+    modelId: string;
+    mode: string;
+    effort: EffortLevel | undefined;
+  } | null;
 };
 
 export type AgentCore = {

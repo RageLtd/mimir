@@ -1,25 +1,35 @@
 /**
  * Claude Code backend prompt path.
  *
- * Uses SDK `persistSession: true, continue: true` mode — the SDK carries
- * conversation context across turns. mimir-acp tracks session state
- * (`session.messages` for persistence, `session.bootSequenceDone` for
- * first-turn gating) but not cross-turn working memory.
+ * Uses streaming-input mode: one CC subprocess per session, fed via
+ * `streamInput`. The Query (held on `session.ccQuery` by the adapter) is
+ * created on the first prompt and reused thereafter. Conversation continuity
+ * is purely in-memory inside the live subprocess — no JSONL transcript on
+ * disk, no `--continue` replay, no per-turn re-send of full history.
+ *
+ * mimir-acp tracks session state (`session.messages` for persistence,
+ * `session.bootSequenceDone` for first-turn gating) but not cross-turn
+ * working memory; that lives in the long-lived Query.
  *
  * The cross-turn channels:
  *   - First turn: assembleContext → full system prompt + session context
- *     + boot tools. XML-converted with model override.
- *   - Subsequent turns: getSystemPrompt (TTL-cached) → full system prompt,
- *     XML-converted with model override. SDK's `continue: true` handles
- *     conversation continuity; no boot server needed.
+ *     + boot tools. XML-converted with model override. The system prompt
+ *     is fixed at Query creation and cannot change during the session.
+ *   - Subsequent turns: getSystemPrompt (TTL-cached) → full system prompt
+ *     for our records. The Query has already captured the first-turn
+ *     prompt and ignores subsequent values; we still build it because
+ *     mid-session model/mode changes go through the adapter via
+ *     `setModel`/`setPermissionMode`, and the `xmlSystemPrompt` is
+ *     harmless to re-pass.
  *
  * `session.bootSequenceDone` gates the first-turn assembly. Initialised to
- * `false` in newSession/restoreSession (core.ts). Set to `true` only after
- * the first turn runs to completion — cancelled / errored / refused first
- * turns leave it `false` so the next prompt re-attempts boot. The cost is
- * one wasted assembleContext call per failed first turn; the alternative
- * (setting it eagerly) risks a session that never receives boot context if
- * the first turn errors before the model invokes the boot tools.
+ * `false` in newSession/restoreSession (core.ts) and reset on compact. Set
+ * to `true` only after the first turn runs to completion — cancelled /
+ * errored / refused first turns leave it `false` so the next prompt
+ * re-attempts boot. The cost is one wasted assembleContext call per failed
+ * first turn; the alternative (setting it eagerly) risks a session that
+ * never receives boot context if the first turn errors before the model
+ * invokes the boot tools.
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
@@ -102,9 +112,10 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
 
   // Always fetch the full system prompt. On the first turn we need the
   // complete assembled context (messages, memories, summaries) for the boot
-  // tools. On subsequent turns we only need the system prompt — the SDK
-  // carries conversation context via continue:true. getSystemPrompt is
-  // TTL-cached so this is near-free on most turns.
+  // tools. On subsequent turns the long-lived Query already has the system
+  // prompt baked in at creation; we still build the XML form so any
+  // observers downstream (logs, future tooling) see what would have been
+  // sent. getSystemPrompt is TTL-cached so this is near-free.
   let bootServer: ReturnType<typeof createBootServer> | undefined;
   let xmlSystemPrompt: string;
 
@@ -154,7 +165,10 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
       );
       xmlSystemPrompt = toAnthropicXml(systemPrompt);
     } catch (err) {
-      logger.warn("system prompt fetch failed, using projectRules fallback:", err);
+      logger.warn(
+        "system prompt fetch failed, using projectRules fallback:",
+        err,
+      );
       xmlSystemPrompt = toAnthropicXml(session.projectRules ?? "");
     }
   }
@@ -217,6 +231,7 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
       effort: session.currentThoughtLevel,
       rules: session.rules,
       signal: abortController.signal,
+      session,
     })
     [Symbol.asyncIterator]();
 
@@ -275,6 +290,13 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
         });
       }
     } else if (event.type === "error") {
+      // The adapter calls q.interrupt() on abort; the SDK then emits a
+      // `result` whose subtype is non-success, which translateResult
+      // surfaces as an `error` event. Distinguish that from genuine model
+      // refusal by checking the signal.
+      if (abortController.signal.aborted) {
+        return { stopReason: "cancelled" as const };
+      }
       return { stopReason: "refusal" as const };
     }
   }

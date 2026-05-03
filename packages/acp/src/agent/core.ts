@@ -136,6 +136,10 @@ export const createAgentCore = (
         deps.voiceAnchorLibrary.length,
       ),
       bootSequenceDone: false,
+      ccQuery: null,
+      ccUserStreamPush: null,
+      ccEvents: null,
+      ccQueryConfig: null,
     };
     sessions.set(sessionId, session);
 
@@ -222,6 +226,10 @@ export const createAgentCore = (
         deps.voiceAnchorLibrary.length,
       ),
       bootSequenceDone: false,
+      ccQuery: null,
+      ccUserStreamPush: null,
+      ccEvents: null,
+      ccQueryConfig: null,
     };
     sessions.set(sessionId, session);
 
@@ -264,6 +272,19 @@ export const createAgentCore = (
     if (!session) return false;
     session.messages = [];
     sessionStore.updateMessages(sessionId, []);
+    // The CC streaming-input Query holds the model's working context for
+    // this session in-memory. Compaction wipes mimir's transcript record;
+    // tearing down the Query forces the next prompt to spin up a fresh
+    // subprocess that re-runs the boot sequence with whatever the server
+    // now provides as recent messages / summaries.
+    if (session.ccQuery) {
+      session.ccQuery.close();
+      session.ccQuery = null;
+      session.ccUserStreamPush = null;
+      session.ccEvents = null;
+      session.ccQueryConfig = null;
+    }
+    session.bootSequenceDone = false;
     return true;
   };
 
@@ -384,14 +405,24 @@ export const createAgentCore = (
 
   const cancel = (sessionId: string) => {
     const session = sessions.get(sessionId);
-    if (session?.abortController) {
-      session.abortController.abort();
-    }
+    if (!session) return;
+    // abortController.abort() is the cross-backend signal; the CC adapter
+    // listens for it and calls q.interrupt() to stop the current turn
+    // without tearing down the long-lived subprocess. The server backend
+    // uses the same signal to cancel its in-flight HTTP request.
+    session.abortController?.abort();
   };
 
   const dispose = () => {
     for (const session of sessions.values()) {
       session.abortController?.abort();
+      // Full teardown: close the CC subprocess. Per-prompt cancellation
+      // would have used interrupt(); dispose is the only place close() runs.
+      session.ccQuery?.close();
+      session.ccQuery = null;
+      session.ccUserStreamPush = null;
+      session.ccEvents = null;
+      session.ccQueryConfig = null;
       session.clientMcp
         ?.close()
         .catch((err) =>

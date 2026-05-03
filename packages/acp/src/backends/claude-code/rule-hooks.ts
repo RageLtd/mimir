@@ -16,7 +16,7 @@ import type {
   HookCallback,
   PreToolUseHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
-import { runAndFormat, type RuleEntry } from "../../rules";
+import { type RuleEntry, runAndFormat } from "../../rules";
 
 /**
  * Build a PreToolUse hook matcher list from loaded rules. Returns the

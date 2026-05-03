@@ -6,11 +6,11 @@
  */
 
 import { Hono } from "hono";
+import { listModels } from "../agent/provider-registry";
 import {
   getModelDisplayName,
   getProviderDisplayName,
 } from "../agent-loop/provider/query";
-import { listModels } from "../agent/provider-registry";
 import { config, OPENROUTER_API_URL } from "../config";
 import { attempt } from "../util/result";
 

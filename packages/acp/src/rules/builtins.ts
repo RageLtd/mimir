@@ -67,7 +67,11 @@ const projectedLineCount = async (ctx: DetectorContext, filePath: string) => {
   const tool = ctx.toolName;
   const input = ctx.toolInput;
 
-  if (tool === "Write" || tool === "fs_write_text_file" || tool === "write_text_file") {
+  if (
+    tool === "Write" ||
+    tool === "fs_write_text_file" ||
+    tool === "write_text_file"
+  ) {
     const content = input.content;
     return typeof content === "string" ? countLines(content) : null;
   }

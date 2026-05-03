@@ -58,12 +58,13 @@ const stripVariantSuffix = (alias: string) => alias.replace(/\[.*\]$/, "");
  * — both are listed so the lookup is robust to either. Sonnet and
  * Haiku families currently have one canonical alias each.
  */
-const FAMILY_FALLBACK_ALIASES: ReadonlyMap<string, readonly string[]> =
-  new Map([
+const FAMILY_FALLBACK_ALIASES: ReadonlyMap<string, readonly string[]> = new Map(
+  [
     ["opus", ["opus", "default"]],
     ["sonnet", ["sonnet"]],
     ["haiku", ["haiku"]],
-  ]);
+  ],
+);
 
 /**
  * Detect the model family from an alias string. Matches against known

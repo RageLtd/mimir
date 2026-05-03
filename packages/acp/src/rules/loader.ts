@@ -15,8 +15,9 @@
  *
  * Bun's built-in TOML parser handles parsing — no extra dependency.
  */
-import { Glob } from "bun";
+
 import * as path from "node:path";
+import { Glob } from "bun";
 import { errMessage } from "../util";
 import { resolveBuiltin } from "./builtins";
 import { compileCondition } from "./runner";
@@ -48,9 +49,11 @@ const VALID_OPERATORS: ReadonlySet<Operator> = new Set([
   "equals",
 ]);
 
-const bunTOML = (Bun as unknown as {
-  TOML: { parse(s: string): Record<string, unknown> };
-}).TOML;
+const bunTOML = (
+  Bun as unknown as {
+    TOML: { parse(s: string): Record<string, unknown> };
+  }
+).TOML;
 
 /**
  * Load and validate every `.enforce.toml` under `projectPath`.
@@ -150,7 +153,7 @@ const loadOne = async (absPath: string, projectPath: string) => {
     return failure(
       absPath,
       id,
-      "must declare either `detector = \"builtin:...\"` or at least one `[[conditions]]` block",
+      'must declare either `detector = "builtin:..."` or at least one `[[conditions]]` block',
     );
   }
   if (hasDetector && hasConditions) {
@@ -195,16 +198,16 @@ const loadOne = async (absPath: string, projectPath: string) => {
   let excludeGlobs: string[] | undefined;
   if (raw.exclude_globs !== undefined) {
     if (!Array.isArray(raw.exclude_globs)) {
-      return failure(absPath, id, "`exclude_globs` must be an array of strings");
+      return failure(
+        absPath,
+        id,
+        "`exclude_globs` must be an array of strings",
+      );
     }
     excludeGlobs = [];
     for (const g of raw.exclude_globs) {
       if (typeof g !== "string") {
-        return failure(
-          absPath,
-          id,
-          "`exclude_globs` entries must be strings",
-        );
+        return failure(absPath, id, "`exclude_globs` entries must be strings");
       }
       excludeGlobs.push(g);
     }
@@ -299,7 +302,11 @@ const compileConditionList = async (raw: unknown, fieldName: string) => {
 };
 
 /** Validate one TOML-loaded condition table. */
-const validateCondition = (entry: unknown, fieldName: string, index: number) => {
+const validateCondition = (
+  entry: unknown,
+  fieldName: string,
+  index: number,
+) => {
   if (!entry || typeof entry !== "object") {
     return {
       ok: false as const,

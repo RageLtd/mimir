@@ -14,4 +14,5 @@ export type { RunClaudeCodeOptions } from "./formatting";
 export { buildSdkOptions, formatContextForPrompt } from "./formatting";
 export { buildMcpServers } from "./mcp-config";
 export { promptViaClaudeCode } from "./prompt-cc";
-export { runClaudeCode } from "./runner";
+export type { CcSession } from "./runner";
+export { feedClaudeCodeMessage, startClaudeCodeSession } from "./runner";

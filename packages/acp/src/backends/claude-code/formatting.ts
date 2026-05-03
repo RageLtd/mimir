@@ -56,9 +56,9 @@ export type RunClaudeCodeOptions = {
 /**
  * Boot instruction appended to the system prompt. Tells the model to call
  * the three boot tools at the START of the session (first turn only) to
- * load per-session context. With `persistSession: true, continue: true` the
- * SDK carries context across turns, so the model only needs to call the
- * boot tools once at session start.
+ * load per-session context. The streaming-input Query stays alive across
+ * turns, so the conversation context is naturally preserved without any
+ * disk-backed transcript or `--continue` replay.
  */
 const BOOT_INSTRUCTION = `At the start of this session, BEFORE responding to anything else, call all three boot tools in parallel to load your context:
 
@@ -108,12 +108,12 @@ export const buildSdkOptions = (
       options.bootServer,
     ),
     strictMcpConfig: true,
-    // SDK-managed session continuity: persistSession writes the JSONL
-    // transcript to ~/.claude/projects/<encoded>/, continue picks the most
-    // recent one for this cwd on the next query(). Boot context delivered
-    // on the first turn rides forward in that transcript.
-    persistSession: true,
-    continue: true,
+    // No persistSession / continue: continuity comes from the long-lived
+    // streaming-input Query (one subprocess per session, fed via
+    // streamInput). Disk-backed JSONL replay is exactly the cost we're
+    // avoiding — every turn was re-sending the full transcript over the
+    // wire (~6.9M prompt tokens/turn average). The mimir-server is the
+    // source of truth for cross-session recovery; one session per process.
     // Hard-disable filesystem settings discovery. Without `[]` the CLI
     // would load ~/.claude/settings.json, .claude/settings.json, and
     // .claude/settings.local.json — bringing in user-level rule rules,

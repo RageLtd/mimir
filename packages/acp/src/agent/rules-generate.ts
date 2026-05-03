@@ -6,8 +6,9 @@
  * actual orchestration (call discovery, build prompt, dispatch via
  * `core.prompt`) is the only thing that remains in commands.ts.
  */
-import { Glob } from "bun";
+
 import * as path from "node:path";
+import { Glob } from "bun";
 
 /**
  * Discover rule body markdowns under `<rulesDir>` that lack a sibling
