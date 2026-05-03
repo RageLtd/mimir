@@ -18,6 +18,7 @@ import {
   agentLoop,
   appendServerStepToPrompt,
   type EmitSSE,
+  type EmitUsage,
   executeServerTools,
   MAX_AGENT_STEPS,
   type Model,
@@ -49,6 +50,22 @@ export function streamingResponse(
     controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
   };
 
+  // Final-chunk usage emission per OpenAI spec when stream_options.include_usage
+  // is true. Empty `choices` + top-level `usage` is the wire format. The
+  // non-standard `context_window` is mimir's extension so the ACP client can
+  // populate Zed's progress bar without round-tripping to /v1/models.
+  const emitUsage: EmitUsage = (controller, usage) => {
+    const chunk = {
+      id: streamId,
+      object: "chat.completion.chunk",
+      created,
+      model: modelId,
+      choices: [],
+      usage,
+    };
+    controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+  };
+
   const readable = new ReadableStream({
     start(controller) {
       // Serialize through the LLM-call queue — one brain, one voice at a
@@ -56,7 +73,7 @@ export function streamingResponse(
       // coherent (an assistant reply never lands next to a user message
       // it wasn't responding to).
       enqueueLlmCall(() =>
-        agentLoop(model, baseOptions, ctx, controller, emitSSE),
+        agentLoop(model, baseOptions, ctx, controller, emitSSE, emitUsage),
       )
         .catch((err) => {
           log.error({ err }, "agent loop error");

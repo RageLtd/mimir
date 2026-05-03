@@ -22,70 +22,125 @@ import {
   accumulateToolCallDeltas,
   type MutableToolCall,
   mergeToolCallDelta,
+  type SSEEvent,
 } from "../sse-parser";
 import { errMessage } from "../util";
-import type { Backend, BackendEvent, BackendRunOptions } from "./types";
+import type { Backend, BackendRunOptions } from "./types";
 
-export const createServerBackend = (
-  serverConfig: ServerClientConfig,
-): Backend => {
-  const run = async function* (
-    options: BackendRunOptions,
-  ): AsyncGenerator<BackendEvent> {
+/**
+ * Parse tool-call arguments without try/catch. JSON.parse throws sync;
+ * Promise.resolve().then().catch() converts the throw into a fallback
+ * value via the rule-approved Result-style pattern.
+ */
+const parseToolCallArgs = (name: string, raw: string) =>
+  Promise.resolve()
+    .then(() => JSON.parse(raw) as Record<string, unknown>)
+    .catch((err) => {
+      log.debug(
+        `Failed to parse tool call arguments for ${name}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+      return {} as Record<string, unknown>;
+    });
+
+export const createServerBackend = (serverConfig: ServerClientConfig) => {
+  const run = async function* (options: BackendRunOptions) {
     const acc = new Map<number, MutableToolCall>();
+    // Buffered usage from the trailing usage chunk (per OpenAI
+    // include_usage spec, arrives AFTER the choice's finish_reason).
+    // mimir-server emits both for every streaming response, so we hold
+    // the finish event until the usage chunk arrives and then emit a
+    // single BackendEvent with both fields populated.
+    let pendingFinishReason: string | null | undefined;
+    let usagePromptTokens: number | undefined;
+    let usageCompletionTokens: number | undefined;
+    let usageContextWindow: number | undefined;
 
-    try {
-      for await (const event of streamCompletion(
-        serverConfig,
-        {
-          model: options.modelId,
-          messages: options.messages as ChatMessage[],
-          tools: options.tools as ToolDefinition[],
-          stream: true,
-          metadata: options.metadata,
-        },
-        options.signal,
-      )) {
-        switch (event.type) {
-          case "content":
-            yield { type: "text", text: event.text };
-            break;
-          case "tool_call_delta":
-            mergeToolCallDelta(acc, event.delta);
-            break;
-          case "finish": {
-            const toolCalls = accumulateToolCallDeltas(acc);
-            for (const tc of toolCalls) {
-              let input: Record<string, unknown> = {};
-              try {
-                input = JSON.parse(tc.function.arguments);
-              } catch (err) {
-                log.debug(
-                  `Failed to parse tool call arguments for ${tc.function.name}:`,
-                  err instanceof Error ? err.message : String(err),
-                );
-                input = {};
-              }
-              yield {
-                type: "tool_call",
-                id: tc.id,
-                name: tc.function.name,
-                input,
-                observeOnly: false,
-              };
-            }
-            yield { type: "finish", stopReason: event.reason ?? undefined };
-            return;
-          }
-          case "error":
-            yield { type: "error", error: event.error };
-            return;
-        }
+    // Drive the SSE iterator manually with `.next().catch(errMessage)` —
+    // same pattern as runner.ts:safeNext and prompt-server.ts. Avoids
+    // try/catch around the for-await loop and makes upstream errors
+    // explicit as `{ ok: false, error }` results rather than thrown
+    // exceptions wrapped in a translation handler.
+    const iter = streamCompletion(
+      serverConfig,
+      {
+        model: options.modelId,
+        messages: options.messages as ChatMessage[],
+        tools: options.tools as ToolDefinition[],
+        stream: true,
+        metadata: options.metadata,
+      },
+      options.signal,
+    )[Symbol.asyncIterator]();
+
+    while (true) {
+      const step = await iter.next().catch(errMessage);
+      if (typeof step === "string") {
+        yield { type: "error" as const, error: step };
+        return;
       }
-    } catch (err) {
-      yield { type: "error", error: errMessage(err) };
+      if (step.done) break;
+
+      const event: SSEEvent = step.value;
+      switch (event.type) {
+        case "content":
+          yield { type: "text" as const, text: event.text };
+          break;
+        case "thinking":
+          yield { type: "thinking" as const, text: event.text };
+          break;
+        case "tool_call_delta":
+          mergeToolCallDelta(acc, event.delta);
+          break;
+        case "finish": {
+          // Hold the finish until usage arrives. Tool calls are flushed
+          // immediately so the agent loop can start dispatching while
+          // the usage chunk is still in flight.
+          pendingFinishReason = event.reason;
+          const toolCalls = accumulateToolCallDeltas(acc);
+          for (const tc of toolCalls) {
+            const input = await parseToolCallArgs(
+              tc.function.name,
+              tc.function.arguments,
+            );
+            yield {
+              type: "tool_call" as const,
+              id: tc.id,
+              name: tc.function.name,
+              input,
+              observeOnly: false,
+            };
+          }
+          break;
+        }
+        case "usage":
+          usagePromptTokens = event.promptTokens;
+          usageCompletionTokens = event.completionTokens;
+          usageContextWindow = event.contextWindow;
+          break;
+        case "error":
+          yield { type: "error" as const, error: event.error };
+          return;
+      }
     }
+
+    // Stream completed naturally — emit the buffered finish with usage
+    // populated (if the server included it). When the upstream errored
+    // we already returned above, so reaching here means a clean turn.
+    yield {
+      type: "finish" as const,
+      stopReason: pendingFinishReason ?? undefined,
+      ...(typeof usagePromptTokens === "number"
+        ? { promptTokens: usagePromptTokens }
+        : {}),
+      ...(typeof usageCompletionTokens === "number"
+        ? { completionTokens: usageCompletionTokens }
+        : {}),
+      ...(typeof usageContextWindow === "number"
+        ? { contextWindow: usageContextWindow }
+        : {}),
+    };
   };
 
-  return { kind: "server", run };
+  return { kind: "server", run } satisfies Backend;
 };

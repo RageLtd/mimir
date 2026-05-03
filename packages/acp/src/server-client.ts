@@ -91,7 +91,14 @@ export const streamCompletion = async function* (
   const headers = authHeaders(config.apiKey);
   const response = await postJson(
     `${config.baseUrl}/v1/chat/completions`,
-    { ...request, stream: true },
+    {
+      ...request,
+      stream: true,
+      // Ask mimir-server to emit the OpenAI-spec usage chunk after the
+      // turn ends. Carries token counts and (mimir extension) the model's
+      // context window so prompt-server.ts can emit a usage_update.
+      stream_options: { include_usage: true },
+    },
     headers,
     signal,
   );

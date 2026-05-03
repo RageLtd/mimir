@@ -25,6 +25,7 @@ import {
   persistAssistantTurn,
   triggerCompactionIfNeeded,
 } from "../../agent-loop/post-processing";
+import { getContextWindow } from "../../agent-loop/provider/query";
 import { SERVER_TOOL_NAMES } from "../../agent-loop/server-tools";
 import type { MimirContext } from "../../middleware/types";
 import { log } from "../../util/logger";
@@ -38,6 +39,16 @@ export type EmitSSE = (
   delta: Record<string, unknown>,
   finishReason?: string | null,
 ) => void;
+export type EmitUsage = (
+  controller: ReadableStreamDefaultController,
+  usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    /** Non-standard mimir extension — model's max context window in tokens. */
+    context_window?: number;
+  },
+) => void;
 
 export async function agentLoop(
   model: Model,
@@ -45,9 +56,16 @@ export async function agentLoop(
   ctx: MimirContext,
   controller: ReadableStreamDefaultController,
   emitSSE: EmitSSE,
+  emitUsage: EmitUsage,
 ) {
   const prompt: LanguageModelV3Message[] = [...(baseOptions.prompt ?? [])];
   let lastStepInputTokens = 0;
+  // Sum across all agent steps so the final usage chunk reflects the
+  // entire turn's output rather than just the last step's. Input tokens
+  // already include accumulated context (the model's prompt grows each
+  // step), so the LAST step's input is the right "prompt size at end of
+  // turn" value.
+  let totalOutputTokens = 0;
   let lastAssistantText = "";
   // Final assistant output destined for the client — accumulated here so
   // we can persist it to the global log once the turn ends. Server-tool
@@ -123,6 +141,7 @@ export async function agentLoop(
     }
 
     lastStepInputTokens = stepInputTokens;
+    totalOutputTokens += stepOutputTokens;
     lastAssistantText = textChunks.join("");
 
     log.debug(
@@ -187,6 +206,21 @@ export async function agentLoop(
     );
     await executeServerTools(prompt, serverCalls, ctx);
   }
+
+  // Emit the OpenAI-spec usage chunk (empty choices + top-level usage)
+  // before [DONE]. Includes a non-standard `context_window` so the ACP
+  // client can populate Zed's progress bar without a separate /v1/models
+  // call. `lastStepInputTokens` is the right "prompt size at end of turn"
+  // value because each agent step appends to the prompt — the final
+  // step's input includes all accumulated context.
+  emitUsage(controller, {
+    prompt_tokens: lastStepInputTokens,
+    completion_tokens: totalOutputTokens,
+    total_tokens: lastStepInputTokens + totalOutputTokens,
+    ...(typeof ctx.request.model === "string"
+      ? { context_window: getContextWindow(ctx.request.model) }
+      : {}),
+  });
 
   // Persist the final assistant turn — server owns its own writes.
   // Fire-and-forget; logs on failure but never blocks the response.

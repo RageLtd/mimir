@@ -4,6 +4,19 @@
  * Sends messages + tool manifest to mimir-server, streams text to the
  * editor, executes tool calls (local or editor-forwarded), and loops
  * until the model finishes without requesting tools.
+ *
+ * Why this path doesn't call `persistTurn` / `reportTokenUsage`:
+ *   mimir-server owns all transcript writes for this backend. Specifically:
+ *   - User + tool messages → `appendTrailingTurn` in
+ *     `middleware/context-assembly.ts` (request-time, before the agent loop).
+ *   - Assistant messages → `persistAssistantTurn` in `agent/run/loop.ts` /
+ *     `response.ts` (post-stream).
+ *   - Token tracking + compaction → `triggerCompactionIfNeeded` (post-stream).
+ *   - Memory extraction → `extractMemoriesFromResponse` (post-stream).
+ *   The CC backend has to call `/v1/messages/persist` and
+ *   `/v1/context/token-report` itself because it runs inference locally and
+ *   the server never sees its assistant emissions; the server backend gets
+ *   all of that for free at the `/v1/chat/completions` boundary.
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
@@ -124,19 +137,46 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
         hasContent = true;
         contentBuffer += event.text;
         await emitAgentText(conn, session.sessionId, event.text);
+      } else if (event.type === "thinking") {
+        await conn.sessionUpdate({
+          sessionId: session.sessionId,
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text: event.text },
+          },
+        });
       } else if (event.type === "tool_call" && !event.observeOnly) {
         pendingToolCalls.push({
           id: event.id,
           name: event.name,
           input: event.input,
         });
+      } else if (event.type === "finish") {
+        // Emit a usage_update so Zed's progress bar updates per turn —
+        // mirrors prompt-cc.ts:248. The server backend now reports
+        // tokens + context window via the trailing usage chunk that
+        // backends/server.ts buffers into this finish event.
+        if (
+          typeof event.promptTokens === "number" &&
+          event.promptTokens > 0 &&
+          typeof event.contextWindow === "number" &&
+          event.contextWindow > 0
+        ) {
+          await conn.sessionUpdate({
+            sessionId: session.sessionId,
+            update: {
+              sessionUpdate: "usage_update",
+              used: event.promptTokens,
+              size: event.contextWindow,
+            },
+          });
+        }
       } else if (event.type === "error") {
         logger.error("Backend error:", event.error);
         await emitAgentText(conn, session.sessionId, `Error: ${event.error}`);
         streamErrored = true;
         break;
       }
-      // event.type === "finish" falls through to post-stream tool execution
     }
     if (streamErrored) return { stopReason: "refusal" as const };
 

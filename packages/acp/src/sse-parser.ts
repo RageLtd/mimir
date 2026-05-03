@@ -20,10 +20,29 @@ export type ChatCompletionChunk = {
     readonly delta: {
       readonly role?: string;
       readonly content?: string;
+      /**
+       * OpenAI-style reasoning delta. Emitted by mimir-server when the
+       * underlying model produces extended-thinking output (DeepSeek
+       * reasoning, Anthropic via OAI-compat, GPT-5 reasoning, etc.).
+       */
+      readonly reasoning_content?: string;
       readonly tool_calls?: readonly ToolCallDelta[];
     };
     readonly finish_reason: string | null;
   }[];
+  /**
+   * Top-level usage object on the final chunk (per OpenAI's
+   * `stream_options.include_usage` spec). mimir-server emits this on
+   * every streaming response. `context_window` is a non-standard mimir
+   * extension carrying the model's max context size — used to populate
+   * the editor's progress bar without a separate /v1/models call.
+   */
+  readonly usage?: {
+    readonly prompt_tokens?: number;
+    readonly completion_tokens?: number;
+    readonly total_tokens?: number;
+    readonly context_window?: number;
+  };
 };
 
 export type ToolCallDelta = {
@@ -48,7 +67,14 @@ export type ResolvedToolCall = {
 
 export type SSEEvent =
   | { readonly type: "content"; readonly text: string }
+  | { readonly type: "thinking"; readonly text: string }
   | { readonly type: "tool_call_delta"; readonly delta: ToolCallDelta }
+  | {
+      readonly type: "usage";
+      readonly promptTokens?: number;
+      readonly completionTokens?: number;
+      readonly contextWindow?: number;
+    }
   | { readonly type: "finish"; readonly reason: string | null }
   | { readonly type: "error"; readonly error: string };
 
@@ -76,6 +102,10 @@ export const chunkToEvents = (chunk: ChatCompletionChunk) => {
       events.push({ type: "content", text: delta.content });
     }
 
+    if (delta.reasoning_content) {
+      events.push({ type: "thinking", text: delta.reasoning_content });
+    }
+
     if (delta.tool_calls && delta.tool_calls.length > 0) {
       for (const tc of delta.tool_calls) {
         events.push({ type: "tool_call_delta", delta: tc });
@@ -85,6 +115,19 @@ export const chunkToEvents = (chunk: ChatCompletionChunk) => {
     if (choice.finish_reason) {
       events.push({ type: "finish", reason: choice.finish_reason });
     }
+  }
+
+  // Top-level usage chunks (empty choices, populated usage) — terminal
+  // signal carrying token counts and context window for the just-finished
+  // turn. Per OpenAI streaming spec these arrive AFTER the finish chunk
+  // and BEFORE [DONE].
+  if (chunk.usage) {
+    events.push({
+      type: "usage",
+      promptTokens: chunk.usage.prompt_tokens,
+      completionTokens: chunk.usage.completion_tokens,
+      contextWindow: chunk.usage.context_window,
+    });
   }
 
   return events;
