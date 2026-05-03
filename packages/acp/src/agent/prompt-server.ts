@@ -114,7 +114,8 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
           return { stopReason: "cancelled" as const };
         }
         logger.error("Agent loop error:", step);
-        return { stopReason: "end_turn" as const };
+        await emitAgentText(conn, session.sessionId, `Error: ${step}`);
+        return { stopReason: "refusal" as const };
       }
       if (step.done) break;
       const event = step.value;
@@ -137,9 +138,12 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
       }
       // event.type === "finish" falls through to post-stream tool execution
     }
-    if (streamErrored) return { stopReason: "end_turn" as const };
+    if (streamErrored) return { stopReason: "refusal" as const };
 
     if (pendingToolCalls.length === 0) {
+      if (hasContent) {
+        session.messages.push({ role: "assistant", content: contentBuffer });
+      }
       return { stopReason: "end_turn" as const };
     }
 
@@ -235,8 +239,9 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
     }
   }
 
-  if (turnCount >= MAX_TURNS) {
-    logger.warn("Max turns reached:", MAX_TURNS);
-  }
-  return { stopReason: "end_turn" as const };
+  // Loop falls through only when the `turnCount < MAX_TURNS` condition
+  // becomes false — every other exit goes through an early return inside
+  // the body. So reaching here means we hit the cap.
+  logger.warn("Max turns reached:", MAX_TURNS);
+  return { stopReason: "max_turn_requests" as const };
 };

@@ -61,7 +61,7 @@ describe("getCCModelList", () => {
       permissionMode: "bypassPermissions",
       models: { opus: "claude-opus-4-20250514" },
       anchorInterval: 6,
-    };
+      };
     const list = getCCModelList(cc);
     expect(list).toHaveLength(1);
     expect(list[0]!.modelId).toBe("claude-code/opus");
@@ -75,7 +75,7 @@ describe("getCCModelList", () => {
       permissionMode: "bypassPermissions",
       models: { opus: "claude-opus-4-20250514" },
       anchorInterval: 6,
-    };
+      };
     expect(getCCModelList(cc)).toEqual([]);
   });
 
@@ -86,7 +86,7 @@ describe("getCCModelList", () => {
       permissionMode: "bypassPermissions",
       models: {},
       anchorInterval: 6,
-    };
+      };
     expect(getCCModelList(cc)).toEqual([]);
   });
 });

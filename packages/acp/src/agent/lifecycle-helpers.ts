@@ -8,6 +8,8 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
+import { getContextWindow } from "../backends/claude-code/context-window-cache";
+import { isCCModel } from "../routing";
 import { createChildLogger, log } from "../utils/log";
 import { AVAILABLE_COMMANDS } from "./session";
 import type { AgentCore } from "./types";
@@ -115,6 +117,44 @@ export const replayHistoryToEditor = (
     }
   }
 };
+
+/**
+ * Resolve the context-window size to advertise for `modelId`. Reads the
+ * per-model cache populated by the CC runner from
+ * `SDKResultMessage.modelUsage[*].contextWindow` after the first turn for
+ * a given model. Returns 0 on a cache miss (initial emission for a model
+ * the SDK hasn't run yet) or when the model isn't a CC model — callers
+ * already guard with `if (size > 0)` and skip the emission, deferring the
+ * advertised size to the post-turn emission in `prompt-cc.ts` where the
+ * SDK's reported value is in hand.
+ */
+export const advertisedContextSize = (modelId: string) =>
+  isCCModel(modelId) ? (getContextWindow(modelId) ?? 0) : 0;
+
+/**
+ * Emit a `usage_update` notification advertising context-window usage and
+ * total capacity to the editor. Zed (and other clients per the ACP spec) need
+ * to see at least one of these — typically at session creation/load — to
+ * allocate UI for the progress bar; subsequent emissions during prompt runs
+ * then update the fill level. Cost is intentionally omitted here since the
+ * post-prompt emission in `prompt-cc.ts` is the source of cost truth.
+ */
+export const emitUsageUpdate = (
+  conn: acp.AgentSideConnection,
+  sessionId: string,
+  used: number,
+  size: number,
+) =>
+  conn
+    .sessionUpdate({
+      sessionId,
+      update: {
+        sessionUpdate: "usage_update",
+        used,
+        size,
+      },
+    })
+    .catch((err) => logger.debug("usage_update failed:", err));
 
 /**
  * Set the session title to a normalised slice of the first user prompt

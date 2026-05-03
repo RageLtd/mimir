@@ -119,20 +119,20 @@ export const buildToolCallContent = (
     name === "write_text_file" ||
     name === "Write"
   ) {
-    const path = (args.path ?? args.file_path) as string | undefined;
-    if (path && typeof args.content === "string") {
-      return diffContent(path, null, args.content as string);
+    const path = args.path ?? args.file_path;
+    if (typeof path === "string" && typeof args.content === "string") {
+      return diffContent(path, null, args.content);
     }
   }
 
   // Edit operations → diff content (old_string → new_string)
   if (name === "Edit") {
-    const path = (args.file_path ?? args.path) as string | undefined;
-    if (path) {
+    const path = args.file_path ?? args.path;
+    if (typeof path === "string") {
       return diffContent(
         path,
-        (args.old_string as string) ?? null,
-        (args.new_string as string) ?? "",
+        typeof args.old_string === "string" ? args.old_string : null,
+        typeof args.new_string === "string" ? args.new_string : "",
       );
     }
   }

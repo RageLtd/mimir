@@ -104,26 +104,6 @@ export const streamCompletion = async function* (
 };
 
 /**
- * Non-streaming completion. Used for tool resubmission when we
- * don't need to stream intermediate tokens.
- */
-export const complete = async (
-  config: ServerClientConfig,
-  request: CompletionRequest,
-  signal?: AbortSignal,
-): Promise<unknown> => {
-  const headers = authHeaders(config.apiKey);
-  const response = await postJson(
-    `${config.baseUrl}/v1/chat/completions`,
-    { ...request, stream: false },
-    headers,
-    signal,
-  );
-
-  return response.json();
-};
-
-/**
  * Fetch the server's tool manifest.
  * Returns an empty array if the endpoint is unavailable.
  */

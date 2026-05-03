@@ -13,5 +13,5 @@ export { createBootServer } from "./boot-tools";
 export type { RunClaudeCodeOptions } from "./formatting";
 export { buildSdkOptions, formatContextForPrompt } from "./formatting";
 export { buildMcpServers } from "./mcp-config";
-export { contextWithoutCurrentTurn, promptViaClaudeCode } from "./prompt-cc";
+export { promptViaClaudeCode } from "./prompt-cc";
 export { runClaudeCode } from "./runner";

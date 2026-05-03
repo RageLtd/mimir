@@ -25,7 +25,6 @@ const mkRunOpts = (overrides?: Partial<BackendRunOptions>): BackendRunOptions =>
   tools: [],
   projectPath: "/tmp/project",
   metadata: {},
-  assembledMessages: [],
   ...overrides,
 });
 

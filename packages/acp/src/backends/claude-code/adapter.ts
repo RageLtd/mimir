@@ -45,7 +45,6 @@ export const createClaudeCodeBackend = (deps: ClaudeCodeBackendDeps) => {
       permissionMode: options.permissionMode,
       effort: options.effort,
       ruleDetectors: options.ruleDetectors,
-      resumeSession: options.resumeSession,
       signal: options.signal,
     });
   };

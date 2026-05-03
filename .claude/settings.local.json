@@ -14,7 +14,8 @@
       "Read(//Users/nathandevuono/.local/share/**)",
       "Read(//Users/nathandevuono/.claude/**)",
       "WebFetch(domain:github.com)",
-      "Bash(grep *)"
+      "Bash(grep *)",
+      "Bash(bun run *)"
     ]
   }
 }

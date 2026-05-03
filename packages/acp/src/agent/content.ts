@@ -21,10 +21,6 @@ export const formatContentBlocks = (blocks: readonly acp.ContentBlock[]) =>
     .filter(Boolean)
     .join("\n\n");
 
-/** True when any block in the array is an image. */
-export const hasImageBlocks = (blocks: readonly acp.ContentBlock[]) =>
-  blocks.some((b) => b.type === "image");
-
 /**
  * Convert ACP content blocks to Anthropic API message content format.
  *

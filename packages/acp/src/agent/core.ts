@@ -121,6 +121,7 @@ export const createAgentCore = (
         sessionId,
         deps.voiceAnchorLibrary.length,
       ),
+      bootSequenceDone: false,
     };
     sessions.set(sessionId, session);
 
@@ -204,6 +205,7 @@ export const createAgentCore = (
         persisted.session_id,
         deps.voiceAnchorLibrary.length,
       ),
+      bootSequenceDone: false,
     };
     sessions.set(sessionId, session);
 
@@ -245,13 +247,6 @@ export const createAgentCore = (
     if (!session) return false;
     session.messages = [];
     sessionStore.updateMessages(sessionId, []);
-    return true;
-  };
-
-  const markCcNeedsFreshSession = (sessionId: string) => {
-    const session = sessions.get(sessionId);
-    if (!session) return false;
-    session.ccNeedsFreshSession = true;
     return true;
   };
 
@@ -312,7 +307,7 @@ export const createAgentCore = (
         sessionId,
         "Error: session not found. Create a new session first.",
       );
-      return { stopReason: "end_turn" as const };
+      return { stopReason: "refusal" as const };
     }
     const abortController = new AbortController();
     session.abortController = abortController;
@@ -338,7 +333,7 @@ export const createAgentCore = (
     if (!route.ok) {
       logger.error("Backend routing failed:", route.error);
       await emitAgentText(conn, sessionId, `Error: ${route.error}`);
-      return { stopReason: "end_turn" as const };
+      return { stopReason: "refusal" as const };
     }
     const backend = route.backend;
 
@@ -403,7 +398,6 @@ export const createAgentCore = (
     setTitle,
     persistMessages,
     compact,
-    markCcNeedsFreshSession,
     prompt,
     cancel,
     dispose,

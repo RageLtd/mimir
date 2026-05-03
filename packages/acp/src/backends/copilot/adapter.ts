@@ -33,7 +33,10 @@ export const createCopilotBackend = (deps: CopilotBackendDeps): Backend => {
     yield* runCopilot({
       prompt: options.prompt,
       promptBlocks: options.promptBlocks,
-      contextMessages: options.assembledMessages ?? [],
+      // Pre-assembled context messages are no longer threaded through
+      // BackendRunOptions; if Copilot needs the equivalent of CC's
+      // first-turn `assembleContext`, wire it inside this adapter.
+      contextMessages: [],
       systemPrompt: options.systemPrompt,
       workingDirectory: cwd,
       copilot: deps.copilot,

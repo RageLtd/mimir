@@ -53,11 +53,6 @@ export type CartographerManager = {
     projectPath: string,
     getProjectId?: () => string | null,
   ) => void;
-  /** Trigger incremental change detection (fire-and-forget). */
-  readonly detectChanges: (
-    projectPath: string,
-    getProjectId?: () => string | null,
-  ) => void;
   /** Kill all child processes. */
   readonly dispose: () => void;
 };
@@ -143,39 +138,6 @@ export const createCartographerManager = (
       });
   };
 
-  const detectChanges = (
-    projectPath: string,
-    getProjectId?: () => string | null,
-  ) => {
-    // detect_changes returns a summary of what changed, not the full index.
-    // If anything changed, trigger a full re-index and sync so the server
-    // stays in step.
-    getClient(projectPath)
-      .then(async (client) => {
-        const result = await client.detectChanges(projectPath);
-        if (result.indexed > 0 || result.removed > 0) {
-          logger.info(
-            "changes detected:",
-            result.indexed,
-            "indexed,",
-            result.removed,
-            "removed — re-syncing index",
-          );
-          const rawJson = await client.indexProject(projectPath);
-          if (rawJson && rawJson.trim() !== "") {
-            await syncIndex(
-              { serverUrl: config.serverUrl, apiKey: config.apiKey, logger },
-              rawJson,
-              getProjectId?.() ?? null,
-            );
-          }
-        }
-      })
-      .catch((err) => {
-        logger.warn("detect-changes failed:", err);
-      });
-  };
-
   const dispose = () => {
     for (const [path, client] of clients) {
       logger.info("killing cartographer for:", path);
@@ -185,5 +147,5 @@ export const createCartographerManager = (
     spawning.clear();
   };
 
-  return { getClient, executeTool, autoIndex, detectChanges, dispose };
+  return { getClient, executeTool, autoIndex, dispose };
 };

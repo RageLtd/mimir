@@ -56,6 +56,7 @@ const mkConfig = (model: string): MimirConfig =>
     userMemoryDbPath: "/tmp/test.db",
     sessionDbPath: "/tmp/test-sessions.db",
     logLevel: "warn",
+    acpLogPath: "",
     autoApproveTools: false,
     systemPromptTtlMs: 0,
     cc: {} as never,

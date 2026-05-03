@@ -11,6 +11,7 @@
  * gets the same context the server backend's middleware pipeline produces.
  */
 
+import { countTokens } from "gpt-tokenizer";
 import { Hono } from "hono";
 import { runCompaction } from "../agent-loop/compaction";
 import { getLastNModelMessages } from "../agent-loop/message-log";
@@ -163,6 +164,41 @@ type AssembleRequest = {
 
 type SimpleMessage = { role: "user" | "assistant"; content: string };
 
+/**
+ * Trim a chronological list of rendered messages to fit within a token
+ * budget, walking newest-first and reversing back to chronological order.
+ *
+ * Uses gpt-tokenizer's cl100k_base BPE encoding as a rough proxy for
+ * Anthropic's tokenizer — slight overcount is intentional. The most recent
+ * message is always kept, even if it alone exceeds the budget; otherwise we
+ * could ship an empty history when one giant tool result lands at the tail.
+ *
+ * Budget ≤ 0 disables trimming.
+ */
+export function trimByTokenBudget(
+  rendered: SimpleMessage[],
+  tokenBudget: number,
+) {
+  if (tokenBudget <= 0 || rendered.length === 0) {
+    return { kept: rendered, tokensUsed: 0, dropped: 0 };
+  }
+
+  const kept: SimpleMessage[] = [];
+  let used = 0;
+  for (let i = rendered.length - 1; i >= 0; i--) {
+    const m = rendered[i];
+    const cost = countTokens(m?.content ?? "");
+    if (used + cost > tokenBudget && kept.length > 0) break;
+    kept.unshift(m as SimpleMessage);
+    used += cost;
+  }
+  return {
+    kept,
+    tokensUsed: used,
+    dropped: rendered.length - kept.length,
+  };
+}
+
 context.post("/assemble", async (c) => {
   const rid = c.req.header("x-request-id") ?? "assemble";
   const log = requestLog(rid);
@@ -220,13 +256,24 @@ context.post("/assemble", async (c) => {
       messages.push({ role: "assistant", content: "Understood." });
     }
 
-    // Flatten historical turns to text (tool calls/results included as prose)
-    for (const msg of recentMessages) {
-      if (msg.role !== "user" && msg.role !== "assistant") continue;
+    // Flatten historical turns to text (tool calls/results included as prose),
+    // then trim newest-first to fit `assemblyTokenBudget`. The DB pull is
+    // already capped at `keepRecentMessages` (default 50); this is the second
+    // fence — keep the bytes that go into the model bounded even when a
+    // handful of giant tool results land in the recent window.
+    const renderedHistory: SimpleMessage[] = recentMessages.flatMap((msg) => {
+      if (msg.role !== "user" && msg.role !== "assistant") return [];
       const content = modelContentToString(msg.content);
-      if (!content) continue;
-      messages.push({ role: msg.role, content });
-    }
+      if (!content) return [];
+      return [{ role: msg.role, content }];
+    });
+
+    const { kept, tokensUsed, dropped } = trimByTokenBudget(
+      renderedHistory,
+      config.context.assemblyTokenBudget,
+    );
+
+    messages.push(...kept);
 
     // Current user message is the final entry
     messages.push({ role: "user", content: body.query });
@@ -236,6 +283,10 @@ context.post("/assemble", async (c) => {
         project: body.project,
         summaries: summaries.length,
         recentMessages: recentMessages.length,
+        renderedHistory: renderedHistory.length,
+        keptHistory: kept.length,
+        droppedHistory: dropped,
+        historyTokens: tokensUsed,
         hasMemories: !!memories,
         totalMessages: messages.length,
       },

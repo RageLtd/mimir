@@ -24,6 +24,8 @@ import { createChildLogger, log } from "../utils/log";
 import { handleCommand } from "./commands";
 import { formatContentBlocks } from "./content";
 import {
+  advertisedContextSize,
+  emitUsageUpdate,
   maybeEmitCommandsList,
   maybeSetSessionTitle,
   replayHistoryToEditor,
@@ -162,16 +164,21 @@ export const newSession = async (
   }
   logger.info("newSession configOptions:", configOptions.length, "entries");
 
-  // Emit available_commands_update after all async work completes so the
-  // notification is sent on the next macrotask — after the SDK has flushed
-  // the session/new response as a microtask. Placing this before the first
-  // await races the client, which hasn't registered the session yet and
-  // discards the notification as "failed to get session".
-  setTimeout(
-    () =>
-      maybeEmitCommandsList(deps.conn, deps.commandsEmitted, session.sessionId),
-    0,
-  );
+  // Emit available_commands_update + initial usage_update after all async
+  // work completes so the notifications are sent on the next macrotask —
+  // after the SDK has flushed the session/new response as a microtask.
+  // Placing these before the first await races the client, which hasn't
+  // registered the session yet and discards the notification as "failed to
+  // get session". The initial usage_update advertises capacity to Zed so
+  // the progress bar appears immediately rather than waiting for the first
+  // prompt's finish event.
+  setTimeout(() => {
+    maybeEmitCommandsList(deps.conn, deps.commandsEmitted, session.sessionId);
+    const size = advertisedContextSize(session.currentModelId);
+    if (size > 0) {
+      emitUsageUpdate(deps.conn, session.sessionId, 0, size);
+    }
+  }, 0);
 
   return {
     sessionId: session.sessionId,
@@ -258,6 +265,16 @@ export const loadSession = async (
       );
   }
 
+  // Initial usage_update so Zed's progress bar appears immediately on resume
+  // — `used: 0` is honest because the SDK session was discarded across
+  // processes and the next prompt rebuilds context from server-assembled
+  // state. The first turn's finish event then updates `used` to the real
+  // value the SDK reports.
+  const size = advertisedContextSize(session.currentModelId);
+  if (size > 0) {
+    emitUsageUpdate(deps.conn, params.sessionId, 0, size);
+  }
+
   logger.info("loadSession configOptions:", configOptions.length, "entries");
   return {
     ...(models ? { models } : {}),
@@ -310,6 +327,12 @@ export const setSessionModel = async (
       params.sessionId,
       thoughtOption.currentValue as string,
     );
+  }
+  // Re-advertise capacity for the newly-selected model so the progress bar
+  // appears or disappears as the user toggles between CC and non-CC models.
+  const size = advertisedContextSize(params.modelId);
+  if (size > 0) {
+    emitUsageUpdate(deps.conn, params.sessionId, 0, size);
   }
   return {};
 };

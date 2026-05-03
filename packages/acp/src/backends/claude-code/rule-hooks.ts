@@ -31,6 +31,10 @@
  */
 
 import { basename, dirname, join, relative } from "node:path";
+import type {
+  HookCallback,
+  PreToolUseHookInput,
+} from "@anthropic-ai/claude-agent-sdk";
 import { Glob } from "bun";
 import { errMessage } from "../../util";
 import { createChildLogger, log } from "../../utils/log";
@@ -59,11 +63,11 @@ export interface Violation {
  */
 export interface RuleDetectionInput {
   /**
-   * The raw hook event from the Claude Agent SDK. For PreToolUse this
-   * carries `hook_event_name`, `tool_name`, and `tool_input`. Extract
-   * what you need — nothing is pre-parsed.
+   * The raw hook event from the Claude Agent SDK. Carries
+   * `hook_event_name: 'PreToolUse'`, `tool_name`, `tool_input`, and
+   * `tool_use_id`. Detectors typically only need `tool_input`.
    */
-  readonly hookEvent: Record<string, unknown>;
+  readonly hookEvent: PreToolUseHookInput;
   /**
    * Path to the file the tool is operating on, extracted from the tool
    * input when a file is involved. Undefined for tools like `Bash` that
@@ -254,27 +258,26 @@ const loadDetector = async (abs: string, projectPath: string) => {
 
 // ── Running ──
 
-/** Extract a `file_path` field from an arbitrary tool_input record. */
-const extractFilePath = (toolInput: Record<string, unknown>) =>
-  typeof toolInput.file_path === "string" ? toolInput.file_path : undefined;
+/** Extract a `file_path` field from an arbitrary tool_input value. */
+const extractFilePath = (toolInput: unknown) =>
+  toolInput &&
+  typeof toolInput === "object" &&
+  "file_path" in toolInput &&
+  typeof toolInput.file_path === "string"
+    ? toolInput.file_path
+    : undefined;
 
 /** Run every detector against a hook event; collect findings per rule. */
 export const runDetectors = async (
   detectors: readonly Detector[],
-  hookEvent: Record<string, unknown>,
+  hookEvent: PreToolUseHookInput,
 ) => {
-  const toolName =
-    typeof hookEvent.tool_name === "string" ? hookEvent.tool_name : "";
-  const toolInput =
-    hookEvent.tool_input && typeof hookEvent.tool_input === "object"
-      ? (hookEvent.tool_input as Record<string, unknown>)
-      : {};
-  const filePath = extractFilePath(toolInput);
+  const filePath = extractFilePath(hookEvent.tool_input);
 
   const results = await Promise.all(
     detectors.map(async (detector) => {
       // Tool scope — skip if this detector doesn't apply to the current tool.
-      if (!matchesTool(detector.tools, toolName)) {
+      if (!matchesTool(detector.tools, hookEvent.tool_name)) {
         return { detector, violations: [] as Violation[] };
       }
       // File scope — skip if filePath is present but doesn't match any glob.
@@ -346,23 +349,11 @@ export const formatFindings = (
 // ── PreToolUse hook ──
 
 export const buildRuleHook = (detectors: readonly Detector[]) => {
-  const hook = async (
-    input: unknown,
-    _toolUseID: string | undefined,
-    _options: { signal: AbortSignal },
-  ) => {
-    const evt = input as {
-      hook_event_name?: string;
-      tool_name?: string;
-      tool_input?: unknown;
-    };
-    if (evt?.hook_event_name !== "PreToolUse") {
+  const hook: HookCallback = async (input) => {
+    if (input.hook_event_name !== "PreToolUse") {
       return { hookSpecificOutput: { hookEventName: "PreToolUse" as const } };
     }
-    const findings = await runDetectors(
-      detectors,
-      evt as Record<string, unknown>,
-    );
+    const findings = await runDetectors(detectors, input);
     const context = formatFindings(findings);
     return {
       hookSpecificOutput: {

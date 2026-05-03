@@ -1,8 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import {
-  formatContextForPrompt,
-  buildSdkOptions,
-} from "./formatting";
+import { buildSdkOptions, formatContextForPrompt } from "./formatting";
 import { buildMcpServers } from "./mcp-config";
 import type { CCBackendConfig } from "../../config";
 
@@ -73,18 +70,24 @@ describe("buildSdkOptions", () => {
       model: overrides?.model,
     });
 
-  test("appends boot instruction to system prompt", () => {
+  test("appends boot instruction to system prompt (session mode)", () => {
     const opts = mkOpts();
+    expect(typeof opts.systemPrompt).toBe("string");
     expect(opts.systemPrompt).toContain("<xml>prompt</xml>");
-    expect(opts.systemPrompt).toContain("<boot_sequence>");
     expect(opts.systemPrompt).toContain("load_user_profile");
     expect(opts.systemPrompt).toContain("load_project_rules");
-    expect(opts.systemPrompt).not.toContain("load_session_context");
+    expect(opts.systemPrompt).toContain("load_session_context");
+    expect(opts.systemPrompt).toContain("At the start of this session");
   });
 
   test("does not append conversation context to system prompt", () => {
     const opts = mkOpts();
-    expect(opts.systemPrompt).not.toContain("<conversation_context>");
+    expect(opts.systemPrompt as string).not.toContain("<conversation_context>");
+  });
+
+  test("system prompt is always a string (no array form with session mode)", () => {
+    const opts = mkOpts();
+    expect(typeof opts.systemPrompt).toBe("string");
   });
 
   test("sets cwd from workingDirectory", () => {
@@ -129,46 +132,13 @@ describe("buildSdkOptions", () => {
     expect(opts.model).toBeUndefined();
   });
 
-  test("enables persistent sessions with continue", () => {
+  test("enables continue and persistSession (SDK session mode)", () => {
     const opts = mkOpts();
+    // SDK maintains session context across turns with persistSession: true,
+    // continue: true. This enables the boot tools cache and conversation
+    // continuity that per-turn mode cannot provide.
+    expect(opts.continue).toBe(true);
     expect(opts.persistSession).toBe(true);
-    expect(opts.continue).toBe(true);
-  });
-
-  test("sets continue:false when resumeSession is false", () => {
-    const opts = buildSdkOptions({
-      systemPrompt: "<xml>prompt</xml>",
-      cc: baseCc,
-      workingDirectory: "/tmp/test",
-      serverUrl: "http://localhost:3777",
-      userMemoryDbPath: "/tmp/test-memories.db",
-      resumeSession: false,
-    });
-    expect(opts.continue).toBe(false);
-    expect(opts.persistSession).toBe(true);
-  });
-
-  test("keeps continue:true when resumeSession is undefined", () => {
-    const opts = buildSdkOptions({
-      systemPrompt: "<xml>prompt</xml>",
-      cc: baseCc,
-      workingDirectory: "/tmp/test",
-      serverUrl: "http://localhost:3777",
-      userMemoryDbPath: "/tmp/test-memories.db",
-    });
-    expect(opts.continue).toBe(true);
-  });
-
-  test("keeps continue:true when resumeSession is true", () => {
-    const opts = buildSdkOptions({
-      systemPrompt: "<xml>prompt</xml>",
-      cc: baseCc,
-      workingDirectory: "/tmp/test",
-      serverUrl: "http://localhost:3777",
-      userMemoryDbPath: "/tmp/test-memories.db",
-      resumeSession: true,
-    });
-    expect(opts.continue).toBe(true);
   });
 
   test("sets strictMcpConfig to true", () => {
@@ -181,10 +151,47 @@ describe("buildSdkOptions", () => {
     expect(opts.env?.ENABLE_TOOL_SEARCH).toBe("false");
   });
 
+  test("disables CC auto-memory injection via env", () => {
+    const opts = mkOpts();
+    expect(opts.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
+  });
+
+  test("hard-disables skill auto-discovery (skills: [])", () => {
+    // Per SDK type docs, omitting `skills` lets the CLI's own defaults apply,
+    // which is NOT "skills off." An empty array is required to enable zero
+    // skills and stop the CLI loading every plugin-discovered skill into the
+    // system prompt every turn.
+    const opts = mkOpts();
+    expect(opts.skills).toEqual([]);
+  });
+
+  test("hard-disables plugin auto-discovery (plugins: [])", () => {
+    const opts = mkOpts();
+    expect(opts.plugins).toEqual([]);
+  });
+
   test("includes mcpServers", () => {
     const opts = mkOpts();
     expect(opts.mcpServers).toBeDefined();
     expect(opts.mcpServers!.mimir).toBeDefined();
+  });
+
+  test("omits maxTurns and maxBudgetUsd when not configured", () => {
+    const opts = mkOpts();
+    expect(opts.maxTurns).toBeUndefined();
+    expect(opts.maxBudgetUsd).toBeUndefined();
+  });
+
+  test("forwards maxTurns when set on cc config", () => {
+    const cc = { ...baseCc, maxTurns: 100 };
+    const opts = mkOpts({ cc });
+    expect(opts.maxTurns).toBe(100);
+  });
+
+  test("forwards maxBudgetUsd when set on cc config", () => {
+    const cc = { ...baseCc, maxBudgetUsd: 5 };
+    const opts = mkOpts({ cc });
+    expect(opts.maxBudgetUsd).toBe(5);
   });
 });
 

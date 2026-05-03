@@ -2,7 +2,6 @@ import { test, expect, describe } from "bun:test";
 import {
   acpBlocksToAnthropicContent,
   formatContentBlocks,
-  hasImageBlocks,
 } from "./content";
 import type * as acp from "@agentclientprotocol/sdk";
 
@@ -328,31 +327,3 @@ describe("formatContentBlocks", () => {
   });
 });
 
-// ── hasImageBlocks ────────────────────────────────────────────────────────────
-
-describe("hasImageBlocks", () => {
-  test("returns true when array contains an image block", () => {
-    expect(hasImageBlocks([textBlock("hi"), imageBlock()])).toBe(true);
-  });
-
-  test("returns false when array has no image blocks", () => {
-    expect(hasImageBlocks([textBlock("hi"), audioBlock()])).toBe(false);
-  });
-
-  test("returns false for empty array", () => {
-    expect(hasImageBlocks([])).toBe(false);
-  });
-
-  test("returns true for array with only an image block", () => {
-    expect(hasImageBlocks([imageBlock()])).toBe(true);
-  });
-
-  test("returns false for resource_link blocks", () => {
-    expect(hasImageBlocks([resourceLinkBlock()])).toBe(false);
-  });
-
-  test("returns false for embedded image-mime text resources (not image blocks)", () => {
-    // An embedded resource with image mimeType is still type "resource", not "image"
-    expect(hasImageBlocks([blobResourceBlock("file:///x.png", "image/png")])).toBe(false);
-  });
-});

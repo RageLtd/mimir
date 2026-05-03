@@ -116,30 +116,38 @@ export const executeClientTool = async (
 ) => {
   try {
     if (name === "fs_read_text_file" || name === "read_text_file") {
+      if (typeof args.path !== "string") return `${name}: missing path arg`;
       const result = await conn.readTextFile({
         sessionId,
-        path: args.path as string,
-        line: (args.line as number | undefined) ?? null,
-        limit: (args.limit as number | undefined) ?? null,
+        path: args.path,
+        line: typeof args.line === "number" ? args.line : null,
+        limit: typeof args.limit === "number" ? args.limit : null,
       });
       return result.content;
     }
 
     if (name === "fs_write_text_file" || name === "write_text_file") {
+      if (typeof args.path !== "string") return `${name}: missing path arg`;
+      if (typeof args.content !== "string")
+        return `${name}: missing content arg`;
       await conn.writeTextFile({
         sessionId,
-        path: args.path as string,
-        content: args.content as string,
+        path: args.path,
+        content: args.content,
       });
       return "File written successfully.";
     }
 
     if (name === "create_terminal" || name === "terminal") {
+      if (typeof args.command !== "string")
+        return `${name}: missing command arg`;
       const handle = await conn.createTerminal({
         sessionId,
-        command: args.command as string,
-        args: args.args as string[] | undefined,
-        cwd: (args.cwd as string | undefined) ?? null,
+        command: args.command,
+        args: Array.isArray(args.args)
+          ? args.args.filter((a): a is string => typeof a === "string")
+          : undefined,
+        cwd: typeof args.cwd === "string" ? args.cwd : null,
       });
       await handle.waitForExit();
       const output = await handle.currentOutput();

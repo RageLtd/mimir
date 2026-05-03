@@ -13,7 +13,6 @@ import {
   type SDKAssistantMessage,
   type SDKPartialAssistantMessage,
   type SDKResultMessage,
-  type SDKSystemMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { acpBlocksToAnthropicContent } from "../../agent/content";
@@ -40,21 +39,29 @@ const shutdownAll = () => {
 process.on("SIGTERM", shutdownAll);
 process.on("SIGINT", shutdownAll);
 
-/** Extract text from a tool_result content field. */
+/**
+ * Extract text from a tool_result content field. The Anthropic API allows
+ * either a string or an array of content parts; for the array form we only
+ * pull the `.text` from text parts and ignore image/document/etc. blocks
+ * (their textual rendering is handled upstream).
+ */
 const stringifyToolResultContent = (content: unknown) => {
   if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((p) => {
-        if (typeof p === "string") return p;
-        if (p && typeof p === "object" && "text" in p) {
-          return String((p as { text?: unknown }).text ?? "");
-        }
-        return "";
-      })
-      .join("");
-  }
-  return "";
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((p) => {
+      if (typeof p === "string") return p;
+      if (
+        p &&
+        typeof p === "object" &&
+        "text" in p &&
+        typeof p.text === "string"
+      ) {
+        return p.text;
+      }
+      return "";
+    })
+    .join("");
 };
 
 /**
@@ -67,16 +74,27 @@ const stringifyToolResultContent = (content: unknown) => {
  * double-render. Only tool_use blocks are yielded; they don't stream as
  * deltas at a useful granularity, so the turn-final form is where they
  * surface.
+ *
+ * `msg.error` (rate_limit, billing_error, max_output_tokens, …) is also
+ * surfaced when present. Without this, a turn truncated by token limit
+ * or bounced by the API looks identical to a clean turn until the
+ * `result` message arrives — and rate_limit / billing_error don't always
+ * map cleanly onto an SDKResultError subtype.
  */
 function* translateAssistant(msg: SDKAssistantMessage) {
+  if (msg.error) {
+    yield {
+      type: "error" as const,
+      error: `assistant message error: ${msg.error}`,
+    };
+  }
   for (const block of msg.message.content ?? []) {
     if (block.type === "tool_use") {
-      const tb = block as { id: string; name: string; input: unknown };
       yield {
         type: "tool_call" as const,
-        id: tb.id,
-        name: tb.name,
-        input: (tb.input ?? {}) as Record<string, unknown>,
+        id: block.id,
+        name: block.name,
+        input: (block.input ?? {}) as Record<string, unknown>,
         observeOnly: true,
       };
     }
@@ -94,19 +112,11 @@ function* translateAssistant(msg: SDKAssistantMessage) {
  * tool-call UI renders on the complete turn-final block.
  */
 function* translateStreamEvent(msg: SDKPartialAssistantMessage) {
-  const event = msg.event as { type?: string; delta?: unknown };
-  if (event.type !== "content_block_delta") return;
-  const delta = event.delta as {
-    type?: string;
-    text?: string;
-    thinking?: string;
-  };
-  if (delta.type === "text_delta" && typeof delta.text === "string") {
+  if (msg.event.type !== "content_block_delta") return;
+  const delta = msg.event.delta;
+  if (delta.type === "text_delta") {
     yield { type: "text" as const, text: delta.text };
-  } else if (
-    delta.type === "thinking_delta" &&
-    typeof delta.thinking === "string"
-  ) {
+  } else if (delta.type === "thinking_delta") {
     yield { type: "thinking" as const, text: delta.thinking };
   }
 }
@@ -120,32 +130,71 @@ function* translateUser(msg: SDKUserMessage) {
       part &&
       typeof part === "object" &&
       "type" in part &&
-      (part as { type: string }).type === "tool_result"
+      part.type === "tool_result"
     ) {
-      const tr = part as {
-        tool_use_id: string;
-        content: unknown;
-      };
       yield {
         type: "tool_result" as const,
-        id: tr.tool_use_id,
-        output: stringifyToolResultContent(tr.content),
+        id: part.tool_use_id,
+        output: stringifyToolResultContent(part.content),
         observeOnly: true,
       };
     }
   }
 }
 
+/**
+ * Pull the contextWindow advertised for the model the session selected.
+ * `modelUsage` is a `Record<string, ModelUsage>` keyed by the SDK model
+ * identifier — the same string we pass into `options.model`. Looking up
+ * that exact key avoids the classic multi-model-turn lie: when an
+ * auxiliary path inside the SDK fires on a different variant (a quick
+ * `haiku` subagent burst, a `sonnet[1m]` internal step), we'd otherwise
+ * advertise its window as the session ceiling and drive every
+ * downstream decision (compaction trigger, UI gauge, headroom math) off
+ * a number the user never opted into.
+ */
+const extractContextWindow = (
+  modelUsage: SDKResultMessage["modelUsage"] | undefined,
+  model: string | undefined,
+) => {
+  if (!modelUsage || !model) return undefined;
+  return modelUsage[model]?.contextWindow;
+};
+
 /** Translate an SDKResultMessage into BackendEvent(s). */
 function* translateResult(
   msg: SDKResultMessage,
   sessionId: string | undefined,
+  model: string | undefined,
 ) {
   const usage = msg.usage;
-  const promptTokens =
-    (usage?.input_tokens ?? 0) +
-    (usage?.cache_read_input_tokens ?? 0) +
-    (usage?.cache_creation_input_tokens ?? 0);
+  const inputTokens = usage?.input_tokens ?? 0;
+  const cacheRead = usage?.cache_read_input_tokens ?? 0;
+  const cacheCreate = usage?.cache_creation_input_tokens ?? 0;
+  const promptTokens = inputTokens + cacheRead + cacheCreate;
+  const contextWindow = extractContextWindow(msg.modelUsage, model);
+
+  // Cache hit ratio over total prompt input. A low ratio after the first turn
+  // points at churn somewhere in the prefix — system prompt, MCP tool list,
+  // or boot tool results — and is the primary signal for diagnosing why a
+  // turn cost more than expected.
+  const cacheRatio =
+    promptTokens > 0 ? Math.round((cacheRead / promptTokens) * 100) / 100 : 0;
+  logger.info(
+    {
+      sessionId,
+      stopReason: msg.subtype,
+      uncachedTokens: inputTokens,
+      cacheReadTokens: cacheRead,
+      cacheCreateTokens: cacheCreate,
+      promptTokens,
+      cacheRatio,
+      outputTokens: usage?.output_tokens ?? 0,
+      costUsd: msg.total_cost_usd,
+      contextWindow,
+    },
+    "CC turn finished",
+  );
 
   if (msg.subtype !== "success") {
     yield { type: "error" as const, error: msg.errors.join("; ") };
@@ -158,6 +207,7 @@ function* translateResult(
     promptTokens,
     completionTokens: usage?.output_tokens,
     cost: msg.total_cost_usd,
+    ...(typeof contextWindow === "number" ? { contextWindow } : {}),
   };
 }
 
@@ -167,8 +217,10 @@ type SafeErr = { ok: false; error: string };
 
 const safeNext = async <T>(iter: AsyncIterator<T>) => {
   const result = await iter.next().catch(errMessage);
-  if (typeof result === "string")
+  if (typeof result === "string") {
+    logger.error({ error: result }, "CC SDK iter.next() threw");
     return { ok: false as const, error: result } satisfies SafeErr;
+  }
   return { ok: true as const, data: result } satisfies SafeOk<T>;
 };
 
@@ -206,6 +258,38 @@ export const runClaudeCode = async function* (options: RunClaudeCodeOptions) {
   });
   activeQueries.add(q);
 
+  // systemPrompt is either a single string or an array of blocks (with the
+  // SYSTEM_PROMPT_DYNAMIC_BOUNDARY sentinel separating the cacheable prefix
+  // from the dynamic suffix). Sum char counts so the log line is meaningful
+  // either way.
+  const sp = sdkOptions.systemPrompt;
+  const systemPromptChars = Array.isArray(sp)
+    ? sp.reduce(
+        (n, block) => n + (typeof block === "string" ? block.length : 0),
+        0,
+      )
+    : typeof sp === "string"
+      ? sp.length
+      : 0;
+  const systemPromptBlockCount = Array.isArray(sp) ? sp.length : 1;
+
+  logger.info(
+    {
+      model: sdkOptions.model,
+      cwd: sdkOptions.cwd,
+      persistSession: sdkOptions.persistSession,
+      settingSources: sdkOptions.settingSources,
+      skills: sdkOptions.skills,
+      plugins: sdkOptions.plugins,
+      disallowedToolCount: sdkOptions.disallowedTools?.length ?? 0,
+      mcpServerCount: Object.keys(sdkOptions.mcpServers ?? {}).length,
+      systemPromptChars,
+      systemPromptBlockCount,
+      includePartialMessages: sdkOptions.includePartialMessages,
+    },
+    "CC SDK query() created, starting iteration",
+  );
+
   const iter = q[Symbol.asyncIterator]();
   let sessionId: string | undefined;
 
@@ -214,60 +298,93 @@ export const runClaudeCode = async function* (options: RunClaudeCodeOptions) {
 
     if (!next.ok) {
       if (!abortController.signal.aborted) {
+        logger.error(
+          { error: next.error },
+          "CC SDK iterator error (not aborted)",
+        );
         yield { type: "error" as const, error: next.error };
+      } else {
+        logger.info("CC SDK iterator error after abort — expected");
       }
       break;
     }
 
-    if (next.data.done) break;
+    if (next.data.done) {
+      logger.info({ sessionId }, "CC SDK iterator completed (done=true)");
+      break;
+    }
     const msg = next.data.value;
 
     // system:init
-    if (msg.type === "system" && "subtype" in msg && msg.subtype === "init") {
-      const init = msg as SDKSystemMessage;
-      sessionId = init.session_id;
+    if (msg.type === "system" && msg.subtype === "init") {
+      sessionId = msg.session_id;
+      // Log what the SDK actually loaded for this turn. The init message is
+      // the only place where tool/skill/plugin/slash-command counts surface;
+      // capturing them lets us spot when settings (skills:[], plugins:[],
+      // disallowedTools) aren't taking effect — e.g. a fresh CC release that
+      // ignores one of them and re-introduces ten extra skills.
+      logger.info(
+        {
+          sessionId: msg.session_id,
+          claudeCodeVersion: msg.claude_code_version,
+          model: msg.model,
+          permissionMode: msg.permissionMode,
+          tools: msg.tools ?? [],
+          toolCount: (msg.tools ?? []).length,
+          mcpServers: (msg.mcp_servers ?? []).map((s) => ({
+            name: s.name,
+            status: s.status,
+          })),
+          slashCommandCount: (msg.slash_commands ?? []).length,
+          skills: msg.skills ?? [],
+          skillCount: (msg.skills ?? []).length,
+          plugins: (msg.plugins ?? []).map((p) => p.name),
+          pluginCount: (msg.plugins ?? []).length,
+        },
+        "CC SDK init",
+      );
       yield {
         type: "init" as const,
-        sessionId: init.session_id,
-        tools: init.tools ?? [],
+        sessionId: msg.session_id,
+        tools: msg.tools ?? [],
       };
       continue;
     }
 
     // stream_event: partial assistant message (text/thinking deltas)
     if (msg.type === "stream_event") {
-      yield* translateStreamEvent(msg as SDKPartialAssistantMessage);
+      yield* translateStreamEvent(msg);
       continue;
     }
 
     // assistant message (complete turn) — tool_use blocks only; text and
     // thinking have already been streamed via stream_event deltas.
     if (msg.type === "assistant") {
-      const asst = msg as SDKAssistantMessage;
-      sessionId = asst.session_id;
-      yield* translateAssistant(asst);
+      sessionId = msg.session_id;
+      yield* translateAssistant(msg);
       continue;
     }
 
     // user message (tool results from CC's internal loop)
     if (msg.type === "user" && !("isReplay" in msg)) {
-      yield* translateUser(msg as SDKUserMessage);
+      yield* translateUser(msg);
       continue;
     }
 
     // result (final)
     if (msg.type === "result") {
-      const result = msg as SDKResultMessage;
-      sessionId = result.session_id;
-      yield* translateResult(result, sessionId);
+      sessionId = msg.session_id;
+      yield* translateResult(msg, sessionId, sdkOptions.model);
       activeQueries.delete(q);
       return;
     }
 
-    // All other message types (compact_boundary, etc.) — skip
-    logger.debug({ type: msg.type }, "ignoring SDK message");
+    // All other message types — log at info so they're visible in
+    // acp.log by default.
+    logger.info({ type: msg.type, sessionId }, "ignoring SDK message");
   }
 
+  logger.info({ sessionId }, "CC SDK loop ended — yielding finish");
   activeQueries.delete(q);
   yield { type: "finish" as const, sessionId };
 };

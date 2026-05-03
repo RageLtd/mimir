@@ -56,6 +56,14 @@ export type BackendEvent =
       readonly promptTokens?: number;
       readonly completionTokens?: number;
       readonly cost?: number;
+      /**
+       * Total context window for the model used on this turn, in tokens.
+       * Set by the CC backend from `SDKResultMessage.modelUsage[*].contextWindow`
+       * — the SDK's authoritative per-model max. Other backends may leave
+       * this undefined; callers fall back to a cached value or skip the
+       * advertised-size emission entirely.
+       */
+      readonly contextWindow?: number;
     }
   | { readonly type: "error"; readonly error: string };
 
@@ -70,17 +78,6 @@ export type BackendRunOptions = {
   readonly tools: readonly ToolDefinition[];
   /** Project path (cwd for CC; metadata for server). */
   readonly projectPath: string;
-  /**
-   * Pre-assembled context messages for the CC backend (prior turns only —
-   * the current user message goes as the SDK prompt input).
-   * Formatted as structured text and concatenated into the system prompt.
-   * Includes the server's context injection pair (summaries + memories)
-   * and historical conversation turns.
-   */
-  readonly assembledMessages?: readonly {
-    role: "user" | "assistant";
-    content: string;
-  }[];
   /** MCP servers provided by the ACP client to forward into CC's MCP config. */
   readonly clientMcpServers?: readonly McpServer[];
   /** In-process boot MCP server for delivering per-session context as tool results. */
@@ -103,13 +100,6 @@ export type BackendRunOptions = {
    * backends other than claude-code. Passed through from the session state.
    */
   ruleDetectors?: readonly Detector[];
-  /**
-   * When `false`, the CC backend runs `query()` with `continue: false` for
-   * this single invocation — fresh SDK session, fresh MCP connections.
-   * Unused by other backends. Default behaviour (omitted or `true`) keeps
-   * the existing `continue: true` rolling-context behaviour.
-   */
-  resumeSession?: boolean;
 };
 
 export type Backend = {

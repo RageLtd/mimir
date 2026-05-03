@@ -14,93 +14,22 @@ export type SessionState = {
   sessionId: string;
   messages: ChatMessage[];
   projectPath: string;
-  /**
-   * Canonical server-side project identifier. Resolved at session start
-   * via git remote + POST /v1/projects/resolve; null when resolution
-   * failed (caller falls back to projectPath as the identifier).
-   */
   projectId: string | null;
-  /**
-   * Full project record returned by the server — title, git_remote,
-   * technologies, etc. Available when projectId is set. Used for display
-   * and for including as metadata in outgoing server calls.
-   */
   projectInfo: ResolvedProject | null;
   abortController: AbortController | null;
-  /** Currently selected model id (drives backend routing per request). */
   currentModelId: string;
-  /**
-   * Current session mode. Backend-specific — e.g. for CC this is a
-   * `PermissionMode` value like "default" / "plan" / "acceptEdits". Other
-   * backends that don't advertise modes store the empty string here.
-   */
   currentMode: string;
-  /**
-   * Current thought-level (effort) selection, for backends that support it.
-   * CC populates this from `ModelInfo.supportedEffortLevels` per model.
-   * Server/Copilot leave it undefined.
-   */
   currentThoughtLevel?: EffortLevel;
-  /** Human-readable title, generated from the first exchange and persisted. */
   title: string | null;
-  /** Formatted project rules (CLAUDE.md, .claude/rules/, etc.) for prompt injection. */
   projectRules: string | null;
-  /**
-   * Rule-detect sidecars loaded from `.claude/rules/**\/*.detect.ts` at
-   * session start. Advisory nudges are injected when violations are
-   * detected — in the CC backend via PreToolUse hooks, in the server
-   * backend by appending findings to the tool result. Empty array when
-   * the project ships no sidecars.
-   */
   ruleDetectors: readonly Detector[];
-  /**
-   * Effective MCP server list for this session — `.mcp.json` entries merged
-   * with the client-supplied list (Zed's `context_servers`, on collision
-   * client wins) and then auth-injected with any persisted Bearer tokens.
-   * This is what gets handed to the SDK / client-MCP manager. Refreshed by
-   * `/mcp reload` so edits to `.mcp.json` and freshly-completed OAuth flows
-   * take effect on the next prompt.
-   */
   clientMcpServers?: readonly acp.McpServer[];
-  /**
-   * The raw, unmodified `params.mcpServers` value the ACP client sent on
-   * `session/new` or `session/load`. Snapshotted so `/mcp reload` can re-merge
-   * `.mcp.json` against it without losing any UI-configured Zed entries.
-   */
   clientSuppliedMcpServers?: readonly acp.McpServer[];
-  /**
-   * Live MCP client connections for `clientMcpServers` entries — used by
-   * the server backend path to expose those tools to mimir-server and
-   * dispatch calls back through them. The CC backend ignores this; it
-   * hands `clientMcpServers` directly to the Claude Agent SDK, which opens
-   * its own connections. Null only for pre-existing sessions restored
-   * before this field was introduced.
-   */
   clientMcp: ClientMcpManager | null;
-  /**
-   * Capabilities advertised by the client during initialize.
-   * Determines which client tools (fs_read_text_file, fs_write_text_file,
-   * create_terminal) are offered to the model, and whether terminal output
-   * is supported via _meta.terminal_*.
-   */
   clientCapabilities: acp.ClientCapabilities;
-  /**
-   * Voice anchor rotation state for the CC backend. Counters tick once per
-   * developer-initiated ACP prompt, never per SDK tool-result turn. Unused
-   * for the mimir-server backend path.
-   */
   voiceAnchors: VoiceAnchorState;
-  /**
-   * One-shot flag — when true, the next CC `query()` invocation runs with
-   * `continue: false` so the Claude Agent SDK opens a fresh session (and
-   * fresh MCP connections). Cleared after that turn. The SDK doesn't
-   * handle `notifications/tools/list_changed` mid-session, so this is the
-   * mechanism for picking up newly-available tools after an MCP server
-   * completes OAuth or otherwise changes its tool advertisement.
-   * Triggered by the `/reload-mcp` slash command. Unused for non-CC
-   * backends.
-   */
-  ccNeedsFreshSession?: boolean;
+  /** First turn only: assembleContext + boot server. Subsequent: SDK handles continuity. */
+  bootSequenceDone: boolean;
 };
 
 export type AgentCore = {
@@ -109,10 +38,6 @@ export type AgentCore = {
     clientMcpServers?: readonly acp.McpServer[],
     clientCapabilities?: acp.ClientCapabilities,
   ) => SessionState;
-  /**
-   * Restore a previously persisted session into the in-memory map.
-   * Returns the restored SessionState, or null if the sessionId is unknown.
-   */
   restoreSession: (
     sessionId: string,
     clientMcpServers?: readonly acp.McpServer[],
@@ -121,21 +46,6 @@ export type AgentCore = {
   getSession: (sessionId: string) => SessionState | undefined;
   listSessions: () => import("../store/sessions").PersistedSession[];
   setModel: (sessionId: string, modelId: string) => boolean;
-  /**
-   * Flag the session so the next CC turn runs `query()` with `continue:
-   * false` — used by `/reload-mcp` to pick up newly-available MCP tools
-   * after a server completes OAuth. No-op when the session is unknown or
-   * routed to a non-CC backend.
-   */
-  markCcNeedsFreshSession: (sessionId: string) => boolean;
-  /**
-   * Replace the session's effective MCP server list. Closes the existing
-   * client-MCP manager (if any) and rebuilds it against the new list so
-   * subsequent server-backend tool calls hit fresh connections. No-op when
-   * the session is unknown. Used by `loadSession` (when the client provides
-   * a different list on resume) and `/mcp reload` (after re-reading
-   * `.mcp.json` and re-injecting tokens).
-   */
   replaceMcpServers: (
     sessionId: string,
     newServers: readonly acp.McpServer[],
@@ -143,9 +53,7 @@ export type AgentCore = {
   setMode: (sessionId: string, modeId: string) => boolean;
   setThoughtLevel: (sessionId: string, level: string) => boolean;
   setTitle: (sessionId: string, title: string) => void;
-  /** Flush current message history to the session store. */
   persistMessages: (sessionId: string) => void;
-  /** Clear session message history. */
   compact: (sessionId: string) => boolean;
   prompt: (
     sessionId: string,

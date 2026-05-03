@@ -28,25 +28,17 @@ export type CommandDeps = {
 
 const END_TURN: acp.PromptResponse = { stopReason: "end_turn" };
 
-const reply = async (
-  conn: acp.AgentSideConnection,
-  sessionId: string,
-  text: string,
-) => {
-  await emitAgentText(conn, sessionId, text);
-};
-
 const runModel = async (
   deps: CommandDeps,
   sessionId: string,
   modelId: string | undefined,
 ) => {
   if (!modelId) {
-    await reply(deps.conn, sessionId, "Usage: `/model <model-id>`");
+    await emitAgentText(deps.conn, sessionId, "Usage: `/model <model-id>`");
     return END_TURN;
   }
   const ok = deps.core.setModel(sessionId, modelId);
-  await reply(
+  await emitAgentText(
     deps.conn,
     sessionId,
     ok ? `Model switched to \`${modelId}\`.` : "Session not found.",
@@ -75,7 +67,7 @@ const runMode = async (
 ) => {
   if (!modeId) {
     const list = listActiveModes(deps, sessionId);
-    await reply(
+    await emitAgentText(
       deps.conn,
       sessionId,
       `Usage: \`/mode <id>\`\nAvailable modes: ${list}`,
@@ -84,7 +76,7 @@ const runMode = async (
   }
   if (!isValidCCMode(modeId)) {
     const list = listActiveModes(deps, sessionId);
-    await reply(
+    await emitAgentText(
       deps.conn,
       sessionId,
       `Unknown mode \`${modeId}\`. Available: ${list}`,
@@ -93,7 +85,7 @@ const runMode = async (
   }
   const ok = deps.core.setMode(sessionId, modeId);
   if (!ok) {
-    await reply(deps.conn, sessionId, "Session not found.");
+    await emitAgentText(deps.conn, sessionId, "Session not found.");
     return END_TURN;
   }
   await deps.conn.sessionUpdate({
@@ -103,20 +95,20 @@ const runMode = async (
       currentModeId: modeId,
     },
   });
-  await reply(deps.conn, sessionId, `Mode switched to **${modeId}**.`);
+  await emitAgentText(deps.conn, sessionId, `Mode switched to **${modeId}**.`);
   return END_TURN;
 };
 
 const runCompact = async (deps: CommandDeps, sessionId: string) => {
   deps.core.compact(sessionId);
-  await reply(deps.conn, sessionId, "Session history cleared.");
+  await emitAgentText(deps.conn, sessionId, "Session history cleared.");
   return END_TURN;
 };
 
 const runMcpReload = async (deps: CommandDeps, sessionId: string) => {
   const session = deps.core.getSession(sessionId);
   if (!session) {
-    await reply(deps.conn, sessionId, "Session not found.");
+    await emitAgentText(deps.conn, sessionId, "Session not found.");
     return END_TURN;
   }
   // Re-read `.mcp.json` (project + global), re-merge with the original
@@ -129,8 +121,9 @@ const runMcpReload = async (deps: CommandDeps, sessionId: string) => {
     session.clientSuppliedMcpServers,
   );
   deps.core.replaceMcpServers(sessionId, authedServers);
-  deps.core.markCcNeedsFreshSession(sessionId);
-  await reply(
+  // Each `query()` is a fresh SDK session, so the rebuilt server list takes
+  // effect on the next prompt automatically — no rotation flag needed.
+  await emitAgentText(
     deps.conn,
     sessionId,
     `Re-scanned \`.mcp.json\` — ${authedServers.length} server${authedServers.length === 1 ? "" : "s"} configured. MCP servers will reconnect on your next prompt; newly-available tools (e.g. after an OAuth flow) will become visible then.`,
@@ -141,12 +134,12 @@ const runMcpReload = async (deps: CommandDeps, sessionId: string) => {
 const runMcpList = async (deps: CommandDeps, sessionId: string) => {
   const session = deps.core.getSession(sessionId);
   if (!session) {
-    await reply(deps.conn, sessionId, "Session not found.");
+    await emitAgentText(deps.conn, sessionId, "Session not found.");
     return END_TURN;
   }
   const servers = session.clientMcpServers ?? [];
   if (servers.length === 0) {
-    await reply(
+    await emitAgentText(
       deps.conn,
       sessionId,
       "No MCP servers configured for this session.",
@@ -175,7 +168,7 @@ const runMcpList = async (deps: CommandDeps, sessionId: string) => {
       return `- **${s.name}** (${s.type}: ${s.url}) — connection failed: ${result.message}${hint}`;
     }),
   );
-  await reply(
+  await emitAgentText(
     deps.conn,
     sessionId,
     `**MCP servers** (${servers.length})\n\n${lines.join("\n")}`,
@@ -189,7 +182,7 @@ const runMcpAuth = async (
   name: string,
 ) => {
   if (!name) {
-    await reply(
+    await emitAgentText(
       deps.conn,
       sessionId,
       "Usage: `/mcp auth <server-name>`\nUse `/mcp list` to see configured servers.",
@@ -198,30 +191,29 @@ const runMcpAuth = async (
   }
   const session = deps.core.getSession(sessionId);
   if (!session) {
-    await reply(deps.conn, sessionId, "Session not found.");
+    await emitAgentText(deps.conn, sessionId, "Session not found.");
     return END_TURN;
   }
   const servers = session.clientMcpServers ?? [];
-  await reply(
+  await emitAgentText(
     deps.conn,
     sessionId,
     `Starting OAuth flow for **${name}** — your browser should open shortly. Approve the request and return here; the next prompt will pick up the authenticated tools.`,
   );
   const result = await authenticateServer(servers, name);
   if (!result.ok) {
-    await reply(
+    await emitAgentText(
       deps.conn,
       sessionId,
       `OAuth flow for **${name}** failed: ${result.error}`,
     );
     return END_TURN;
   }
-  // Replace the session's MCP server list with the bearer-injected version
-  // and force the next CC turn to open a fresh SDK session so the
-  // newly-authenticated server's tool list appears in the namespace.
+  // Replace the session's MCP server list with the bearer-injected version.
+  // Each `query()` is a fresh SDK session, so the next prompt naturally
+  // picks up the new server list with no rotation flag needed.
   session.clientMcpServers = result.servers;
-  deps.core.markCcNeedsFreshSession(sessionId);
-  await reply(
+  await emitAgentText(
     deps.conn,
     sessionId,
     `**${name}** authenticated. Tools will become visible on your next prompt.`,
@@ -235,16 +227,24 @@ const runMemorySearch = async (
   query: string,
 ) => {
   if (!query) {
-    await reply(deps.conn, sessionId, "Usage: `/memory search <query>`");
+    await emitAgentText(
+      deps.conn,
+      sessionId,
+      "Usage: `/memory search <query>`",
+    );
     return END_TURN;
   }
   const results = deps.memoryStore.searchMemories(query);
   if (results.length === 0) {
-    await reply(deps.conn, sessionId, `No memories found for "${query}".`);
+    await emitAgentText(
+      deps.conn,
+      sessionId,
+      `No memories found for "${query}".`,
+    );
     return END_TURN;
   }
   const lines = results.map((m) => `[#${m.id}] ${m.content}`).join("\n");
-  await reply(
+  await emitAgentText(
     deps.conn,
     sessionId,
     `**Memory search**: "${query}"\n\n${lines}`,
@@ -255,11 +255,11 @@ const runMemorySearch = async (
 const runMemoryList = async (deps: CommandDeps, sessionId: string) => {
   const memories = deps.memoryStore.getMemories();
   if (memories.length === 0) {
-    await reply(deps.conn, sessionId, "No memories stored.");
+    await emitAgentText(deps.conn, sessionId, "No memories stored.");
     return END_TURN;
   }
   const lines = memories.map((m) => `[#${m.id}] ${m.content}`).join("\n");
-  await reply(
+  await emitAgentText(
     deps.conn,
     sessionId,
     `**Memories** (${memories.length})\n\n${lines}`,
@@ -273,11 +273,11 @@ const runMemoryStore = async (
   fact: string,
 ) => {
   if (!fact) {
-    await reply(deps.conn, sessionId, "Usage: `/memory store <fact>`");
+    await emitAgentText(deps.conn, sessionId, "Usage: `/memory store <fact>`");
     return END_TURN;
   }
   const entry = deps.memoryStore.addMemory(fact);
-  await reply(
+  await emitAgentText(
     deps.conn,
     sessionId,
     `Memory stored [#${entry.id}]: "${entry.content}"`,
@@ -292,7 +292,7 @@ const runMemoryDelete = async (
 ) => {
   const id = parseInt(rawId, 10);
   if (Number.isNaN(id)) {
-    await reply(
+    await emitAgentText(
       deps.conn,
       sessionId,
       "Usage: `/memory delete <id>`\nID must be a number.",
@@ -300,7 +300,7 @@ const runMemoryDelete = async (
     return END_TURN;
   }
   const deleted = deps.memoryStore.deleteMemory(id);
-  await reply(
+  await emitAgentText(
     deps.conn,
     sessionId,
     deleted ? `Memory #${id} deleted.` : `Memory #${id} not found.`,

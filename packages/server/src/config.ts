@@ -99,6 +99,15 @@ export const config = {
     ),
     /** Keep this many recent conversation turns after compaction */
     keepRecentMessages: parseInt(Bun.env.CONTEXT_KEEP_RECENT ?? "50", 10),
+    /** Max tokens of rendered recent-history to inject into the assembled
+     *  CC system prompt. Trimmed newest-first; 0 disables the cap. Uses
+     *  gpt-tokenizer (cl100k_base) as a rough but fast proxy — Anthropic
+     *  doesn't ship a public tokenizer, and a slight overcount is desirable
+     *  for a budget. */
+    assemblyTokenBudget: parseInt(
+      Bun.env.CONTEXT_ASSEMBLY_TOKEN_BUDGET ?? "12000",
+      10,
+    ),
   },
 
   /** System prompt — loaded from markdown file */

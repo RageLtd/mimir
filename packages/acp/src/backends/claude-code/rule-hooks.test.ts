@@ -39,11 +39,19 @@ const mkDetector = (
   detect: fn,
 });
 
-const mkHookEvent = (tool_name: string, tool_input: Record<string, unknown>) => ({
-  hook_event_name: "PreToolUse",
-  tool_name,
-  tool_input,
-});
+const mkHookEvent = (
+  tool_name: string,
+  tool_input: Record<string, unknown>,
+) =>
+  ({
+    hook_event_name: "PreToolUse",
+    tool_name,
+    tool_input,
+    tool_use_id: "tu_1",
+    session_id: "sess_1",
+    transcript_path: "/tmp/transcript.jsonl",
+    cwd: "/tmp",
+  }) as const;
 
 describe("runDetectors", () => {
   test("collects violations from each detector", async () => {
@@ -204,22 +212,26 @@ describe("formatFindings", () => {
   });
 });
 
+// Hook returns HookJSONOutput which is a union of Sync/Async; only the Sync
+// variant carries hookSpecificOutput. Tests expect the sync form so we
+// narrow at the assertion site.
+type SyncHookOutput = {
+  hookSpecificOutput?: { hookEventName: string; additionalContext?: string };
+};
+
 describe("buildRuleHook", () => {
   test("returns empty additionalContext when no violations", async () => {
     const d = mkDetector("rule-a", () => []);
     const matchers = buildRuleHook([d]);
     const matcher = matchers[0];
     if (!matcher || !matcher.hooks[0]) throw new Error("no hook returned");
-    const result = await matcher.hooks[0](
+    const result = (await matcher.hooks[0](
       mkHookEvent("Edit", { file_path: "/x.ts", new_string: "clean" }),
       undefined,
       { signal: new AbortController().signal },
-    );
-    expect(result.hookSpecificOutput.hookEventName).toBe("PreToolUse");
-    expect(
-      (result.hookSpecificOutput as { additionalContext?: string })
-        .additionalContext,
-    ).toBeUndefined();
+    )) as SyncHookOutput;
+    expect(result.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
+    expect(result.hookSpecificOutput?.additionalContext).toBeUndefined();
   });
 
   test("includes additionalContext when violations found", async () => {
@@ -227,14 +239,12 @@ describe("buildRuleHook", () => {
     const matchers = buildRuleHook([d]);
     const matcher = matchers[0];
     if (!matcher || !matcher.hooks[0]) throw new Error("no hook returned");
-    const result = await matcher.hooks[0](
+    const result = (await matcher.hooks[0](
       mkHookEvent("Edit", { file_path: "/x.ts", new_string: "bad" }),
       undefined,
       { signal: new AbortController().signal },
-    );
-    const ctx = (
-      result.hookSpecificOutput as { additionalContext?: string }
-    ).additionalContext;
+    )) as SyncHookOutput;
+    const ctx = result.hookSpecificOutput?.additionalContext;
     expect(ctx).toContain("rule-a");
     expect(ctx).toContain("found bad");
   });
@@ -244,14 +254,20 @@ describe("buildRuleHook", () => {
     const matchers = buildRuleHook([d]);
     const matcher = matchers[0];
     if (!matcher || !matcher.hooks[0]) throw new Error("no hook returned");
-    const result = await matcher.hooks[0](
-      { hook_event_name: "PostToolUse" },
+    const result = (await matcher.hooks[0](
+      {
+        hook_event_name: "PostToolUse",
+        tool_name: "Edit",
+        tool_input: {},
+        tool_use_id: "tu_1",
+        tool_response: {},
+        session_id: "sess_1",
+        transcript_path: "/tmp/transcript.jsonl",
+        cwd: "/tmp",
+      },
       undefined,
       { signal: new AbortController().signal },
-    );
-    expect(
-      (result.hookSpecificOutput as { additionalContext?: string })
-        .additionalContext,
-    ).toBeUndefined();
+    )) as SyncHookOutput;
+    expect(result.hookSpecificOutput?.additionalContext).toBeUndefined();
   });
 });

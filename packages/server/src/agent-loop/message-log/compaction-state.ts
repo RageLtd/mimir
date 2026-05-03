@@ -36,7 +36,14 @@ export async function updateTokenCount(
   modelId?: string,
 ): Promise<{ needsCompaction: boolean; state: CompactionState }> {
   const modelContextWindow = modelId ? getContextWindow(modelId) : undefined;
-  const maxTokens = modelContextWindow ?? config.context.maxTokens;
+  // Cap at config.context.maxTokens regardless of what the model advertises.
+  // Opus advertises 1M on some tiers, but pricing jumps 4x past 256k — we
+  // don't want compaction waiting until 800k to fire. Smaller windows
+  // (local models, etc.) still use their own ceiling.
+  const maxTokens = Math.min(
+    modelContextWindow ?? config.context.maxTokens,
+    config.context.maxTokens,
+  );
   const threshold = maxTokens * config.context.compactionThreshold;
 
   // Get current state

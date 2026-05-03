@@ -3,6 +3,8 @@ import {
 	BOOT_SERVER_NAME,
 	type BootContent,
 	buildProfileResult,
+	buildRulesResult,
+	buildSessionContextResult,
 	createBootServer,
 	USER_CONTEXT_INSTRUCTIONS,
 } from "./boot-tools";
@@ -35,6 +37,36 @@ describe("buildProfileResult", () => {
 	});
 });
 
+// ── buildRulesResult ──
+
+describe("buildRulesResult", () => {
+	test("returns full rules when present", () => {
+		const rules = "<project_rules>be excellent</project_rules>";
+		expect(buildRulesResult(rules)).toBe(rules);
+	});
+
+	test("returns fallback message when content is null", () => {
+		expect(buildRulesResult(null)).toBe(
+			"No project rules found in this codebase.",
+		);
+	});
+});
+
+// ── buildSessionContextResult ──
+
+describe("buildSessionContextResult", () => {
+	test("returns full context when present", () => {
+		const ctx = "<conversation_context>...</conversation_context>";
+		expect(buildSessionContextResult(ctx)).toBe(ctx);
+	});
+
+	test("returns fallback message when content is null", () => {
+		expect(buildSessionContextResult(null)).toContain(
+			"start of the conversation",
+		);
+	});
+});
+
 // ── createBootServer ──
 
 describe("createBootServer", () => {
@@ -45,6 +77,9 @@ describe("createBootServer", () => {
 		projectRules:
 			overrides?.projectRules ??
 			"<project_rules>\n--- CLAUDE.md ---\nNo OOP.\n</project_rules>",
+		sessionContext:
+			overrides?.sessionContext ??
+			"<conversation_context>\n[User]\nhello\n\n[Assistant]\nhi\n</conversation_context>",
 	});
 
 	test("returns a server config with the correct name", () => {
@@ -58,15 +93,6 @@ describe("createBootServer", () => {
 		expect(server.instance).toBeDefined();
 	});
 
-	test("returns frozen content for user profile tool", async () => {
-		const content = mkContent();
-		const server = createBootServer(content);
-		// The server instance is an McpServer — we can't call tools directly
-		// through it. Verify the config shape is correct for the SDK.
-		expect(server.name).toBe(BOOT_SERVER_NAME);
-		expect(server.type).toBe("sdk");
-	});
-
 	test("handles null user context gracefully", () => {
 		const server = createBootServer(mkContent({ userContext: null }));
 		expect(server.name).toBe(BOOT_SERVER_NAME);
@@ -77,12 +103,28 @@ describe("createBootServer", () => {
 		expect(server.name).toBe(BOOT_SERVER_NAME);
 	});
 
+	test("handles null session context", () => {
+		const server = createBootServer(mkContent({ sessionContext: null }));
+		expect(server.name).toBe(BOOT_SERVER_NAME);
+	});
+
 	test("handles all-empty content", () => {
 		const server = createBootServer({
 			userContext: null,
 			projectRules: null,
+			sessionContext: null,
 		});
 		expect(server.name).toBe(BOOT_SERVER_NAME);
 		expect(server.type).toBe("sdk");
+	});
+
+	// Cache-friendliness invariant: identical input content must produce a
+	// server config that the SDK serialises identically across calls.
+	test("produces stable surface fields from identical content", () => {
+		const content = mkContent();
+		const a = createBootServer(content);
+		const b = createBootServer(content);
+		expect(a.name).toBe(b.name);
+		expect(a.type).toBe(b.type);
 	});
 });

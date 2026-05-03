@@ -22,6 +22,18 @@ export type CCBackendConfig = {
   readonly anchorInterval: number;
   /** Path to the canonical system prompt markdown file. */
   readonly systemPromptPath?: string;
+  /**
+   * Cap on conversation turns inside a single SDK `query()`. Forwarded as
+   * the SDK's `maxTurns`. Undefined leaves the SDK's own default in place;
+   * set via `MIMIR_CC_MAX_TURNS` to bound runaway tool loops.
+   */
+  readonly maxTurns?: number;
+  /**
+   * USD spend cap inside a single SDK `query()`. Forwarded as the SDK's
+   * `maxBudgetUsd` — query stops with `error_max_budget_usd` once exceeded.
+   * Undefined disables the cap; set via `MIMIR_CC_MAX_BUDGET_USD`.
+   */
+  readonly maxBudgetUsd?: number;
 };
 
 export type CopilotBackendConfig = {
@@ -48,6 +60,12 @@ export type MimirConfig = {
   readonly userMemoryDbPath: string;
   readonly sessionDbPath: string;
   readonly logLevel: "debug" | "info" | "warn" | "error";
+  /**
+   * Filesystem path for the ACP log file. Lines are appended to this file
+   * in addition to being written to stderr. Empty string disables file
+   * logging. Default: `~/.mimir/acp.log`.
+   */
+  readonly acpLogPath: string;
   readonly autoApproveTools: boolean;
   readonly systemPromptTtlMs: number;
   readonly cc: CCBackendConfig;
@@ -55,8 +73,18 @@ export type MimirConfig = {
   readonly cartographer: CartographerConfig;
 };
 
+// Tools removed from the model's context to keep the per-turn prompt small.
+// `disallowedTools` is the lever for hard removal — the SDK strips these from
+// the tool definitions sent to the API. Anything kept here costs tokens every
+// turn for its name + description + schema.
+//   - Agent / Task: subagent dispatch, not used (we don't run subagents)
+//   - WebFetch / WebSearch: superseded by mimir MCP's web_search tool
+//   - NotebookRead / NotebookEdit: Jupyter, not in scope
+//   - The remaining entries (worktree, cron, monitor, askUserQuestion,
+//     scheduleWakeup, remoteTrigger) are CC features we don't surface.
 const DEFAULT_DISALLOWED = [
   "Agent",
+  "Task",
   "AskUserQuestion",
   "EnterWorktree",
   "ExitWorktree",
@@ -67,6 +95,9 @@ const DEFAULT_DISALLOWED = [
   "Monitor",
   "RemoteTrigger",
   "NotebookEdit",
+  "NotebookRead",
+  "WebFetch",
+  "WebSearch",
 ];
 
 const DEFAULT_CC_MODELS: Record<string, string> = {
@@ -85,14 +116,28 @@ const parseDisallowed = (raw: string | undefined): string[] => {
     .filter((s) => s.length > 0);
 };
 
-const parseEnabled = (raw: string | undefined) => {
-  if (raw === undefined) return undefined;
-  return raw === "true" || raw === "1";
+/**
+ * Parse a boolean env var. Unset → `defaultValue`; "true"/"1" → true;
+ * anything else → false. Folds the prior `parseEnabled` + `?? true` pattern
+ * into a single call.
+ */
+const parseBool = (raw: string | undefined, defaultValue: boolean) =>
+  raw === undefined ? defaultValue : raw === "true" || raw === "1";
+
+/**
+ * Parse a positive number from an env var. Returns undefined when the
+ * variable is unset, empty, or not a finite positive number — keeping the
+ * SDK option absent in those cases rather than passing through a bogus
+ * value.
+ */
+const parsePositiveNumber = (raw: string | undefined) => {
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
 };
 
-export const loadConfig = (): MimirConfig => {
-  const ccEnabledOverride = parseEnabled(process.env.MIMIR_CC_ENABLED);
-  return {
+export const loadConfig = () => {
+  const config: MimirConfig = {
     serverUrl: process.env.MIMIR_SERVER_URL ?? "http://mimir.conhost.lan",
     apiKey: process.env.MIMIR_API_KEY ?? "",
     model: process.env.MIMIR_MODEL ?? "openrouter/auto",
@@ -103,6 +148,9 @@ export const loadConfig = (): MimirConfig => {
       process.env.MIMIR_SESSION_DB ?? "~/.mimir/sessions.db",
     ),
     logLevel: (process.env.LOG_LEVEL as MimirConfig["logLevel"]) ?? "info",
+    acpLogPath: expandHome(
+      process.env.MIMIR_ACP_LOG_FILE ?? "~/.mimir/acp.log",
+    ),
     autoApproveTools: process.env.AUTO_APPROVE_TOOLS === "true",
     systemPromptTtlMs: parseInt(
       process.env.MIMIR_SYSTEM_PROMPT_TTL ?? "300000",
@@ -110,7 +158,7 @@ export const loadConfig = (): MimirConfig => {
     ),
     cc: {
       // Default to true; routing.ts disables it at startup if `claude` isn't on PATH.
-      enabled: ccEnabledOverride ?? true,
+      enabled: parseBool(process.env.MIMIR_CC_ENABLED, true),
       disallowedTools: parseDisallowed(process.env.MIMIR_CC_DISALLOWED_TOOLS),
       permissionMode:
         process.env.MIMIR_CC_PERMISSION_MODE ?? "bypassPermissions",
@@ -118,17 +166,20 @@ export const loadConfig = (): MimirConfig => {
       models: { ...DEFAULT_CC_MODELS },
       anchorInterval: parseInt(process.env.ANCHOR_INTERVAL ?? "20", 10),
       systemPromptPath: process.env.MIMIR_SYSTEM_PROMPT_PATH,
+      maxTurns: parsePositiveNumber(process.env.MIMIR_CC_MAX_TURNS),
+      maxBudgetUsd: parsePositiveNumber(process.env.MIMIR_CC_MAX_BUDGET_USD),
     },
     copilot: {
-      enabled: parseEnabled(process.env.MIMIR_COPILOT_ENABLED) ?? true,
+      enabled: parseBool(process.env.MIMIR_COPILOT_ENABLED, true),
       defaultModel: process.env.MIMIR_COPILOT_DEFAULT_MODEL ?? "gpt-5",
       workingDirectory: process.env.MIMIR_COPILOT_WORKING_DIR,
     },
     cartographer: {
-      enabled: parseEnabled(process.env.MIMIR_CARTOGRAPHER_ENABLED) ?? true,
+      enabled: parseBool(process.env.MIMIR_CARTOGRAPHER_ENABLED, true),
       binaryPath: process.env.MIMIR_CARTOGRAPHER_BIN ?? "cartographer",
     },
   };
+  return config;
 };
 
 export const config = loadConfig();

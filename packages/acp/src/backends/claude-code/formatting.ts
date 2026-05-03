@@ -1,10 +1,10 @@
 /**
  * Context formatting and SDK option building for the Claude Code backend.
  *
- * `formatContextForPrompt` converts assembled context messages to the
- * structured text appended to the system prompt. `buildSdkOptions`
- * assembles the SDK options object. Both are pure functions with no
- * side effects, making them straightforward to unit test.
+ * `formatContextForPrompt` renders assembled context messages as the
+ * structured text body of the `load_session_context` boot tool result.
+ * `buildSdkOptions` assembles the SDK Options object for `query()`. Both
+ * are pure functions — straightforward to unit test.
  */
 
 import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk";
@@ -15,18 +15,19 @@ import type {
   PermissionMode,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { CCBackendConfig } from "../../config";
+import { isValidCCMode } from "./config-options";
 import { buildMcpServers } from "./mcp-config";
 import { supportsAdaptiveThinking } from "./model-capabilities";
 import { buildRuleHook, type Detector } from "./rule-hooks";
 
 /**
- * Format assembled context messages (summaries, memories, prior turns)
- * as structured text appended to the system prompt. The current user
- * message must NOT be included — it goes as the SDK prompt input.
+ * Format assembled context messages as structured text for the
+ * `load_session_context` boot tool result. Same shape as the Copilot
+ * backend's equivalent so model behaviour matches across backends.
  */
 export const formatContextForPrompt = (
   messages: ReadonlyArray<{ role: "user" | "assistant"; content: string }>,
-): string => {
+) => {
   if (messages.length === 0) return "";
   const lines = messages.map(
     (m) => `[${m.role === "user" ? "User" : "Assistant"}]\n${m.content}`,
@@ -35,72 +36,40 @@ export const formatContextForPrompt = (
 };
 
 export type RunClaudeCodeOptions = {
-  /** Current user prompt text — used as prompt fallback when promptBlocks is absent. */
   readonly prompt: string;
-  /**
-   * Raw ACP content blocks for the current turn. When present, converted to
-   * Anthropic content format for the SDK prompt input. Preserves image data
-   * that would be lost if the prompt were flattened to plain text.
-   */
   readonly promptBlocks?: readonly ContentBlock[];
   readonly systemPrompt: string;
   readonly workingDirectory: string;
   readonly cc: CCBackendConfig;
-  /** The mimir-server URL, needed to build the MCP config. */
   readonly serverUrl: string;
-  /** Path to the user memory SQLite database. */
   readonly userMemoryDbPath: string;
-  /** SDK model value; e.g. "opus", "sonnet". */
   readonly model?: string;
-  /** MCP servers from the ACP client to merge into the SDK MCP config. */
   readonly clientMcpServers?: readonly McpServer[];
-  /** In-process boot MCP server delivering per-session context as tool results. */
   readonly bootServer?: McpSdkServerConfigWithInstance;
-  /**
-   * Permission mode for this turn. Overrides `cc.permissionMode` from the
-   * startup config when provided — set by the session's mode selector.
-   */
   readonly permissionMode?: PermissionMode;
-  /**
-   * Effort level for this turn. Set by the session's thought-level selector
-   * (CC backend only). Omitted for models that don't advertise effort support.
-   */
   readonly effort?: EffortLevel;
-  /**
-   * Rule-detect sidecars loaded from `.claude/rules/**\/*.detect.ts` in the
-   * project. When non-empty, they're wired into a PreToolUse hook that runs
-   * on every Edit/Write/MultiEdit and injects violation notices as
-   * `additionalContext`. Loaded once per session at newSession time.
-   */
   readonly ruleDetectors?: readonly Detector[];
-  /**
-   * When `false`, the SDK runs `query()` with `continue: false` for this
-   * single invocation — fresh session, fresh MCP connections. Used by
-   * `/reload-mcp` to pick up newly-available tools after an MCP server
-   * completes OAuth, since the SDK doesn't honour mid-session
-   * `notifications/tools/list_changed`. Default behaviour (omitted or
-   * `true`) keeps the rolling-context `continue: true` semantic.
-   */
-  readonly resumeSession?: boolean;
   readonly signal?: AbortSignal;
 };
 
 /**
- * Boot instruction appended to the system prompt. Tells the model to
- * call the two boot tools on its first turn to load per-session context.
- * Session context (summaries, memories, prior turns) is injected directly
- * into the system prompt rather than via a boot tool.
+ * Boot instruction appended to the system prompt. Tells the model to call
+ * the three boot tools at the START of the session (first turn only) to
+ * load per-session context. With `persistSession: true, continue: true` the
+ * SDK carries context across turns, so the model only needs to call the
+ * boot tools once at session start.
  */
-const BOOT_INSTRUCTION = `<boot_sequence>
-At the start of every session, BEFORE responding to the user's message, call these two tools in parallel to load your context:
+const BOOT_INSTRUCTION = `At the start of this session, BEFORE responding to anything else, call all three boot tools in parallel to load your context:
 
 1. \`load_user_profile\` — developer identity, preferences, and memories
 2. \`load_project_rules\` — this project's rules and conventions (CLAUDE.md, .claude/rules/)
+3. \`load_session_context\` — summaries, memories, and narrated history for this conversation
 
-Call both in your first response. Do not skip either. Do not respond to the user until you have loaded and read both results. The tool results, combined with the session context already in this prompt, contain your operating context for this session.
-</boot_sequence>`;
+Call all three in parallel. Do not skip any. Do not respond to the user until you have loaded and read all three results.
 
-/** Build the SDK Options object from runner options. Pure function, easy to test. */
+Then begin working with the user normally. You do not need to call these tools again on subsequent turns — your session context is preserved automatically.`;
+
+/** Build the SDK Options object from runner options. */
 export const buildSdkOptions = (
   options: Pick<
     RunClaudeCodeOptions,
@@ -115,21 +84,18 @@ export const buildSdkOptions = (
     | "permissionMode"
     | "effort"
     | "ruleDetectors"
-    | "resumeSession"
   >,
 ) => {
-  // System prompt arrives with session context already embedded (injected by
-  // prompt-cc.ts). Boot instruction appended after it.
-  const fullSystemPrompt = `${options.systemPrompt}\n\n${BOOT_INSTRUCTION}`;
+  const systemPrompt = `${options.systemPrompt}\n\n${BOOT_INSTRUCTION}`;
 
-  // Turn-level permission mode overrides the startup default. This lets the
-  // session's mode selector take effect without restarting the ACP.
-  const permissionMode =
-    options.permissionMode ?? (options.cc.permissionMode as PermissionMode);
+  const startupMode = isValidCCMode(options.cc.permissionMode)
+    ? options.cc.permissionMode
+    : undefined;
+  const permissionMode = options.permissionMode ?? startupMode;
 
   const sdkOptions: Options = {
     cwd: options.workingDirectory,
-    systemPrompt: fullSystemPrompt,
+    systemPrompt,
     permissionMode,
     ...(permissionMode === "bypassPermissions"
       ? { allowDangerouslySkipPermissions: true }
@@ -141,19 +107,28 @@ export const buildSdkOptions = (
       options.bootServer,
     ),
     strictMcpConfig: true,
+    // SDK-managed session continuity: persistSession writes the JSONL
+    // transcript to ~/.claude/projects/<encoded>/, continue picks the most
+    // recent one for this cwd on the next query(). Boot context delivered
+    // on the first turn rides forward in that transcript.
     persistSession: true,
-    // `continue: false` for this turn forces a fresh SDK session — fresh
-    // MCP connections, no rolled-over context. Used by /reload-mcp after
-    // OAuth flows. Default (undefined or true) keeps the existing
-    // rolling-context behaviour.
-    continue: options.resumeSession === false ? false : true,
+    continue: true,
+    // Hard-disable filesystem settings discovery. Without `[]` the CLI
+    // would load ~/.claude/settings.json, .claude/settings.json, and
+    // .claude/settings.local.json — bringing in user-level rule rules,
+    // plugin configs, and skill listings that bloat every prompt.
     settingSources: [],
+    // Per the SDK type docs, omitting `skills` lets the CLI's defaults
+    // apply, which is NOT "skills off." `[]` is the only way to turn
+    // every discovered plugin skill out of the system prompt every turn.
+    skills: [],
+    // Same story for plugins.
+    plugins: [],
     includePartialMessages: true,
-    // Thinking mode shaped per-model from the capability cache populated at
-    // startup by discoverCCModelsViaSdk. Undefined (unknown/discovery-failed)
-    // defaults to adaptive — the forward-looking pick for the current
-    // Anthropic catalogue, where adaptive-capable models dominate. Known
-    // legacy models fall back to enabled mode with an explicit budget.
+    // Thinking config is per-model. Adaptive is the modern default; older
+    // models that don't advertise it fall back to enabled with a fixed
+    // budget. supportsAdaptiveThinking reads a capability cache populated
+    // at model-discovery time.
     thinking:
       supportsAdaptiveThinking(options.model) === false
         ? {
@@ -162,7 +137,17 @@ export const buildSdkOptions = (
             budgetTokens: 31999,
           }
         : { type: "adaptive", display: "summarized" },
-    env: { ...process.env, ENABLE_TOOL_SEARCH: "false" },
+    env: {
+      ...process.env,
+      ENABLE_TOOL_SEARCH: "false",
+      // mimir owns project rules via the load_project_rules boot tool.
+      // CC's auto-memory injection (~/.claude/projects/<encoded>/memory/
+      // MEMORY.md) would duplicate that context every turn outside our
+      // caching discipline; this env var is the targeted kill switch and
+      // leaves explicit user/project CLAUDE.md alone (governed by
+      // settingSources: []).
+      CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+    },
   };
 
   if (options.cc.disallowedTools.length > 0) {
@@ -174,9 +159,12 @@ export const buildSdkOptions = (
   if (options.effort) {
     sdkOptions.effort = options.effort;
   }
-
-  // Rule-detect hooks — advisory nudges on known anti-patterns. Only
-  // attached when the project ships `.detect.ts` sidecars.
+  if (typeof options.cc.maxTurns === "number") {
+    sdkOptions.maxTurns = options.cc.maxTurns;
+  }
+  if (typeof options.cc.maxBudgetUsd === "number") {
+    sdkOptions.maxBudgetUsd = options.cc.maxBudgetUsd;
+  }
   if (options.ruleDetectors && options.ruleDetectors.length > 0) {
     sdkOptions.hooks = {
       PreToolUse: buildRuleHook(options.ruleDetectors),
