@@ -19,11 +19,7 @@
  */
 
 import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk";
-import type {
-  EffortLevel,
-  McpSdkServerConfigWithInstance,
-  PermissionMode,
-} from "@anthropic-ai/claude-agent-sdk";
+import type { EffortLevel, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import type { SessionState } from "../agent/types";
 import type { RuleEntry } from "../rules";
 import type { ChatMessage, ToolDefinition } from "../server-client";
@@ -81,8 +77,6 @@ export type BackendRunOptions = {
   readonly projectPath: string;
   /** MCP servers provided by the ACP client to forward into CC's MCP config. */
   readonly clientMcpServers?: readonly McpServer[];
-  /** In-process boot MCP server for delivering per-session context as tool results. */
-  readonly bootServer?: McpSdkServerConfigWithInstance;
   /**
    * Raw ACP content blocks for the current turn.
    * Used by the CC backend to preserve image data in the SDK prompt input.

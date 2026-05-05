@@ -10,7 +10,6 @@
 import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk";
 import type {
   EffortLevel,
-  McpSdkServerConfigWithInstance,
   Options,
   PermissionMode,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -46,29 +45,11 @@ export type RunClaudeCodeOptions = {
   readonly userMemoryDbPath: string;
   readonly model?: string;
   readonly clientMcpServers?: readonly McpServer[];
-  readonly bootServer?: McpSdkServerConfigWithInstance;
   readonly permissionMode?: PermissionMode;
   readonly effort?: EffortLevel;
   readonly rules?: readonly RuleEntry[];
   readonly signal?: AbortSignal;
 };
-
-/**
- * Boot instruction appended to the system prompt. Tells the model to call
- * the three boot tools at the START of the session (first turn only) to
- * load per-session context. The streaming-input Query stays alive across
- * turns, so the conversation context is naturally preserved without any
- * disk-backed transcript or `--continue` replay.
- */
-const BOOT_INSTRUCTION = `At the start of this session, BEFORE responding to anything else, call all three boot tools in parallel to load your context:
-
-1. \`load_user_profile\` — developer identity, preferences, and memories
-2. \`load_project_rules\` — this project's rules and conventions (CLAUDE.md, .claude/rules/)
-3. \`load_session_context\` — summaries, memories, and narrated history for this conversation
-
-Call all three in parallel. Do not skip any. Do not respond to the user until you have loaded and read all three results.
-
-Then begin working with the user normally. You do not need to call these tools again on subsequent turns — your session context is preserved automatically.`;
 
 /** Build the SDK Options object from runner options. */
 export const buildSdkOptions = (
@@ -81,13 +62,12 @@ export const buildSdkOptions = (
     | "serverUrl"
     | "userMemoryDbPath"
     | "clientMcpServers"
-    | "bootServer"
     | "permissionMode"
     | "effort"
     | "rules"
   >,
 ) => {
-  const systemPrompt = `${options.systemPrompt}\n\n${BOOT_INSTRUCTION}`;
+  const systemPrompt = options.systemPrompt;
 
   const startupMode = isValidCCMode(options.cc.permissionMode)
     ? options.cc.permissionMode
@@ -105,7 +85,6 @@ export const buildSdkOptions = (
       options.serverUrl,
       options.userMemoryDbPath,
       options.clientMcpServers,
-      options.bootServer,
     ),
     strictMcpConfig: true,
     // No persistSession / continue: continuity comes from the long-lived

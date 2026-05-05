@@ -70,19 +70,10 @@ describe("buildSdkOptions", () => {
       model: overrides?.model,
     });
 
-  test("appends boot instruction to system prompt (session mode)", () => {
+  test("passes system prompt through unchanged", () => {
     const opts = mkOpts();
     expect(typeof opts.systemPrompt).toBe("string");
-    expect(opts.systemPrompt).toContain("<xml>prompt</xml>");
-    expect(opts.systemPrompt).toContain("load_user_profile");
-    expect(opts.systemPrompt).toContain("load_project_rules");
-    expect(opts.systemPrompt).toContain("load_session_context");
-    expect(opts.systemPrompt).toContain("At the start of this session");
-  });
-
-  test("does not append conversation context to system prompt", () => {
-    const opts = mkOpts();
-    expect(opts.systemPrompt as string).not.toContain("<conversation_context>");
+    expect(opts.systemPrompt).toBe("<xml>prompt</xml>");
   });
 
   test("system prompt is always a string (no array form with session mode)", () => {
@@ -193,6 +184,7 @@ describe("buildSdkOptions", () => {
     const opts = mkOpts({ cc });
     expect(opts.maxBudgetUsd).toBe(5);
   });
+
 });
 
 // ── buildMcpServers ──

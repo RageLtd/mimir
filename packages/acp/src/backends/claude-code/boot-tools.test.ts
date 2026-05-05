@@ -1,13 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
-	BOOT_SERVER_NAME,
 	type BootContent,
 	buildProfileResult,
 	buildRulesResult,
 	buildSessionContextResult,
-	createBootServer,
+	formatBootContent,
 	USER_CONTEXT_INSTRUCTIONS,
-	VOICE_ANCHOR,
 } from "./boot-tools";
 
 // ── buildProfileResult ──
@@ -19,18 +17,12 @@ describe("buildProfileResult", () => {
 		const result = buildProfileResult(userContext);
 		expect(result).toContain(USER_CONTEXT_INSTRUCTIONS);
 		expect(result).toContain(userContext);
-		expect(result.endsWith(VOICE_ANCHOR)).toBe(true);
 	});
 
 	test("includes fallback message when user context is null", () => {
 		const result = buildProfileResult(null);
 		expect(result).toContain(USER_CONTEXT_INSTRUCTIONS);
 		expect(result).toContain("No user profile or memories stored yet");
-		expect(result.endsWith(VOICE_ANCHOR)).toBe(true);
-	});
-
-	test("instructions mention proactive persistence", () => {
-		expect(USER_CONTEXT_INSTRUCTIONS).toContain("Proactively persist");
 	});
 
 	test("instructions mention never quoting the block", () => {
@@ -43,53 +35,36 @@ describe("buildProfileResult", () => {
 // ── buildRulesResult ──
 
 describe("buildRulesResult", () => {
-	test("returns full rules followed by voice anchor when present", () => {
+	test("returns rules content when present", () => {
 		const rules = "<project_rules>be excellent</project_rules>";
 		const result = buildRulesResult(rules);
-		expect(result.startsWith(rules)).toBe(true);
-		expect(result.endsWith(VOICE_ANCHOR)).toBe(true);
+		expect(result).toBe(rules);
 	});
 
-	test("returns fallback message followed by voice anchor when content is null", () => {
+	test("returns fallback message when content is null", () => {
 		const result = buildRulesResult(null);
 		expect(result).toContain("No project rules found in this codebase.");
-		expect(result.endsWith(VOICE_ANCHOR)).toBe(true);
 	});
 });
 
 // ── buildSessionContextResult ──
 
 describe("buildSessionContextResult", () => {
-	test("returns full context followed by voice anchor when present", () => {
+	test("returns context content when present", () => {
 		const ctx = "<conversation_context>...</conversation_context>";
 		const result = buildSessionContextResult(ctx);
-		expect(result.startsWith(ctx)).toBe(true);
-		expect(result.endsWith(VOICE_ANCHOR)).toBe(true);
+		expect(result).toBe(ctx);
 	});
 
-	test("returns fallback message followed by voice anchor when content is null", () => {
+	test("returns fallback message when content is null", () => {
 		const result = buildSessionContextResult(null);
 		expect(result).toContain("start of the conversation");
-		expect(result.endsWith(VOICE_ANCHOR)).toBe(true);
 	});
 });
 
-// ── VOICE_ANCHOR ──
+// ── formatBootContent ──
 
-describe("VOICE_ANCHOR", () => {
-	test("is wrapped in a voice_reminder tag", () => {
-		expect(VOICE_ANCHOR).toContain("<voice_reminder>");
-		expect(VOICE_ANCHOR).toContain("</voice_reminder>");
-	});
-
-	test("names Mimir explicitly", () => {
-		expect(VOICE_ANCHOR).toContain("Mimir");
-	});
-});
-
-// ── createBootServer ──
-
-describe("createBootServer", () => {
+describe("formatBootContent", () => {
 	const mkContent = (overrides?: Partial<BootContent>): BootContent => ({
 		userContext:
 			overrides?.userContext ??
@@ -102,49 +77,57 @@ describe("createBootServer", () => {
 			"<conversation_context>\n[User]\nhello\n\n[Assistant]\nhi\n</conversation_context>",
 	});
 
-	test("returns a server config with the correct name", () => {
-		const server = createBootServer(mkContent());
-		expect(server.name).toBe(BOOT_SERVER_NAME);
-		expect(server.type).toBe("sdk");
+	test("wraps content in boot_context tags", () => {
+		const result = formatBootContent(mkContent());
+		expect(result.startsWith("<boot_context>")).toBe(true);
+		expect(result.endsWith("</boot_context>")).toBe(true);
 	});
 
-	test("server config has an instance property", () => {
-		const server = createBootServer(mkContent());
-		expect(server.instance).toBeDefined();
+	test("includes all three sections with XML tags", () => {
+		const result = formatBootContent(mkContent());
+		expect(result).toContain("<user_profile_section>");
+		expect(result).toContain("</user_profile_section>");
+		expect(result).toContain("<project_rules_section>");
+		expect(result).toContain("</project_rules_section>");
+		expect(result).toContain("<session_context_section>");
+		expect(result).toContain("</session_context_section>");
 	});
 
-	test("handles null user context gracefully", () => {
-		const server = createBootServer(mkContent({ userContext: null }));
-		expect(server.name).toBe(BOOT_SERVER_NAME);
+	test("includes user context instructions", () => {
+		const result = formatBootContent(mkContent());
+		expect(result).toContain(USER_CONTEXT_INSTRUCTIONS);
 	});
 
-	test("handles null project rules", () => {
-		const server = createBootServer(mkContent({ projectRules: null }));
-		expect(server.name).toBe(BOOT_SERVER_NAME);
+	test("includes user context content", () => {
+		const result = formatBootContent(mkContent());
+		expect(result).toContain("Name: Test");
 	});
 
-	test("handles null session context", () => {
-		const server = createBootServer(mkContent({ sessionContext: null }));
-		expect(server.name).toBe(BOOT_SERVER_NAME);
+	test("includes project rules content", () => {
+		const result = formatBootContent(mkContent());
+		expect(result).toContain("No OOP.");
 	});
 
-	test("handles all-empty content", () => {
-		const server = createBootServer({
+	test("includes session context content", () => {
+		const result = formatBootContent(mkContent());
+		expect(result).toContain("[User]\nhello");
+	});
+
+	test("handles all-null content with fallbacks", () => {
+		const result = formatBootContent({
 			userContext: null,
 			projectRules: null,
 			sessionContext: null,
 		});
-		expect(server.name).toBe(BOOT_SERVER_NAME);
-		expect(server.type).toBe("sdk");
+		expect(result).toContain("No user profile or memories stored yet");
+		expect(result).toContain("No project rules found in this codebase.");
+		expect(result).toContain("start of the conversation");
 	});
 
-	// Cache-friendliness invariant: identical input content must produce a
-	// server config that the SDK serialises identically across calls.
-	test("produces stable surface fields from identical content", () => {
+	test("produces identical output from identical input", () => {
 		const content = mkContent();
-		const a = createBootServer(content);
-		const b = createBootServer(content);
-		expect(a.name).toBe(b.name);
-		expect(a.type).toBe(b.type);
+		const a = formatBootContent(content);
+		const b = formatBootContent(content);
+		expect(a).toBe(b);
 	});
 });

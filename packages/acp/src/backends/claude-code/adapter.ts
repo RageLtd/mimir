@@ -80,7 +80,6 @@ export const createClaudeCodeBackend = (deps: ClaudeCodeBackendDeps) => {
         userMemoryDbPath: deps.userMemoryDbPath,
         model,
         clientMcpServers: options.clientMcpServers,
-        bootServer: options.bootServer,
         permissionMode: options.permissionMode,
         effort: options.effort,
         rules: options.rules,

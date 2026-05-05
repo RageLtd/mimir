@@ -1,8 +1,8 @@
 /**
  * MCP server config builder for the Claude Code SDK backend.
  *
- * Converts ACP McpServer descriptors to the record format expected by
- * the SDK's `mcpServers` option, merging the base mimir/context7/user-memory
+ * Converts ACP McpServer descriptors to the record format expected by the
+ * SDK's `mcpServers` option, merging the base mimir/context7/user-memory
  * servers with any client-supplied servers. Client-supplied names are
  * inserted first so mimir's reserved names always win on collision.
  */
@@ -10,7 +10,6 @@
 import type { McpServer, McpServerStdio } from "@agentclientprotocol/sdk";
 import type {
   McpHttpServerConfig,
-  McpSdkServerConfigWithInstance,
   McpServerConfig,
   McpSSEServerConfig,
   McpStdioServerConfig,
@@ -59,7 +58,6 @@ export const buildMcpServers = (
   serverUrl: string,
   userMemoryDbPath: string,
   clientMcpServers?: readonly McpServer[],
-  bootServer?: McpSdkServerConfigWithInstance,
 ) => {
   // Resolve built-in MCP server scripts relative to this file.
   const userMemoryScript = new URL(
@@ -87,10 +85,6 @@ export const buildMcpServers = (
   };
   servers.mimir = { type: "http", url: `${serverUrl}/mcp` };
   servers.context7 = { command: "bunx", args: ["@upstash/context7-mcp"] };
-
-  // Boot server delivers per-session context (user profile, session
-  // history, project rules) as tool results on the first turn.
-  if (bootServer) servers[bootServer.name] = bootServer;
 
   return servers;
 };

@@ -17,5 +17,6 @@
       "Bash(grep *)",
       "Bash(bun run *)"
     ]
-  }
+  },
+  "spinnerTipsEnabled": false
 }

@@ -8,8 +8,8 @@ import { buildSdkOptions, formatContextForPrompt } from "./formatting";
 // Simulates the full flow: the server's /v1/context/assemble returns a
 // systemPrompt + messages array. prompt-cc strips the current user
 // message, converts the system prompt to XML, and the assembled context
-// flows through the load_session_context boot tool result. The system
-// prompt itself stays free of conversation history.
+// is injected directly into the system prompt as boot content. The
+// system prompt is passed verbatim to buildSdkOptions.
 
 describe("end-to-end: assembled context → claude args + context", () => {
   const serverSystemPrompt =
@@ -63,7 +63,7 @@ describe("end-to-end: assembled context → claude args + context", () => {
     expect(xml).toContain("Be direct.");
   });
 
-  test("buildSdkOptions appends boot instruction and passes model/disallowedTools", () => {
+  test("buildSdkOptions passes system prompt through and sets model/disallowedTools", () => {
     const xmlPrompt = toAnthropicXml(serverSystemPrompt);
     const cc: CCBackendConfig = {
       enabled: true,
@@ -82,17 +82,12 @@ describe("end-to-end: assembled context → claude args + context", () => {
       userMemoryDbPath: "/tmp/test-memories.db",
     });
 
-    expect(opts.systemPrompt).toContain(xmlPrompt);
-    expect(opts.systemPrompt).toContain("load_user_profile");
-    expect(opts.systemPrompt).toContain("load_project_rules");
-    expect(opts.systemPrompt).toContain("load_session_context");
-    expect(opts.systemPrompt).toContain("At the start of this session");
-
+    expect(opts.systemPrompt).toBe(xmlPrompt);
     expect(opts.model).toBe("opus");
     expect(opts.disallowedTools).toEqual(["Agent", "Monitor"]);
   });
 
-  test("system prompt always includes boot instruction even on first message", () => {
+  test("buildSdkOptions passes system prompt verbatim without modification", () => {
     const cc: CCBackendConfig = {
       enabled: true,
       disallowedTools: [],
@@ -108,15 +103,10 @@ describe("end-to-end: assembled context → claude args + context", () => {
       userMemoryDbPath: "/tmp/test-memories.db",
     });
 
-    expect(opts.systemPrompt).toContain("load_user_profile");
-    expect(opts.systemPrompt).toContain("load_project_rules");
-    expect(opts.systemPrompt).toContain("load_session_context");
-    expect(opts.systemPrompt).toContain("At the start of this session");
+    expect(opts.systemPrompt).toBe("<system/>");
   });
 
-  // The system prompt is fed verbatim — boot instruction is appended.
-  // Session context flows through the load_session_context boot tool.
-  test("buildSdkOptions does not inject conversation history into the system prompt", () => {
+  test("buildSdkOptions produces byte-identical output for identical input (cache contract)", () => {
     const cc: CCBackendConfig = {
       enabled: true,
       disallowedTools: [],
@@ -134,14 +124,6 @@ describe("end-to-end: assembled context → claude args + context", () => {
       userMemoryDbPath: "/tmp/test-memories.db",
     });
 
-    if (typeof opts.systemPrompt !== "string") {
-      throw new Error("expected systemPrompt to be a string");
-    }
-    expect(opts.systemPrompt).toContain(xmlPrompt);
-    expect(opts.systemPrompt).toContain("load_user_profile");
-    expect(opts.systemPrompt).not.toContain("<conversation_context>");
-
-    // Byte-identical output for byte-identical input — the cache contract.
     const opts2 = buildSdkOptions({
       systemPrompt: xmlPrompt,
       cc,
@@ -150,32 +132,5 @@ describe("end-to-end: assembled context → claude args + context", () => {
       userMemoryDbPath: "/tmp/test-memories.db",
     });
     expect(opts2.systemPrompt).toBe(opts.systemPrompt);
-  });
-
-  // System prompt is always a single string with boot instruction appended.
-  // The SDK handles session continuity via persistSession: true, continue: true.
-  test("system prompt with custom content preserves it and appends boot instruction", () => {
-    const cc: CCBackendConfig = {
-      enabled: true,
-      disallowedTools: [],
-      permissionMode: "bypassPermissions",
-      models: {},
-      anchorInterval: 6,
-    };
-    const composed = `<base/>\n\n<custom_block>content</custom_block>`;
-    const opts = buildSdkOptions({
-      systemPrompt: composed,
-      cc,
-      workingDirectory: "/tmp/test",
-      serverUrl: "http://localhost:3777",
-      userMemoryDbPath: "/tmp/test-memories.db",
-    });
-    if (typeof opts.systemPrompt !== "string") {
-      throw new Error("expected systemPrompt to be a string");
-    }
-    expect(opts.systemPrompt).toContain(composed);
-    expect(opts.systemPrompt).toContain("load_user_profile");
-    expect(opts.systemPrompt).toContain("load_project_rules");
-    expect(opts.systemPrompt).toContain("load_session_context");
   });
 });

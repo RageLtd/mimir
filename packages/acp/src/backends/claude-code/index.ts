@@ -9,7 +9,7 @@
 export type { ClaudeCodeBackendDeps } from "./adapter";
 export { createClaudeCodeBackend } from "./adapter";
 export type { BootContent } from "./boot-tools";
-export { createBootServer } from "./boot-tools";
+export { formatBootContent } from "./boot-tools";
 export type { RunClaudeCodeOptions } from "./formatting";
 export { buildSdkOptions, formatContextForPrompt } from "./formatting";
 export { buildMcpServers } from "./mcp-config";

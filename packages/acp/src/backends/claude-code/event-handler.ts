@@ -218,6 +218,8 @@ export const handleCCEvent = async ({
 
   if (event.type === "error") {
     logger.error("CC error:", event.error);
-    await emitAgentText(conn, session.sessionId, `Error: ${event.error}`);
+    // Don't emit to user here — the caller (prompt-cc) decides whether to
+    // surface the error or suppress it (e.g. user-initiated cancellation
+    // produces an error event that should not be shown).
   }
 };

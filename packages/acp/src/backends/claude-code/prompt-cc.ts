@@ -12,9 +12,10 @@
  * working memory; that lives in the long-lived Query.
  *
  * The cross-turn channels:
- *   - First turn: assembleContext → full system prompt + session context
- *     + boot tools. XML-converted with model override. The system prompt
- *     is fixed at Query creation and cannot change during the session.
+ *   - First turn: assembleContext → full system prompt + boot content
+ *     (user profile, project rules, session context) injected directly
+ *     into the system prompt. XML-converted with model override. The
+ *     system prompt is fixed at Query creation and cannot change.
  *   - Subsequent turns: getSystemPrompt (TTL-cached) → full system prompt
  *     for our records. The Query has already captured the first-turn
  *     prompt and ignores subsequent values; we still build it because
@@ -28,8 +29,7 @@
  * errored / refused first turns leave it `false` so the next prompt
  * re-attempts boot. The cost is one wasted assembleContext call per failed
  * first turn; the alternative (setting it eagerly) risks a session that
- * never receives boot context if the first turn errors before the model
- * invokes the boot tools.
+ * never receives boot context if the first turn errors.
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
@@ -49,7 +49,7 @@ import { errMessage } from "../../util";
 import { createChildLogger, log } from "../../utils/log";
 import { toAnthropicXml } from "../../utils/markdown-to-xml";
 import type { Backend } from "../types";
-import { type BootContent, createBootServer } from "./boot-tools";
+import { type BootContent, formatBootContent } from "./boot-tools";
 import { isValidCCMode } from "./config-options";
 import { getContextWindow, setContextWindow } from "./context-window-cache";
 import { isFileWriteTool } from "../../cartographer/lifecycle";
@@ -112,12 +112,11 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
   const isFirstTurn = !session.bootSequenceDone;
 
   // Always fetch the full system prompt. On the first turn we need the
-  // complete assembled context (messages, memories, summaries) for the boot
-  // tools. On subsequent turns the long-lived Query already has the system
-  // prompt baked in at creation; we still build the XML form so any
-  // observers downstream (logs, future tooling) see what would have been
-  // sent. getSystemPrompt is TTL-cached so this is near-free.
-  let bootServer: ReturnType<typeof createBootServer> | undefined;
+  // complete assembled context (messages, memories, summaries) to inject
+  // as boot content. On subsequent turns the long-lived Query already has
+  // the system prompt baked in at creation; we still build the XML form so
+  // any observers downstream (logs, future tooling) see what would have
+  // been sent. getSystemPrompt is TTL-cached so this is near-free.
   let xmlSystemPrompt: string;
 
   if (isFirstTurn) {
@@ -137,8 +136,6 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
       return { stopReason: "refusal" as const, filesModified: false };
     }
 
-    xmlSystemPrompt = toAnthropicXml(context.systemPrompt);
-
     const contextMessages = context.messages as readonly AssembledMessage[];
     const priorMessages = contextMessages.slice(0, -1);
     const sessionContextText = formatContextForPrompt(priorMessages);
@@ -148,7 +145,10 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
       projectRules: session.projectRules,
       sessionContext: sessionContextText.length > 0 ? sessionContextText : null,
     };
-    bootServer = createBootServer(bootContent);
+
+    // Inject boot content directly into the system prompt — eliminates the
+    // tool-call round trip that the old boot MCP server required.
+    xmlSystemPrompt = `${toAnthropicXml(context.systemPrompt)}\n\n${formatBootContent(bootContent)}`;
 
     logger.info(
       {
@@ -156,7 +156,7 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
         sessionMessageCount: context.messages.length,
         systemPromptChars: xmlSystemPrompt.length,
       },
-      "CC boot sequence assembled",
+      "CC boot content injected into system prompt",
     );
   } else {
     try {
@@ -223,7 +223,6 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
       tools: [],
       projectPath: session.projectPath,
       clientMcpServers: session.clientMcpServers,
-      bootServer,
       metadata: {},
       modelId: session.currentModelId,
       permissionMode: isValidCCMode(session.currentMode)
@@ -304,6 +303,7 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
       if (abortController.signal.aborted) {
         return { stopReason: "cancelled" as const, filesModified };
       }
+      await emitAgentText(conn, session.sessionId, `Error: ${event.error}`);
       return { stopReason: "refusal" as const, filesModified };
     }
   }
