@@ -36,11 +36,14 @@ export const getCCModelFlag = (modelId: string, cc: CCBackendConfig) => {
 /**
  * Convert a `cc.models` suffix into a friendly display name. Replaces
  * digit-dash-digit with the dotted form (`opus-4-6` → `opus-4.6`),
- * splits on dashes/underscores, titlecases each word.
+ * splits on dashes/underscores, titlecases each word. Words shaped as
+ * `<digits><letters>` (e.g. `1m`, `200k`) are fully uppercased so unit
+ * suffixes render canonically.
  *
- *   prettifyModelSuffix("opus-4-6")   → "Opus 4.6"
- *   prettifyModelSuffix("sonnet-4-6") → "Sonnet 4.6"
- *   prettifyModelSuffix("opusplan")   → "Opusplan"
+ *   prettifyModelSuffix("opus-4-6")      → "Opus 4.6"
+ *   prettifyModelSuffix("sonnet-4-6")    → "Sonnet 4.6"
+ *   prettifyModelSuffix("opusplan")      → "Opusplan"
+ *   prettifyModelSuffix("opus-4-6-1m")   → "Opus 4.6 1M"
  *
  * Exported for unit testing.
  */
@@ -48,7 +51,11 @@ export const prettifyModelSuffix = (suffix: string) => {
   const dotted = suffix.replace(/(\d)-(\d)/g, "$1.$2");
   return dotted
     .split(/[-_\s]/)
-    .map((w) => (w.length > 0 ? w[0]!.toUpperCase() + w.slice(1) : ""))
+    .map((w) => {
+      if (w.length === 0) return "";
+      if (/^\d+[a-zA-Z]+$/.test(w)) return w.toUpperCase();
+      return w[0]!.toUpperCase() + w.slice(1);
+    })
     .join(" ");
 };
 

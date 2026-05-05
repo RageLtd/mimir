@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { buildUserMessage, createMessageQueue } from "./runner";
+import {
+  buildUserMessage,
+  computeGaugePromptTokens,
+  createMessageQueue,
+} from "./runner";
 
 const expectArrayContent = (content: unknown) => {
   if (typeof content === "string") {
@@ -84,5 +88,132 @@ describe("createMessageQueue", () => {
     expect(expectArrayContent(first.message.content)).toEqual([
       { type: "text", text: "kept" },
     ]);
+  });
+});
+
+describe("computeGaugePromptTokens", () => {
+  // The shapes here mirror the runtime payload from
+  // `@anthropic-ai/sdk` BetaUsage / BetaIterationsUsage. We assemble them
+  // structurally because the SDK types include many optional fields that
+  // would clutter the test fixtures and aren't load-bearing for this
+  // computation. Cast at the call boundary, never inside the helper.
+  const usage = (u: unknown) =>
+    computeGaugePromptTokens(u as Parameters<typeof computeGaugePromptTokens>[0]);
+
+  test("returns 0 when usage is undefined", () => {
+    expect(usage(undefined)).toBe(0);
+  });
+
+  test("falls back to cumulative totals when iterations is null", () => {
+    expect(
+      usage({
+        input_tokens: 10,
+        cache_read_input_tokens: 100,
+        cache_creation_input_tokens: 5,
+        iterations: null,
+      }),
+    ).toBe(115);
+  });
+
+  test("falls back to cumulative totals when iterations is empty array", () => {
+    expect(
+      usage({
+        input_tokens: 7,
+        cache_read_input_tokens: 3,
+        cache_creation_input_tokens: 0,
+        iterations: [],
+      }),
+    ).toBe(10);
+  });
+
+  test("uses last message iteration instead of cumulative across iterations", () => {
+    // Six tool cycles with a 30k cached prefix. Cumulative top-level would
+    // sum to ~180k, but the gauge should report ~32k — the size of the
+    // input on the final API call.
+    const result = usage({
+      input_tokens: 12_000, // cumulative uncached across 6 calls
+      cache_read_input_tokens: 150_000, // cumulative cache reads
+      cache_creation_input_tokens: 30_000, // cumulative cache creates
+      iterations: [
+        {
+          type: "message",
+          input_tokens: 200,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 30_000,
+        },
+        {
+          type: "message",
+          input_tokens: 1_500,
+          cache_read_input_tokens: 30_000,
+          cache_creation_input_tokens: 0,
+        },
+        {
+          type: "message",
+          input_tokens: 2_500,
+          cache_read_input_tokens: 30_000,
+          cache_creation_input_tokens: 0,
+        },
+        {
+          type: "message",
+          input_tokens: 3_000,
+          cache_read_input_tokens: 30_000,
+          cache_creation_input_tokens: 0,
+        },
+        {
+          type: "message",
+          input_tokens: 3_500,
+          cache_read_input_tokens: 30_000,
+          cache_creation_input_tokens: 0,
+        },
+        {
+          type: "message",
+          input_tokens: 1_300,
+          cache_read_input_tokens: 30_000,
+          cache_creation_input_tokens: 0,
+        },
+      ],
+    });
+    expect(result).toBe(1_300 + 30_000);
+  });
+
+  test("skips trailing compaction iterations to find the last message iteration", () => {
+    const result = usage({
+      input_tokens: 999,
+      cache_read_input_tokens: 999,
+      cache_creation_input_tokens: 999,
+      iterations: [
+        {
+          type: "message",
+          input_tokens: 500,
+          cache_read_input_tokens: 25_000,
+          cache_creation_input_tokens: 0,
+        },
+        {
+          type: "compaction",
+          input_tokens: 100_000,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 100_000,
+        },
+      ],
+    });
+    expect(result).toBe(25_500);
+  });
+
+  test("still reports cumulative when no message iteration exists", () => {
+    expect(
+      usage({
+        input_tokens: 1,
+        cache_read_input_tokens: 2,
+        cache_creation_input_tokens: 3,
+        iterations: [
+          {
+            type: "compaction",
+            input_tokens: 99,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+        ],
+      }),
+    ).toBe(6);
   });
 });

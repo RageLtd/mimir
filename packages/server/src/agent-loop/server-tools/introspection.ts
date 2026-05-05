@@ -45,7 +45,16 @@ export const executeReadLogs = async ({
     args.push("--tail", String(maxLines));
   }
 
-  args.push("mimir-server-mimir-1");
+  // HOSTNAME inside a Docker container is the container ID by default
+  const containerId = process.env.HOSTNAME;
+  if (!containerId) {
+    return {
+      success: false,
+      error: "HOSTNAME env var not set — cannot determine container ID",
+      lines: [],
+    };
+  }
+  args.push(containerId);
 
   const proc = Bun.spawn(["docker", ...args], {
     stdout: "pipe",

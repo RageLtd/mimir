@@ -119,9 +119,11 @@ const DEFAULT_DISALLOWED = [
 // and intentionally omitted — listing it in the selector would dangle
 // an unreachable option in front of every other user.
 //
-// Opus 4.6/4.7 default to 1M context, so the legacy `opus[1m]`/
-// `sonnet[1m]` bracket-syntax aliases are no longer included — the
-// bracket form was for the pre-4.6 era where 1M was opt-in.
+// The `[1m]` bracket suffix opts a model into its 1M-token long-context
+// variant. Listed alongside the standard entry so the selector exposes
+// both — the standard variant has a smaller window but cheaper input
+// pricing under the 256k cliff, the 1M variant raises the ceiling at
+// the higher tier rate. Users pick deliberately per session.
 //
 // Keys are the suffix shown in the selector (`claude-code/<key>`);
 // values are the model string passed to the SDK's `model` option.
@@ -129,6 +131,7 @@ const DEFAULT_DISALLOWED = [
 const DEFAULT_CC_MODELS: Record<string, string> = {
   "opus-4-7": "claude-opus-4-7",
   "opus-4-6": "claude-opus-4-6",
+  "opus-4-6-1m": "claude-opus-4-6[1m]",
   "sonnet-4-6": "claude-sonnet-4-6",
   opusplan: "opusplan",
 };

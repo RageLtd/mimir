@@ -13,6 +13,7 @@
 
 import type { ContentBlock } from "@agentclientprotocol/sdk";
 import {
+  type NonNullableUsage,
   type Query,
   query,
   type SDKAssistantMessage,
@@ -227,6 +228,43 @@ const extractContextWindow = (
   return modelUsage[model]?.contextWindow;
 };
 
+/**
+ * Compute the prompt-token count to surface as the conversation gauge.
+ *
+ * The top-level fields on `usage` (`input_tokens`, `cache_read_input_tokens`,
+ * `cache_creation_input_tokens`) are documented as cumulative across every
+ * sampling iteration in the turn — so a turn that fires N tool cycles reports
+ * the sum of N API calls' inputs, not the size of the final context window.
+ *
+ * `usage.iterations[*]` carries per-iteration breakdowns. Per the SDK doc, the
+ * last entry yields "the true context window size." We pick the last *message*
+ * iteration (skipping compaction iterations, which describe a summarization
+ * step and not the post-turn window) and sum its inputs. If the SDK gave us
+ * no iteration breakdown, we fall back to the cumulative top-level.
+ */
+export const computeGaugePromptTokens = (
+  usage: NonNullableUsage | undefined,
+) => {
+  const iterations = usage?.iterations;
+  if (Array.isArray(iterations) && iterations.length > 0) {
+    for (let i = iterations.length - 1; i >= 0; i--) {
+      const it = iterations[i];
+      if (it && it.type === "message") {
+        return (
+          it.input_tokens +
+          it.cache_read_input_tokens +
+          it.cache_creation_input_tokens
+        );
+      }
+    }
+  }
+  return (
+    (usage?.input_tokens ?? 0) +
+    (usage?.cache_read_input_tokens ?? 0) +
+    (usage?.cache_creation_input_tokens ?? 0)
+  );
+};
+
 /** Translate an SDKResultMessage into BackendEvent(s). */
 function* translateResult(
   msg: SDKResultMessage,
@@ -234,26 +272,33 @@ function* translateResult(
   model: string | undefined,
 ) {
   const usage = msg.usage;
-  const inputTokens = usage?.input_tokens ?? 0;
+  const cumulativeInput = usage?.input_tokens ?? 0;
   const cacheRead = usage?.cache_read_input_tokens ?? 0;
   const cacheCreate = usage?.cache_creation_input_tokens ?? 0;
-  const promptTokens = inputTokens + cacheRead + cacheCreate;
+  const cumulativeTotal = cumulativeInput + cacheRead + cacheCreate;
+  const promptTokens = computeGaugePromptTokens(usage);
   const contextWindow = extractContextWindow(msg.modelUsage, model);
 
-  // Cache hit ratio over total prompt input. A low ratio after the first turn
-  // points at churn somewhere in the prefix — system prompt, MCP tool list,
-  // or boot tool results — and is the primary signal for diagnosing why a
-  // turn cost more than expected.
+  // Cache hit ratio is computed over the cumulative-across-iterations totals
+  // because cache_read here is itself cumulative; comparing it to the
+  // last-iteration gauge would mislabel churn. A low ratio after the first
+  // turn points at churn somewhere in the prefix — system prompt, MCP tool
+  // list, or boot tool results — and is the primary signal for diagnosing
+  // why a turn cost more than expected.
   const cacheRatio =
-    promptTokens > 0 ? Math.round((cacheRead / promptTokens) * 100) / 100 : 0;
+    cumulativeTotal > 0
+      ? Math.round((cacheRead / cumulativeTotal) * 100) / 100
+      : 0;
   logger.info(
     {
       sessionId,
       stopReason: msg.subtype,
-      uncachedTokens: inputTokens,
+      uncachedTokens: cumulativeInput,
       cacheReadTokens: cacheRead,
       cacheCreateTokens: cacheCreate,
+      cumulativeTotal,
       promptTokens,
+      iterationCount: usage?.iterations?.length ?? 0,
       cacheRatio,
       outputTokens: usage?.output_tokens ?? 0,
       costUsd: msg.total_cost_usd,

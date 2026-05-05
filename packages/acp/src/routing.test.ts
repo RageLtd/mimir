@@ -71,6 +71,21 @@ describe("getCCModelList", () => {
     expect(list[0]!.name).toBe("Opus 4.6 (Claude Code)");
   });
 
+  test("surfaces the 1M long-context variant with bracket model id", () => {
+    const cc: CCBackendConfig = {
+      enabled: true,
+      disallowedTools: [],
+      permissionMode: "bypassPermissions",
+      models: { "opus-4-6-1m": "claude-opus-4-6[1m]" },
+      anchorInterval: 6,
+    };
+    const list = getCCModelList(cc);
+    expect(list).toHaveLength(1);
+    expect(list[0]!.modelId).toBe("claude-code/opus-4-6-1m");
+    expect(list[0]!.name).toBe("Opus 4.6 1M (Claude Code)");
+    expect(list[0]!.description).toContain("claude-opus-4-6[1m]");
+  });
+
   test("returns empty list when disabled", () => {
     const cc: CCBackendConfig = {
       enabled: false,
@@ -188,6 +203,11 @@ describe("prettifyModelSuffix", () => {
   test("single-word suffixes get titlecased", () => {
     expect(prettifyModelSuffix("opusplan")).toBe("Opusplan");
     expect(prettifyModelSuffix("haiku")).toBe("Haiku");
+  });
+
+  test("digit+letter unit tokens are fully uppercased", () => {
+    expect(prettifyModelSuffix("opus-4-6-1m")).toBe("Opus 4.6 1M");
+    expect(prettifyModelSuffix("sonnet-200k")).toBe("Sonnet 200K");
   });
 
   test("underscores split too", () => {
