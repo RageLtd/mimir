@@ -35,6 +35,16 @@ export const LOCAL_CARTOGRAPHER_TOOLS = new Set([
 export const isLocalCartographerTool = (name: string) =>
   LOCAL_CARTOGRAPHER_TOOLS.has(name);
 
+/** Tools that modify files on disk — used to detect when reindexing is needed. */
+const FILE_WRITE_TOOLS = new Set([
+  "Edit",
+  "Write",
+  "fs_write_text_file",
+  "write_text_file",
+]);
+
+export const isFileWriteTool = (name: string) => FILE_WRITE_TOOLS.has(name);
+
 export type CartographerManager = {
   /** Get or spawn the client for a project path. */
   readonly getClient: (projectPath: string) => Promise<CartographerClient>;

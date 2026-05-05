@@ -52,6 +52,7 @@ import type { Backend } from "../types";
 import { type BootContent, createBootServer } from "./boot-tools";
 import { isValidCCMode } from "./config-options";
 import { getContextWindow, setContextWindow } from "./context-window-cache";
+import { isFileWriteTool } from "../../cartographer/lifecycle";
 import { type CcToolCallInfo, handleCCEvent } from "./event-handler";
 import { formatContextForPrompt } from "./formatting";
 import {
@@ -133,7 +134,7 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
         session.sessionId,
         `Context assembly failed: ${context}`,
       );
-      return { stopReason: "refusal" as const };
+      return { stopReason: "refusal" as const, filesModified: false };
     }
 
     xmlSystemPrompt = toAnthropicXml(context.systemPrompt);
@@ -238,12 +239,15 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
   while (true) {
     const step = await iter.next().catch(errMessage);
     if (typeof step === "string") {
+      const filesModified = [...toolCallInfo.values()].some((t) =>
+        isFileWriteTool(t.name),
+      );
       if (abortController.signal.aborted) {
-        return { stopReason: "cancelled" as const };
+        return { stopReason: "cancelled" as const, filesModified };
       }
       logger.error("CC backend error:", step);
       await emitAgentText(conn, session.sessionId, `Error: ${step}`);
-      return { stopReason: "refusal" as const };
+      return { stopReason: "refusal" as const, filesModified };
     }
     if (step.done) break;
     const event = step.value;
@@ -294,10 +298,13 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
       // `result` whose subtype is non-success, which translateResult
       // surfaces as an `error` event. Distinguish that from genuine model
       // refusal by checking the signal.
+      const filesModified = [...toolCallInfo.values()].some((t) =>
+        isFileWriteTool(t.name),
+      );
       if (abortController.signal.aborted) {
-        return { stopReason: "cancelled" as const };
+        return { stopReason: "cancelled" as const, filesModified };
       }
-      return { stopReason: "refusal" as const };
+      return { stopReason: "refusal" as const, filesModified };
     }
   }
 
@@ -340,5 +347,9 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
     ).catch((err) => logger.warn("reportTokenUsage failed:", err));
   }
 
-  return { stopReason: "end_turn" as const };
+  const filesModified = [...toolCallInfo.values()].some((t) =>
+    isFileWriteTool(t.name),
+  );
+
+  return { stopReason: "end_turn" as const, filesModified };
 };

@@ -375,32 +375,40 @@ export const createAgentCore = (
     }
     const backend = route.backend;
 
-    if (backend.kind === "claude-code") {
-      return promptViaClaudeCode({
-        session,
-        promptText: stampedPrompt,
-        conn,
-        abortController,
-        backend,
-        contextClient,
-        memoryStore,
-        anchorOpts: {
-          library: deps.voiceAnchorLibrary,
-          interval: deps.anchorInterval,
-        },
-        promptBlocks,
-      });
+    const result =
+      backend.kind === "claude-code"
+        ? await promptViaClaudeCode({
+            session,
+            promptText: stampedPrompt,
+            conn,
+            abortController,
+            backend,
+            contextClient,
+            memoryStore,
+            anchorOpts: {
+              library: deps.voiceAnchorLibrary,
+              interval: deps.anchorInterval,
+            },
+            promptBlocks,
+          })
+        : await promptViaServer({
+            session,
+            promptText: stampedPrompt,
+            conn,
+            abortController,
+            backend,
+            appConfig,
+            memoryStore,
+            cartographer,
+          });
+
+    // Reindex after any turn that modified files so Cartographer queries
+    // reflect the current state on the next prompt.
+    if (result.filesModified && cartographer && session.projectPath) {
+      cartographer.autoIndex(session.projectPath, () => session.projectId);
     }
-    return promptViaServer({
-      session,
-      promptText: stampedPrompt,
-      conn,
-      abortController,
-      backend,
-      appConfig,
-      memoryStore,
-      cartographer,
-    });
+
+    return result;
   };
 
   const cancel = (sessionId: string) => {

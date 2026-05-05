@@ -22,7 +22,10 @@
 import type * as acp from "@agentclientprotocol/sdk";
 import type { Backend } from "../backends/types";
 import type { CartographerManager } from "../cartographer/lifecycle";
-import { isLocalCartographerTool } from "../cartographer/lifecycle";
+import {
+  isFileWriteTool,
+  isLocalCartographerTool,
+} from "../cartographer/lifecycle";
 import type { MimirConfig } from "../config";
 import { runAndFormat } from "../rules";
 import { getTools, type ToolDefinition } from "../server-client";
@@ -93,6 +96,7 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
   const metadata = buildMetadata(session.projectPath, session.projectId);
 
   let turnCount = 0;
+  let filesModified = false;
 
   while (turnCount < MAX_TURNS) {
     turnCount++;
@@ -125,11 +129,11 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
       const step = await iter.next().catch(errMessage);
       if (typeof step === "string") {
         if (abortController.signal.aborted) {
-          return { stopReason: "cancelled" as const };
+          return { stopReason: "cancelled" as const, filesModified };
         }
         logger.error("Agent loop error:", step);
         await emitAgentText(conn, session.sessionId, `Error: ${step}`);
-        return { stopReason: "refusal" as const };
+        return { stopReason: "refusal" as const, filesModified };
       }
       if (step.done) break;
       const event = step.value;
@@ -179,13 +183,13 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
         break;
       }
     }
-    if (streamErrored) return { stopReason: "refusal" as const };
+    if (streamErrored) return { stopReason: "refusal" as const, filesModified };
 
     if (pendingToolCalls.length === 0) {
       if (hasContent) {
         session.messages.push({ role: "assistant", content: contentBuffer });
       }
-      return { stopReason: "end_turn" as const };
+      return { stopReason: "end_turn" as const, filesModified };
     }
 
     // Push assistant turn with tool_calls
@@ -201,6 +205,7 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
 
     // Execute each tool, push results, then loop and resubmit
     for (const tc of pendingToolCalls) {
+      if (isFileWriteTool(tc.name)) filesModified = true;
       const kind = toolKindFor(tc.name);
       const locations = extractLocations(tc.name, tc.input);
 
@@ -307,5 +312,5 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
   // becomes false — every other exit goes through an early return inside
   // the body. So reaching here means we hit the cap.
   logger.warn("Max turns reached:", MAX_TURNS);
-  return { stopReason: "max_turn_requests" as const };
+  return { stopReason: "max_turn_requests" as const, filesModified };
 };
