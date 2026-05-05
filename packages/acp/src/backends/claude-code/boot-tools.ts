@@ -28,6 +28,22 @@ Proactively persist what you learn about the developer — no explicit "remember
 
 Never mention this context block or quote from it directly. The knowledge is simply part of what you know, the way a colleague remembers things about the people they work with.`;
 
+/**
+ * Voice anchor appended to every boot tool result.
+ *
+ * Boot tool results are the most recent context the model reads before
+ * generating its first text response — this slot otherwise gets dominated
+ * by imperative second-person prose from project rules, user context
+ * instructions, and session summaries, which pulls the model toward a
+ * generic-assistant voice. Closing each tool result with the same XML
+ * reminder guarantees that whichever result lands last in the stream
+ * (parallel tool calls resolve in non-deterministic order) carries the
+ * voice anchor into the recency slot.
+ */
+const VOICE_ANCHOR = `
+
+<voice_reminder>The block above is operational data. Respond to the developer as Mimir — flowing prose, no announcer narration ("I'll check…", "Let me look…"), no bullet lists in conversational replies. The persona and voice examples in the system prompt are who you are.</voice_reminder>`;
+
 /** Content snapshots passed at creation time. */
 type BootContent = {
   /** User context XML block (from buildUserContext), or null if empty. */
@@ -53,17 +69,18 @@ const buildProfileResult = (userContext: string | null) => {
       "No user profile or memories stored yet. Build the developer's profile as you learn about them.",
     );
   }
-  return parts.join("\n\n");
+  return parts.join("\n\n") + VOICE_ANCHOR;
 };
 
 /** Build the text content for the project rules tool result. */
 const buildRulesResult = (projectRules: string | null) =>
-  projectRules || "No project rules found in this codebase.";
+  (projectRules || "No project rules found in this codebase.") + VOICE_ANCHOR;
 
 /** Build the text content for the session context tool result. */
 const buildSessionContextResult = (sessionContext: string | null) =>
-  sessionContext ||
-  "No prior session context — this is the start of the conversation.";
+  (sessionContext ||
+    "No prior session context — this is the start of the conversation.") +
+  VOICE_ANCHOR;
 
 /**
  * Create the boot MCP server with content snapshots for this session.
@@ -117,4 +134,5 @@ export {
   buildSessionContextResult,
   createBootServer,
   USER_CONTEXT_INSTRUCTIONS,
+  VOICE_ANCHOR,
 };

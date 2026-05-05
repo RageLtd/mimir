@@ -7,6 +7,7 @@ import {
 	buildSessionContextResult,
 	createBootServer,
 	USER_CONTEXT_INSTRUCTIONS,
+	VOICE_ANCHOR,
 } from "./boot-tools";
 
 // ── buildProfileResult ──
@@ -18,12 +19,14 @@ describe("buildProfileResult", () => {
 		const result = buildProfileResult(userContext);
 		expect(result).toContain(USER_CONTEXT_INSTRUCTIONS);
 		expect(result).toContain(userContext);
+		expect(result.endsWith(VOICE_ANCHOR)).toBe(true);
 	});
 
 	test("includes fallback message when user context is null", () => {
 		const result = buildProfileResult(null);
 		expect(result).toContain(USER_CONTEXT_INSTRUCTIONS);
 		expect(result).toContain("No user profile or memories stored yet");
+		expect(result.endsWith(VOICE_ANCHOR)).toBe(true);
 	});
 
 	test("instructions mention proactive persistence", () => {
@@ -40,30 +43,47 @@ describe("buildProfileResult", () => {
 // ── buildRulesResult ──
 
 describe("buildRulesResult", () => {
-	test("returns full rules when present", () => {
+	test("returns full rules followed by voice anchor when present", () => {
 		const rules = "<project_rules>be excellent</project_rules>";
-		expect(buildRulesResult(rules)).toBe(rules);
+		const result = buildRulesResult(rules);
+		expect(result.startsWith(rules)).toBe(true);
+		expect(result.endsWith(VOICE_ANCHOR)).toBe(true);
 	});
 
-	test("returns fallback message when content is null", () => {
-		expect(buildRulesResult(null)).toBe(
-			"No project rules found in this codebase.",
-		);
+	test("returns fallback message followed by voice anchor when content is null", () => {
+		const result = buildRulesResult(null);
+		expect(result).toContain("No project rules found in this codebase.");
+		expect(result.endsWith(VOICE_ANCHOR)).toBe(true);
 	});
 });
 
 // ── buildSessionContextResult ──
 
 describe("buildSessionContextResult", () => {
-	test("returns full context when present", () => {
+	test("returns full context followed by voice anchor when present", () => {
 		const ctx = "<conversation_context>...</conversation_context>";
-		expect(buildSessionContextResult(ctx)).toBe(ctx);
+		const result = buildSessionContextResult(ctx);
+		expect(result.startsWith(ctx)).toBe(true);
+		expect(result.endsWith(VOICE_ANCHOR)).toBe(true);
 	});
 
-	test("returns fallback message when content is null", () => {
-		expect(buildSessionContextResult(null)).toContain(
-			"start of the conversation",
-		);
+	test("returns fallback message followed by voice anchor when content is null", () => {
+		const result = buildSessionContextResult(null);
+		expect(result).toContain("start of the conversation");
+		expect(result.endsWith(VOICE_ANCHOR)).toBe(true);
+	});
+});
+
+// ── VOICE_ANCHOR ──
+
+describe("VOICE_ANCHOR", () => {
+	test("is wrapped in a voice_reminder tag", () => {
+		expect(VOICE_ANCHOR).toContain("<voice_reminder>");
+		expect(VOICE_ANCHOR).toContain("</voice_reminder>");
+	});
+
+	test("names Mimir explicitly", () => {
+		expect(VOICE_ANCHOR).toContain("Mimir");
 	});
 });
 
