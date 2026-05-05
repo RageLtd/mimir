@@ -105,19 +105,13 @@ The ACP adapter connects your editor to mimir. Register it in Zed's settings:
 
 ```json
 {
-  "agent": {
-    "profiles": {
-      "mimir": {
-        "provider": "custom",
-        "custom": {
-          "mimir-acp": {
-            "type": "custom",
-            "command": "bun",
-            "args": ["run", "/path/to/mimir/packages/acp/index.ts"],
-            "env": {
-              "MIMIR_SERVER_URL": "http://mimir.conhost.lan"
-            }
-          }
+  "agent_servers": {
+      "mimir-acp": {
+        "type": "custom",
+        "command": "bun",
+        "args": ["run", "/path/to/mimir/packages/acp/index.ts"],
+        "env": {
+          "MIMIR_SERVER_URL": "http://mimir.conhost.lan"
         }
       }
     }
