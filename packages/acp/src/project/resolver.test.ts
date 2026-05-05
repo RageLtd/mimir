@@ -18,7 +18,8 @@ mock.module("./git", () => ({
 }));
 
 // Must import AFTER mock.module() registers the stub.
-const { resolveProjectForPath } = await import("./resolver");
+const { resolveProjectForPath, patchProjectMetadata } =
+  await import("./resolver");
 
 const CFG = { serverUrl: "http://test.invalid", apiKey: "test-key" };
 
@@ -135,5 +136,63 @@ describe("resolveProjectForPath", () => {
     stubFetch(() => new Response("not json at all", { status: 200 }));
     const result = await resolveProjectForPath(CFG, "/tmp/test");
     expect(result).toBeNull();
+  });
+});
+
+describe("patchProjectMetadata", () => {
+  test("sends PATCH to correct URL with metadata", async () => {
+    stubFetch(() => new Response(JSON.stringify({ project: mkProject() }), { status: 200 }));
+    const result = await patchProjectMetadata(CFG, "abc123", {
+      technologies: ["typescript", "react"],
+      description: "A cool app",
+    });
+    expect(result).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("http://test.invalid/v1/projects/abc123");
+    expect(calls[0]?.init?.method).toBe("PATCH");
+    const body = JSON.parse(calls[0]?.init?.body as string);
+    expect(body.technologies).toEqual(["typescript", "react"]);
+    expect(body.description).toBe("A cool app");
+  });
+
+  test("omits description from body when null", async () => {
+    stubFetch(() => new Response(JSON.stringify({ project: mkProject() }), { status: 200 }));
+    await patchProjectMetadata(CFG, "abc123", {
+      technologies: ["go"],
+      description: null,
+    });
+    const body = JSON.parse(calls[0]?.init?.body as string);
+    expect(body.technologies).toEqual(["go"]);
+    expect(body.description).toBeUndefined();
+  });
+
+  test("returns null on network error", async () => {
+    globalThis.fetch = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const result = await patchProjectMetadata(CFG, "abc123", {
+      technologies: ["rust"],
+      description: null,
+    });
+    expect(result).toBeNull();
+  });
+
+  test("returns null on non-2xx response", async () => {
+    stubFetch(() => new Response("not found", { status: 404 }));
+    const result = await patchProjectMetadata(CFG, "abc123", {
+      technologies: ["rust"],
+      description: null,
+    });
+    expect(result).toBeNull();
+  });
+
+  test("sends authorization header", async () => {
+    stubFetch(() => new Response(JSON.stringify({ project: mkProject() }), { status: 200 }));
+    await patchProjectMetadata(CFG, "abc123", {
+      technologies: ["typescript"],
+      description: null,
+    });
+    const headers = calls[0]?.init?.headers as Record<string, string> | undefined;
+    expect(headers?.Authorization).toBe("Bearer test-key");
   });
 });

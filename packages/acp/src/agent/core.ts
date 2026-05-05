@@ -17,7 +17,11 @@ import { formatRulesForPrompt, readProjectRules } from "../cartographer/rules";
 import { createClientMcpManager } from "../client-mcp/manager";
 import type { MimirConfig } from "../config";
 import type { ContextClientConfig } from "../context-client";
-import { resolveProjectForPath } from "../project/resolver";
+import { collectProjectMetadata } from "../project/metadata";
+import {
+  patchProjectMetadata,
+  resolveProjectForPath,
+} from "../project/resolver";
 import { type LoadError, loadRules } from "../rules";
 import type { SessionStore } from "../store/sessions";
 import type { UserMemoryStore } from "../store/user-memories";
@@ -90,8 +94,17 @@ const kickOffSessionInit = (
     .catch((err) => logger.warn("failed to load rules:", err));
 
   resolveProjectForPath({ serverUrl, apiKey }, projectPath)
-    .then((project) => {
-      if (project) onResolved(project);
+    .then(async (project) => {
+      if (!project) return;
+      onResolved(project);
+
+      // Collect metadata from manifest files and PATCH unconditionally —
+      // the project entity is the source of truth and should reflect the
+      // current state of the filesystem on every session start.
+      const metadata = await collectProjectMetadata(projectPath);
+      if (metadata.technologies.length > 0 || metadata.description) {
+        await patchProjectMetadata({ serverUrl, apiKey }, project.id, metadata);
+      }
     })
     .catch((err) =>
       logger.warn("project resolver failed: %s", errMessage(err)),

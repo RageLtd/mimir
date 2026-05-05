@@ -20,6 +20,7 @@
 import { errMessage } from "../util";
 import { createChildLogger, log } from "../utils/log";
 import { detectGitRemote } from "./git";
+import type { ProjectMetadata } from "./metadata";
 
 const logger = createChildLogger(log, "project-resolver");
 
@@ -102,4 +103,49 @@ export const resolveProjectForPath = async (
     projectPath,
   );
   return project;
+};
+
+/**
+ * PATCH collected metadata to an existing project record. Fire-and-forget
+ * safe — returns null on any failure so the caller doesn't need to handle
+ * errors beyond logging (which happens here).
+ */
+export const patchProjectMetadata = async (
+  cfg: ResolverConfig,
+  projectId: string,
+  metadata: ProjectMetadata,
+) => {
+  const url = `${cfg.serverUrl}/v1/projects/${projectId}`;
+  const body = JSON.stringify({
+    technologies: metadata.technologies,
+    ...(metadata.description ? { description: metadata.description } : {}),
+  });
+
+  const response = await fetch(url, {
+    method: "PATCH",
+    headers: buildHeaders(cfg.apiKey),
+    body,
+  }).catch((err) => {
+    logger.warn(
+      "project metadata patch failed: %s (id=%s)",
+      errMessage(err),
+      projectId,
+    );
+    return null;
+  });
+  if (!response) return null;
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    logger.warn(
+      "project metadata patch returned %d: %s (id=%s)",
+      response.status,
+      text,
+      projectId,
+    );
+    return null;
+  }
+
+  logger.info("patched project metadata for %s", projectId);
+  return true;
 };
