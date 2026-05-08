@@ -108,6 +108,16 @@ export const config = {
      * pass both filters when both are enabled.
      */
     freeOnly: (Bun.env.OPENROUTER_FREE ?? "false") === "true",
+    /**
+     * Comma-separated model ID prefixes to exclude from the model list.
+     * Filters out model families whose upstream data retention policies
+     * can't be verified, regardless of the provider's ZDR status.
+     * e.g. "openai,black-forest-labs,flux" removes all OpenAI and Flux models.
+     */
+    excludePrefixes: (Bun.env.OPENROUTER_EXCLUDE ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
   },
 
   /** Context window management */

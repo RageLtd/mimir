@@ -132,6 +132,7 @@ async function getOpenRouterModels(): Promise<ModelEntry[]> {
               id: string;
               created?: number;
               pricing?: { prompt?: string; completion?: string };
+              architecture?: { output_modalities?: string[] };
             }>;
           }>,
       ),
@@ -144,6 +145,12 @@ async function getOpenRouterModels(): Promise<ModelEntry[]> {
     const now = Math.floor(Date.now() / 1000);
     let models = res.data;
 
+    // Keep only models that produce text output — strips image generation,
+    // audio-only, and embedding models from the coding agent's picker.
+    models = models.filter((m) =>
+      m.architecture?.output_modalities?.includes("text") ?? true,
+    );
+
     // When ZDR is enabled and we got the endpoint list, keep only models
     // that have at least one ZDR-compliant endpoint.
     if (zdrIds) {
@@ -154,6 +161,15 @@ async function getOpenRouterModels(): Promise<ModelEntry[]> {
     if (config.openrouter.freeOnly) {
       models = models.filter(
         (m) => m.pricing?.prompt === "0" && m.pricing?.completion === "0",
+      );
+    }
+
+    // Exclude model families whose upstream retention policies are unverifiable.
+    // ZDR only covers the routing provider, not the model vendor behind it.
+    const { excludePrefixes } = config.openrouter;
+    if (excludePrefixes.length > 0) {
+      models = models.filter(
+        (m) => !excludePrefixes.some((prefix) => m.id.startsWith(prefix)),
       );
     }
 
