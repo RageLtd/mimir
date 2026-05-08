@@ -35,6 +35,7 @@
 import type * as acp from "@agentclientprotocol/sdk";
 import { emitAgentText } from "../../agent/lifecycle-helpers";
 import type { SessionState } from "../../agent/types";
+import { isFileWriteTool } from "../../cartographer/lifecycle";
 import {
   type AssembledMessage,
   assembleContext,
@@ -52,7 +53,6 @@ import type { Backend } from "../types";
 import { type BootContent, formatBootContent } from "./boot-tools";
 import { isValidCCMode } from "./config-options";
 import { getContextWindow, setContextWindow } from "./context-window-cache";
-import { isFileWriteTool } from "../../cartographer/lifecycle";
 import { type CcToolCallInfo, handleCCEvent } from "./event-handler";
 import { formatContextForPrompt } from "./formatting";
 import {
@@ -213,6 +213,11 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
 
   let cycles = 1;
   let inToolPhase = false;
+  // Accumulates mid-turn `error` events (assistant message errors like
+  // rate_limit / billing_error / max_output_tokens). Outcome is decided
+  // at the `finish` boundary — matches prompt-server.ts and aligns with
+  // the SDK's "one result message per turn" contract.
+  let streamErrored: string | null = null;
 
   const iter = backend
     .run({
@@ -292,19 +297,36 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
           },
         });
       }
-    } else if (event.type === "error") {
-      // The adapter calls q.interrupt() on abort; the SDK then emits a
-      // `result` whose subtype is non-success, which translateResult
-      // surfaces as an `error` event. Distinguish that from genuine model
-      // refusal by checking the signal.
+
+      // Outcome decision lives at the turn boundary. Cancellation trumps
+      // everything — `query.interrupt()` produces a non-success result
+      // and we want it to look like a clean cancellation, not a refusal.
+      // Otherwise: non-success subtype → refusal with errors[] detail;
+      // a mid-turn error that the SDK still flagged success at boundary
+      // → still surface as refusal with the accumulated text.
       const filesModified = [...toolCallInfo.values()].some((t) =>
         isFileWriteTool(t.name),
       );
       if (abortController.signal.aborted) {
         return { stopReason: "cancelled" as const, filesModified };
       }
-      await emitAgentText(conn, session.sessionId, `Error: ${event.error}`);
-      return { stopReason: "refusal" as const, filesModified };
+      if (event.stopReason && event.stopReason !== "success") {
+        const detail =
+          event.errors?.join("; ") ?? streamErrored ?? event.stopReason;
+        await emitAgentText(conn, session.sessionId, `Error: ${detail}`);
+        return { stopReason: "refusal" as const, filesModified };
+      }
+      if (streamErrored) {
+        await emitAgentText(conn, session.sessionId, `Error: ${streamErrored}`);
+        return { stopReason: "refusal" as const, filesModified };
+      }
+      // success — fall through; the next iter.next() returns done
+    } else if (event.type === "error") {
+      // Mid-turn error (assistant message error or iterator failure that
+      // the SDK still followed up with a result). Mark and continue
+      // draining; the boundary is the `finish` event, where outcome
+      // is decided uniformly.
+      streamErrored = event.error;
     }
   }
 

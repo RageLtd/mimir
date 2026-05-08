@@ -265,8 +265,16 @@ export const computeGaugePromptTokens = (
   );
 };
 
-/** Translate an SDKResultMessage into BackendEvent(s). */
-function* translateResult(
+/**
+ * Translate an SDKResultMessage into a single `finish` BackendEvent.
+ *
+ * One SDK result == one BackendEvent finish (the documented turn boundary).
+ * Non-success outcomes carry their `errors[]` detail on the same event so
+ * consumers can decide outcome (cancellation, refusal, success) at one
+ * boundary instead of racing a separate error yield. Exported for unit
+ * tests that assert this contract.
+ */
+export function* translateResult(
   msg: SDKResultMessage,
   sessionId: string | undefined,
   model: string | undefined,
@@ -307,10 +315,11 @@ function* translateResult(
     "CC turn finished",
   );
 
-  if (msg.subtype !== "success") {
-    yield { type: "error" as const, error: msg.errors.join("; ") };
-  }
-
+  // One SDKResultMessage = one finish event (the SDK's documented turn
+  // boundary). Non-success outcomes carry their detail on the same event
+  // via `errors[]` so consumers decide outcome at the boundary instead of
+  // racing a separate error yield. See prompt-cc.ts for the accumulator
+  // pattern that handles both this and mid-turn `error` events uniformly.
   yield {
     type: "finish" as const,
     sessionId,
@@ -319,6 +328,7 @@ function* translateResult(
     completionTokens: usage?.output_tokens,
     cost: msg.total_cost_usd,
     ...(typeof contextWindow === "number" ? { contextWindow } : {}),
+    ...(msg.subtype !== "success" ? { errors: msg.errors } : {}),
   };
 }
 

@@ -19,7 +19,10 @@
  */
 
 import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk";
-import type { EffortLevel, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  EffortLevel,
+  PermissionMode,
+} from "@anthropic-ai/claude-agent-sdk";
 import type { SessionState } from "../agent/types";
 import type { RuleEntry } from "../rules";
 import type { ChatMessage, ToolDefinition } from "../server-client";
@@ -61,6 +64,13 @@ export type BackendEvent =
        * advertised-size emission entirely.
        */
       readonly contextWindow?: number;
+      /**
+       * Non-success error details from the underlying turn-boundary message
+       * (e.g. SDKResultMessage.errors when subtype !== "success"). Consumers
+       * use this together with stopReason to surface human-readable causes
+       * for refusals; absent on a successful turn.
+       */
+      readonly errors?: readonly string[];
     }
   | { readonly type: "error"; readonly error: string };
 

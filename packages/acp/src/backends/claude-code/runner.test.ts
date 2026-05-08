@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import type { SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   buildUserMessage,
   computeGaugePromptTokens,
   createMessageQueue,
+  translateResult,
 } from "./runner";
 
 const expectArrayContent = (content: unknown) => {
@@ -215,5 +217,115 @@ describe("computeGaugePromptTokens", () => {
         ],
       }),
     ).toBe(6);
+  });
+});
+
+// ── translateResult: SDKResultMessage → single BackendEvent.finish ──
+//
+// One SDK turn boundary == one BackendEvent finish. Non-success outcomes
+// (interrupt, max_turns, max_budget, structured_output_retries) carry their
+// detail on the same event via `errors[]`. Splitting into a separate error
+// event would leave the finish queued in the long-lived events generator,
+// desynchronising subsequent turns.
+describe("translateResult", () => {
+  // Structurally assemble SDKResultMessage payloads — the SDK type has
+  // many optional fields that aren't load-bearing for translation. Cast
+  // at the call boundary, never inside the helper.
+  const result = (msg: unknown) =>
+    [...translateResult(msg as SDKResultMessage, "session-1", "claude-sonnet")];
+
+  const baseSuccess = {
+    type: "result",
+    subtype: "success",
+    uuid: "u-1",
+    session_id: "session-1",
+    duration_ms: 100,
+    duration_api_ms: 90,
+    is_error: false,
+    num_turns: 1,
+    result: "ok",
+    total_cost_usd: 0.001,
+    usage: {
+      input_tokens: 100,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      output_tokens: 50,
+      iterations: null,
+    },
+    modelUsage: {},
+    permission_denials: [],
+  };
+
+  const baseInterrupted = {
+    type: "result",
+    subtype: "error_during_execution",
+    uuid: "u-2",
+    session_id: "session-1",
+    duration_ms: 200,
+    duration_api_ms: 180,
+    is_error: true,
+    num_turns: 1,
+    total_cost_usd: 0.002,
+    usage: {
+      input_tokens: 200,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      output_tokens: 25,
+      iterations: null,
+    },
+    modelUsage: {},
+    permission_denials: [],
+    errors: ["interrupted"],
+  };
+
+  test("emits exactly one finish event for a successful result", () => {
+    const events = result(baseSuccess);
+    expect(events).toHaveLength(1);
+    const ev = events[0];
+    if (!ev) throw new Error("expected one event");
+    expect(ev.type).toBe("finish");
+    if (ev.type !== "finish") throw new Error("type guard");
+    expect(ev.stopReason).toBe("success");
+    expect(ev.errors).toBeUndefined();
+    expect(ev.sessionId).toBe("session-1");
+    expect(ev.completionTokens).toBe(50);
+    expect(ev.cost).toBe(0.001);
+  });
+
+  test("emits exactly one finish event for an interrupted (error_during_execution) result", () => {
+    const events = result(baseInterrupted);
+    expect(events).toHaveLength(1);
+    const ev = events[0];
+    if (!ev) throw new Error("expected one event");
+    expect(ev.type).toBe("finish");
+    if (ev.type !== "finish") throw new Error("type guard");
+    expect(ev.stopReason).toBe("error_during_execution");
+    expect(ev.errors).toEqual(["interrupted"]);
+    expect(ev.completionTokens).toBe(25);
+  });
+
+  test("carries multi-error errors[] on non-success boundary", () => {
+    const events = result({
+      ...baseInterrupted,
+      subtype: "error_max_turns",
+      errors: ["max turns reached", "budget exceeded mid-turn"],
+    });
+    expect(events).toHaveLength(1);
+    const ev = events[0];
+    if (!ev) throw new Error("expected one event");
+    if (ev.type !== "finish") throw new Error("type guard");
+    expect(ev.stopReason).toBe("error_max_turns");
+    expect(ev.errors).toEqual([
+      "max turns reached",
+      "budget exceeded mid-turn",
+    ]);
+  });
+
+  test("does not yield a separate error event before finish (1:1 SDK contract)", () => {
+    // Regression: the previous implementation yielded `error` then `finish`
+    // on non-success, leaving the finish queued in session.ccEvents and
+    // desyncing the next turn. Verify only `finish` types come out.
+    const events = result(baseInterrupted);
+    expect(events.every((e) => e.type === "finish")).toBe(true);
   });
 });

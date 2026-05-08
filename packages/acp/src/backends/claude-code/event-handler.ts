@@ -218,8 +218,9 @@ export const handleCCEvent = async ({
 
   if (event.type === "error") {
     logger.error("CC error:", event.error);
-    // Don't emit to user here — the caller (prompt-cc) decides whether to
-    // surface the error or suppress it (e.g. user-initiated cancellation
-    // produces an error event that should not be shown).
+    // Mid-turn errors are accumulated by the caller (prompt-cc.ts) and
+    // surfaced to the user only when the turn ends without a clean
+    // success boundary. Don't emit here — outcome decisions happen at
+    // the finish event, not on a per-error-event basis.
   }
 };
