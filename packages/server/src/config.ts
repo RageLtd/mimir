@@ -102,6 +102,12 @@ export const config = {
      * OpenRouter only routes to zero-data-retention providers.
      */
     zdr: (Bun.env.OPENROUTER_ZDR ?? "false") === "true",
+    /**
+     * When true, only advertise models with zero-cost pricing (both prompt
+     * and completion at "0"). Works in conjunction with ZDR — a model must
+     * pass both filters when both are enabled.
+     */
+    freeOnly: (Bun.env.OPENROUTER_FREE ?? "false") === "true",
   },
 
   /** Context window management */

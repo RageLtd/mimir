@@ -128,7 +128,11 @@ async function getOpenRouterModels(): Promise<ModelEntry[]> {
       }).then(
         (r) =>
           r.json() as Promise<{
-            data: Array<{ id: string; created?: number }>;
+            data: Array<{
+              id: string;
+              created?: number;
+              pricing?: { prompt?: string; completion?: string };
+            }>;
           }>,
       ),
     ),
@@ -144,6 +148,13 @@ async function getOpenRouterModels(): Promise<ModelEntry[]> {
     // that have at least one ZDR-compliant endpoint.
     if (zdrIds) {
       models = models.filter((m) => zdrIds.has(m.id));
+    }
+
+    // When free-only is enabled, keep only models with zero-cost pricing.
+    if (config.openrouter.freeOnly) {
+      models = models.filter(
+        (m) => m.pricing?.prompt === "0" && m.pricing?.completion === "0",
+      );
     }
 
     orModelsCache = models.map((m) => ({
