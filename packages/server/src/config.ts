@@ -96,6 +96,12 @@ export const config = {
   /** OpenRouter — multi-provider gateway (OpenAI-compatible) */
   openrouter: {
     apiKey: Bun.env.OPENROUTER_API_KEY ?? "",
+    /**
+     * When true, only advertise models that have at least one ZDR-compliant
+     * endpoint, and pass `provider: { zdr: true }` on inference requests so
+     * OpenRouter only routes to zero-data-retention providers.
+     */
+    zdr: (Bun.env.OPENROUTER_ZDR ?? "false") === "true",
   },
 
   /** Context window management */

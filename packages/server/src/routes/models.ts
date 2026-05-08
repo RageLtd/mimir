@@ -99,23 +99,54 @@ async function getZenModels(): Promise<ModelEntry[]> {
 let orModelsCache: ModelEntry[] = [];
 let orModelsCacheTime = 0;
 
+/**
+ * Fetch the set of model IDs that have at least one ZDR-compliant endpoint.
+ * Returns undefined on failure so callers can fall back to the unfiltered list.
+ */
+async function fetchZdrModelIds() {
+  const [err, res] = await attempt(() =>
+    fetch(`${OPENROUTER_API_URL}/endpoints/zdr`, {
+      headers: { Authorization: `Bearer ${config.openrouter.apiKey}` },
+      signal: AbortSignal.timeout(10_000),
+    }).then((r) => r.json() as Promise<{ data: Array<{ model_id: string }> }>),
+  );
+
+  if (err || !res?.data) return undefined;
+  return new Set(res.data.map((e) => e.model_id));
+}
+
 async function getOpenRouterModels(): Promise<ModelEntry[]> {
   if (!config.openrouter.apiKey) return [];
   if (Date.now() - orModelsCacheTime < ZEN_CACHE_TTL) return orModelsCache;
 
-  const [err, res] = await attempt(() =>
-    fetch(`${OPENROUTER_API_URL}/models`, {
-      headers: { Authorization: `Bearer ${config.openrouter.apiKey}` },
-      signal: AbortSignal.timeout(10_000),
-    }).then(
-      (r) =>
-        r.json() as Promise<{ data: Array<{ id: string; created?: number }> }>,
+  // Fetch models and (when ZDR is enabled) ZDR endpoints in parallel
+  const [modelsResult, zdrIds] = await Promise.all([
+    attempt(() =>
+      fetch(`${OPENROUTER_API_URL}/models`, {
+        headers: { Authorization: `Bearer ${config.openrouter.apiKey}` },
+        signal: AbortSignal.timeout(10_000),
+      }).then(
+        (r) =>
+          r.json() as Promise<{
+            data: Array<{ id: string; created?: number }>;
+          }>,
+      ),
     ),
-  );
+    config.openrouter.zdr ? fetchZdrModelIds() : undefined,
+  ]);
 
+  const [err, res] = modelsResult;
   if (!err && res?.data) {
     const now = Math.floor(Date.now() / 1000);
-    orModelsCache = res.data.map((m) => ({
+    let models = res.data;
+
+    // When ZDR is enabled and we got the endpoint list, keep only models
+    // that have at least one ZDR-compliant endpoint.
+    if (zdrIds) {
+      models = models.filter((m) => zdrIds.has(m.id));
+    }
+
+    orModelsCache = models.map((m) => ({
       id: m.id,
       object: "model",
       created: m.created ?? now,

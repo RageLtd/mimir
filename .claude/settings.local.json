@@ -15,7 +15,12 @@
       "Read(//Users/nathandevuono/.claude/**)",
       "WebFetch(domain:github.com)",
       "Bash(grep *)",
-      "Bash(bun run *)"
+      "Bash(bun run *)",
+      "mcp__mimir__cartographer_search",
+      "mcp__mimir__web_search",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__query-docs",
+      "Bash(bun add *)"
     ]
   },
   "spinnerTipsEnabled": false

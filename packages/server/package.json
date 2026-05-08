@@ -19,6 +19,7 @@
     "@ai-sdk/provider": "^3.0.8",
     "@ai-sdk/provider-utils": "^4.0.23",
     "@hono/zod-validator": "^0.7.6",
+    "@openrouter/ai-sdk-provider": "^2.9.0",
     "@tavily/core": "^0.7.2",
     "ai": "^6.0.158",
     "gpt-tokenizer": "^3.4.0",

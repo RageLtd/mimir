@@ -14,6 +14,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createMoonshotAI } from "@ai-sdk/moonshotai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import providerData from "../../../provider-data.json";
 import { config } from "../../config";
 import { log } from "../../util/logger";
@@ -76,6 +77,15 @@ export function createProviderSDK(
       return createMoonshotAI({
         baseURL: baseUrl,
         apiKey,
+      });
+
+    case "@openrouter/ai-sdk-provider":
+      return createOpenRouter({
+        baseURL: baseUrl,
+        apiKey,
+        ...(config.openrouter.zdr
+          ? { extraBody: { provider: { zdr: true } } }
+          : {}),
       });
 
     default:
