@@ -113,7 +113,43 @@ export type BackendRunOptions = {
    * Other backends ignore this field.
    */
   session?: SessionState;
+
+  /**
+   * Generic permission callback for gating tool execution. The CC backend
+   * wraps this into the SDK's `CanUseTool` shape; the server backend can
+   * call it directly before executing each tool. Created once per session
+   * via `createRequestToolPermission`.
+   */
+  requestToolPermission?: RequestToolPermission;
 };
+
+// ---------------------------------------------------------------------------
+// Generic tool-permission abstraction (backend-agnostic)
+// ---------------------------------------------------------------------------
+
+export type ToolPermissionRequest = {
+  readonly toolName: string;
+  readonly input: Record<string, unknown>;
+  readonly toolCallId: string;
+  readonly title?: string;
+  readonly description?: string;
+};
+
+export type ToolPermissionResult = {
+  readonly allowed: boolean;
+  readonly message?: string;
+  /** Whether this decision should persist for the remainder of the session. */
+  readonly permanent?: boolean;
+};
+
+/**
+ * Callback that prompts the user for permission before executing a tool.
+ * Created once per session via `createRequestToolPermission` and threaded
+ * through `BackendRunOptions` so every backend can use it.
+ */
+export type RequestToolPermission = (
+  request: ToolPermissionRequest,
+) => Promise<ToolPermissionResult>;
 
 export type Backend = {
   readonly kind: "server" | "claude-code" | "copilot";

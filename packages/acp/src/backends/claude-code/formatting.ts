@@ -9,6 +9,7 @@
 
 import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk";
 import type {
+  CanUseTool,
   EffortLevel,
   Options,
   PermissionMode,
@@ -49,6 +50,7 @@ export type RunClaudeCodeOptions = {
   readonly effort?: EffortLevel;
   readonly rules?: readonly RuleEntry[];
   readonly signal?: AbortSignal;
+  readonly canUseTool?: CanUseTool;
 };
 
 /** Build the SDK Options object from runner options. */
@@ -65,6 +67,7 @@ export const buildSdkOptions = (
     | "permissionMode"
     | "effort"
     | "rules"
+    | "canUseTool"
   >,
 ) => {
   const systemPrompt = options.systemPrompt;
@@ -149,6 +152,9 @@ export const buildSdkOptions = (
     sdkOptions.hooks = {
       PreToolUse: buildRuleHook(options.rules),
     };
+  }
+  if (options.canUseTool) {
+    sdkOptions.canUseTool = options.canUseTool;
   }
 
   return sdkOptions;

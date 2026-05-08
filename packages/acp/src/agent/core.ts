@@ -36,7 +36,7 @@ import type { SessionState } from "./types";
  * point — CC will resolve it against `isValidCCMode` which accepts `"default"`;
  * server/Copilot don't read currentMode at all, so this is inert for them.
  */
-const DEFAULT_MODE = "auto";
+const DEFAULT_MODE = "default";
 
 export type AgentCoreDeps = {
   /** Parsed Voice in Action library used by the CC anchor wrapper. */

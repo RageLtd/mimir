@@ -27,6 +27,7 @@ import {
   isLocalCartographerTool,
 } from "../cartographer/lifecycle";
 import type { MimirConfig } from "../config";
+import { createRequestToolPermission } from "../permissions";
 import { runAndFormat } from "../rules";
 import { getTools, type ToolDefinition } from "../server-client";
 import type { UserMemoryStore } from "../store/user-memories";
@@ -80,6 +81,15 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
   } = opts;
   session.messages.push({ role: "user", content: promptText });
 
+  // Permission callback is created once and threaded through BackendRunOptions.
+  // Not actively gating any tools yet (the server backend's tool set is
+  // fully controlled by us), but the plumbing is ready for future per-tool
+  // permission policies.
+  const requestToolPermission = createRequestToolPermission(
+    conn,
+    session.sessionId,
+  );
+
   const [serverTools, clientMcpTools] = await Promise.all([
     getTools(
       { baseUrl: appConfig.serverUrl, apiKey: appConfig.apiKey },
@@ -121,6 +131,7 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
         metadata,
         modelId: session.currentModelId,
         signal: abortController.signal,
+        requestToolPermission,
       })
       [Symbol.asyncIterator]();
 

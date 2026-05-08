@@ -44,6 +44,7 @@ import {
   persistTurn,
   reportTokenUsage,
 } from "../../context-client";
+import { createRequestToolPermission } from "../../permissions";
 import type { UserMemoryStore } from "../../store/user-memories";
 import { buildUserContext } from "../../tools/user-memory";
 import { errMessage } from "../../util";
@@ -219,6 +220,11 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
   // the SDK's "one result message per turn" contract.
   let streamErrored: string | null = null;
 
+  const requestToolPermission = createRequestToolPermission(
+    conn,
+    session.sessionId,
+  );
+
   const iter = backend
     .run({
       prompt: sdkPrompt,
@@ -237,6 +243,7 @@ export const promptViaClaudeCode = async (opts: PromptViaClaudeCodeOptions) => {
       rules: session.rules,
       signal: abortController.signal,
       session,
+      requestToolPermission,
     })
     [Symbol.asyncIterator]();
 

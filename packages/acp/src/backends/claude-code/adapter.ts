@@ -20,6 +20,7 @@ import type { SessionState } from "../../agent/types";
 import type { CCBackendConfig } from "../../config";
 import { getCCModelFlag, isCCModel } from "../../routing";
 import type { Backend, BackendRunOptions } from "../types";
+import { toCanUseTool } from "./permissions";
 import { feedClaudeCodeMessage, startClaudeCodeSession } from "./runner";
 
 export type ClaudeCodeBackendDeps = {
@@ -70,6 +71,10 @@ export const createClaudeCodeBackend = (deps: ClaudeCodeBackendDeps) => {
     }
 
     if (!session.ccQuery) {
+      const canUseTool = options.requestToolPermission
+        ? toCanUseTool(options.requestToolPermission)
+        : undefined;
+
       const cc = startClaudeCodeSession({
         prompt: options.prompt,
         promptBlocks: options.promptBlocks,
@@ -83,6 +88,7 @@ export const createClaudeCodeBackend = (deps: ClaudeCodeBackendDeps) => {
         permissionMode: options.permissionMode,
         effort: options.effort,
         rules: options.rules,
+        canUseTool,
       });
       session.ccQuery = cc.query;
       session.ccUserStreamPush = cc.push;
