@@ -16,14 +16,72 @@ import type {
 } from "@ai-sdk/provider";
 import type { ModelMessage } from "ai";
 import type { MimirContext } from "../../middleware/types";
+import { log } from "../../util/logger";
 
 export function buildPrompt(ctx: MimirContext) {
   const messages: ModelMessage[] = [
     { role: "system", content: ctx.systemPrompt },
     ...ctx.contextInjection,
-    ...ctx.conversationMessages,
+    ...sanitizeToolMessages(ctx.conversationMessages),
   ];
   return messagesToV3Prompt(messages);
+}
+
+/**
+ * Drop tool-result messages whose toolCallIds have no matching tool-call
+ * in a preceding assistant message. This happens when getLastNModelMessages
+ * cuts the window between an assistant(tool_calls) and its tool(results),
+ * leaving orphan tool results that strict OpenAI-compatible APIs (DeepSeek,
+ * etc.) reject with "Messages with role `tool` must be a response to a
+ * preceding message with `tool_calls`".
+ */
+export function sanitizeToolMessages(messages: readonly ModelMessage[]) {
+  // Collect all toolCallIds from assistant messages
+  const knownCallIds = new Set<string>();
+  for (const msg of messages) {
+    if (msg.role === "assistant" && Array.isArray(msg.content)) {
+      for (const part of msg.content) {
+        if (part.type === "tool-call" && part.toolCallId) {
+          knownCallIds.add(part.toolCallId);
+        }
+      }
+    }
+  }
+
+  const result: ModelMessage[] = [];
+  let dropped = 0;
+  for (const msg of messages) {
+    if (msg.role !== "tool") {
+      result.push(msg);
+      continue;
+    }
+    // A tool message is valid only if every tool-result part has a matching
+    // tool-call in the known set.
+    if (!Array.isArray(msg.content)) {
+      result.push(msg);
+      continue;
+    }
+    const toolCallIds = msg.content
+      .filter((p) => p.type === "tool-result" && "toolCallId" in p)
+      .map((p) => (p as { toolCallId: string }).toolCallId);
+    const allResolved =
+      toolCallIds.length > 0 &&
+      toolCallIds.every((id) => knownCallIds.has(id));
+    if (allResolved) {
+      result.push(msg);
+    } else {
+      dropped++;
+    }
+  }
+
+  if (dropped > 0) {
+    log.warn(
+      { dropped, totalMessages: messages.length, kept: result.length },
+      "dropped orphan tool-result messages (no matching assistant tool_calls)",
+    );
+  }
+
+  return result;
 }
 
 export function messagesToV3Prompt(messages: ModelMessage[]) {
