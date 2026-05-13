@@ -1,11 +1,14 @@
 /**
  * Provider registry — state, SDK creation, and initialization.
  *
- * At boot:
- *   1. Initialize providers for configured API keys (from provider-data.json)
- *   2. Initialize local providers (vLLM, Ollama) for configured base URLs
- *   3. Fetch models from local providers' /models endpoints
- *   4. Index all models: modelId → providerId, modelId → metadata
+ * All behavior is driven by provider-data.json:
+ *   - `npm` field determines which AI SDK factory creates the provider
+ *   - `env` field determines which API key env var gates the provider
+ *   - `api` field gives the base URL
+ *   - `models` are indexed for resolution
+ *
+ * Local providers (vLLM, Ollama, Featherless) use the same registration
+ * helpers but discover models dynamically from /models endpoints.
  *
  * Query functions (resolveModel, getModelMetadata, etc.) live in ./query.ts.
  */
@@ -13,10 +16,12 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createMoonshotAI } from "@ai-sdk/moonshotai";
+import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { config } from "../../config";
 import { log } from "../../util/logger";
+import { attempt } from "../../util/result";
 
 const PROVIDER_DATA_PATH = "provider-data.json";
 
@@ -52,7 +57,7 @@ export interface ModelEntry {
 }
 
 // ---------------------------------------------------------------------------
-// Provider SDK creation
+// Provider SDK creation — npm field from provider-data.json picks the factory
 // ---------------------------------------------------------------------------
 
 export function createProviderSDK(
@@ -62,23 +67,17 @@ export function createProviderSDK(
 ) {
   switch (npm) {
     case "@ai-sdk/anthropic":
-      return createAnthropic({
-        baseURL: baseUrl,
-        apiKey,
-      });
+      return createAnthropic({ baseURL: baseUrl, apiKey });
 
     case "@ai-sdk/google":
     case "@ai-sdk/google-vertex":
-      return createGoogleGenerativeAI({
-        baseURL: baseUrl,
-        apiKey,
-      });
+      return createGoogleGenerativeAI({ baseURL: baseUrl, apiKey });
 
     case "@ai-sdk/moonshotai":
-      return createMoonshotAI({
-        baseURL: baseUrl,
-        apiKey,
-      });
+      return createMoonshotAI({ baseURL: baseUrl, apiKey });
+
+    case "@ai-sdk/openai":
+      return createOpenAI({ baseURL: baseUrl, apiKey: apiKey || "not-needed" });
 
     case "@openrouter/ai-sdk-provider":
       return createOpenRouter({
@@ -135,41 +134,38 @@ export let initialized = false;
 /** Runtime-loaded provider data — populated during initProviderRegistry(). */
 export let providerData: Record<string, ProviderEntry> = {};
 
-// Env var aliases: ZEN_API_KEY maps to OPENCODE_API_KEY in provider-data.json
+// ---------------------------------------------------------------------------
+// Env var resolution
+// ---------------------------------------------------------------------------
+
+// ZEN_API_KEY maps to OPENCODE_API_KEY in provider-data.json
 const ENV_KEY_ALIASES: Record<string, string> = {
   ZEN_API_KEY: "OPENCODE_API_KEY",
 };
 
-/**
- * Get API key for a provider, checking aliases.
- */
-function getApiKey(envVar: string): string | undefined {
+function getApiKey(envVar: string) {
   const key = Bun.env[envVar];
   if (key) return key;
 
   const alias = ENV_KEY_ALIASES[envVar];
-  if (alias) {
-    return Bun.env[alias];
-  }
+  if (alias) return Bun.env[alias];
 
   for (const [aliasName, targetVar] of Object.entries(ENV_KEY_ALIASES)) {
-    if (targetVar === envVar && Bun.env[aliasName]) {
-      return Bun.env[aliasName];
-    }
+    if (targetVar === envVar && Bun.env[aliasName]) return Bun.env[aliasName];
   }
 
   return undefined;
 }
 
-/**
- * Get or create an SDK for a (providerId, npm) combination.
- */
+// ---------------------------------------------------------------------------
+// SDK cache for per-model npm overrides
+// ---------------------------------------------------------------------------
+
 export function getOrCreateSDK(
   providerId: string,
   npm: string,
-): ReturnType<typeof createProviderSDK> | undefined {
+) {
   const key = `${providerId}:${npm}`;
-
   const existing = providerSdks.get(key);
   if (existing) return existing;
 
@@ -182,15 +178,44 @@ export function getOrCreateSDK(
 }
 
 // ---------------------------------------------------------------------------
+// Registration helpers
+// ---------------------------------------------------------------------------
+
+function registerProvider(
+  id: string,
+  npm: string,
+  baseUrl: string,
+  apiKey: string,
+) {
+  const sdk = createProviderSDK(npm, baseUrl, apiKey);
+  providers.set(id, sdk);
+  providerSdks.set(`${id}:${npm}`, sdk);
+  providerConfig.set(id, { baseUrl, apiKey, npm });
+  return sdk;
+}
+
+function registerModels(
+  providerId: string,
+  models: Record<string, ModelEntry>,
+) {
+  for (const [modelId, meta] of Object.entries(models)) {
+    modelToProvider.set(modelId, providerId);
+    modelMetadata.set(modelId, meta);
+
+    if (modelId.includes("/")) {
+      const bareName = modelId.split("/").pop() ?? "";
+      modelToProvider.set(bareName, providerId);
+      modelMetadata.set(bareName, meta);
+      bareNameToFullId.set(bareName, modelId);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Initialization
 // ---------------------------------------------------------------------------
 
-/**
- * Initialize providers from configured API keys and base URLs.
- * Call once at server boot.
- */
-export async function initProviderRegistry(): Promise<void> {
-  // Load provider data from disk (freshly fetched from models.dev at boot)
+export async function initProviderRegistry() {
   const raw = await Bun.file(PROVIDER_DATA_PATH).text();
   providerData = JSON.parse(raw) as Record<string, ProviderEntry>;
 
@@ -201,96 +226,29 @@ export async function initProviderRegistry(): Promise<void> {
     ProviderEntry,
   ][]) {
     for (const envVar of entry.env) {
-      if (!envVarToProviders.has(envVar)) {
-        envVarToProviders.set(envVar, []);
-      }
+      if (!envVarToProviders.has(envVar)) envVarToProviders.set(envVar, []);
       envVarToProviders.get(envVar)?.push(providerId);
     }
   }
 
-  // --- Local providers (vLLM, Ollama) ---
+  // --- Local providers ---
   const vllmBaseUrl = Bun.env.VLLM_BASE_URL;
-  let ollamaBaseUrl = Bun.env.OLLAMA_BASE_URL;
+  if (vllmBaseUrl) {
+    registerProvider("vllm", "@ai-sdk/openai", `${vllmBaseUrl}/v1`, "not-needed");
+    const models = await fetchModels(`${vllmBaseUrl}/v1/models`);
+    for (const id of models) modelToProvider.set(id, "vllm");
+    log.info({ baseUrl: vllmBaseUrl, count: models.length }, "vllm initialized");
+  }
 
-  // Use SMALL_MODEL_BASE_URL for Ollama if SMALL_MODEL_PROVIDER_TYPE=ollama
+  let ollamaBaseUrl = Bun.env.OLLAMA_BASE_URL;
   if (config.smallModel.providerType === "ollama" && !ollamaBaseUrl) {
     ollamaBaseUrl = config.smallModel.baseUrl;
   }
-
-  if (vllmBaseUrl) {
-    const sdk = createProviderSDK(
-      "@ai-sdk/openai",
-      `${vllmBaseUrl}/v1`,
-      "not-needed",
-    );
-    providers.set("vllm", sdk);
-    providerSdks.set("vllm:@ai-sdk/openai", sdk);
-    providerConfig.set("vllm", {
-      baseUrl: vllmBaseUrl,
-      apiKey: "",
-      npm: "@ai-sdk/openai",
-    });
-    log.info({ baseUrl: vllmBaseUrl }, "vllm provider initialized");
-
-    const models = await fetchModels(`${vllmBaseUrl}/v1/models`);
-    for (const modelId of models) {
-      modelToProvider.set(modelId, "vllm");
-    }
-    log.info({ count: models.length }, "vllm models indexed");
-  }
-
   if (ollamaBaseUrl) {
-    const sdk = createProviderSDK(
-      "@ai-sdk/openai",
-      `${ollamaBaseUrl}/v1`,
-      "not-needed",
-    );
-    providers.set("ollama", sdk);
-    providerSdks.set("ollama:@ai-sdk/openai", sdk);
-    providerConfig.set("ollama", {
-      baseUrl: ollamaBaseUrl,
-      apiKey: "",
-      npm: "@ai-sdk/openai",
-    });
-    log.info({ baseUrl: ollamaBaseUrl }, "ollama provider initialized");
-
+    registerProvider("ollama", "@ai-sdk/openai", `${ollamaBaseUrl}/v1`, "not-needed");
     const models = await fetchModels(`${ollamaBaseUrl}/v1/models`);
-    for (const modelId of models) {
-      modelToProvider.set(modelId, "ollama");
-    }
-    log.info({ count: models.length }, "ollama models indexed");
-  }
-
-  // --- Featherless (unlimited tokens, no logging, OpenAI-compatible) ---
-  const featherlessBaseUrl = Bun.env.FEATHERLESS_BASE_URL;
-  const featherlessApiKey = Bun.env.FEATHERLESS_API_KEY;
-  if (featherlessBaseUrl && featherlessApiKey) {
-    const sdk = createProviderSDK(
-      "@ai-sdk/openai-compatible",
-      featherlessBaseUrl,
-      featherlessApiKey,
-    );
-    providers.set("featherless", sdk);
-    providerSdks.set("featherless:@ai-sdk/openai-compatible", sdk);
-    providerConfig.set("featherless", {
-      baseUrl: featherlessBaseUrl,
-      apiKey: featherlessApiKey,
-      npm: "@ai-sdk/openai-compatible",
-    });
-
-    // Register the configured model — both the full HuggingFace ID and
-    // a featherless/ prefixed version so resolution works either way.
-    const featherlessModel =
-      Bun.env.FEATHERLESS_MODEL ?? "Qwen/Qwen3.5-397B-A17B";
-    modelToProvider.set(featherlessModel, "featherless");
-    if (featherlessModel.includes("/")) {
-      const bareName = featherlessModel.split("/").pop() ?? "";
-      modelToProvider.set(bareName, "featherless");
-    }
-    log.info(
-      { baseUrl: featherlessBaseUrl, model: featherlessModel },
-      "featherless provider initialized",
-    );
+    for (const id of models) modelToProvider.set(id, "ollama");
+    log.info({ baseUrl: ollamaBaseUrl, count: models.length }, "ollama initialized");
   }
 
   // --- Remote providers (from provider-data.json) ---
@@ -299,32 +257,17 @@ export async function initProviderRegistry(): Promise<void> {
     if (!apiKey) continue;
 
     for (const providerId of providerIds) {
-      const entry = (providerData as Record<string, ProviderEntry>)[providerId];
+      const entry = providerData[providerId];
       if (!entry) continue;
 
       const baseUrl = entry.api ?? `https://${providerId}.example.com/v1`;
       const npm = entry.npm ?? "@ai-sdk/openai-compatible";
-      const sdk = createProviderSDK(npm, baseUrl, apiKey);
-
-      providers.set(providerId, sdk);
-      providerSdks.set(`${providerId}:${npm}`, sdk);
-      providerConfig.set(providerId, { baseUrl, apiKey, npm });
-
-      for (const [modelId, meta] of Object.entries(entry.models || {})) {
-        modelToProvider.set(modelId, providerId);
-        modelMetadata.set(modelId, meta as ModelEntry);
-
-        if (modelId.includes("/")) {
-          const bareName = modelId.split("/").pop() ?? "";
-          modelToProvider.set(bareName, providerId);
-          modelMetadata.set(bareName, meta as ModelEntry);
-          bareNameToFullId.set(bareName, modelId);
-        }
-      }
+      registerProvider(providerId, npm, baseUrl, apiKey);
+      registerModels(providerId, entry.models || {});
 
       log.info(
         { providerId, modelCount: Object.keys(entry.models || {}).length },
-        "provider initialized from provider-data",
+        "provider initialized",
       );
     }
   }
@@ -336,24 +279,28 @@ export async function initProviderRegistry(): Promise<void> {
   );
 }
 
-/**
- * Fetch model IDs from an OpenAI-compatible /models endpoint.
- */
-async function fetchModels(url: string): Promise<string[]> {
-  try {
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(10_000),
-    });
+// ---------------------------------------------------------------------------
+// Model discovery for local providers
+// ---------------------------------------------------------------------------
 
-    if (!res.ok) {
-      log.warn({ url, status: res.status }, "/models returned error");
-      return [];
-    }
-
-    const body = (await res.json()) as { data?: Array<{ id: string }> };
-    return body.data?.map((m) => m.id) ?? [];
-  } catch (err) {
+async function fetchModels(url: string) {
+  const [err, res] = await attempt(() =>
+    fetch(url, { signal: AbortSignal.timeout(10_000) }),
+  );
+  if (err) {
     log.warn({ err, url }, "/models fetch failed");
     return [];
   }
+  if (!res.ok) {
+    log.warn({ url, status: res.status }, "/models returned error");
+    return [];
+  }
+  const [parseErr, body] = await attempt(
+    () => res.json() as Promise<{ data?: Array<{ id: string }> }>,
+  );
+  if (parseErr) {
+    log.warn({ err: parseErr, url }, "/models parse failed");
+    return [];
+  }
+  return body.data?.map((m) => m.id) ?? [];
 }

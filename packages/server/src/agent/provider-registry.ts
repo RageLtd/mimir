@@ -6,17 +6,6 @@
  */
 
 export {
-  defaultModel,
-  embeddingModel,
-  getReasoningOptions,
-  getSamplingOptions,
-  isMistralModel,
-  ollama,
-  resolveModel,
-  vllm,
-} from "../agent-loop/provider/model";
-
-export {
   fetchModelId,
   getContextWindow,
   getEmbeddingModelMetadata,
@@ -24,6 +13,7 @@ export {
   getModelNpm,
   getModelProvider,
   getProviderConfigForModel,
+  getReasoningOptions,
   getSmallModelConfig,
   hasModel,
   hasProvider,
@@ -31,6 +21,7 @@ export {
   listModels,
   listProviders,
   resolveEmbeddingModel,
+  resolveModel,
 } from "../agent-loop/provider/query";
 
 export {

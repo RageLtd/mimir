@@ -1,23 +1,7 @@
 /**
- * Provider module — LLM provider setup, registry, and model routing.
- *
- * Re-exports from registry, query, model, and middleware submodules.
+ * Provider module — re-exports from registry, query, and middleware.
  */
 
-// Middleware — Mistral tool call streaming fix
-export { mistralToolCallMiddleware } from "./mistral-middleware";
-
-// Model — vLLM, Ollama, embedding, reasoning/sampling options
-export {
-  defaultModel,
-  embeddingModel,
-  getReasoningOptions,
-  getSamplingOptions,
-  isMistralModel,
-  ollama,
-  vllm,
-} from "./model";
-// Query — model resolution, metadata lookup, provider config
 export {
   fetchModelId,
   getContextWindow,
@@ -26,6 +10,7 @@ export {
   getModelNpm,
   getModelProvider,
   getProviderConfigForModel,
+  getReasoningOptions,
   getSmallModelConfig,
   hasModel,
   hasProvider,
@@ -35,7 +20,7 @@ export {
   resolveEmbeddingModel,
   resolveModel,
 } from "./query";
-// Registry — state, SDK creation, initialization
+
 export {
   initProviderRegistry,
   type ModelEntry,

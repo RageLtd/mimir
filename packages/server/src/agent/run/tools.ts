@@ -11,7 +11,7 @@ import type {
 } from "@ai-sdk/provider";
 import { asSchema } from "ai";
 import type { MimirContext } from "../../middleware/types";
-import { getReasoningOptions, getSamplingOptions } from "../provider-registry";
+import { getReasoningOptions } from "../provider-registry";
 
 export function buildTools(ctx: MimirContext) {
   if (Object.keys(ctx.allTools).length === 0) return undefined;
@@ -48,7 +48,6 @@ export function buildCallOptions(
   prompt: LanguageModelV3Prompt,
   tools: LanguageModelV3FunctionTool[] | undefined,
 ) {
-  const sampling = getSamplingOptions(ctx.request.model);
   const reasoning = getReasoningOptions(
     ctx.request.model,
     ctx.request.reasoning_effort ?? undefined,
@@ -57,10 +56,6 @@ export function buildCallOptions(
   return {
     prompt,
     tools,
-    temperature: sampling.temperature,
-    topP: sampling.topP,
-    topK: sampling.topK,
-    presencePenalty: sampling.presencePenalty,
     providerOptions: reasoning,
   };
 }
