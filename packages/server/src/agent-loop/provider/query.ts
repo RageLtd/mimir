@@ -6,7 +6,6 @@
  */
 
 import type { EmbeddingModel } from "ai";
-import providerData from "../../../provider-data.json";
 import { config } from "../../config";
 import { log } from "../../util/logger";
 import {
@@ -18,6 +17,7 @@ import {
   modelMetadata,
   modelToProvider,
   providerConfig,
+  providerData,
   providers,
 } from "./registry";
 
@@ -137,20 +137,24 @@ export function getModelDisplayName(modelId: string) {
  * APIs); caller should fall back to titlecasing the providerId.
  */
 export function getProviderDisplayName(providerId: string) {
-  return providerDisplayNames.get(providerId);
+  return getProviderDisplayNames().get(providerId);
 }
 
-// Build the display-name map once at module load. Keys are providerIds
-// from provider-data.json; values are the `name` field.
-const providerDisplayNames = (() => {
-  const map = new Map<string, string>();
-  for (const [id, entry] of Object.entries(
-    providerData as Record<string, { name?: string }>,
-  )) {
-    if (typeof entry.name === "string") map.set(id, entry.name);
+// Lazily built on first access — providerData is populated at runtime
+// during initProviderRegistry(), not at module load.
+let providerDisplayNames: Map<string, string> | null = null;
+
+function getProviderDisplayNames() {
+  if (!providerDisplayNames) {
+    providerDisplayNames = new Map();
+    for (const [id, entry] of Object.entries(
+      providerData as Record<string, { name?: string }>,
+    )) {
+      if (typeof entry.name === "string") providerDisplayNames.set(id, entry.name);
+    }
   }
-  return map;
-})();
+  return providerDisplayNames;
+}
 
 /**
  * Get provider ID for a model.

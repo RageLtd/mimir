@@ -15,9 +15,10 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createMoonshotAI } from "@ai-sdk/moonshotai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import providerData from "../../../provider-data.json";
 import { config } from "../../config";
 import { log } from "../../util/logger";
+
+const PROVIDER_DATA_PATH = "provider-data.json";
 
 // ---------------------------------------------------------------------------
 // Types from provider-data.json
@@ -131,19 +132,8 @@ export const bareNameToFullId = new Map<string, string>();
 
 export let initialized = false;
 
-// Build reverse index: env var → provider IDs
-const envVarToProviders = new Map<string, string[]>();
-for (const [providerId, entry] of Object.entries(providerData) as [
-  string,
-  ProviderEntry,
-][]) {
-  for (const envVar of entry.env) {
-    if (!envVarToProviders.has(envVar)) {
-      envVarToProviders.set(envVar, []);
-    }
-    envVarToProviders.get(envVar)?.push(providerId);
-  }
-}
+/** Runtime-loaded provider data — populated during initProviderRegistry(). */
+export let providerData: Record<string, ProviderEntry> = {};
 
 // Env var aliases: ZEN_API_KEY maps to OPENCODE_API_KEY in provider-data.json
 const ENV_KEY_ALIASES: Record<string, string> = {
@@ -200,6 +190,24 @@ export function getOrCreateSDK(
  * Call once at server boot.
  */
 export async function initProviderRegistry(): Promise<void> {
+  // Load provider data from disk (freshly fetched from models.dev at boot)
+  const raw = await Bun.file(PROVIDER_DATA_PATH).text();
+  providerData = JSON.parse(raw) as Record<string, ProviderEntry>;
+
+  // Build reverse index: env var → provider IDs
+  const envVarToProviders = new Map<string, string[]>();
+  for (const [providerId, entry] of Object.entries(providerData) as [
+    string,
+    ProviderEntry,
+  ][]) {
+    for (const envVar of entry.env) {
+      if (!envVarToProviders.has(envVar)) {
+        envVarToProviders.set(envVar, []);
+      }
+      envVarToProviders.get(envVar)?.push(providerId);
+    }
+  }
+
   // --- Local providers (vLLM, Ollama) ---
   const vllmBaseUrl = Bun.env.VLLM_BASE_URL;
   let ollamaBaseUrl = Bun.env.OLLAMA_BASE_URL;
