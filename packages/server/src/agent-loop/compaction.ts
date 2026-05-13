@@ -13,21 +13,6 @@
  * - Project field on summary is metadata for display, not a filter
  */
 
-/**
- * Extract text from ModelMessage content.
- */
-function messageContentToString(content: unknown) {
-  if (typeof content === "string") return content;
-  if (!content) return "";
-  if (Array.isArray(content)) {
-    return (content as Array<{ type: string; text?: string }>)
-      .filter((p) => p.type === "text" && p.text)
-      .map((p) => p.text)
-      .join(" ");
-  }
-  return "";
-}
-
 import { embedOne } from "../goldfish/clients";
 import { getLastSummaries, storeMemory } from "../goldfish/store";
 import { log } from "../util/logger";
@@ -37,6 +22,7 @@ import {
   getCompactionState,
   startCompaction,
 } from "./message-log/compaction-state";
+import { modelContentToString } from "./message-log/message-utils";
 import { getModelMessagesSince } from "./message-log/persistence";
 import {
   getProviderConfigForModel,
@@ -87,14 +73,14 @@ export async function runCompaction(modelId?: string): Promise<void> {
     const conversationText = messages
       .map((m) => {
         if (m.role === "tool") {
-          const text = messageContentToString(m.content);
+          const text = modelContentToString(m.content);
           if (text.length > 500) {
             return `${m.role}: ${text.slice(0, 500)}... [truncated]`;
           }
           return `${m.role}: ${text}`;
         }
 
-        const text = messageContentToString(m.content);
+        const text = modelContentToString(m.content);
         if (!text) return null;
 
         // Skip context injection pair (summaries/memories injected at session start)

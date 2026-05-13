@@ -6,27 +6,10 @@
  */
 
 import type { ModelMessage } from "ai";
+import { modelContentToString } from "../agent-loop/message-log/message-utils";
 import { retrieveMemories } from "../goldfish/memory";
 import { log } from "../util/logger";
 import type { MimirContext } from "./types";
-
-/**
- * Extract text content from a ModelMessage, handling string and array formats.
- */
-function messageContentToString(content: ModelMessage["content"]) {
-  if (typeof content === "string") return content;
-  if (!content) return "";
-  if (Array.isArray(content)) {
-    return content
-      .filter(
-        (p): p is { type: "text"; text: string } =>
-          p.type === "text" && !!p.text,
-      )
-      .map((p) => p.text)
-      .join(" ");
-  }
-  return "";
-}
 
 /**
  * Retrieve memories based on the last user message and inject into context.
@@ -45,7 +28,7 @@ export async function injectMemories(ctx: MimirContext) {
     return;
   }
 
-  const query = messageContentToString(lastUser.content);
+  const query = modelContentToString(lastUser.content);
 
   if (!query) {
     ctx.memories = null;

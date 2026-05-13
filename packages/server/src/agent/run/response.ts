@@ -6,11 +6,9 @@
 
 import type { LanguageModelV3Message } from "@ai-sdk/provider";
 import {
-  extractMemoriesFromResponse,
-  persistAssistantTurn,
-  triggerCompactionIfNeeded,
+  classifyToolCalls,
+  finalizeTurn,
 } from "../../agent-loop/post-processing";
-import { SERVER_TOOL_NAMES } from "../../agent-loop/server-tools";
 import type { MimirContext } from "../../middleware/types";
 import { log } from "../../util/logger";
 import { enqueueLlmCall } from "../queue";
@@ -120,6 +118,7 @@ async function nonStreamingResponseImpl(
   const prompt: LanguageModelV3Message[] = [...(baseOptions.prompt ?? [])];
   let lastStepInputTokens = 0;
   let lastText = "";
+  let lastReasoning = "";
   let lastToolCalls: Array<{
     toolCallId: string;
     toolName: string;
@@ -159,6 +158,7 @@ async function nonStreamingResponseImpl(
     }
 
     lastText = textParts.join("");
+    lastReasoning = reasoningParts.join("");
     lastToolCalls = toolCalls;
 
     log.debug(
@@ -175,43 +175,25 @@ async function nonStreamingResponseImpl(
 
     if (toolCalls.length === 0) break;
 
-    const clientCalls = toolCalls.filter(
-      (tc) => !SERVER_TOOL_NAMES.has(tc.toolName),
-    );
+    const { serverCalls, clientCalls } = classifyToolCalls(toolCalls);
     if (clientCalls.length > 0) {
       lastToolCalls = clientCalls;
       lastFinishReason = "tool-calls";
       break;
     }
 
-    const serverCalls = toolCalls.filter((tc) =>
-      SERVER_TOOL_NAMES.has(tc.toolName),
-    );
-
     appendServerStepToPrompt(prompt, lastText, reasoningParts, serverCalls);
     await executeServerTools(prompt, serverCalls, ctx);
     lastToolCalls = [];
   }
 
-  // Persist the final assistant turn — server owns its own writes.
-  persistAssistantTurn(lastText, lastToolCalls, ctx.project).catch((err) =>
-    log.error({ err }, "persistAssistantTurn failed (non-streaming)"),
-  );
-
-  // Post-processing
-  triggerCompactionIfNeeded(
+  // Post-processing: persist, compact, extract memories (fire-and-forget)
+  finalizeTurn(
+    lastText,
+    lastToolCalls,
+    lastReasoning || undefined,
+    ctx,
     lastStepInputTokens,
-    ctx.project,
-    ctx.request.model,
-  );
-
-  const lastUserMessage = [...ctx.request.messages]
-    .reverse()
-    .find((m) => m.role === "user");
-  extractMemoriesFromResponse(
-    lastText || null,
-    lastUserMessage ?? null,
-    ctx.project,
   );
 
   // Build OpenAI-compatible response

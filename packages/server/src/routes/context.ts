@@ -20,6 +20,7 @@ import { modelContentToString } from "../agent-loop/message-log/message-utils";
 import { config } from "../config";
 import { retrieveMemories } from "../goldfish/memory";
 import { getLastSummaries } from "../goldfish/store";
+import { buildContextInjection } from "../middleware/context-assembly";
 import { requestLog } from "../util/logger";
 import { loadPrompt } from "./system-prompt";
 
@@ -234,27 +235,13 @@ context.post("/assemble", async (c) => {
       config.context.keepRecentMessages,
     );
 
-    // Build context injection pair
-    const contextParts: string[] = [];
-    if (summaries.length > 0) {
-      const summaryText = summaries
-        .map((s, i) => `[Summary ${i + 1}]\n${s.content}`)
-        .join("\n\n");
-      contextParts.push(`<summaries>\n${summaryText}\n</summaries>`);
-    }
-    if (memories) {
-      contextParts.push(`<memories>\n${memories}\n</memories>`);
-    }
+    // Build context injection pair — shared with server middleware
+    const injection = buildContextInjection(summaries, memories);
 
-    const messages: SimpleMessage[] = [];
-
-    if (contextParts.length > 0) {
-      messages.push({
-        role: "user",
-        content: `Session context:\n${contextParts.join("\n\n")}`,
-      });
-      messages.push({ role: "assistant", content: "Understood." });
-    }
+    const messages: SimpleMessage[] = injection.map((m) => ({
+      role: m.role as "user" | "assistant",
+      content: typeof m.content === "string" ? m.content : "",
+    }));
 
     // Flatten historical turns to text (tool calls/results included as prose),
     // then trim newest-first to fit `assemblyTokenBudget`. The DB pull is

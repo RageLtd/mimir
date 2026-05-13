@@ -21,13 +21,12 @@ import type {
   LanguageModelV3ToolResultPart,
 } from "@ai-sdk/provider";
 import {
-  extractMemoriesFromResponse,
-  persistAssistantTurn,
-  triggerCompactionIfNeeded,
+  classifyToolCalls,
+  finalizeTurn,
 } from "../../agent-loop/post-processing";
 import { getContextWindow } from "../../agent-loop/provider/query";
-import { SERVER_TOOL_NAMES } from "../../agent-loop/server-tools";
 import type { MimirContext } from "../../middleware/types";
+import { safeParseJSON } from "../../util/json";
 import { log } from "../../util/logger";
 import type { buildCallOptions } from "./tools";
 
@@ -67,6 +66,7 @@ export async function agentLoop(
   // turn" value.
   let totalOutputTokens = 0;
   let lastAssistantText = "";
+  let lastReasoningText = "";
   // Final assistant output destined for the client — accumulated here so
   // we can persist it to the global log once the turn ends. Server-tool
   // internal iterations are NOT persisted (they're ephemeral by design).
@@ -143,6 +143,7 @@ export async function agentLoop(
     lastStepInputTokens = stepInputTokens;
     totalOutputTokens += stepOutputTokens;
     lastAssistantText = textChunks.join("");
+    lastReasoningText = reasoningChunks.join("");
 
     log.debug(
       {
@@ -163,12 +164,7 @@ export async function agentLoop(
     }
 
     // Classify: server vs client
-    const serverCalls = toolCalls.filter((tc) =>
-      SERVER_TOOL_NAMES.has(tc.toolName),
-    );
-    const clientCalls = toolCalls.filter(
-      (tc) => !SERVER_TOOL_NAMES.has(tc.toolName),
-    );
+    const { serverCalls, clientCalls } = classifyToolCalls(toolCalls);
 
     // Client tool calls → emit and stop
     if (clientCalls.length > 0) {
@@ -222,30 +218,13 @@ export async function agentLoop(
       : {}),
   });
 
-  // Persist the final assistant turn — server owns its own writes.
-  // Fire-and-forget; logs on failure but never blocks the response.
-  persistAssistantTurn(
+  // Post-processing: persist, compact, extract memories (fire-and-forget)
+  finalizeTurn(
     lastAssistantText,
     finalClientToolCalls,
-    ctx.project,
-  ).catch((err) =>
-    log.error({ err }, "persistAssistantTurn failed (streaming)"),
-  );
-
-  // Post-processing (fire-and-forget)
-  triggerCompactionIfNeeded(
+    lastReasoningText || undefined,
+    ctx,
     lastStepInputTokens,
-    ctx.project,
-    ctx.request.model,
-  );
-
-  const lastUserMessage = [...ctx.request.messages]
-    .reverse()
-    .find((m) => m.role === "user");
-  extractMemoriesFromResponse(
-    lastAssistantText || null,
-    lastUserMessage ?? null,
-    ctx.project,
   );
 }
 
@@ -329,18 +308,3 @@ export async function executeServerTools(
   prompt.push({ role: "tool", content: toolResults });
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function safeParseJSON(str: string) {
-  try {
-    return JSON.parse(str);
-  } catch (err) {
-    log.debug(
-      { err: err instanceof Error ? err.message : String(err) },
-      "safeParseJSON failed, returning raw string",
-    );
-    return str;
-  }
-}

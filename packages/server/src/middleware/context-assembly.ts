@@ -32,11 +32,48 @@ import { log } from "../util/logger";
 import type { MimirContext } from "./types";
 
 /**
+ * Build the synthetic context injection pair from summaries and memories.
+ *
+ * Returns a two-element ModelMessage array (user + assistant) when there's
+ * content to inject, or an empty array when there's nothing. This is the
+ * single source of truth for the injection format — both the server
+ * middleware pipeline and the CC `/assemble` route call it.
+ */
+export function buildContextInjection(
+  summaries: Array<{ content: string }>,
+  memories: string | null | undefined,
+) {
+  const contextParts: string[] = [];
+
+  if (summaries.length > 0) {
+    const summaryText = summaries
+      .map((s, i) => `[Summary ${i + 1}]\n${s.content}`)
+      .join("\n\n");
+    contextParts.push(`<summaries>\n${summaryText}\n</summaries>`);
+  }
+
+  if (memories) {
+    contextParts.push(`<memories>\n${memories}\n</memories>`);
+  }
+
+  if (contextParts.length === 0) return [];
+
+  const injection: ModelMessage[] = [
+    {
+      role: "user",
+      content: `Session context:\n${contextParts.join("\n\n")}`,
+    },
+    { role: "assistant", content: "Understood." },
+  ];
+  return injection;
+}
+
+/**
  * Assemble the complete context for the LLM.
  *
  * Order: summaries → memories → rules → format reminder
  */
-export async function assembleContext(ctx: MimirContext): Promise<void> {
+export async function assembleContext(ctx: MimirContext) {
   const start = Date.now();
 
   // 1. Persist only the client's trailing new turn (user message or
@@ -79,31 +116,8 @@ export async function assembleContext(ctx: MimirContext): Promise<void> {
     config.context.keepRecentMessages,
   );
 
-  // 3. Build context injection (summaries + memories + rules)
-  const contextParts: string[] = [];
-
-  if (summaries.length > 0) {
-    const summaryText = summaries
-      .map((s, i) => `[Summary ${i + 1}]\n${s.content}`)
-      .join("\n\n");
-    contextParts.push(`<summaries>\n${summaryText}\n</summaries>`);
-  }
-
-  if (ctx.memories) {
-    contextParts.push(`<memories>\n${ctx.memories}\n</memories>`);
-  }
-
-  // Build the synthetic context injection pair
-  if (contextParts.length > 0) {
-    ctx.contextInjection = [
-      {
-        role: "user",
-        content: `Session context:\n${contextParts.join("\n\n")}`,
-      },
-      { role: "assistant", content: "Understood." },
-    ];
-  }
-
+  // 4. Build context injection from summaries + memories
+  ctx.contextInjection = buildContextInjection(summaries, ctx.memories);
   ctx.conversationMessages = recentMessages;
 
   log.info(
@@ -111,7 +125,7 @@ export async function assembleContext(ctx: MimirContext): Promise<void> {
       summaries: summaries.length,
       recentMessages: recentMessages.length,
       hasMemories: !!ctx.memories,
-      contextParts: contextParts.length,
+      injectionPairs: ctx.contextInjection.length,
       conversationMessages: ctx.conversationMessages.length,
       elapsed: `${Date.now() - start}ms`,
     },

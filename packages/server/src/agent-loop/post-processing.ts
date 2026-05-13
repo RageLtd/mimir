@@ -25,6 +25,55 @@ import { SERVER_TOOL_NAMES } from "./server-tools";
  */
 
 // ---------------------------------------------------------------------------
+// Tool call classification
+// ---------------------------------------------------------------------------
+
+/** Shared tool-call type used across both agent loop paths. */
+export type ToolCall = { toolCallId: string; toolName: string; input: string };
+
+/**
+ * Split a set of tool calls into server-side (executed internally) and
+ * client-side (emitted to the caller). Single source of truth for the
+ * classification — both streaming and non-streaming loops use this.
+ */
+export function classifyToolCalls(toolCalls: ToolCall[]) {
+  return {
+    serverCalls: toolCalls.filter((tc) => SERVER_TOOL_NAMES.has(tc.toolName)),
+    clientCalls: toolCalls.filter((tc) => !SERVER_TOOL_NAMES.has(tc.toolName)),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Post-turn finalization
+// ---------------------------------------------------------------------------
+
+/**
+ * Fire-and-forget post-processing trio at the end of an agent turn:
+ * persist the assistant output, update compaction state, extract memories.
+ *
+ * Both streaming and non-streaming agent loops call this identically.
+ * Consolidating here ensures the three steps stay in sync.
+ */
+export function finalizeTurn(
+  text: string,
+  toolCalls: ToolCall[],
+  reasoning: string | undefined,
+  ctx: { project: string | null | undefined; request: { messages: ModelMessage[]; model: string } },
+  lastStepInputTokens: number,
+) {
+  persistAssistantTurn(text, toolCalls, ctx.project, reasoning).catch((err) =>
+    log.error({ err }, "persistAssistantTurn failed"),
+  );
+
+  triggerCompactionIfNeeded(lastStepInputTokens, ctx.project ?? null, ctx.request.model);
+
+  const lastUserMessage = [...ctx.request.messages]
+    .reverse()
+    .find((m) => m.role === "user");
+  extractMemoriesFromResponse(text || null, lastUserMessage ?? null, ctx.project);
+}
+
+// ---------------------------------------------------------------------------
 // Compaction
 // ---------------------------------------------------------------------------
 
@@ -75,18 +124,21 @@ export async function persistAssistantTurn(
   text: string,
   toolCalls: Array<{ toolCallId: string; toolName: string; input: string }>,
   project: string | null | undefined,
+  reasoning?: string,
 ) {
   const clientToolCalls = toolCalls.filter(
     (tc) => !SERVER_TOOL_NAMES.has(tc.toolName),
   );
   const hasText = text.trim().length > 0;
   const hasToolCalls = clientToolCalls.length > 0;
-  if (!hasText && !hasToolCalls) return;
+  const hasReasoning = reasoning && reasoning.trim().length > 0;
+  if (!hasText && !hasToolCalls && !hasReasoning) return;
 
   // Tool-call inputs are kept as raw JSON strings here — DB storage uses
   // JSON.stringify on content regardless, and clients reconstructing
   // history via the read path get the same shape either way.
   const parts: AssistantContent = [];
+  if (hasReasoning) parts.push({ type: "reasoning", text: reasoning });
   if (hasText) parts.push({ type: "text", text });
   for (const tc of clientToolCalls) {
     parts.push({
