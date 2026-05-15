@@ -16,6 +16,7 @@ import type {
 } from "@ai-sdk/provider";
 import type { ModelMessage } from "ai";
 import type { MimirContext } from "../../middleware/types";
+import { safeParseJSON } from "../../util/json";
 import { log } from "../../util/logger";
 
 export function buildPrompt(ctx: MimirContext) {
@@ -165,13 +166,15 @@ function normalizeAssistantParts(parts: unknown) {
         result.push({ type: "reasoning" as const, text: String(p.text ?? "") });
         break;
       case "tool-call":
-        // Critical: ensure input is never undefined.
-        // Providers (vLLM, Chutes) reject tool calls without arguments.
+        // Critical: ensure input is never undefined and is always an object.
+        // Providers (vLLM, Chutes, Fireworks) reject tool calls without arguments
+        // or with arguments that decode to a non-object. DB-stored messages have
+        // `input` as a JSON string; AI SDK ModelMessages have it as an object.
         result.push({
           type: "tool-call" as const,
           toolCallId: String(p.toolCallId),
           toolName: String(p.toolName),
-          input: p.input ?? {},
+          input: parseToolInput(p.input),
         });
         break;
       default:
@@ -183,6 +186,22 @@ function normalizeAssistantParts(parts: unknown) {
     }
   }
   return result;
+}
+
+/**
+ * Coerce tool-call input to an object. DB rows store `input` as a JSON
+ * string; AI SDK ModelMessages provide it as a parsed object. Either way,
+ * upstream providers require a plain object — not a string, not null.
+ */
+function parseToolInput(raw: unknown) {
+  if (raw === null || raw === undefined) return {};
+  if (typeof raw === "object" && !Array.isArray(raw)) return raw;
+  if (typeof raw !== "string" || !raw.trim()) return {};
+  const parsed = safeParseJSON(raw);
+  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return parsed;
+  }
+  return {};
 }
 
 function normalizeToolParts(parts: unknown) {

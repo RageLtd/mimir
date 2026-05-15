@@ -26,7 +26,10 @@
       "mcp__mimir__cartographer_query",
       "mcp__mimir__read_mimir_logs",
       "Bash(bun -e \"const d = JSON.parse\\(await Bun.file\\('provider-data.json'\\).text\\(\\)\\); const first = Object.entries\\(d\\)[0]; console.log\\(JSON.stringify\\({ [first[0]]: first[1] }, null, 2\\).slice\\(0, 2000\\)\\)\")",
-      "Bash(bun -e ' *)"
+      "Bash(bun -e ' *)",
+      "Bash(grep -n \"create_terminal\\\\|must decode\\\\|parseToolCallArgs\\\\|Invalid tool call\\\\|got str\" ~/.mimir/acp.log | tail -30)",
+      "Bash(grep -n \"create_terminal\\\\|must decode\\\\|parseToolCallArgs\\\\|Invalid tool call\\\\|got str\" ~/.mimir/acp.log)",
+      "Read(//tmp/**)"
     ]
   },
   "spinnerTipsEnabled": false

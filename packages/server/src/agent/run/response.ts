@@ -151,7 +151,7 @@ async function nonStreamingResponseImpl(
           toolCalls.push({
             toolCallId: part.toolCallId,
             toolName: part.toolName,
-            input: part.input,
+            input: JSON.stringify(part.input ?? {}),
           });
           break;
       }

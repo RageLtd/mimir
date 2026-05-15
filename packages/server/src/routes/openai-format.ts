@@ -136,11 +136,20 @@ export const normalizeMessages = (messages: unknown[]) => {
       if (text) parts.push({ type: "text", text });
       for (const tc of msg.tool_calls) {
         const parsed = parseJsonSafe(tc.function.arguments ?? "{}");
+        // Upstream providers require input to be a plain object. If parsing
+        // failed (malformed JSON) or decoded to a non-object (bare string,
+        // array, null), fall back to empty object rather than passing a raw
+        // string that the AI SDK would double-encode on re-serialization.
+        const value = parsed.ok ? parsed.value : undefined;
+        const input =
+          value !== null && typeof value === "object" && !Array.isArray(value)
+            ? value
+            : {};
         parts.push({
           type: "tool-call",
           toolCallId: tc.id,
           toolName: tc.function.name,
-          input: parsed.ok ? parsed.value : parsed.raw,
+          input,
         });
       }
       return { role: "assistant", content: parts } as ModelMessage;
