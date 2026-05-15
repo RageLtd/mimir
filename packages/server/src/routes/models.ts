@@ -9,6 +9,7 @@ import { Hono } from "hono";
 import { listModels } from "../agent/provider-registry";
 import {
   getModelDisplayName,
+  getModelMetadata,
   getProviderDisplayName,
 } from "../agent-loop/provider/query";
 import { config, OPENROUTER_API_URL } from "../config";
@@ -38,6 +39,12 @@ interface ModelEntry {
    * model selector parenthetical; absent → client titlecases `owned_by`.
    */
   provider_name?: string;
+  /**
+   * Whether the model supports extended thinking / reasoning. Derived
+   * from `provider-data.json`'s per-model `reasoning` flag. ACP clients
+   * use this to conditionally expose a thought-level config selector.
+   */
+  reasoning?: boolean;
 }
 
 /**
@@ -59,15 +66,17 @@ const titlecaseProviderId = (id: string) =>
  * provider-data lookups. Pure function — passes the entry through
  * unchanged when no enrichments are available.
  */
-const enrichEntry = (entry: ModelEntry): ModelEntry => {
+const enrichEntry = (entry: ModelEntry) => {
   const display_name = getModelDisplayName(entry.id);
   const provider_name =
     getProviderDisplayName(entry.owned_by) ??
     titlecaseProviderId(entry.owned_by);
+  const meta = getModelMetadata(entry.id);
   return {
     ...entry,
     ...(display_name ? { display_name } : {}),
     ...(provider_name ? { provider_name } : {}),
+    ...(meta?.reasoning ? { reasoning: true } : {}),
   };
 };
 

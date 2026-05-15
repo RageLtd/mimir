@@ -44,6 +44,7 @@ export type CompletionRequest = {
   readonly stream?: boolean;
   readonly temperature?: number;
   readonly metadata?: Record<string, unknown>;
+  readonly reasoning_effort?: string;
 };
 
 export type ServerClientConfig = {

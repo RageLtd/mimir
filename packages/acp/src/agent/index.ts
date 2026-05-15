@@ -95,6 +95,7 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
       discoveredCopilotModels = ms;
     },
     commandsEmitted: new Set<string>(),
+    serverReasoningModels: new Set<string>(),
   };
 
   return {

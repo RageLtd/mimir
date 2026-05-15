@@ -158,6 +158,29 @@ export const emitUsageUpdate = (
     .catch((err) => logger.debug("usage_update failed:", err));
 
 /**
+ * Translate a TodoWrite input into an ACP `plan` session update. Both the
+ * CC event handler and the server backend's tool-dispatch loop call this
+ * after a TodoWrite tool_call to keep Zed's plan panel in sync.
+ */
+export const emitPlanUpdate = (
+  conn: acp.AgentSideConnection,
+  sessionId: string,
+  todos: readonly { content: string; status: string; activeForm?: string }[],
+) =>
+  conn.sessionUpdate({
+    sessionId,
+    update: {
+      sessionUpdate: "plan",
+      entries: todos.map((t) => ({
+        content:
+          t.activeForm && t.status === "in_progress" ? t.activeForm : t.content,
+        status: t.status as "pending" | "in_progress" | "completed",
+        priority: "medium" as const,
+      })),
+    },
+  });
+
+/**
  * Surface rule-loader errors to the editor at session start. The loader
  * fails loudly per design — every broken `.enforce.toml` becomes a
  * `LoadError`; this helper renders them all into one

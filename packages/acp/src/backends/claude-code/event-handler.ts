@@ -13,7 +13,7 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
-import { emitAgentText } from "../../agent/lifecycle-helpers";
+import { emitAgentText, emitPlanUpdate } from "../../agent/lifecycle-helpers";
 import {
   buildToolCallContent,
   extractLocations,
@@ -44,26 +44,6 @@ const isTerminalTool = (name: string) => TERMINAL_TOOLS.has(name);
 const supportsTerminalOutput = (session: SessionState) =>
   session.clientCapabilities._meta?.terminal_output === true;
 
-/** Translate TodoWrite input into an ACP `plan` session update. */
-const emitPlanUpdate = async (
-  session: SessionState,
-  conn: acp.AgentSideConnection,
-  todos: readonly { content: string; status: string; activeForm?: string }[],
-) => {
-  await conn.sessionUpdate({
-    sessionId: session.sessionId,
-    update: {
-      sessionUpdate: "plan",
-      entries: todos.map((t) => ({
-        content:
-          t.activeForm && t.status === "in_progress" ? t.activeForm : t.content,
-        status: t.status as "pending" | "in_progress" | "completed",
-        priority: "medium" as const,
-      })),
-    },
-  });
-};
-
 const handleToolCall = async (
   event: Extract<BackendEvent, { type: "tool_call" }>,
   session: SessionState,
@@ -75,8 +55,8 @@ const handleToolCall = async (
   // TodoWrite → emit an ACP plan update alongside the normal tool card.
   if (event.name === "TodoWrite" && Array.isArray(event.input.todos)) {
     await emitPlanUpdate(
-      session,
       conn,
+      session.sessionId,
       event.input.todos as {
         content: string;
         status: string;

@@ -30,6 +30,13 @@ export type ModelResolutionDeps = {
   readonly router: BackendRouter;
   readonly getDiscoveredCCModels: () => readonly acp.ModelInfo[];
   readonly getDiscoveredCopilotModels: () => readonly acp.ModelInfo[];
+  /**
+   * Set of server-backend model IDs that support extended thinking /
+   * reasoning. Populated by `buildModelsState` from the server's
+   * `/v1/models` response; consumed by `buildSessionConfigOptions` to
+   * expose a thought-level selector for reasoning-capable models.
+   */
+  serverReasoningModels: Set<string>;
 };
 
 /**
@@ -60,7 +67,9 @@ export const buildModelsState = async (
   preferredModelId?: string,
 ) => {
   const { config, router } = deps;
-  const serverModels = await fetchServerModels(config.serverUrl, config.apiKey);
+  const serverResult = await fetchServerModels(config.serverUrl, config.apiKey);
+  const serverModels = serverResult.models;
+  deps.serverReasoningModels = serverResult.reasoningModels;
   const ccModels = router.runtime.ccEnabled ? deps.getDiscoveredCCModels() : [];
   const copilotModels = router.runtime.copilotEnabled
     ? deps.getDiscoveredCopilotModels()
@@ -112,6 +121,22 @@ export const buildModelConfigOption = (models: acp.SessionModelState) => ({
   })),
 });
 
+/** Effort levels the server backend supports (matches `effortToBudget` in query.ts). */
+const SERVER_EFFORT_LEVELS = ["none", "low", "medium", "high"] as const;
+
+const SERVER_EFFORT_DISPLAY: Record<string, string> = {
+  none: "None",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+};
+
+const DEFAULT_SERVER_EFFORT = "high";
+
+/** Check whether a string is a valid server-backend effort level. */
+export const isValidServerEffort = (level: string) =>
+  (SERVER_EFFORT_LEVELS as readonly string[]).includes(level);
+
 /**
  * Build the backend-native `configOptions[]` for the given session (mode +
  * thought-level). Does NOT include the model selector — that's composed by
@@ -122,19 +147,40 @@ export const buildSessionConfigOptions = (
   deps: ModelResolutionDeps,
   session: SessionState,
 ) => {
-  // Only the CC backend currently surfaces native config options. Inline
-  // prefix + runtime check rather than calling `router.forModel`, which
-  // throws when the matching backend is disabled — we'd just translate that
-  // into "no options" anyway.
-  if (!isCCModel(session.currentModelId)) return [];
-  if (!deps.router.runtime.ccEnabled) return [];
-  return buildCCConfigOptions({
-    modelAlias: ccAliasFor(session.currentModelId),
-    currentMode: session.currentMode || DEFAULT_CC_MODE,
-    currentThoughtLevel: session.currentThoughtLevel,
-    bypassPermissionsAllowed:
-      deps.config.cc.permissionMode === "bypassPermissions",
-  });
+  // CC backend — surfaces mode + thought-level selectors.
+  if (isCCModel(session.currentModelId) && deps.router.runtime.ccEnabled) {
+    return buildCCConfigOptions({
+      modelAlias: ccAliasFor(session.currentModelId),
+      currentMode: session.currentMode || DEFAULT_CC_MODE,
+      currentThoughtLevel: session.currentThoughtLevel,
+      bypassPermissionsAllowed:
+        deps.config.cc.permissionMode === "bypassPermissions",
+    });
+  }
+
+  // Server backend — expose a thought-level selector for reasoning models.
+  if (deps.serverReasoningModels.has(session.currentModelId)) {
+    const currentLevel =
+      session.currentThoughtLevel &&
+      isValidServerEffort(session.currentThoughtLevel)
+        ? session.currentThoughtLevel
+        : DEFAULT_SERVER_EFFORT;
+
+    const thoughtLevelOption: acp.SessionConfigOption = {
+      type: "select",
+      id: "thought_level",
+      name: "Thought Level",
+      category: "thought_level",
+      currentValue: currentLevel,
+      options: SERVER_EFFORT_LEVELS.map((level) => ({
+        value: level,
+        name: SERVER_EFFORT_DISPLAY[level],
+      })),
+    };
+    return [thoughtLevelOption];
+  }
+
+  return [];
 };
 
 /**

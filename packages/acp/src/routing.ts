@@ -102,6 +102,8 @@ type ServerModelEntry = {
   display_name?: string;
   /** Human-readable provider name from provider-data (e.g. "OpenCode Go"). */
   provider_name?: string;
+  /** Whether the model supports extended thinking / reasoning. */
+  reasoning?: boolean;
 };
 
 /**
@@ -165,13 +167,17 @@ export const fetchServerModels = async (
     return [];
   }
   const data = (body as { data?: ServerModelEntry[] }).data ?? [];
-  const models = data.map((m) => ({
-    modelId: m.id,
-    name: composeServerModelName(m),
-    description: m.owned_by ? `Provider: ${m.owned_by}` : undefined,
-  }));
-  logger.info(`fetched ${models.length} models from mimir-server`);
-  return models;
+  const reasoningModels = new Set<string>();
+  const models = data.map((m) => {
+    if (m.reasoning) reasoningModels.add(m.id);
+    return {
+      modelId: m.id,
+      name: composeServerModelName(m),
+      description: m.owned_by ? `Provider: ${m.owned_by}` : undefined,
+    };
+  });
+  logger.info(`fetched ${models.length} models from mimir-server (${reasoningModels.size} with reasoning)`);
+  return { models, reasoningModels };
 };
 
 // ── Copilot routing ──

@@ -24,7 +24,9 @@
       "mcp__mimir__project_memory_search",
       "mcp__mimir__cartographer_file_info",
       "mcp__mimir__cartographer_query",
-      "mcp__mimir__read_mimir_logs"
+      "mcp__mimir__read_mimir_logs",
+      "Bash(bun -e \"const d = JSON.parse\\(await Bun.file\\('provider-data.json'\\).text\\(\\)\\); const first = Object.entries\\(d\\)[0]; console.log\\(JSON.stringify\\({ [first[0]]: first[1] }, null, 2\\).slice\\(0, 2000\\)\\)\")",
+      "Bash(bun -e ' *)"
     ]
   },
   "spinnerTipsEnabled": false

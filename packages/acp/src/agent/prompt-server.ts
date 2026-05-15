@@ -32,6 +32,7 @@ import { runAndFormat } from "../rules";
 import { getTools, type ToolDefinition } from "../server-client";
 import type { UserMemoryStore } from "../store/user-memories";
 import {
+  buildUserContext,
   executeUserMemoryTool,
   userMemoryToolDefs,
   userMemoryToolNames,
@@ -48,7 +49,7 @@ import {
   buildMetadata,
   hasImageContent,
 } from "./content";
-import { emitAgentText } from "./lifecycle-helpers";
+import { emitAgentText, emitPlanUpdate } from "./lifecycle-helpers";
 import {
   buildToolCallContent,
   extractLocations,
@@ -112,7 +113,8 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
     ...clientToolDefs,
     ...clientMcpTools,
   ];
-  const metadata = buildMetadata(session.projectPath, session.projectId);
+  const userContext = buildUserContext(memoryStore);
+  const metadata = buildMetadata(session.projectPath, session.projectId, userContext);
 
   let turnCount = 0;
   let filesModified = false;
@@ -139,6 +141,7 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
         projectPath: session.projectPath,
         metadata,
         modelId: session.currentModelId,
+        effort: session.currentThoughtLevel,
         signal: abortController.signal,
         requestToolPermission,
       })
@@ -394,6 +397,20 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
         : resultContent;
 
       if (isFileWrite) filesModified = true;
+
+      // TodoWrite → emit a plan update so Zed's plan panel stays in sync,
+      // mirroring the CC event handler's behaviour.
+      if (tc.name === "TodoWrite" && Array.isArray(tc.input.todos)) {
+        await emitPlanUpdate(
+          conn,
+          session.sessionId,
+          tc.input.todos as {
+            content: string;
+            status: string;
+            activeForm?: string;
+          }[],
+        );
+      }
 
       session.messages.push({
         role: "tool",

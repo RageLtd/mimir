@@ -13,6 +13,7 @@ import {
   isValidCCMode,
   isValidThoughtLevel,
 } from "../backends/claude-code/config-options";
+import { isCCModel } from "../routing";
 import { discoverCCModelsViaSdk } from "../backends/claude-code/models";
 import { checkForSdkUpdate } from "../backends/claude-code/sdk-updater";
 import type { CartographerManager } from "../cartographer/lifecycle";
@@ -35,6 +36,7 @@ import {
   buildSessionConfigOptions,
   ccAliasFor,
   composeSessionResponse,
+  isValidServerEffort,
   type ModelResolutionDeps,
 } from "./model-resolution";
 import { parseCommand } from "./session";
@@ -391,10 +393,13 @@ const applyModeChange = async (
 const applyThoughtLevelChange = (
   deps: HandlerDeps,
   sessionId: string,
-  modelAlias: string | undefined,
+  modelId: string,
   value: string,
 ) => {
-  if (!isValidThoughtLevel(value, modelAlias)) {
+  const valid = isCCModel(modelId)
+    ? isValidThoughtLevel(value, ccAliasFor(modelId))
+    : isValidServerEffort(value);
+  if (!valid) {
     logger.warn("setSessionConfigOption: invalid thought_level", value);
     return;
   }
@@ -422,8 +427,7 @@ export const setSessionConfigOption = async (
   if (params.configId === "mode") {
     await applyModeChange(deps, params.sessionId, params.value);
   } else if (params.configId === "thought_level") {
-    const alias = ccAliasFor(session.currentModelId);
-    applyThoughtLevelChange(deps, params.sessionId, alias, params.value);
+    applyThoughtLevelChange(deps, params.sessionId, session.currentModelId, params.value);
   } else if (params.configId === "model") {
     // Model switch via configOptions path — delegate to the same logic as
     // unstable_setSessionModel so thought-level narrowing happens.

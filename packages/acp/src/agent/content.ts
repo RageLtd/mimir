@@ -186,10 +186,16 @@ export const hasImageContent = (blocks: readonly acp.ContentBlock[]) =>
  * Build server request metadata for the server-backend path. Prefers the
  * canonical project UUID when available; falls back to the filesystem path
  * until the resolver completes (or when resolution failed entirely).
+ *
+ * `userContext` carries the `<user_context>` XML block from the local
+ * sqlite store so mimir-server can inject it into the system prompt.
+ * The server can't access the client-side profile/memories directly.
  */
 export const buildMetadata = (
   projectPath: string,
   projectId: string | null,
+  userContext?: string | null,
 ) => ({
   project: projectId ?? projectPath,
+  ...(userContext ? { user_context: userContext } : {}),
 });

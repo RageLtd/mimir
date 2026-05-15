@@ -86,6 +86,7 @@ export const createServerBackend = (serverConfig: ServerClientConfig) => {
         tools: options.tools as ToolDefinition[],
         stream: true,
         metadata: options.metadata,
+        ...(options.effort ? { reasoning_effort: options.effort } : {}),
       },
       options.signal,
     )[Symbol.asyncIterator]();
