@@ -29,7 +29,10 @@
       "Bash(bun -e ' *)",
       "Bash(grep -n \"create_terminal\\\\|must decode\\\\|parseToolCallArgs\\\\|Invalid tool call\\\\|got str\" ~/.mimir/acp.log | tail -30)",
       "Bash(grep -n \"create_terminal\\\\|must decode\\\\|parseToolCallArgs\\\\|Invalid tool call\\\\|got str\" ~/.mimir/acp.log)",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(bun -e \"const d = await Bun.file\\('packages/server/provider-data.json'\\).json\\(\\); const fw = d.providers?.['fireworks-ai'] ?? d.providers?.fireworks; console.log\\('Provider:', JSON.stringify\\(fw, null, 2\\)\\); const models = Object.entries\\(d.models\\).filter\\(\\([k]\\) => k.toLowerCase\\(\\).includes\\('deepseek'\\)\\); console.log\\('DeepSeek models:', JSON.stringify\\(Object.fromEntries\\(models\\), null, 2\\)\\)\")",
+      "Bash(bun -e \"const d = await Bun.file\\('packages/server/provider-data.json'\\).json\\(\\); console.log\\('Top keys:', Object.keys\\(d\\)\\)\")",
+      "Bash(tail -200 ~/.mimir/acp.log 2>/dev/null | head -100)"
     ]
   },
   "spinnerTipsEnabled": false

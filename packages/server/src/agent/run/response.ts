@@ -10,6 +10,7 @@ import {
   finalizeTurn,
 } from "../../agent-loop/post-processing";
 import type { MimirContext } from "../../middleware/types";
+import { safeParseJSON } from "../../util/json";
 import { log } from "../../util/logger";
 import { enqueueLlmCall } from "../queue";
 import {
@@ -147,13 +148,17 @@ async function nonStreamingResponseImpl(
         case "reasoning":
           reasoningParts.push(part.text);
           break;
-        case "tool-call":
+        case "tool-call": {
+          const input = typeof part.input === "string"
+            ? safeParseJSON(part.input)
+            : (part.input ?? {});
           toolCalls.push({
             toolCallId: part.toolCallId,
             toolName: part.toolName,
-            input: JSON.stringify(part.input ?? {}),
+            input: JSON.stringify(input),
           });
           break;
+        }
       }
     }
 

@@ -77,12 +77,20 @@ export async function agentLoop(
   }> = [];
 
   for (let step = 0; step < MAX_AGENT_STEPS; step++) {
-    log.debug({ step, promptMessages: prompt.length }, "agent step");
+    log.info(
+      { step, promptMessages: prompt.length, model: ctx.request.model },
+      "agent step — calling doStream",
+    );
 
-    const { stream } = await model.doStream({
-      ...baseOptions,
-      prompt,
-    });
+    const doStreamResult = await Promise.race([
+      model.doStream({ ...baseOptions, prompt }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("doStream timed out after 120s")), 120_000),
+      ),
+    ]);
+    const { stream } = doStreamResult;
+
+    log.info({ step }, "doStream returned — reading chunks");
 
     const textChunks: string[] = [];
     const reasoningChunks: string[] = [];
@@ -112,13 +120,21 @@ export async function agentLoop(
             emitSSE(controller, { reasoning_content: part.delta });
             break;
 
-          case "tool-call":
+          case "tool-call": {
+            // part.input is typed `unknown`. Most SDKs hand us a parsed
+            // object, but @ai-sdk/openai-compatible passes the raw JSON
+            // string. Normalize to object before stringifying so downstream
+            // consumers (prompt replay, SSE, tool execution) get valid args.
+            const input = typeof part.input === "string"
+              ? safeParseJSON(part.input)
+              : (part.input ?? {});
             toolCalls.push({
               toolCallId: part.toolCallId,
               toolName: part.toolName,
-              input: JSON.stringify(part.input ?? {}),
+              input: JSON.stringify(input),
             });
             break;
+          }
 
           case "finish":
             finishReason = part.finishReason.unified;
