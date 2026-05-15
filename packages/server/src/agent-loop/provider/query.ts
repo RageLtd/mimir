@@ -134,9 +134,11 @@ export function getProviderConfigForModel(modelId: string) {
 
   const slashIndex = modelId.indexOf("/");
   if (slashIndex !== -1) {
-    const providerHint = modelId.slice(0, slashIndex);
-    bareModelId = modelId.slice(slashIndex + 1);
-    if (providers.has(providerHint)) providerId = providerHint;
+    const candidate = modelId.slice(0, slashIndex);
+    if (providers.has(candidate)) {
+      providerId = candidate;
+      bareModelId = modelId.slice(slashIndex + 1);
+    }
   }
 
   if (!providerId) {
@@ -173,18 +175,24 @@ export function resolveModel(modelId: string) {
     );
   }
 
-  // Check for provider prefix (e.g., "opencode-go/glm-5")
+  // Check for provider prefix (e.g., "opencode-go/glm-5").
+  // Only strip when the prefix is a registered provider — model IDs like
+  // "accounts/fireworks/models/deepseek-v4-pro" contain slashes that are
+  // part of the ID itself, not a provider hint.
   const slashIndex = modelId.indexOf("/");
   let bareModelId = modelId;
   let providerHint: string | undefined;
 
   if (slashIndex !== -1) {
-    providerHint = modelId.slice(0, slashIndex);
-    bareModelId = modelId.slice(slashIndex + 1);
+    const candidate = modelId.slice(0, slashIndex);
+    if (providers.has(candidate)) {
+      providerHint = candidate;
+      bareModelId = modelId.slice(slashIndex + 1);
+    }
   }
 
   // Try with hint first
-  if (providerHint && providers.has(providerHint)) {
+  if (providerHint) {
     const fullModelId = bareNameToFullId.get(bareModelId) ?? bareModelId;
     const npm = getModelNpm(bareModelId);
     const sdk = getOrCreateSDK(providerHint, npm);
