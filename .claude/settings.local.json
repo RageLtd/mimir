@@ -23,7 +23,8 @@
       "Bash(bun add *)",
       "mcp__mimir__project_memory_search",
       "mcp__mimir__cartographer_file_info",
-      "mcp__mimir__cartographer_query"
+      "mcp__mimir__cartographer_query",
+      "mcp__mimir__read_mimir_logs"
     ]
   },
   "spinnerTipsEnabled": false

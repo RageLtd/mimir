@@ -128,7 +128,7 @@ describe("toCanUseTool", () => {
     expect(capturedRequest!.description).toBe("Modify foo.ts");
   });
 
-  test("uses displayName as title fallback", async () => {
+  test("falls back to toolTitle when SDK title is absent", async () => {
     let capturedRequest: Parameters<RequestToolPermission>[0] | undefined;
     const mockPermission: RequestToolPermission = async (req) => {
       capturedRequest = req;
@@ -142,6 +142,7 @@ describe("toCanUseTool", () => {
       displayName: "Shell command",
     });
 
-    expect(capturedRequest!.title).toBe("Shell command");
+    // toolTitle("Bash", { command: "ls" }) → "ls"
+    expect(capturedRequest!.title).toBe("ls");
   });
 });

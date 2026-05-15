@@ -34,7 +34,24 @@ import type { Backend, BackendRunOptions } from "./types";
  */
 const parseToolCallArgs = (name: string, raw: string) =>
   Promise.resolve()
-    .then(() => JSON.parse(raw) as Record<string, unknown>)
+    .then(() => {
+      const parsed = JSON.parse(raw);
+      // Some models (e.g. Kimi K2.6 via Fireworks) emit tool call arguments
+      // as a bare string or primitive instead of a JSON object. Upstream APIs
+      // reject these on the next turn when the conversation history is
+      // re-submitted, so coerce non-objects to an empty object and log it.
+      if (
+        parsed === null ||
+        typeof parsed !== "object" ||
+        Array.isArray(parsed)
+      ) {
+        log.warn(
+          `Tool ${name}: arguments decoded to ${typeof parsed}, expected object. Raw: ${raw.slice(0, 200)}`,
+        );
+        return {} as Record<string, unknown>;
+      }
+      return parsed as Record<string, unknown>;
+    })
     .catch((err) => {
       log.debug(
         `Failed to parse tool call arguments for ${name}:`,

@@ -146,8 +146,33 @@ export const normalizeMessages = (messages: unknown[]) => {
       return { role: "assistant", content: parts } as ModelMessage;
     }
 
-    // User and assistant messages without tool calls — keep content as-is
-    if (msg.role === "user" || msg.role === "assistant") {
+    // User messages — pass through multipart content (images) when present
+    if (msg.role === "user") {
+      if (Array.isArray(msg.content) && msg.content.some((p: { type?: string }) => p.type === "image_url")) {
+        const parts = (msg.content as Array<{ type: string; text?: string; image_url?: { url: string } }>).flatMap((p) => {
+          if (p.type === "text" && p.text) {
+            return [{ type: "text" as const, text: p.text }];
+          }
+          if (p.type === "image_url" && p.image_url?.url) {
+            const url = p.image_url.url;
+            // Extract mime type and base64 data from data URI
+            const match = url.match(/^data:([^;]+);base64,(.+)$/);
+            if (match) {
+              return [{ type: "image" as const, image: match[2], mimeType: match[1] }];
+            }
+            // URL-based images — pass as-is via the provider's URL support
+            return [{ type: "image" as const, image: new URL(url), mimeType: undefined }];
+          }
+          return [];
+        });
+        return { role: "user", content: parts } as ModelMessage;
+      }
+      const text = extractTextContent(msg.content);
+      return { role: "user", content: text } as ModelMessage;
+    }
+
+    // Assistant messages without tool calls — keep content as-is
+    if (msg.role === "assistant") {
       const text = extractTextContent(msg.content);
       return {
         role: msg.role,

@@ -36,6 +36,14 @@ export type SessionState = {
   /** First turn only: assembleContext + boot server. Subsequent: SDK handles continuity. */
   bootSequenceDone: boolean;
   /**
+   * Server backend: tools whose permission the user permanently granted
+   * via "Always Allow" in the client dialog. Persisted only in memory for
+   * the session lifetime; restored sessions start fresh. Read/search tools
+   * are auto-approved without prompting, so this Set typically only
+   * contains state-mutating tools (edit, write, execute, delete).
+   */
+  permanentlyAllowedTools: Set<string>;
+  /**
    * CC backend: live Query handle from a streaming-input query(). Held across
    * ACP prompts so the subprocess and conversation state are reused instead of
    * rebuilt each turn. Null until the first prompt creates it; nulled on

@@ -114,6 +114,74 @@ export const acpBlocksToAnthropicContent = (
     return [];
   });
 
+// ── OpenAI multipart content ──
+
+export type OpenAIContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
+/**
+ * Convert ACP content blocks to OpenAI multipart content format.
+ *
+ * Used by the server backend when the user's prompt includes images.
+ * Images become `image_url` parts with data-URI encoding; everything
+ * else collapses to text parts, matching `acpBlocksToAnthropicContent`.
+ */
+export const acpBlocksToOpenAIContent = (
+  blocks: readonly acp.ContentBlock[],
+) =>
+  blocks.flatMap((block): OpenAIContentPart[] => {
+    if (block.type === "text") {
+      return [{ type: "text" as const, text: block.text }];
+    }
+
+    if (block.type === "image") {
+      return [
+        {
+          type: "image_url" as const,
+          image_url: { url: `data:${block.mimeType};base64,${block.data}` },
+        },
+      ];
+    }
+
+    if (block.type === "resource_link") {
+      const label = block.title ?? block.name ?? block.uri;
+      const desc = block.description ? ` — ${block.description}` : "";
+      return [
+        { type: "text" as const, text: `[Resource: ${label}${desc}] (${block.uri})` },
+      ];
+    }
+
+    if (block.type === "resource") {
+      const resource = block.resource;
+      if ("text" in resource) {
+        const mime = resource.mimeType ?? "";
+        return [
+          {
+            type: "text" as const,
+            text: `--- ${resource.uri}${mime ? ` (${mime})` : ""} ---\n${resource.text}`,
+          },
+        ];
+      }
+      return [
+        {
+          type: "text" as const,
+          text: `[Binary resource: ${resource.uri}${resource.mimeType ? ` (${resource.mimeType})` : ""}]`,
+        },
+      ];
+    }
+
+    if (block.type === "audio") {
+      return [{ type: "text" as const, text: `[Audio: ${block.mimeType}]` }];
+    }
+
+    return [];
+  });
+
+/** True when any block in the array carries image data. */
+export const hasImageContent = (blocks: readonly acp.ContentBlock[]) =>
+  blocks.some((b) => b.type === "image");
+
 /**
  * Build server request metadata for the server-backend path. Prefers the
  * canonical project UUID when available; falls back to the filesystem path

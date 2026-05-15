@@ -149,6 +149,7 @@ export const createAgentCore = (
         deps.voiceAnchorLibrary.length,
       ),
       bootSequenceDone: false,
+      permanentlyAllowedTools: new Set(),
       ccQuery: null,
       ccUserStreamPush: null,
       ccEvents: null,
@@ -239,6 +240,7 @@ export const createAgentCore = (
         deps.voiceAnchorLibrary.length,
       ),
       bootSequenceDone: false,
+      permanentlyAllowedTools: new Set(),
       ccQuery: null,
       ccUserStreamPush: null,
       ccEvents: null,
@@ -413,6 +415,7 @@ export const createAgentCore = (
             appConfig,
             memoryStore,
             cartographer,
+            promptBlocks,
           });
 
     // Reindex after any turn that modified files so Cartographer queries

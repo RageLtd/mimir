@@ -11,6 +11,7 @@ import type {
   CanUseTool,
   PermissionUpdate,
 } from "@anthropic-ai/claude-agent-sdk";
+import { toolTitle } from "../../agent/tool-reporting";
 import type { RequestToolPermission } from "../types";
 
 /**
@@ -19,11 +20,17 @@ import type { RequestToolPermission } from "../types";
  */
 export const toCanUseTool = (requestToolPermission: RequestToolPermission) => {
   const canUseTool: CanUseTool = async (toolName, input, options) => {
+    // The SDK's options.title / options.displayName are bridge-level labels
+    // (e.g. "Bash", "Read file") — not the specific command or path. Fall
+    // back to toolTitle() which extracts the actual command/path from input.
+    const title =
+      options.title ?? toolTitle(toolName, input as Record<string, unknown>);
+
     const result = await requestToolPermission({
       toolName,
       input,
       toolCallId: options.toolUseID,
-      title: options.title ?? options.displayName,
+      title,
       description: options.description,
     });
 

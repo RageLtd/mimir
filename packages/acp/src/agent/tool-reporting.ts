@@ -38,6 +38,7 @@ const TOOL_KIND_MAP: Record<string, acp.ToolKind> = {
   cartographer_file_info: "read",
   cartographer_query: "search",
   web_search: "fetch",
+  read_mimir_logs: "read",
   // Local user memory tools
   user_memory_search: "search",
   user_memory_store: "other",
@@ -55,7 +56,7 @@ export const toolKindFor = (name: string) => TOOL_KIND_MAP[name] ?? "other";
 
 /** Build a human-readable title for a tool call. */
 export const toolTitle = (name: string, args: Record<string, unknown>) => {
-  if (name === "Bash") {
+  if (name === "Bash" || name === "create_terminal" || name === "terminal") {
     if (typeof args.description === "string" && args.description.length > 0)
       return args.description;
     if (typeof args.command === "string" && args.command.length > 0)
@@ -73,6 +74,34 @@ export const toolTitle = (name: string, args: Record<string, unknown>) => {
     return `Grep: ${args.pattern}`;
   if (name === "Glob" && typeof args.pattern === "string")
     return `Glob: ${args.pattern}`;
+
+  // Server-side tools
+  if (name === "project_memory_search" && typeof args.query === "string")
+    return `Search memories: ${args.query.length > 50 ? `${args.query.slice(0, 47)}...` : args.query}`;
+  if (name === "project_memory_store") return "Store project memory";
+  if (name === "project_memory_update") return "Update project memory";
+  if (name === "project_memory_list") return "List project memories";
+  if (name === "project_memory_delete") return "Delete project memory";
+  if (name === "cartographer_search" && typeof args.query === "string")
+    return `Search codebase: ${args.query.length > 50 ? `${args.query.slice(0, 47)}...` : args.query}`;
+  if (name === "cartographer_file_info" && typeof args.file_path === "string")
+    return `Inspect ${args.file_path}`;
+  if (name === "cartographer_query" && typeof args.entry_points === "string")
+    return `Query dependencies: ${args.entry_points.length > 40 ? `${args.entry_points.slice(0, 37)}...` : args.entry_points}`;
+  if (name === "web_search" && typeof args.query === "string")
+    return `Web search: ${args.query.length > 50 ? `${args.query.slice(0, 47)}...` : args.query}`;
+  if (name === "read_mimir_logs") return "Read Mimir logs";
+
+  // User memory / profile tools
+  if (name === "user_memory_search" && typeof args.query === "string")
+    return `Search user memories: ${args.query.length > 50 ? `${args.query.slice(0, 47)}...` : args.query}`;
+  if (name === "user_memory_store") return "Store user memory";
+  if (name === "user_memory_list") return "List user memories";
+  if (name === "user_memory_delete") return "Delete user memory";
+  if (name === "user_profile_get") return "Get user profile";
+  if (name === "user_profile_add") return "Update user profile";
+  if (name === "user_profile_remove") return "Remove user profile entry";
+
   return name;
 };
 
@@ -156,13 +185,22 @@ export const buildToolCallContent = (
     if (result.length > 0) return textContent(result);
   }
 
-  // Search / fetch tools → surface results as text
+  // Search / fetch / memory / log tools → surface results as text
   if (
     name === "Glob" ||
     name === "Grep" ||
     name === "WebFetch" ||
     name === "WebSearch" ||
-    name === "web_search"
+    name === "web_search" ||
+    name === "project_memory_search" ||
+    name === "project_memory_list" ||
+    name === "cartographer_search" ||
+    name === "cartographer_file_info" ||
+    name === "cartographer_query" ||
+    name === "read_mimir_logs" ||
+    name === "user_memory_search" ||
+    name === "user_memory_list" ||
+    name === "user_profile_get"
   ) {
     if (result.length > 0) return textContent(result);
   }

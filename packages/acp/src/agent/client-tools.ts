@@ -106,6 +106,21 @@ export const clientToolNames = new Set([
   "terminal",
 ]);
 
+/** Options for executing a client tool. */
+export type ExecuteClientToolOptions = {
+  /** Signal to abort long-running operations (e.g. terminal commands). */
+  abortSignal?: AbortSignal;
+  /**
+   * Callback invoked periodically with the terminal's current output while a
+   * `create_terminal` command is running. `isComplete` is true on the final
+   * call after the process exits.
+   */
+  onTerminalOutput?: (
+    output: string,
+    isComplete: boolean,
+  ) => void | Promise<void>;
+};
+
 // ── Client tool execution ──
 
 export const executeClientTool = async (
@@ -113,52 +128,94 @@ export const executeClientTool = async (
   args: Record<string, unknown>,
   sessionId: string,
   conn: acp.AgentSideConnection,
+  options?: ExecuteClientToolOptions,
 ) => {
-  try {
-    if (name === "fs_read_text_file" || name === "read_text_file") {
-      if (typeof args.path !== "string") return `${name}: missing path arg`;
-      const result = await conn.readTextFile({
-        sessionId,
-        path: args.path,
-        line: typeof args.line === "number" ? args.line : null,
-        limit: typeof args.limit === "number" ? args.limit : null,
-      });
-      return result.content;
-    }
-
-    if (name === "fs_write_text_file" || name === "write_text_file") {
-      if (typeof args.path !== "string") return `${name}: missing path arg`;
-      if (typeof args.content !== "string")
-        return `${name}: missing content arg`;
-      await conn.writeTextFile({
-        sessionId,
-        path: args.path,
-        content: args.content,
-      });
-      return "File written successfully.";
-    }
-
-    if (name === "create_terminal" || name === "terminal") {
-      if (typeof args.command !== "string")
-        return `${name}: missing command arg`;
-      const handle = await conn.createTerminal({
-        sessionId,
-        command: args.command,
-        args: Array.isArray(args.args)
-          ? args.args.filter((a): a is string => typeof a === "string")
-          : undefined,
-        cwd: typeof args.cwd === "string" ? args.cwd : null,
-      });
-      await handle.waitForExit();
-      const output = await handle.currentOutput();
-      await handle.release();
-      return output.output;
-    }
-
-    return `Unknown client tool: ${name}`;
-  } catch (err) {
-    const msg = errMessage(err);
-    logger.error("Client tool error:", msg);
-    return `Error executing ${name}: ${msg}`;
+  if (name === "fs_read_text_file" || name === "read_text_file") {
+    if (typeof args.path !== "string") return `${name}: missing path arg`;
+    const result = await conn.readTextFile({
+      sessionId,
+      path: args.path,
+      line: typeof args.line === "number" ? args.line : null,
+      limit: typeof args.limit === "number" ? args.limit : null,
+    });
+    return result.content;
   }
+
+  if (name === "fs_write_text_file" || name === "write_text_file") {
+    if (typeof args.path !== "string") return `${name}: missing path arg`;
+    if (typeof args.content !== "string") return `${name}: missing content arg`;
+    await conn.writeTextFile({
+      sessionId,
+      path: args.path,
+      content: args.content,
+    });
+    return "File written successfully.";
+  }
+
+  if (name === "create_terminal" || name === "terminal") {
+    if (typeof args.command !== "string") return `${name}: missing command arg`;
+    const handle = await conn.createTerminal({
+      sessionId,
+      command: args.command,
+      args: Array.isArray(args.args)
+        ? args.args.filter((a) => typeof a === "string")
+        : undefined,
+      cwd: typeof args.cwd === "string" ? args.cwd : null,
+    });
+
+    // If a streaming callback was provided, poll currentOutput while waiting.
+    if (options?.onTerminalOutput) {
+      let done = false;
+      let lastOutput = "";
+      const exitPromise = handle.waitForExit().finally(() => {
+        done = true;
+      });
+
+      const pollPromise = (async () => {
+        while (!done) {
+          if (options.abortSignal?.aborted) {
+            handle.kill().catch((err) => {
+              logger.debug("Terminal kill failed:", errMessage(err));
+            });
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 250));
+          if (done) break;
+          const current = await handle.currentOutput();
+          if (current.output.length > lastOutput.length) {
+            lastOutput = current.output;
+            await options.onTerminalOutput?.(current.output, false);
+          }
+        }
+      })();
+
+      await Promise.race([exitPromise, pollPromise]);
+      await exitPromise; // ensure terminal has finished
+      const final = await handle.currentOutput();
+      await handle.release();
+      await options.onTerminalOutput(final.output, true);
+      return final.output;
+    }
+
+    // No streaming callback — simple blocking wait with abort support.
+    if (options?.abortSignal) {
+      const abortPromise = new Promise<never>((_, reject) => {
+        const onAbort = () => {
+          handle.kill().catch((err) => {
+            logger.debug("Terminal kill failed:", errMessage(err));
+          });
+          reject(new Error("Aborted"));
+        };
+        options.abortSignal?.addEventListener("abort", onAbort, { once: true });
+      });
+      await Promise.race([handle.waitForExit(), abortPromise]);
+    } else {
+      await handle.waitForExit();
+    }
+    const output = await handle.currentOutput();
+    await handle.release();
+    return output.output;
+  }
+
+  return `Unknown client tool: ${name}`;
 };

@@ -89,6 +89,13 @@ const handleToolCall = async (
   const showTerminal = isBash && supportsTerminalOutput(session);
   const locations = extractLocations(event.name, event.input);
 
+  // Build content eagerly — Edit/Write diffs only need the input args
+  // (old_string, new_string, content), so they render immediately when the
+  // tool card appears instead of waiting for the result.
+  const eagarContent = showTerminal
+    ? [{ type: "terminal" as const, terminalId: event.id }]
+    : (buildToolCallContent(event.name, event.input, "") ?? []);
+
   await conn.sessionUpdate({
     sessionId: session.sessionId,
     update: {
@@ -102,9 +109,7 @@ const handleToolCall = async (
       rawInput: event.input,
       kind: toolKindFor(event.name),
       status: "pending" as const,
-      content: showTerminal
-        ? [{ type: "terminal" as const, terminalId: event.id }]
-        : [],
+      content: eagarContent,
       ...(locations ? { locations } : {}),
     },
   });

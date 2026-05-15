@@ -14,9 +14,11 @@ const log = createChildLogger(rootLog, "server-client");
 
 // ── Types ──
 
+import type { OpenAIContentPart } from "./agent/content";
+
 export type ChatMessage = {
   readonly role: "system" | "user" | "assistant" | "tool";
-  readonly content: string | null;
+  readonly content: string | OpenAIContentPart[] | null;
   readonly tool_calls?: readonly {
     readonly id: string;
     readonly type: "function";

@@ -43,7 +43,11 @@ import {
   clientToolNames,
   executeClientTool,
 } from "./client-tools";
-import { buildMetadata } from "./content";
+import {
+  acpBlocksToOpenAIContent,
+  buildMetadata,
+  hasImageContent,
+} from "./content";
 import { emitAgentText } from "./lifecycle-helpers";
 import {
   buildToolCallContent,
@@ -66,6 +70,7 @@ export type PromptViaServerOptions = {
   readonly appConfig: MimirConfig;
   readonly memoryStore: UserMemoryStore;
   readonly cartographer?: CartographerManager | null;
+  readonly promptBlocks?: readonly acp.ContentBlock[];
 };
 
 export const promptViaServer = async (opts: PromptViaServerOptions) => {
@@ -78,13 +83,17 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
     appConfig,
     memoryStore,
     cartographer,
+    promptBlocks,
   } = opts;
-  session.messages.push({ role: "user", content: promptText });
 
-  // Permission callback is created once and threaded through BackendRunOptions.
-  // Not actively gating any tools yet (the server backend's tool set is
-  // fully controlled by us), but the plumbing is ready for future per-tool
-  // permission policies.
+  // When the user's prompt includes images, send multipart content so the
+  // model can see them. Otherwise plain text keeps the payload small.
+  const userContent =
+    promptBlocks && promptBlocks.length > 0 && hasImageContent(promptBlocks)
+      ? acpBlocksToOpenAIContent(promptBlocks)
+      : promptText;
+  session.messages.push({ role: "user", content: userContent });
+
   const requestToolPermission = createRequestToolPermission(
     conn,
     session.sessionId,
@@ -214,14 +223,36 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
       })),
     });
 
-    // Execute each tool, push results, then loop and resubmit
+    // Check abort before starting tool execution.
+    if (abortController.signal.aborted) {
+      return { stopReason: "cancelled" as const, filesModified };
+    }
+
+    const supportsTerminalOutput =
+      session.clientCapabilities._meta?.terminal_output === true;
+
+    // Execute each tool sequentially so permission requests don't stack
+    // multiple overlapping dialogs in the client UI.
     for (const tc of pendingToolCalls) {
-      if (isFileWriteTool(tc.name)) filesModified = true;
+      if (abortController.signal.aborted) {
+        session.messages.push({
+          role: "tool",
+          content: "Aborted by user.",
+          tool_call_id: tc.id,
+          name: tc.name,
+        });
+        continue;
+      }
+
       const kind = toolKindFor(tc.name);
       const locations = extractLocations(tc.name, tc.input);
+      const title = toolTitle(tc.name, tc.input);
+
+      // Build content eagerly — Edit/Write diffs only need the input args,
+      // so they render immediately when the tool card appears.
+      const eagerContent = buildToolCallContent(tc.name, tc.input, "") ?? [];
 
       // Initial tool_call notification with in_progress status
-      const title = toolTitle(tc.name, tc.input);
       await conn.sessionUpdate({
         sessionId: session.sessionId,
         update: {
@@ -231,9 +262,52 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
           rawInput: tc.input,
           kind,
           status: "in_progress" as const,
+          content: eagerContent,
           ...(locations ? { locations } : {}),
         },
       });
+
+      // Permission gate — auto-approve read/search tools and tools the
+      // user permanently allowed earlier in this session. Everything else
+      // goes through the ACP permission dialog.
+      const isAutoApproved =
+        kind === "read" ||
+        kind === "search" ||
+        session.permanentlyAllowedTools.has(tc.name);
+
+      if (!isAutoApproved) {
+        const permission = await requestToolPermission({
+          toolCallId: tc.id,
+          toolName: tc.name,
+          title,
+          input: tc.input,
+        });
+
+        if (!permission.allowed) {
+          const denialMessage =
+            permission.message ?? "Permission denied by user.";
+          session.messages.push({
+            role: "tool",
+            content: denialMessage,
+            tool_call_id: tc.id,
+            name: tc.name,
+          });
+          await conn.sessionUpdate({
+            sessionId: session.sessionId,
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: tc.id,
+              rawOutput: { content: denialMessage },
+              status: "completed" as const,
+            },
+          });
+          continue;
+        }
+
+        if (permission.permanent) {
+          session.permanentlyAllowedTools.add(tc.name);
+        }
+      }
 
       // Rule-detector intercept — backend-agnostic engine evaluates
       // session.rules against this tool call and (if any fired) returns
@@ -248,6 +322,8 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
       });
 
       let resultContent: string;
+      const isFileWrite = isFileWriteTool(tc.name);
+
       if (userMemoryToolNames.has(tc.name)) {
         const result = executeUserMemoryTool(memoryStore, tc.name, tc.input);
         resultContent = result.content;
@@ -267,11 +343,34 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
           resultContent = `Error executing ${tc.name}: ${outcome.error}`;
         }
       } else if (clientToolNames.has(tc.name)) {
+        const isTerminal =
+          tc.name === "create_terminal" || tc.name === "terminal";
         resultContent = await executeClientTool(
           tc.name,
           tc.input,
           session.sessionId,
           conn,
+          {
+            abortSignal: abortController.signal,
+            onTerminalOutput:
+              isTerminal && supportsTerminalOutput
+                ? async (output) => {
+                    await conn.sessionUpdate({
+                      sessionId: session.sessionId,
+                      update: {
+                        _meta: {
+                          terminal_output: {
+                            terminal_id: tc.id,
+                            data: output,
+                          },
+                        },
+                        sessionUpdate: "tool_call_update",
+                        toolCallId: tc.id,
+                      },
+                    });
+                  }
+                : undefined,
+          },
         );
       } else if (session.clientMcp?.owns(tc.name)) {
         resultContent = await session.clientMcp
@@ -293,6 +392,8 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
       const finalResult = ruleNudge
         ? `${ruleNudge}\n\n---\n\n${resultContent}`
         : resultContent;
+
+      if (isFileWrite) filesModified = true;
 
       session.messages.push({
         role: "tool",
