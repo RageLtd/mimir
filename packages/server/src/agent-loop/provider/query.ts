@@ -336,6 +336,10 @@ export function getReasoningOptions(
   // "none" → skip reasoning entirely
   if (budget === null) return {};
 
+  // Models with interleaved thinking (DeepSeek, Kimi, etc.) manage reasoning
+  // server-side — sending provider options causes 500s on Fireworks/Together.
+  if (meta.interleaved) return {};
+
   switch (npm) {
     case "@ai-sdk/anthropic":
       return {
@@ -357,8 +361,12 @@ export function getReasoningOptions(
       };
 
     case "@ai-sdk/openai":
-    case "@ai-sdk/openai-compatible":
       return { openai: { reasoningEffort: effort ?? "high" } };
+
+    case "@ai-sdk/openai-compatible":
+      // Only OpenAI proper supports reasoningEffort; other providers behind
+      // openai-compatible (Fireworks, Together, Groq, etc.) don't recognize it.
+      return {};
 
     default:
       return {};
