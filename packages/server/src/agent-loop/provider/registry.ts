@@ -251,6 +251,30 @@ export async function initProviderRegistry() {
     log.info({ baseUrl: ollamaBaseUrl, count: models.length }, "ollama initialized");
   }
 
+  // LM Studio — OpenAI-compatible local server. Routed through
+  // `@ai-sdk/openai-compatible` per Vercel's documented integration: LM Studio
+  // doesn't honour OpenAI's `reasoningEffort` shape, so the conservative SDK
+  // is correct here. Models are whatever's currently loaded in the LM Studio
+  // UI when this runs — restart to pick up newly loaded ones.
+  let lmstudioBaseUrl = Bun.env.LMSTUDIO_BASE_URL;
+  if (config.smallModel.providerType === "lmstudio" && !lmstudioBaseUrl) {
+    lmstudioBaseUrl = config.smallModel.baseUrl;
+  }
+  if (lmstudioBaseUrl) {
+    registerProvider(
+      "lmstudio",
+      "@ai-sdk/openai-compatible",
+      `${lmstudioBaseUrl}/v1`,
+      "not-needed",
+    );
+    const models = await fetchModels(`${lmstudioBaseUrl}/v1/models`);
+    for (const id of models) modelToProvider.set(id, "lmstudio");
+    log.info(
+      { baseUrl: lmstudioBaseUrl, count: models.length },
+      "lmstudio initialized",
+    );
+  }
+
   // --- Remote providers (from provider-data.json) ---
   for (const [envVar, providerIds] of envVarToProviders) {
     const apiKey = getApiKey(envVar);

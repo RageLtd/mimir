@@ -106,6 +106,15 @@ export function getProviderDisplayName(providerId: string) {
 // during initProviderRegistry(), not at module load.
 let providerDisplayNames: Map<string, string> | null = null;
 
+// Local providers don't appear in provider-data.json, so titlecasing their
+// IDs in the ACP picker produces awkward results ("Lmstudio", "Vllm").
+// These overrides give them proper display names.
+const LOCAL_PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  lmstudio: "LM Studio",
+  ollama: "Ollama",
+  vllm: "vLLM",
+};
+
 function getProviderDisplayNames() {
   if (!providerDisplayNames) {
     providerDisplayNames = new Map();
@@ -114,6 +123,9 @@ function getProviderDisplayNames() {
     )) {
       if (typeof entry.name === "string")
         providerDisplayNames.set(id, entry.name);
+    }
+    for (const [id, name] of Object.entries(LOCAL_PROVIDER_DISPLAY_NAMES)) {
+      if (!providerDisplayNames.has(id)) providerDisplayNames.set(id, name);
     }
   }
   return providerDisplayNames;

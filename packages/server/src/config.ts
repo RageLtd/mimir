@@ -17,6 +17,14 @@ export const config = {
     embedModel: Bun.env.OLLAMA_EMBED_MODEL ?? "qwen3-embedding:0.6b",
   },
 
+  /** LM Studio — OpenAI-compatible server, default port 1234. Only initialized
+   *  when LMSTUDIO_BASE_URL is set; models discovered dynamically from /v1/models.
+   *  Currently-loaded models in the LM Studio UI are the only ones exposed —
+   *  loading or unloading mid-session requires a server restart to refresh. */
+  lmstudio: {
+    baseUrl: Bun.env.LMSTUDIO_BASE_URL ?? "http://localhost:1234",
+  },
+
   /** Embedding — OpenAI-compatible endpoint (defaults to Ollama for local) */
   embedding: {
     /** OpenAI-compatible API endpoint */
@@ -45,9 +53,10 @@ export const config = {
     apiKey: Bun.env.SMALL_MODEL_API_KEY ?? Bun.env.ZEN_API_KEY ?? "",
     /** Model identifier */
     model: Bun.env.SMALL_MODEL_MODEL ?? "gpt-5-nano",
-    /** Provider type for self-hosted: "ollama" | "openai". If unset, uses provider registry. */
+    /** Provider type for self-hosted: "ollama" | "lmstudio" | "openai". If unset, uses provider registry. */
     providerType: Bun.env.SMALL_MODEL_PROVIDER_TYPE as
       | "ollama"
+      | "lmstudio"
       | "openai"
       | undefined,
     /** Manual context window override (uses models.dev lookup if unset) */

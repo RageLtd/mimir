@@ -61,6 +61,16 @@ app.get("/health", async (c) => {
     ),
   ];
 
+  // Only check LM Studio if explicitly configured — opt-in local provider,
+  // not always running on every user's machine.
+  if (Bun.env.LMSTUDIO_BASE_URL) {
+    healthChecks.push(
+      pingService(`${config.lmstudio.baseUrl}/v1/models`).then(
+        (r) => ["lmstudio", r] as [string, HealthStatus],
+      ),
+    );
+  }
+
   // Only check Zen if configured
   if (config.zen.apiKey) {
     healthChecks.push(
