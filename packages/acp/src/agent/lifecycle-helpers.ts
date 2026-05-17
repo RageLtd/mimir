@@ -11,6 +11,7 @@ import type * as acp from "@agentclientprotocol/sdk";
 import { getContextWindow } from "../backends/claude-code/context-window-cache";
 import { isCCModel } from "../routing";
 import { formatLoadErrors, type LoadError } from "../rules";
+import type { ChatMessage } from "../server-client";
 import { createChildLogger, log } from "../utils/log";
 import { AVAILABLE_COMMANDS } from "./session";
 import type { AgentCore } from "./types";
@@ -102,13 +103,13 @@ export const maybeEmitCommandsList = (
 export const replayHistoryToEditor = (
   conn: acp.AgentSideConnection,
   sessionId: string,
-  messages: readonly { role: string; content: string | null }[],
+  messages: readonly ChatMessage[],
 ) => {
   const onFail = (kind: string) => (err: unknown) =>
     logger.debug(`replay ${kind} chunk failed:`, err);
 
   for (const msg of messages) {
-    if (!msg.content) continue;
+    if (typeof msg.content !== "string" || msg.content.length === 0) continue;
     if (msg.role === "user") {
       emitUserText(conn, sessionId, msg.content).catch(onFail("user_message"));
     } else if (msg.role === "assistant") {

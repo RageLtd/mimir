@@ -8,12 +8,15 @@ import type {
   Query,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import type { ModelReasoningEffort, Thread } from "@openai/codex-sdk";
 import type { VoiceAnchorState } from "../backends/claude-code/voice-anchors";
 import type { BackendEvent } from "../backends/types";
 import type { ClientMcpManager } from "../client-mcp/manager";
 import type { ResolvedProject } from "../project/resolver";
 import type { LoadError, RuleEntry } from "../rules";
 import type { ChatMessage } from "../server-client";
+
+export type ThoughtLevel = EffortLevel | ModelReasoningEffort | "none";
 
 export type SessionState = {
   sessionId: string;
@@ -24,7 +27,7 @@ export type SessionState = {
   abortController: AbortController | null;
   currentModelId: string;
   currentMode: string;
-  currentThoughtLevel?: EffortLevel;
+  currentThoughtLevel?: ThoughtLevel;
   title: string | null;
   projectRules: string | null;
   rules: readonly RuleEntry[];
@@ -72,6 +75,18 @@ export type SessionState = {
     modelId: string;
     mode: string;
     effort: EffortLevel | undefined;
+  } | null;
+  codexThread: Thread | null;
+  codexInstructionPath: string | null;
+  codexPermissionBridge: {
+    readonly socketPath: string;
+    readonly command: string;
+    readonly close: () => Promise<void>;
+  } | null;
+  codexThreadConfig: {
+    modelId: string;
+    mode: string;
+    effort: ThoughtLevel | undefined;
   } | null;
 };
 

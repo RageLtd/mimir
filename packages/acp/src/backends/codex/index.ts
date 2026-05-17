@@ -1,0 +1,1 @@
+export { createCodexBackend } from "./adapter";

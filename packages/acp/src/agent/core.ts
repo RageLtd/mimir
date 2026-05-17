@@ -12,6 +12,7 @@ import {
   createAnchorState,
   type VoiceAnchor,
 } from "../backends/claude-code/voice-anchors";
+import { promptViaCodex } from "../backends/codex/prompt-codex";
 import type { CartographerManager } from "../cartographer/lifecycle";
 import { formatRulesForPrompt, readProjectRules } from "../cartographer/rules";
 import { createClientMcpManager } from "../client-mcp/manager";
@@ -154,6 +155,10 @@ export const createAgentCore = (
       ccUserStreamPush: null,
       ccEvents: null,
       ccQueryConfig: null,
+      codexThread: null,
+      codexInstructionPath: null,
+      codexPermissionBridge: null,
+      codexThreadConfig: null,
     };
     sessions.set(sessionId, session);
 
@@ -245,6 +250,10 @@ export const createAgentCore = (
       ccUserStreamPush: null,
       ccEvents: null,
       ccQueryConfig: null,
+      codexThread: null,
+      codexInstructionPath: null,
+      codexPermissionBridge: null,
+      codexThreadConfig: null,
     };
     sessions.set(sessionId, session);
 
@@ -299,6 +308,15 @@ export const createAgentCore = (
       session.ccEvents = null;
       session.ccQueryConfig = null;
     }
+    session.codexThread = null;
+    session.codexInstructionPath = null;
+    session.codexPermissionBridge
+      ?.close()
+      .catch((err) =>
+        logger.debug("codex permission bridge close on compact failed:", err),
+      );
+    session.codexPermissionBridge = null;
+    session.codexThreadConfig = null;
     session.bootSequenceDone = false;
     return true;
   };
@@ -390,33 +408,46 @@ export const createAgentCore = (
     }
     const backend = route.backend;
 
-    const result =
-      backend.kind === "claude-code"
-        ? await promptViaClaudeCode({
-            session,
-            promptText: stampedPrompt,
-            conn,
-            abortController,
-            backend,
-            contextClient,
-            memoryStore,
-            anchorOpts: {
-              library: deps.voiceAnchorLibrary,
-              interval: deps.anchorInterval,
-            },
-            promptBlocks,
-          })
-        : await promptViaServer({
-            session,
-            promptText: stampedPrompt,
-            conn,
-            abortController,
-            backend,
-            appConfig,
-            memoryStore,
-            cartographer,
-            promptBlocks,
-          });
+    let result: acp.PromptResponse & { filesModified?: boolean };
+    if (backend.kind === "claude-code") {
+      result = await promptViaClaudeCode({
+        session,
+        promptText: stampedPrompt,
+        conn,
+        abortController,
+        backend,
+        contextClient,
+        memoryStore,
+        anchorOpts: {
+          library: deps.voiceAnchorLibrary,
+          interval: deps.anchorInterval,
+        },
+        promptBlocks,
+      });
+    } else if (backend.kind === "codex") {
+      result = await promptViaCodex({
+        session,
+        promptText: stampedPrompt,
+        conn,
+        abortController,
+        backend,
+        contextClient,
+        memoryStore,
+        promptBlocks,
+      });
+    } else {
+      result = await promptViaServer({
+        session,
+        promptText: stampedPrompt,
+        conn,
+        abortController,
+        backend,
+        appConfig,
+        memoryStore,
+        cartographer,
+        promptBlocks,
+      });
+    }
 
     // Reindex after any turn that modified files so Cartographer queries
     // reflect the current state on the next prompt.
@@ -447,6 +478,15 @@ export const createAgentCore = (
       session.ccUserStreamPush = null;
       session.ccEvents = null;
       session.ccQueryConfig = null;
+      session.codexThread = null;
+      session.codexInstructionPath = null;
+      session.codexPermissionBridge
+        ?.close()
+        .catch((err) =>
+          logger.debug("codex permission bridge close on dispose failed:", err),
+        );
+      session.codexPermissionBridge = null;
+      session.codexThreadConfig = null;
       session.clientMcp
         ?.close()
         .catch((err) =>

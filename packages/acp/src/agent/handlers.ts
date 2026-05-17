@@ -13,13 +13,23 @@ import {
   isValidCCMode,
   isValidThoughtLevel,
 } from "../backends/claude-code/config-options";
-import { isCCModel } from "../routing";
 import { discoverCCModelsViaSdk } from "../backends/claude-code/models";
 import { checkForSdkUpdate } from "../backends/claude-code/sdk-updater";
+import {
+  isValidCodexMode,
+  isValidCodexThoughtLevel,
+} from "../backends/codex/config-options";
 import type { CartographerManager } from "../cartographer/lifecycle";
 import type { MimirConfig } from "../config";
 import { assembleClientMcpServers } from "../mcp-config/assemble";
-import { ccAvailable, discoverCopilotModels } from "../routing";
+import {
+  ccAvailable,
+  codexAvailable,
+  discoverCopilotModels,
+  getCodexModelList,
+  isCCModel,
+  isCodexModel,
+} from "../routing";
 import type { UserMemoryStore } from "../store/user-memories";
 import { createChildLogger, log } from "../utils/log";
 import { handleCommand } from "./commands";
@@ -54,6 +64,7 @@ export type HandlerDeps = ModelResolutionDeps & {
   readonly getClientCapabilities: () => acp.ClientCapabilities;
   readonly setClientCapabilities: (caps: acp.ClientCapabilities) => void;
   readonly setDiscoveredCCModels: (ms: readonly acp.ModelInfo[]) => void;
+  readonly setDiscoveredCodexModels: (ms: readonly acp.ModelInfo[]) => void;
   readonly setDiscoveredCopilotModels: (ms: readonly acp.ModelInfo[]) => void;
   /** Tracks which sessions have already received available_commands_update,
    *  so we emit it once per session on the first prompt call rather than
@@ -77,21 +88,26 @@ export const initialize = async (
     );
   }
 
-  const [ccResult, ccModelsResult, copilotResult] = await Promise.all([
-    config.cc.enabled
-      ? ccAvailable().then((available) => ({ available }))
-      : Promise.resolve({ available: false }),
-    config.cc.enabled
-      ? discoverCCModelsViaSdk(config.cc)
-      : Promise.resolve([] as acp.ModelInfo[]),
-    config.copilot.enabled
-      ? discoverCopilotModels()
-      : Promise.resolve({
-          available: false,
-          models: [] as acp.ModelInfo[],
-          modelMap: new Map<string, string>(),
-        }),
-  ]);
+  const [ccResult, ccModelsResult, codexResult, copilotResult] =
+    await Promise.all([
+      config.cc.enabled
+        ? ccAvailable().then((available) => ({ available }))
+        : Promise.resolve({ available: false }),
+      config.cc.enabled
+        ? discoverCCModelsViaSdk(config.cc)
+        : Promise.resolve([] as acp.ModelInfo[]),
+      codexAvailable().then((available) => ({
+        available,
+        models: available ? getCodexModelList() : ([] as acp.ModelInfo[]),
+      })),
+      config.copilot.enabled
+        ? discoverCopilotModels()
+        : Promise.resolve({
+            available: false,
+            models: [] as acp.ModelInfo[],
+            modelMap: new Map<string, string>(),
+          }),
+    ]);
 
   router.runtime.ccEnabled = ccResult.available;
   deps.setDiscoveredCCModels(ccModelsResult);
@@ -101,6 +117,14 @@ export const initialize = async (
       : config.cc.enabled
         ? "claude binary not found on PATH; disabling CC backend"
         : "CC backend disabled by config",
+  );
+
+  router.runtime.codexEnabled = codexResult.available;
+  deps.setDiscoveredCodexModels(codexResult.models);
+  logger.info(
+    codexResult.available
+      ? `Codex backend enabled (${codexResult.models.length} models)`
+      : "codex binary not found on PATH; disabling Codex backend",
   );
 
   router.runtime.copilotEnabled = copilotResult.available;
@@ -369,12 +393,24 @@ export const setSessionMode = async (
 const applyModeChange = async (
   deps: HandlerDeps,
   sessionId: string,
+  modelId: string,
   value: string,
 ) => {
-  if (!isValidCCMode(value)) {
-    logger.warn("setSessionConfigOption: invalid mode", value);
+  if (isCodexModel(modelId) && !isValidCodexMode(value)) {
+    logger.warn("setSessionConfigOption: invalid Codex mode", value);
     return;
   }
+
+  if (isCCModel(modelId) && !isValidCCMode(value)) {
+    logger.warn("setSessionConfigOption: invalid Claude Code mode", value);
+    return;
+  }
+
+  if (!isCodexModel(modelId) && !isCCModel(modelId)) {
+    logger.warn("setSessionConfigOption: mode unsupported for model", modelId);
+    return;
+  }
+
   deps.core.setMode(sessionId, value);
   await deps.conn
     .sessionUpdate({
@@ -390,16 +426,25 @@ const applyModeChange = async (
   logger.info("mode set:", sessionId, "→", value);
 };
 
+const validThoughtLevelForModel = (modelId: string, value: string) => {
+  if (isCCModel(modelId)) {
+    return isValidThoughtLevel(value, ccAliasFor(modelId));
+  }
+
+  if (isCodexModel(modelId)) {
+    return isValidCodexThoughtLevel(value);
+  }
+
+  return isValidServerEffort(value);
+};
+
 const applyThoughtLevelChange = (
   deps: HandlerDeps,
   sessionId: string,
   modelId: string,
   value: string,
 ) => {
-  const valid = isCCModel(modelId)
-    ? isValidThoughtLevel(value, ccAliasFor(modelId))
-    : isValidServerEffort(value);
-  if (!valid) {
+  if (!validThoughtLevelForModel(modelId, value)) {
     logger.warn("setSessionConfigOption: invalid thought_level", value);
     return;
   }
@@ -425,9 +470,19 @@ export const setSessionConfigOption = async (
   }
 
   if (params.configId === "mode") {
-    await applyModeChange(deps, params.sessionId, params.value);
+    await applyModeChange(
+      deps,
+      params.sessionId,
+      session.currentModelId,
+      params.value,
+    );
   } else if (params.configId === "thought_level") {
-    applyThoughtLevelChange(deps, params.sessionId, session.currentModelId, params.value);
+    applyThoughtLevelChange(
+      deps,
+      params.sessionId,
+      session.currentModelId,
+      params.value,
+    );
   } else if (params.configId === "model") {
     // Model switch via configOptions path — delegate to the same logic as
     // unstable_setSessionModel so thought-level narrowing happens.

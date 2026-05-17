@@ -72,6 +72,7 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
   // getter/setter pairs. One connection = one Zed window, so this state is
   // per-connection; handlers never see cross-connection leakage.
   let discoveredCCModels: readonly acp.ModelInfo[] = [];
+  let discoveredCodexModels: readonly acp.ModelInfo[] = [];
   let discoveredCopilotModels: readonly acp.ModelInfo[] = [];
   let clientCapabilities: acp.ClientCapabilities = {};
 
@@ -89,6 +90,10 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
     getDiscoveredCCModels: () => discoveredCCModels,
     setDiscoveredCCModels: (ms) => {
       discoveredCCModels = ms;
+    },
+    getDiscoveredCodexModels: () => discoveredCodexModels,
+    setDiscoveredCodexModels: (ms) => {
+      discoveredCodexModels = ms;
     },
     getDiscoveredCopilotModels: () => discoveredCopilotModels,
     setDiscoveredCopilotModels: (ms) => {

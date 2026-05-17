@@ -3,16 +3,18 @@
  *
  * Backend selection is driven by the model id (per-request), not by a
  * static config. `claude-code/*` routes through the Claude Code Agent SDK;
- * every other model routes through mimir-server.
+ * `codex/*` routes through the Codex SDK; every other model routes through
+ * mimir-server.
  *
  * The two backends are constructed once and selected by model on each
  * call so users can switch models mid-conversation.
  */
 
 import type { MimirConfig } from "../config";
-import { isCCModel, isCopilotModel } from "../routing";
+import { isCCModel, isCodexModel, isCopilotModel } from "../routing";
 import type { ServerClientConfig } from "../server-client";
 import { createClaudeCodeBackend } from "./claude-code";
+import { createCodexBackend } from "./codex/adapter";
 import { createCopilotBackend } from "./copilot/adapter";
 import { createServerBackend } from "./server";
 import type { Backend } from "./types";
@@ -24,6 +26,7 @@ import type { Backend } from "./types";
  */
 export type RuntimeState = {
   ccEnabled: boolean;
+  codexEnabled: boolean;
   copilotEnabled: boolean;
   /** Discovered Copilot model IDs, keyed by suffix for routing. */
   copilotModelMap: Map<string, string>;
@@ -44,6 +47,7 @@ export type BackendRouter = {
   readonly forModel: (modelId: string) => RouteResult;
   readonly server: Backend;
   readonly cc: Backend;
+  readonly codex: Backend;
   readonly copilot: Backend;
   readonly runtime: RuntimeState;
 };
@@ -66,8 +70,14 @@ export const createBackendRouter = (config: MimirConfig) => {
     userMemoryDbPath: config.userMemoryDbPath,
     defaultCwd: process.cwd(),
   });
+  const codex = createCodexBackend({
+    serverUrl: config.serverUrl,
+    userMemoryDbPath: config.userMemoryDbPath,
+    defaultCwd: process.cwd(),
+  });
   const runtime: RuntimeState = {
     ccEnabled: config.cc.enabled,
+    codexEnabled: true,
     copilotEnabled: config.copilot.enabled,
     copilotModelMap: new Map(),
   };
@@ -82,6 +92,15 @@ export const createBackendRouter = (config: MimirConfig) => {
       }
       return { ok: true as const, backend: cc };
     }
+    if (isCodexModel(modelId)) {
+      if (!runtime.codexEnabled) {
+        return {
+          ok: false as const,
+          error: `Model ${modelId} requires the Codex backend, which is disabled.`,
+        };
+      }
+      return { ok: true as const, backend: codex };
+    }
     if (isCopilotModel(modelId)) {
       if (!runtime.copilotEnabled) {
         return {
@@ -94,7 +113,7 @@ export const createBackendRouter = (config: MimirConfig) => {
     return { ok: true as const, backend: server };
   };
 
-  return { forModel, server, cc, copilot, runtime };
+  return { forModel, server, cc, codex, copilot, runtime };
 };
 
 export type { Backend, BackendEvent, BackendRunOptions } from "./types";

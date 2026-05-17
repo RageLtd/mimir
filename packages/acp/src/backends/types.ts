@@ -19,11 +19,8 @@
  */
 
 import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk";
-import type {
-  EffortLevel,
-  PermissionMode,
-} from "@anthropic-ai/claude-agent-sdk";
-import type { SessionState } from "../agent/types";
+import type { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
+import type { SessionState, ThoughtLevel } from "../agent/types";
 import type { RuleEntry } from "../rules";
 import type { ChatMessage, ToolDefinition } from "../server-client";
 
@@ -99,7 +96,7 @@ export type BackendRunOptions = {
   readonly modelId: string;
 
   permissionMode?: PermissionMode;
-  effort?: EffortLevel;
+  effort?: ThoughtLevel;
   /**
    * Loaded rule entries from the engine. CC backend wires them into a
    * PreToolUse hook; server backend intercepts tool dispatch in
@@ -152,6 +149,6 @@ export type RequestToolPermission = (
 ) => Promise<ToolPermissionResult>;
 
 export type Backend = {
-  readonly kind: "server" | "claude-code" | "copilot";
+  readonly kind: "server" | "claude-code" | "codex" | "copilot";
   readonly run: (options: BackendRunOptions) => AsyncGenerator<BackendEvent>;
 };

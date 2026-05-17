@@ -50,6 +50,16 @@ const tearDown = (session: SessionState) => {
   session.ccQueryConfig = null;
 };
 
+const isCcEffort = (
+  effort: BackendRunOptions["effort"],
+): effort is NonNullable<SessionState["ccQueryConfig"]>["effort"] =>
+  effort === undefined ||
+  effort === "low" ||
+  effort === "medium" ||
+  effort === "high" ||
+  effort === "xhigh" ||
+  effort === "max";
+
 export const createClaudeCodeBackend = (deps: ClaudeCodeBackendDeps) => {
   const run = async function* (options: BackendRunOptions) {
     const session = requireSession(options);
@@ -61,11 +71,13 @@ export const createClaudeCodeBackend = (deps: ClaudeCodeBackendDeps) => {
       ? getCCModelFlag(options.modelId, deps.cc)
       : undefined;
 
+    const effort = isCcEffort(options.effort) ? options.effort : undefined;
+
     // Effort changes require recreation (no SDK setEffort).
     if (
       session.ccQuery &&
       session.ccQueryConfig &&
-      session.ccQueryConfig.effort !== options.effort
+      session.ccQueryConfig.effort !== effort
     ) {
       tearDown(session);
     }
@@ -86,7 +98,7 @@ export const createClaudeCodeBackend = (deps: ClaudeCodeBackendDeps) => {
         model,
         clientMcpServers: options.clientMcpServers,
         permissionMode: options.permissionMode,
-        effort: options.effort,
+        effort,
         rules: options.rules,
         canUseTool,
       });
@@ -96,7 +108,7 @@ export const createClaudeCodeBackend = (deps: ClaudeCodeBackendDeps) => {
       session.ccQueryConfig = {
         modelId: options.modelId,
         mode: options.permissionMode ?? "",
-        effort: options.effort,
+        effort,
       };
     } else {
       // Apply mid-session setters before pushing the next message.

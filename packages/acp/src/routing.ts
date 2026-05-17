@@ -2,8 +2,9 @@
  * Model-based backend routing.
  *
  * Models prefixed with `claude-code/` route through the Claude Code
- * Agent SDK backend. Models prefixed with `copilot/` route through the
- * GitHub Copilot SDK backend, with models discovered at startup via
+ * Agent SDK backend. Models prefixed with `codex/` route through the
+ * OpenAI Codex SDK backend. Models prefixed with `copilot/` route through
+ * the GitHub Copilot SDK backend, with models discovered at startup via
  * CopilotClient.listModels(). Everything else routes through mimir-server.
  *
  * Backend selection is per-request, not per-session — the editor's
@@ -17,6 +18,11 @@ import { errMessage } from "./util";
 import { createChildLogger, log } from "./utils/log";
 
 const logger = createChildLogger(log, "routing");
+
+const EMPTY_SERVER_MODELS = {
+  models: [] as ModelInfo[],
+  reasoningModels: new Set<string>(),
+};
 
 // ── Claude Code routing ──
 
@@ -54,7 +60,7 @@ export const prettifyModelSuffix = (suffix: string) => {
     .map((w) => {
       if (w.length === 0) return "";
       if (/^\d+[a-zA-Z]+$/.test(w)) return w.toUpperCase();
-      return w[0]!.toUpperCase() + w.slice(1);
+      return w.charAt(0).toUpperCase() + w.slice(1);
     })
     .join(" ");
 };
@@ -92,6 +98,88 @@ export const ccAvailable = async () => {
   return code === 0;
 };
 
+// ── Codex routing ──
+
+export const CODEX_PREFIX = "codex/";
+
+export const isCodexModel = (modelId: string) =>
+  modelId.startsWith(CODEX_PREFIX);
+
+/**
+ * Map a `codex/<suffix>` model id to Codex's --model value.
+ * Falls back to the input value for defensive callers.
+ */
+export const getCodexModelFlag = (modelId: string) =>
+  isCodexModel(modelId) ? modelId.slice(CODEX_PREFIX.length) : modelId;
+
+const CODEX_MODELS: readonly {
+  readonly suffix: string;
+  readonly name: string;
+  readonly description: string;
+}[] = [
+  {
+    suffix: "gpt-5.5",
+    name: "GPT-5.5 (Codex)",
+    description:
+      "OpenAI's newest frontier model for complex coding workflows in Codex.",
+  },
+  {
+    suffix: "gpt-5.4",
+    name: "GPT-5.4 (Codex)",
+    description:
+      "Flagship frontier model for professional coding and agentic workflows.",
+  },
+  {
+    suffix: "gpt-5.4-mini",
+    name: "GPT-5.4 Mini (Codex)",
+    description: "Fast, efficient Codex model for lighter coding tasks.",
+  },
+  {
+    suffix: "gpt-5.3-codex",
+    name: "GPT-5.3 Codex (Codex)",
+    description: "Coding-specialized model for complex software engineering.",
+  },
+  {
+    suffix: "gpt-5.3-codex-spark",
+    name: "GPT-5.3 Codex Spark (Codex)",
+    description: "Fast research-preview model for real-time coding iteration.",
+  },
+  {
+    suffix: "gpt-5.2",
+    name: "GPT-5.2 (Codex)",
+    description: "Previous general-purpose model for coding and agentic tasks.",
+  },
+];
+
+export const getCodexModelList = () =>
+  CODEX_MODELS.map((model) => ({
+    modelId: `${CODEX_PREFIX}${model.suffix}`,
+    name: model.name,
+    description: model.description,
+  }));
+
+const shellWhich = async (binary: string) => {
+  const shell = Bun.env.SHELL ?? "/bin/sh";
+  return Promise.resolve()
+    .then(
+      () =>
+        Bun.spawn([shell, "-lc", `which ${binary}`], {
+          stdout: "ignore",
+          stderr: "ignore",
+        }).exited,
+    )
+    .catch((err) => {
+      logger.debug(`${binary} binary not found:`, errMessage(err));
+      return -1;
+    });
+};
+
+/** Detect whether the `codex` binary is on the user's login-shell PATH. */
+export const codexAvailable = async () => {
+  const code = await shellWhich("codex");
+  return code === 0;
+};
+
 // ── Server model list fetch + merge ──
 
 type ServerModelEntry = {
@@ -118,7 +206,7 @@ export const titlecaseProviderId = (id: string) =>
   id
     .split(/[-_]/g)
     .map((part) =>
-      part.length > 0 ? part[0]!.toUpperCase() + part.slice(1) : "",
+      part.length > 0 ? part.charAt(0).toUpperCase() + part.slice(1) : "",
     )
     .join(" ");
 
@@ -153,18 +241,18 @@ export const fetchServerModels = async (
   const res = await fetch(url, { headers, signal }).catch(errMessage);
   if (typeof res === "string") {
     logger.warn(`server model fetch failed: ${res} (${url})`);
-    return [];
+    return EMPTY_SERVER_MODELS;
   }
   if (!res.ok) {
     logger.warn(
       `server model fetch failed: ${res.status} ${res.statusText} (${url})`,
     );
-    return [];
+    return EMPTY_SERVER_MODELS;
   }
   const body = await res.json().catch(errMessage);
   if (typeof body === "string") {
     logger.warn(`server model fetch — invalid JSON: ${body} (${url})`);
-    return [];
+    return EMPTY_SERVER_MODELS;
   }
   const data = (body as { data?: ServerModelEntry[] }).data ?? [];
   const reasoningModels = new Set<string>();
@@ -176,7 +264,9 @@ export const fetchServerModels = async (
       description: m.owned_by ? `Provider: ${m.owned_by}` : undefined,
     };
   });
-  logger.info(`fetched ${models.length} models from mimir-server (${reasoningModels.size} with reasoning)`);
+  logger.info(
+    `fetched ${models.length} models from mimir-server (${reasoningModels.size} with reasoning)`,
+  );
   return { models, reasoningModels };
 };
 
@@ -259,9 +349,10 @@ export const discoverCopilotModels = async () => {
 
 // ── Model merging ──
 
-/** Merge server + CC + Copilot models. CC and Copilot entries come first. */
+/** Merge server + CC + Codex + Copilot models. Local CLI backends come first. */
 export const mergeModels = (
   serverModels: ModelInfo[],
   ccModels: ModelInfo[],
+  codexModels: ModelInfo[] = [],
   copilotModels: ModelInfo[] = [],
-) => [...ccModels, ...copilotModels, ...serverModels];
+) => [...ccModels, ...codexModels, ...copilotModels, ...serverModels];

@@ -40,8 +40,10 @@ const mkRouter = (
   server: {} as never,
   cc: {} as never,
   copilot: {} as never,
+  codex: {} as never,
   runtime: {
     ccEnabled: true,
+    codexEnabled: false,
     copilotEnabled: false,
     copilotModelMap: new Map(),
     ...overrides,
@@ -77,7 +79,9 @@ const mkDeps = (
   config,
   router: mkRouter(),
   getDiscoveredCCModels: () => ccModels,
+  getDiscoveredCodexModels: () => [],
   getDiscoveredCopilotModels: () => [],
+  serverReasoningModels: new Set(),
 });
 
 describe("buildModelsState — preferredModelId", () => {

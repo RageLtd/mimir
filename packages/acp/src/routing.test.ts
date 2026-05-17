@@ -1,11 +1,15 @@
 import { test, expect, describe } from "bun:test";
 import {
   CC_PREFIX,
+  CODEX_PREFIX,
   COPILOT_PREFIX,
   composeServerModelName,
   isCCModel,
+  isCodexModel,
   isCopilotModel,
   getCCModelFlag,
+  getCodexModelFlag,
+  getCodexModelList,
   getCopilotModelFlag,
   getCCModelList,
   mergeModels,
@@ -109,6 +113,43 @@ describe("getCCModelList", () => {
   });
 });
 
+// ── Codex routing ──
+
+describe("isCodexModel", () => {
+  test("returns true for codex/ prefixed models", () => {
+    expect(isCodexModel("codex/gpt-5.5")).toBe(true);
+    expect(isCodexModel("codex/gpt-5.4")).toBe(true);
+  });
+
+  test("returns false for non-Codex models", () => {
+    expect(isCodexModel("gpt-5.5")).toBe(false);
+    expect(isCodexModel("claude-code/opus")).toBe(false);
+    expect(isCodexModel("")).toBe(false);
+  });
+
+  test("prefix is exact — no partial matches", () => {
+    expect(isCodexModel("codex-wrong/gpt-5.5")).toBe(false);
+  });
+});
+
+describe("getCodexModelFlag", () => {
+  test("strips the codex/ prefix", () => {
+    expect(getCodexModelFlag(`${CODEX_PREFIX}gpt-5.5`)).toBe("gpt-5.5");
+  });
+
+  test("passes through non-Codex model ids", () => {
+    expect(getCodexModelFlag("gpt-5.5")).toBe("gpt-5.5");
+  });
+});
+
+describe("getCodexModelList", () => {
+  test("returns static Codex model entries", () => {
+    const list = getCodexModelList();
+    expect(list.map((m) => m.modelId)).toContain("codex/gpt-5.5");
+    expect(list[0]!.name).toContain("(Codex)");
+  });
+});
+
 // ── Copilot routing ──
 
 describe("isCopilotModel", () => {
@@ -147,17 +188,19 @@ describe("getCopilotModelFlag", () => {
 // ── mergeModels ──
 
 describe("mergeModels", () => {
-  test("CC and Copilot models come before server models", () => {
+  test("CLI backend models come before server models", () => {
     const server = [{ modelId: "s1", name: "Server 1" }];
     const cc = [{ modelId: "claude-code/opus", name: "CC Opus" }];
+    const codex = [{ modelId: "codex/gpt-5.5", name: "Codex GPT-5.5" }];
     const copilot = [{ modelId: "copilot/gpt-4o", name: "Copilot GPT-4o" }];
-    const merged = mergeModels(server, cc, copilot);
+    const merged = mergeModels(server, cc, codex, copilot);
     expect(merged[0]!.modelId).toBe("claude-code/opus");
-    expect(merged[1]!.modelId).toBe("copilot/gpt-4o");
-    expect(merged[2]!.modelId).toBe("s1");
+    expect(merged[1]!.modelId).toBe("codex/gpt-5.5");
+    expect(merged[2]!.modelId).toBe("copilot/gpt-4o");
+    expect(merged[3]!.modelId).toBe("s1");
   });
 
-  test("handles empty copilot list", () => {
+  test("handles empty optional backend lists", () => {
     const server = [{ modelId: "s1", name: "Server 1" }];
     const cc = [{ modelId: "claude-code/opus", name: "CC Opus" }];
     const merged = mergeModels(server, cc);
@@ -175,15 +218,21 @@ describe("mergeModels", () => {
       { modelId: "claude-code/a", name: "A" },
       { modelId: "claude-code/b", name: "B" },
     ];
+    const codex = [
+      { modelId: "codex/a", name: "A" },
+      { modelId: "codex/b", name: "B" },
+    ];
     const copilot = [
       { modelId: "copilot/x", name: "X" },
       { modelId: "copilot/y", name: "Y" },
     ];
     const server = [{ modelId: "s1", name: "S1" }];
-    const merged = mergeModels(server, cc, copilot);
+    const merged = mergeModels(server, cc, codex, copilot);
     expect(merged.map((m) => m.modelId)).toEqual([
       "claude-code/a",
       "claude-code/b",
+      "codex/a",
+      "codex/b",
       "copilot/x",
       "copilot/y",
       "s1",

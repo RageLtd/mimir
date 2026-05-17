@@ -13,11 +13,13 @@ import {
   buildCCConfigOptions,
   DEFAULT_CC_MODE,
 } from "../backends/claude-code/config-options";
+import { buildCodexConfigOptions } from "../backends/codex/config-options";
 import type { MimirConfig } from "../config";
 import {
   CC_PREFIX,
   fetchServerModels,
   isCCModel,
+  isCodexModel,
   mergeModels,
 } from "../routing";
 import { createChildLogger, log } from "../utils/log";
@@ -29,6 +31,7 @@ export type ModelResolutionDeps = {
   readonly config: MimirConfig;
   readonly router: BackendRouter;
   readonly getDiscoveredCCModels: () => readonly acp.ModelInfo[];
+  readonly getDiscoveredCodexModels: () => readonly acp.ModelInfo[];
   readonly getDiscoveredCopilotModels: () => readonly acp.ModelInfo[];
   /**
    * Set of server-backend model IDs that support extended thinking /
@@ -71,12 +74,16 @@ export const buildModelsState = async (
   const serverModels = serverResult.models;
   deps.serverReasoningModels = serverResult.reasoningModels;
   const ccModels = router.runtime.ccEnabled ? deps.getDiscoveredCCModels() : [];
+  const codexModels = router.runtime.codexEnabled
+    ? deps.getDiscoveredCodexModels()
+    : [];
   const copilotModels = router.runtime.copilotEnabled
     ? deps.getDiscoveredCopilotModels()
     : [];
   const availableModels = mergeModels(
     serverModels,
     [...ccModels],
+    [...codexModels],
     [...copilotModels],
   );
   const preferred = preferredModelId
@@ -158,6 +165,16 @@ export const buildSessionConfigOptions = (
     });
   }
 
+  if (
+    isCodexModel(session.currentModelId) &&
+    deps.router.runtime.codexEnabled
+  ) {
+    return buildCodexConfigOptions({
+      currentMode: session.currentMode,
+      currentThoughtLevel: session.currentThoughtLevel,
+    });
+  }
+
   // Server backend — expose a thought-level selector for reasoning models.
   if (deps.serverReasoningModels.has(session.currentModelId)) {
     const currentLevel =
@@ -174,7 +191,7 @@ export const buildSessionConfigOptions = (
       currentValue: currentLevel,
       options: SERVER_EFFORT_LEVELS.map((level) => ({
         value: level,
-        name: SERVER_EFFORT_DISPLAY[level],
+        name: SERVER_EFFORT_DISPLAY[level] ?? level,
       })),
     };
     return [thoughtLevelOption];
