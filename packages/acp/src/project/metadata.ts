@@ -165,9 +165,7 @@ const collectFromCargoToml = async (projectPath: string) => {
   }
 
   // Extract dependency names from [dependencies] and [dev-dependencies]
-  const depSection = text.match(
-    /\[dependencies\]\s*\n([\s\S]*?)(?=\n\[|\n*$)/,
-  );
+  const depSection = text.match(/\[dependencies\]\s*\n([\s\S]*?)(?=\n\[|\n*$)/);
   const devDepSection = text.match(
     /\[dev-dependencies\]\s*\n([\s\S]*?)(?=\n\[|\n*$)/,
   );

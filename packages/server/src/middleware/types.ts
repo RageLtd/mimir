@@ -58,6 +58,9 @@ export interface MimirContext {
   // -- Set by MW2: goldfish --
   memories: string | null; // formatted memory text for context injection
 
+  // -- Set by MW2.6: project rules (from ACP metadata) --
+  projectRules: string | null;
+
   // -- Set by MW3: context assembly --
   conversationMessages: ModelMessage[]; // the actual messages to send to the model
   contextInjection: ModelMessage[]; // synthetic user+assistant pair (summaries + memories)

@@ -57,7 +57,7 @@ const titlecaseProviderId = (id: string) =>
   id
     .split(/[-_]/g)
     .map((part) =>
-      part.length > 0 ? part[0]!.toUpperCase() + part.slice(1) : "",
+      part.length > 0 ? part[0]?.toUpperCase() + part.slice(1) : "",
     )
     .join(" ");
 
@@ -156,8 +156,8 @@ async function getOpenRouterModels(): Promise<ModelEntry[]> {
 
     // Keep only models that produce text output — strips image generation,
     // audio-only, and embedding models from the coding agent's picker.
-    models = models.filter((m) =>
-      m.architecture?.output_modalities?.includes("text") ?? true,
+    models = models.filter(
+      (m) => m.architecture?.output_modalities?.includes("text") ?? true,
     );
 
     // When ZDR is enabled and we got the endpoint list, keep only models

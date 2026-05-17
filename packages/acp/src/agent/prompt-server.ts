@@ -114,7 +114,12 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
     ...clientMcpTools,
   ];
   const userContext = buildUserContext(memoryStore);
-  const metadata = buildMetadata(session.projectPath, session.projectId, userContext);
+  const metadata = buildMetadata(
+    session.projectPath,
+    session.projectId,
+    userContext,
+    session.projectRules,
+  );
 
   let turnCount = 0;
   let filesModified = false;

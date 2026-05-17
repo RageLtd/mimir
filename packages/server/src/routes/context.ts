@@ -235,8 +235,9 @@ context.post("/assemble", async (c) => {
       config.context.keepRecentMessages,
     );
 
-    // Build context injection pair — shared with server middleware
-    const injection = buildContextInjection(summaries, memories);
+    // Build context injection pair — shared with server middleware.
+    // Rules are null here — the CC backend gets them via boot tools, not this route.
+    const injection = buildContextInjection(summaries, memories, null);
 
     const messages: SimpleMessage[] = injection.map((m) => ({
       role: m.role as "user" | "assistant",

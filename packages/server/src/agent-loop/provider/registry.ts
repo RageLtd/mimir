@@ -161,10 +161,7 @@ function getApiKey(envVar: string) {
 // SDK cache for per-model npm overrides
 // ---------------------------------------------------------------------------
 
-export function getOrCreateSDK(
-  providerId: string,
-  npm: string,
-) {
+export function getOrCreateSDK(providerId: string, npm: string) {
   const key = `${providerId}:${npm}`;
   const existing = providerSdks.get(key);
   if (existing) return existing;
@@ -234,10 +231,18 @@ export async function initProviderRegistry() {
   // --- Local providers ---
   const vllmBaseUrl = Bun.env.VLLM_BASE_URL;
   if (vllmBaseUrl) {
-    registerProvider("vllm", "@ai-sdk/openai", `${vllmBaseUrl}/v1`, "not-needed");
+    registerProvider(
+      "vllm",
+      "@ai-sdk/openai",
+      `${vllmBaseUrl}/v1`,
+      "not-needed",
+    );
     const models = await fetchModels(`${vllmBaseUrl}/v1/models`);
     for (const id of models) modelToProvider.set(id, "vllm");
-    log.info({ baseUrl: vllmBaseUrl, count: models.length }, "vllm initialized");
+    log.info(
+      { baseUrl: vllmBaseUrl, count: models.length },
+      "vllm initialized",
+    );
   }
 
   let ollamaBaseUrl = Bun.env.OLLAMA_BASE_URL;
@@ -245,10 +250,18 @@ export async function initProviderRegistry() {
     ollamaBaseUrl = config.smallModel.baseUrl;
   }
   if (ollamaBaseUrl) {
-    registerProvider("ollama", "@ai-sdk/openai", `${ollamaBaseUrl}/v1`, "not-needed");
+    registerProvider(
+      "ollama",
+      "@ai-sdk/openai",
+      `${ollamaBaseUrl}/v1`,
+      "not-needed",
+    );
     const models = await fetchModels(`${ollamaBaseUrl}/v1/models`);
     for (const id of models) modelToProvider.set(id, "ollama");
-    log.info({ baseUrl: ollamaBaseUrl, count: models.length }, "ollama initialized");
+    log.info(
+      { baseUrl: ollamaBaseUrl, count: models.length },
+      "ollama initialized",
+    );
   }
 
   // LM Studio — OpenAI-compatible local server. Routed through

@@ -96,6 +96,34 @@ export const clientToolDefs: ToolDefinition[] = [
       },
     },
   },
+
+  {
+    type: "function",
+    function: {
+      name: "fs_edit_text_file",
+      description:
+        "Edit a text file on the local filesystem by replacing a specific string. Use this to patch files instead of overwriting them completely.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Absolute path of the file to edit.",
+          },
+          old_string: {
+            type: "string",
+            description:
+              "The exact string to replace. Must match the existing content perfectly.",
+          },
+          new_string: {
+            type: "string",
+            description: "The new string to replace it with.",
+          },
+        },
+        required: ["path", "old_string", "new_string"],
+      },
+    },
+  },
 ];
 
 /** Names of all client tools, including recognized aliases. */
@@ -103,6 +131,8 @@ export const clientToolNames = new Set([
   ...clientToolDefs.map((t) => t.function.name),
   "read_text_file",
   "write_text_file",
+  "fs_edit_text_file",
+  "edit_file",
   "terminal",
 ]);
 
@@ -150,6 +180,40 @@ export const executeClientTool = async (
       content: args.content,
     });
     return "File written successfully.";
+  }
+
+  if (name === "fs_edit_text_file" || name === "edit_file" || name === "Edit") {
+    if (typeof args.path !== "string") return `${name}: missing path arg`;
+    if (typeof args.old_string !== "string")
+      return `${name}: missing old_string arg`;
+    if (typeof args.new_string !== "string")
+      return `${name}: missing new_string arg`;
+
+    const readResult = await conn.readTextFile({
+      sessionId,
+      path: args.path,
+      line: null,
+      limit: null,
+    });
+
+    const content = readResult.content;
+    const occurrences = content.split(args.old_string).length - 1;
+
+    if (occurrences === 0) {
+      return "Error: old_string not found in file. The string must match exactly.";
+    }
+    if (occurrences > 1) {
+      return "Error: old_string matches multiple times in file. Please provide a more unique snippet to replace.";
+    }
+
+    const newContent = content.replace(args.old_string, args.new_string);
+
+    await conn.writeTextFile({
+      sessionId,
+      path: args.path,
+      content: newContent,
+    });
+    return "File edited successfully.";
   }
 
   if (name === "create_terminal" || name === "terminal") {

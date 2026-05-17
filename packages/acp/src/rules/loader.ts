@@ -102,7 +102,7 @@ export const loadRules = async (projectPath: string) => {
  * `LoadError` rather than thrown so the caller's `for await` loop
  * stays linear.
  */
-const loadOne = async (absPath: string, projectPath: string) => {
+const loadOne = async (absPath: string, _projectPath: string) => {
   const text = await Bun.file(absPath)
     .text()
     .then((s) => ({ ok: true as const, text: s }))

@@ -15,7 +15,7 @@
  *   required toolCallId/toolName
  */
 
-import type { ModelMessage } from "ai";
+import type { ImagePart, ModelMessage, TextPart } from "ai";
 import { log } from "../util/logger";
 
 /** Extract text from either a string or array-of-parts content field. */
@@ -157,23 +157,32 @@ export const normalizeMessages = (messages: unknown[]) => {
 
     // User messages — pass through multipart content (images) when present
     if (msg.role === "user") {
-      if (Array.isArray(msg.content) && msg.content.some((p: { type?: string }) => p.type === "image_url")) {
-        const parts = (msg.content as Array<{ type: string; text?: string; image_url?: { url: string } }>).flatMap((p) => {
+      if (
+        Array.isArray(msg.content) &&
+        msg.content.some((p: { type?: string }) => p.type === "image_url")
+      ) {
+        const parts: Array<TextPart | ImagePart> = [];
+        for (const p of msg.content as Array<{
+          type: string;
+          text?: string;
+          image_url?: { url: string };
+        }>) {
           if (p.type === "text" && p.text) {
-            return [{ type: "text" as const, text: p.text }];
-          }
-          if (p.type === "image_url" && p.image_url?.url) {
+            parts.push({ type: "text", text: p.text });
+          } else if (p.type === "image_url" && p.image_url?.url) {
             const url = p.image_url.url;
-            // Extract mime type and base64 data from data URI
             const match = url.match(/^data:([^;]+);base64,(.+)$/);
             if (match) {
-              return [{ type: "image" as const, image: match[2], mimeType: match[1] }];
+              parts.push({
+                type: "image",
+                image: match[2]!,
+                mediaType: match[1]!,
+              });
+            } else {
+              parts.push({ type: "image", image: new URL(url) });
             }
-            // URL-based images — pass as-is via the provider's URL support
-            return [{ type: "image" as const, image: new URL(url), mimeType: undefined }];
           }
-          return [];
-        });
+        }
         return { role: "user", content: parts } as ModelMessage;
       }
       const text = extractTextContent(msg.content);

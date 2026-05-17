@@ -15,6 +15,8 @@ const TOOL_KIND_MAP: Record<string, acp.ToolKind> = {
   read_text_file: "read",
   fs_write_text_file: "edit",
   write_text_file: "edit",
+  fs_edit_text_file: "edit",
+  edit_file: "edit",
   // Client terminal tools
   create_terminal: "execute",
   terminal: "execute",
@@ -66,8 +68,11 @@ export const toolTitle = (name: string, args: Record<string, unknown>) => {
   }
   if (name === "Read" && typeof args.file_path === "string")
     return `Read ${args.file_path}`;
-  if (name === "Edit" && typeof args.file_path === "string")
-    return `Edit ${args.file_path}`;
+  if (
+    (name === "Edit" || name === "fs_edit_text_file" || name === "edit_file") &&
+    (typeof args.file_path === "string" || typeof args.path === "string")
+  )
+    return `Edit ${args.file_path ?? args.path}`;
   if (name === "Write" && typeof args.file_path === "string")
     return `Write ${args.file_path}`;
   if (name === "Grep" && typeof args.pattern === "string")
@@ -155,7 +160,7 @@ export const buildToolCallContent = (
   }
 
   // Edit operations → diff content (old_string → new_string)
-  if (name === "Edit") {
+  if (name === "Edit" || name === "fs_edit_text_file" || name === "edit_file") {
     const path = args.file_path ?? args.path;
     if (typeof path === "string") {
       return diffContent(

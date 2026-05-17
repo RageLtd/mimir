@@ -118,6 +118,61 @@ describe("sanitizeToolMessages", () => {
     expect(sanitizeToolMessages(msgs)).toEqual(msgs);
   });
 
+  test("coalesces split tool result messages for one assistant tool-call turn", () => {
+    const assistantTurn = assistantWithToolCalls(
+      { id: "tc1", name: "search" },
+      { id: "tc2", name: "read" },
+    );
+    const msgs = [
+      assistantTurn,
+      toolResult({ id: "tc1", name: "search" }),
+      toolResult({ id: "tc2", name: "read" }),
+      assistant("done"),
+    ];
+    const result = sanitizeToolMessages(msgs);
+    expect(result).toEqual([
+      assistantTurn,
+      toolResult(
+        { id: "tc1", name: "search" },
+        { id: "tc2", name: "read" },
+      ),
+      assistant("done"),
+    ]);
+  });
+
+  test("orders coalesced tool results to match the assistant call order", () => {
+    const assistantTurn = assistantWithToolCalls(
+      { id: "tc1", name: "search" },
+      { id: "tc2", name: "read" },
+    );
+    const result = sanitizeToolMessages([
+      assistantTurn,
+      toolResult({ id: "tc2", name: "read" }),
+      toolResult({ id: "tc1", name: "search" }),
+    ]);
+    expect(result).toEqual([
+      assistantTurn,
+      toolResult(
+        { id: "tc1", name: "search" },
+        { id: "tc2", name: "read" },
+      ),
+    ]);
+  });
+
+  test("drops assistant tool-call turn when the matching results are incomplete", () => {
+    const msgs = [
+      user("do two things"),
+      assistantWithToolCalls(
+        { id: "tc1", name: "search" },
+        { id: "tc2", name: "read" },
+      ),
+      toolResult({ id: "tc1", name: "search" }),
+      user("next question"),
+    ];
+    const result = sanitizeToolMessages(msgs);
+    expect(result).toEqual([user("do two things"), user("next question")]);
+  });
+
   test("drops tool message when only some results have matching calls", () => {
     const msgs = [
       assistantWithToolCalls({ id: "tc1", name: "search" }),
@@ -128,18 +183,16 @@ describe("sanitizeToolMessages", () => {
     ];
     const result = sanitizeToolMessages(msgs);
     // The whole tool message is dropped because tc-missing has no match
-    expect(result).toEqual([
-      assistantWithToolCalls({ id: "tc1", name: "search" }),
-    ]);
+    expect(result).toEqual([]);
   });
 
   test("handles empty input", () => {
     expect(sanitizeToolMessages([])).toEqual([]);
   });
 
-  test("keeps tool messages with non-array content", () => {
+  test("drops tool messages with non-array content", () => {
     const oddTool = { role: "tool" as const, content: "raw string" };
     const msgs = [user("hi"), oddTool as unknown as ModelMessage];
-    expect(sanitizeToolMessages(msgs)).toEqual(msgs);
+    expect(sanitizeToolMessages(msgs)).toEqual([user("hi")]);
   });
 });

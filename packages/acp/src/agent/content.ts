@@ -127,9 +127,7 @@ export type OpenAIContentPart =
  * Images become `image_url` parts with data-URI encoding; everything
  * else collapses to text parts, matching `acpBlocksToAnthropicContent`.
  */
-export const acpBlocksToOpenAIContent = (
-  blocks: readonly acp.ContentBlock[],
-) =>
+export const acpBlocksToOpenAIContent = (blocks: readonly acp.ContentBlock[]) =>
   blocks.flatMap((block): OpenAIContentPart[] => {
     if (block.type === "text") {
       return [{ type: "text" as const, text: block.text }];
@@ -148,7 +146,10 @@ export const acpBlocksToOpenAIContent = (
       const label = block.title ?? block.name ?? block.uri;
       const desc = block.description ? ` — ${block.description}` : "";
       return [
-        { type: "text" as const, text: `[Resource: ${label}${desc}] (${block.uri})` },
+        {
+          type: "text" as const,
+          text: `[Resource: ${label}${desc}] (${block.uri})`,
+        },
       ];
     }
 
@@ -190,12 +191,18 @@ export const hasImageContent = (blocks: readonly acp.ContentBlock[]) =>
  * `userContext` carries the `<user_context>` XML block from the local
  * sqlite store so mimir-server can inject it into the system prompt.
  * The server can't access the client-side profile/memories directly.
+ *
+ * `projectRules` carries the formatted project rules (from .claude/rules,
+ * CLAUDE.md, AGENTS.md) so server-side models see the same coding
+ * conventions as CC/Codex backends.
  */
 export const buildMetadata = (
   projectPath: string,
   projectId: string | null,
   userContext?: string | null,
+  projectRules?: string | null,
 ) => ({
   project: projectId ?? projectPath,
   ...(userContext ? { user_context: userContext } : {}),
+  ...(projectRules ? { project_rules: projectRules } : {}),
 });

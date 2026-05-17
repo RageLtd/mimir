@@ -120,11 +120,7 @@ async function nonStreamingResponseImpl(
   let lastStepInputTokens = 0;
   let lastText = "";
   let lastReasoning = "";
-  let lastToolCalls: Array<{
-    toolCallId: string;
-    toolName: string;
-    input: string;
-  }> = [];
+  let lastToolCalls: Array<Record<string, unknown>> = [];
   let lastFinishReason = "stop";
 
   for (let step = 0; step < MAX_AGENT_STEPS; step++) {
@@ -138,7 +134,7 @@ async function nonStreamingResponseImpl(
 
     const textParts: string[] = [];
     const reasoningParts: string[] = [];
-    const toolCalls: typeof lastToolCalls = [];
+    const toolCalls: Array<Record<string, unknown>> = [];
 
     for (const part of result.content) {
       switch (part.type) {
@@ -149,12 +145,12 @@ async function nonStreamingResponseImpl(
           reasoningParts.push(part.text);
           break;
         case "tool-call": {
-          const input = typeof part.input === "string"
-            ? safeParseJSON(part.input)
-            : (part.input ?? {});
+          const input =
+            typeof part.input === "string"
+              ? safeParseJSON(part.input)
+              : (part.input ?? {});
           toolCalls.push({
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
+            ...part,
             input: JSON.stringify(input),
           });
           break;

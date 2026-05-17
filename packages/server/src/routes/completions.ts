@@ -14,6 +14,7 @@ import { runAgent } from "../agent/run";
 import { getSmallModelConfig } from "../agent-loop/provider/query";
 import { assembleContext } from "../middleware/context-assembly";
 import { injectMemories } from "../middleware/goldfish";
+import { injectProjectRules } from "../middleware/project-rules";
 import { injectSystemPrompt } from "../middleware/system-prompt";
 import { classifyTools } from "../middleware/tool-classification";
 import type {
@@ -150,6 +151,7 @@ completions.post("/v1/chat/completions", async (c) => {
     // Filled by middleware:
     systemPrompt: "",
     memories: null,
+    projectRules: null,
     conversationMessages: [],
     contextInjection: [],
     compactionTriggered: false,
@@ -164,6 +166,7 @@ completions.post("/v1/chat/completions", async (c) => {
     await injectSystemPrompt(ctx);
     await injectMemories(ctx);
     injectUserProfile(ctx);
+    injectProjectRules(ctx);
     await assembleContext(ctx);
     await classifyTools(ctx);
 

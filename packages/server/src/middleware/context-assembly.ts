@@ -32,7 +32,7 @@ import { log } from "../util/logger";
 import type { MimirContext } from "./types";
 
 /**
- * Build the synthetic context injection pair from summaries and memories.
+ * Build the synthetic context injection pair from summaries, memories, and rules.
  *
  * Returns a two-element ModelMessage array (user + assistant) when there's
  * content to inject, or an empty array when there's nothing. This is the
@@ -42,6 +42,7 @@ import type { MimirContext } from "./types";
 export function buildContextInjection(
   summaries: Array<{ content: string }>,
   memories: string | null | undefined,
+  projectRules?: string | null,
 ) {
   const contextParts: string[] = [];
 
@@ -54,6 +55,10 @@ export function buildContextInjection(
 
   if (memories) {
     contextParts.push(`<memories>\n${memories}\n</memories>`);
+  }
+
+  if (projectRules) {
+    contextParts.push(`<project_rules>\n${projectRules}\n</project_rules>`);
   }
 
   if (contextParts.length === 0) return [];
@@ -116,8 +121,12 @@ export async function assembleContext(ctx: MimirContext) {
     config.context.keepRecentMessages,
   );
 
-  // 4. Build context injection from summaries + memories
-  ctx.contextInjection = buildContextInjection(summaries, ctx.memories);
+  // 4. Build context injection from summaries + memories + rules
+  ctx.contextInjection = buildContextInjection(
+    summaries,
+    ctx.memories,
+    ctx.projectRules,
+  );
   ctx.conversationMessages = recentMessages;
 
   log.info(

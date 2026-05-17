@@ -70,11 +70,9 @@ export async function agentLoop(
   // Final assistant output destined for the client — accumulated here so
   // we can persist it to the global log once the turn ends. Server-tool
   // internal iterations are NOT persisted (they're ephemeral by design).
-  let finalClientToolCalls: Array<{
-    toolCallId: string;
-    toolName: string;
-    input: string;
-  }> = [];
+  // Record<string, unknown> to carry providerMetadata and any future
+  // SDK fields through the loop without enumerating.
+  let finalClientToolCalls: Array<Record<string, unknown>> = [];
 
   for (let step = 0; step < MAX_AGENT_STEPS; step++) {
     log.info(
@@ -85,7 +83,10 @@ export async function agentLoop(
     const doStreamResult = await Promise.race([
       model.doStream({ ...baseOptions, prompt }),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("doStream timed out after 120s")), 120_000),
+        setTimeout(
+          () => reject(new Error("doStream timed out after 120s")),
+          120_000,
+        ),
       ),
     ]);
     const { stream } = doStreamResult;
@@ -94,11 +95,11 @@ export async function agentLoop(
 
     const textChunks: string[] = [];
     const reasoningChunks: string[] = [];
-    const toolCalls: Array<{
-      toolCallId: string;
-      toolName: string;
-      input: string;
-    }> = [];
+    // Spread source parts — carry all fields (providerMetadata, etc.)
+    // rather than enumerating. Only override `input` with the normalized
+    // version. This ensures Google's thoughtSignature and any future
+    // SDK fields survive the round-trip through the agent loop.
+    const toolCalls: Array<Record<string, unknown>> = [];
     let stepInputTokens = 0;
     let stepOutputTokens = 0;
     let finishReason = "stop";
@@ -121,16 +122,12 @@ export async function agentLoop(
             break;
 
           case "tool-call": {
-            // part.input is typed `unknown`. Most SDKs hand us a parsed
-            // object, but @ai-sdk/openai-compatible passes the raw JSON
-            // string. Normalize to object before stringifying so downstream
-            // consumers (prompt replay, SSE, tool execution) get valid args.
-            const input = typeof part.input === "string"
-              ? safeParseJSON(part.input)
-              : (part.input ?? {});
+            const input =
+              typeof part.input === "string"
+                ? safeParseJSON(part.input)
+                : (part.input ?? {});
             toolCalls.push({
-              toolCallId: part.toolCallId,
-              toolName: part.toolName,
+              ...part,
               input: JSON.stringify(input),
             });
             break;
@@ -193,11 +190,11 @@ export async function agentLoop(
             tool_calls: [
               {
                 index: i,
-                id: tc.toolCallId,
+                id: String(tc.toolCallId),
                 type: "function",
                 function: {
-                  name: tc.toolName,
-                  arguments: tc.input,
+                  name: String(tc.toolName),
+                  arguments: String(tc.input),
                 },
               },
             ],
@@ -250,12 +247,14 @@ export async function agentLoop(
 
 /**
  * Append assistant message with text + reasoning + tool calls to the prompt.
+ * Spreads tool call fields to preserve providerMetadata (Google thoughtSignature)
+ * and any future SDK fields — only override `input` with the parsed version.
  */
 export function appendServerStepToPrompt(
   prompt: LanguageModelV3Message[],
   text: string,
   reasoning: string[],
-  toolCalls: Array<{ toolCallId: string; toolName: string; input: string }>,
+  toolCalls: Array<Record<string, unknown>>,
 ) {
   const parts: Array<
     | LanguageModelV3TextPart
@@ -268,11 +267,18 @@ export function appendServerStepToPrompt(
   }
   for (const tc of toolCalls) {
     parts.push({
+      ...tc,
       type: "tool-call",
-      toolCallId: tc.toolCallId,
-      toolName: tc.toolName,
-      input: safeParseJSON(tc.input),
-    });
+      input: safeParseJSON(
+        typeof tc.input === "string"
+          ? tc.input
+          : JSON.stringify(tc.input ?? {}),
+      ),
+      // doStream emits thoughtSignature via providerMetadata, but providers
+      // (Google) read from providerOptions when formatting outgoing messages.
+      // Map explicitly so the signature survives the round-trip.
+      providerOptions: tc.providerMetadata ?? tc.providerOptions,
+    } as LanguageModelV3ToolCallPart);
   }
   prompt.push({ role: "assistant", content: parts });
 }
@@ -283,44 +289,44 @@ export function appendServerStepToPrompt(
  */
 export async function executeServerTools(
   prompt: LanguageModelV3Message[],
-  toolCalls: Array<{ toolCallId: string; toolName: string; input: string }>,
+  toolCalls: Array<Record<string, unknown>>,
   ctx: MimirContext,
 ) {
   const toolResults: LanguageModelV3ToolResultPart[] = [];
 
   for (const tc of toolCalls) {
-    const tool = ctx.serverTools[tc.toolName];
-    const parsedInput = safeParseJSON(tc.input);
+    const toolName = String(tc.toolName);
+    const toolCallId = String(tc.toolCallId);
+    const tool = ctx.serverTools[toolName];
+    const parsedInput = safeParseJSON(
+      typeof tc.input === "string" ? tc.input : JSON.stringify(tc.input ?? {}),
+    );
     let resultValue: string;
 
     if (!tool?.execute) {
-      resultValue = `Error: tool ${tc.toolName} has no execute function`;
+      resultValue = `Error: tool ${toolName} has no execute function`;
     } else {
       try {
         const result = await tool.execute(parsedInput, {
-          toolCallId: tc.toolCallId,
+          toolCallId,
           messages: [],
           abortSignal: undefined,
         });
         resultValue =
           typeof result === "string" ? result : JSON.stringify(result ?? "");
       } catch (err) {
-        log.error(
-          { err, toolName: tc.toolName },
-          "server tool execution failed",
-        );
+        log.error({ err, toolName }, "server tool execution failed");
         resultValue = `Error: ${err instanceof Error ? err.message : String(err)}`;
       }
     }
 
     toolResults.push({
       type: "tool-result" as const,
-      toolCallId: tc.toolCallId,
-      toolName: tc.toolName,
+      toolCallId,
+      toolName,
       output: { type: "text" as const, value: resultValue },
     });
   }
 
   prompt.push({ role: "tool", content: toolResults });
 }
-

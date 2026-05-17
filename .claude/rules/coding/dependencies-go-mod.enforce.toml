@@ -12,4 +12,4 @@ pattern = '''(^|/)go\.mod$'''
 [[conditions]]
 field = "new_text"
 operator = "regex_match"
-pattern = '''(?m)^\s*require\s+'''
+pattern = '''(?:^|\n)\s*require\s+'''

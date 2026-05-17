@@ -29,60 +29,129 @@ export function buildPrompt(ctx: MimirContext) {
 }
 
 /**
- * Drop tool-result messages whose toolCallIds have no matching tool-call
- * in a preceding assistant message. This happens when getLastNModelMessages
- * cuts the window between an assistant(tool_calls) and its tool(results),
- * leaving orphan tool results that strict OpenAI-compatible APIs (DeepSeek,
- * etc.) reject with "Messages with role `tool` must be a response to a
- * preceding message with `tool_calls`".
+ * Normalize tool-call turns before handing history to providers.
+ *
+ * Two invariants matter here:
+ * - Tool results must follow an assistant message with matching tool calls.
+ * - All results for one assistant function-call turn must be in a single
+ *   tool message. Gemini/GCP rejects split tool-result turns with:
+ *   "number of function response parts is equal to the number of function
+ *   call parts of the function call turn."
+ *
+ * If the context window cuts through a tool-call exchange, drop the incomplete
+ * block rather than sending a malformed history turn.
  */
 export function sanitizeToolMessages(messages: readonly ModelMessage[]) {
-  // Collect all toolCallIds from assistant messages
-  const knownCallIds = new Set<string>();
-  for (const msg of messages) {
-    if (msg.role === "assistant" && Array.isArray(msg.content)) {
-      for (const part of msg.content) {
-        if (part.type === "tool-call" && part.toolCallId) {
-          knownCallIds.add(part.toolCallId);
-        }
-      }
-    }
-  }
-
   const result: ModelMessage[] = [];
-  let dropped = 0;
-  for (const msg of messages) {
-    if (msg.role !== "tool") {
+  let droppedToolResults = 0;
+  let droppedToolCallTurns = 0;
+  let coalescedToolMessages = 0;
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (!msg) continue;
+
+    if (msg.role === "assistant") {
+      const calls = toolCallParts(msg);
+      if (calls.length === 0) {
+        result.push(msg);
+        continue;
+      }
+
+      const toolMessages: ModelMessage[] = [];
+      let j = i + 1;
+      while (j < messages.length && messages[j]?.role === "tool") {
+        const toolMessage = messages[j];
+        if (toolMessage) toolMessages.push(toolMessage);
+        j++;
+      }
+
+      const results = toolResultParts(toolMessages);
+      const orderedResults = alignResults(calls, results);
+      if (!orderedResults) {
+        droppedToolCallTurns++;
+        droppedToolResults += results.length;
+        i = j - 1;
+        continue;
+      }
+
       result.push(msg);
+      result.push({ role: "tool", content: orderedResults });
+      if (toolMessages.length > 1) coalescedToolMessages += toolMessages.length;
+      i = j - 1;
       continue;
     }
-    // A tool message is valid only if every tool-result part has a matching
-    // tool-call in the known set.
-    if (!Array.isArray(msg.content)) {
-      result.push(msg);
+
+    if (msg.role === "tool") {
+      droppedToolResults += toolResultParts([msg]).length || 1;
       continue;
     }
-    const toolCallIds = msg.content
-      .filter((p) => p.type === "tool-result" && "toolCallId" in p)
-      .map((p) => (p as { toolCallId: string }).toolCallId);
-    const allResolved =
-      toolCallIds.length > 0 &&
-      toolCallIds.every((id) => knownCallIds.has(id));
-    if (allResolved) {
-      result.push(msg);
-    } else {
-      dropped++;
-    }
+
+    result.push(msg);
   }
 
-  if (dropped > 0) {
+  if (
+    droppedToolResults > 0 ||
+    droppedToolCallTurns > 0 ||
+    coalescedToolMessages > 0
+  ) {
     log.warn(
-      { dropped, totalMessages: messages.length, kept: result.length },
-      "dropped orphan tool-result messages (no matching assistant tool_calls)",
+      {
+        droppedToolResults,
+        droppedToolCallTurns,
+        coalescedToolMessages,
+        totalMessages: messages.length,
+        kept: result.length,
+      },
+      "sanitized malformed tool-call history",
     );
   }
 
   return result;
+}
+
+function toolCallParts(message: ModelMessage) {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) {
+    return [];
+  }
+  return message.content.filter((part) => part.type === "tool-call");
+}
+
+function toolResultParts(messages: readonly ModelMessage[]) {
+  const results: Array<ReturnType<typeof toolResultPartsFromMessage>[number]> =
+    [];
+  for (const message of messages) {
+    results.push(...toolResultPartsFromMessage(message));
+  }
+  return results;
+}
+
+function toolResultPartsFromMessage(message: ModelMessage) {
+  if (message.role !== "tool" || !Array.isArray(message.content)) {
+    return [];
+  }
+  return message.content.filter((part) => part.type === "tool-result");
+}
+
+function alignResults(
+  calls: ReturnType<typeof toolCallParts>,
+  results: ReturnType<typeof toolResultParts>,
+) {
+  if (calls.length === 0 || calls.length !== results.length) return null;
+
+  const resultsById = new Map<string, (typeof results)[number]>();
+  for (const result of results) {
+    if (resultsById.has(result.toolCallId)) return null;
+    resultsById.set(result.toolCallId, result);
+  }
+
+  const orderedResults = [];
+  for (const call of calls) {
+    const result = resultsById.get(call.toolCallId);
+    if (!result) return null;
+    orderedResults.push(result);
+  }
+  return orderedResults;
 }
 
 export function messagesToV3Prompt(messages: ModelMessage[]) {
@@ -166,15 +235,16 @@ function normalizeAssistantParts(parts: unknown) {
         result.push({ type: "reasoning" as const, text: String(p.text ?? "") });
         break;
       case "tool-call":
-        // Critical: ensure input is never undefined and is always an object.
-        // Providers (vLLM, Chutes, Fireworks) reject tool calls without arguments
-        // or with arguments that decode to a non-object. DB-stored messages have
-        // `input` as a JSON string; AI SDK ModelMessages have it as an object.
+        // Spread source part — carry providerMetadata and any future SDK
+        // fields rather than enumerating. Map providerMetadata →
+        // providerOptions so Google's thought signatures survive the
+        // round-trip (doStream emits providerMetadata; the provider reads
+        // providerOptions when formatting outgoing messages).
         result.push({
+          ...p,
           type: "tool-call" as const,
-          toolCallId: String(p.toolCallId),
-          toolName: String(p.toolName),
           input: parseToolInput(p.input),
+          providerOptions: p.providerMetadata ?? p.providerOptions,
         });
         break;
       default:

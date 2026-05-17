@@ -28,18 +28,22 @@ import { SERVER_TOOL_NAMES } from "./server-tools";
 // Tool call classification
 // ---------------------------------------------------------------------------
 
-/** Shared tool-call type used across both agent loop paths. */
-export type ToolCall = { toolCallId: string; toolName: string; input: string };
-
 /**
  * Split a set of tool calls into server-side (executed internally) and
  * client-side (emitted to the caller). Single source of truth for the
  * classification — both streaming and non-streaming loops use this.
+ *
+ * Accepts Record<string, unknown> to carry providerMetadata (Google
+ * thoughtSignature) and any future SDK fields without enumerating.
  */
-export function classifyToolCalls(toolCalls: ToolCall[]) {
+export function classifyToolCalls(toolCalls: Array<Record<string, unknown>>) {
   return {
-    serverCalls: toolCalls.filter((tc) => SERVER_TOOL_NAMES.has(tc.toolName)),
-    clientCalls: toolCalls.filter((tc) => !SERVER_TOOL_NAMES.has(tc.toolName)),
+    serverCalls: toolCalls.filter((tc) =>
+      SERVER_TOOL_NAMES.has(String(tc.toolName)),
+    ),
+    clientCalls: toolCalls.filter(
+      (tc) => !SERVER_TOOL_NAMES.has(String(tc.toolName)),
+    ),
   };
 }
 
@@ -56,21 +60,32 @@ export function classifyToolCalls(toolCalls: ToolCall[]) {
  */
 export function finalizeTurn(
   text: string,
-  toolCalls: ToolCall[],
+  toolCalls: Array<Record<string, unknown>>,
   reasoning: string | undefined,
-  ctx: { project: string | null | undefined; request: { messages: ModelMessage[]; model: string } },
+  ctx: {
+    project: string | null | undefined;
+    request: { messages: ModelMessage[]; model: string };
+  },
   lastStepInputTokens: number,
 ) {
   persistAssistantTurn(text, toolCalls, ctx.project, reasoning).catch((err) =>
     log.error({ err }, "persistAssistantTurn failed"),
   );
 
-  triggerCompactionIfNeeded(lastStepInputTokens, ctx.project ?? null, ctx.request.model);
+  triggerCompactionIfNeeded(
+    lastStepInputTokens,
+    ctx.project ?? null,
+    ctx.request.model,
+  );
 
   const lastUserMessage = [...ctx.request.messages]
     .reverse()
     .find((m) => m.role === "user");
-  extractMemoriesFromResponse(text || null, lastUserMessage ?? null, ctx.project);
+  extractMemoriesFromResponse(
+    text || null,
+    lastUserMessage ?? null,
+    ctx.project,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -88,7 +103,7 @@ export function triggerCompactionIfNeeded(
   promptTokens: number,
   project: string | null,
   modelId?: string,
-): void {
+) {
   updateTokenCount(promptTokens, modelId)
     .then(({ needsCompaction }) => {
       if (needsCompaction) {
@@ -122,31 +137,30 @@ export function triggerCompactionIfNeeded(
  */
 export async function persistAssistantTurn(
   text: string,
-  toolCalls: Array<{ toolCallId: string; toolName: string; input: string }>,
+  toolCalls: Array<Record<string, unknown>>,
   project: string | null | undefined,
   reasoning?: string,
 ) {
   const clientToolCalls = toolCalls.filter(
-    (tc) => !SERVER_TOOL_NAMES.has(tc.toolName),
+    (tc) => !SERVER_TOOL_NAMES.has(String(tc.toolName)),
   );
   const hasText = text.trim().length > 0;
   const hasToolCalls = clientToolCalls.length > 0;
   const hasReasoning = reasoning && reasoning.trim().length > 0;
   if (!hasText && !hasToolCalls && !hasReasoning) return;
 
-  // Tool-call inputs are kept as raw JSON strings here — DB storage uses
-  // JSON.stringify on content regardless, and clients reconstructing
-  // history via the read path get the same shape either way.
-  const parts: AssistantContent = [];
+  // Spread tool call fields — carry providerMetadata (Google thoughtSignature)
+  // and any future SDK fields rather than enumerating. Override `type` and
+  // `input` with the persistence-compatible shapes.
+  const parts: Exclude<AssistantContent, string> = [];
   if (hasReasoning) parts.push({ type: "reasoning", text: reasoning });
   if (hasText) parts.push({ type: "text", text });
   for (const tc of clientToolCalls) {
     parts.push({
+      ...tc,
       type: "tool-call",
-      toolCallId: tc.toolCallId,
-      toolName: tc.toolName,
       input: tc.input,
-    });
+    } as (typeof parts)[number]);
   }
 
   const message: ModelMessage = {
@@ -170,7 +184,7 @@ export function extractMemoriesFromResponse(
   assistantContent: string | null | undefined,
   lastUserMessage: ModelMessage | null,
   project: string | null | undefined,
-): void {
+) {
   if (!assistantContent || !lastUserMessage) return;
 
   const messages: ModelMessage[] = [
@@ -194,11 +208,7 @@ export function extractMemoriesFromResponse(
  */
 export function formatClientToolCalls<TOOLS extends ToolSet>(
   toolCalls: Array<TypedToolCall<TOOLS>>,
-): Array<{
-  id: string;
-  type: "function";
-  function: { name: string; arguments: string };
-}> {
+) {
   return toolCalls
     .filter((tc) => !SERVER_TOOL_NAMES.has(tc.toolName))
     .map((tc) => ({

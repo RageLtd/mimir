@@ -23,8 +23,5 @@ export function injectUserProfile(ctx: MimirContext) {
   ctx.memories = ctx.memories
     ? `${ctx.memories}\n\n${userContext}`
     : userContext;
-  log.info(
-    { blockLength: userContext.length },
-    "user context injected",
-  );
+  log.info({ blockLength: userContext.length }, "user context injected");
 }
