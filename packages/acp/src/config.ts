@@ -29,9 +29,12 @@ export type CCBackendConfig = {
    */
   readonly maxTurns?: number;
   /**
-   * USD spend cap inside a single SDK `query()`. Forwarded as the SDK's
-   * `maxBudgetUsd` — query stops with `error_max_budget_usd` once exceeded.
-   * Undefined disables the cap; set via `MIMIR_CC_MAX_BUDGET_USD`.
+   * USD spend cap for the lifetime of the CC `Query`. The adapter creates
+   * one Query per ACP session and reuses it across every turn via
+   * streaming-input mode (see backends/claude-code/adapter.ts), so this
+   * accumulates across the whole session — not per turn. Forwarded as the
+   * SDK's `maxBudgetUsd`; query stops with `error_max_budget_usd` once
+   * exceeded. Undefined disables the cap; set via `MIMIR_CC_MAX_BUDGET_USD`.
    */
   readonly maxBudgetUsd?: number;
 };
@@ -221,14 +224,15 @@ export const loadConfig = () => {
       models: parseExtraModels(process.env.MIMIR_CC_EXTRA_MODELS),
       anchorInterval: parseInt(process.env.ANCHOR_INTERVAL ?? "20", 10),
       systemPromptPath: process.env.MIMIR_SYSTEM_PROMPT_PATH,
-      // Defaults bound the SDK's internal tool loop within a single ACP
-      // prompt. Without them, a runaway loop has been observed at 40+ inner
-      // model calls / 77M cumulative cached prompt tokens / $40+ per turn.
-      // The cap is per-ACP-prompt, not per-session — normal turns sit well
-      // under both ceilings.
+      // Defaults bound the SDK's internal tool loop. `maxTurns` resets per
+      // ACP prompt; `maxBudgetUsd` accumulates across the whole Query
+      // lifetime (one Query per session — see backends/claude-code/adapter.ts)
+      // so the budget ceiling is a session cap, not a per-turn cap. Without
+      // these, a runaway loop has been observed at 40+ inner model calls /
+      // 77M cumulative cached prompt tokens / $40+ in a single turn.
       maxTurns: parsePositiveNumber(process.env.MIMIR_CC_MAX_TURNS) ?? 50,
       maxBudgetUsd:
-        parsePositiveNumber(process.env.MIMIR_CC_MAX_BUDGET_USD) ?? 10,
+        parsePositiveNumber(process.env.MIMIR_CC_MAX_BUDGET_USD) ?? 25,
     },
     copilot: {
       enabled: parseBool(process.env.MIMIR_COPILOT_ENABLED, true),
