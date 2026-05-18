@@ -8,15 +8,30 @@ import type {
   Query,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { ModelReasoningEffort, Thread } from "@openai/codex-sdk";
 import type { VoiceAnchorState } from "../backends/claude-code/voice-anchors";
+import type { ReasoningEffort } from "../backends/codex/protocol/ReasoningEffort";
 import type { BackendEvent } from "../backends/types";
 import type { ClientMcpManager } from "../client-mcp/manager";
 import type { ResolvedProject } from "../project/resolver";
 import type { LoadError, RuleEntry } from "../rules";
 import type { ChatMessage } from "../server-client";
 
-export type ThoughtLevel = EffortLevel | ModelReasoningEffort | "none";
+export type ThoughtLevel = EffortLevel | ReasoningEffort;
+
+export type CodexAppServerTurnOptions = {
+  readonly prompt: string;
+  readonly model: string;
+  readonly effort?: ThoughtLevel;
+  readonly signal?: AbortSignal;
+};
+
+export type CodexAppServerState = {
+  readonly threadId: string;
+  readonly close: () => Promise<void>;
+  readonly runTurn: (
+    options: CodexAppServerTurnOptions,
+  ) => AsyncGenerator<BackendEvent>;
+};
 
 export type SessionState = {
   sessionId: string;
@@ -76,13 +91,8 @@ export type SessionState = {
     mode: string;
     effort: EffortLevel | undefined;
   } | null;
-  codexThread: Thread | null;
+  codexAppServer: CodexAppServerState | null;
   codexInstructionPath: string | null;
-  codexPermissionBridge: {
-    readonly socketPath: string;
-    readonly command: string;
-    readonly close: () => Promise<void>;
-  } | null;
   codexThreadConfig: {
     modelId: string;
     mode: string;

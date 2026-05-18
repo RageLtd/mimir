@@ -3,7 +3,7 @@
  *
  * Models prefixed with `claude-code/` route through the Claude Code
  * Agent SDK backend. Models prefixed with `codex/` route through the
- * OpenAI Codex SDK backend. Models prefixed with `copilot/` route through
+ * OpenAI Codex app-server backend. Models prefixed with `copilot/` route through
  * the GitHub Copilot SDK backend, with models discovered at startup via
  * CopilotClient.listModels(). Everything else routes through mimir-server.
  *

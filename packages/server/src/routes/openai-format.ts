@@ -173,10 +173,12 @@ export const normalizeMessages = (messages: unknown[]) => {
             const url = p.image_url.url;
             const match = url.match(/^data:([^;]+);base64,(.+)$/);
             if (match) {
+              const [, mediaType, image] = match;
+              if (!mediaType || !image) continue;
               parts.push({
                 type: "image",
-                image: match[2]!,
-                mediaType: match[1]!,
+                image,
+                mediaType,
               });
             } else {
               parts.push({ type: "image", image: new URL(url) });

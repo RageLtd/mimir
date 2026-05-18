@@ -11,29 +11,13 @@ describe("Codex formatting", () => {
       instructionPath: "/tmp/mimir.md",
       serverUrl: "http://mimir.test",
       userMemoryDbPath: "/tmp/mem.db",
+      workingDirectory: "/repo",
       clientMcpServers: [],
     });
 
     expect(opts.config?.model_instructions_file).toBe("/tmp/mimir.md");
     expect(opts.config?.mcp_servers).toBeDefined();
-    expect(opts.config?.hooks).toBeUndefined();
-  });
-
-  test("adds permission hook config when a bridge is present", () => {
-    const opts = buildCodexOptions({
-      instructionPath: "/tmp/mimir.md",
-      serverUrl: "http://mimir.test",
-      userMemoryDbPath: "/tmp/mem.db",
-      clientMcpServers: [],
-      permissionBridge: {
-        socketPath: "/tmp/mimir-codex-permissions/session.sock",
-        command: "bun /tmp/mimir-codex-permissions/permission-hook.js /tmp/mimir-codex-permissions/session.sock",
-        close: async () => undefined,
-      },
-    });
-
-    expect(opts.config?.features).toEqual({ hooks: true });
-    expect(opts.config?.hooks).toBeDefined();
+    expect("hooks" in opts.config).toBe(false);
   });
 
   test("builds thread options with professional default safety", () => {

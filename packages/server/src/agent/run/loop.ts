@@ -14,6 +14,7 @@
  */
 
 import type {
+  LanguageModelV3,
   LanguageModelV3Message,
   LanguageModelV3ReasoningPart,
   LanguageModelV3TextPart,
@@ -32,7 +33,7 @@ import type { buildCallOptions } from "./tools";
 
 export const MAX_AGENT_STEPS = 20;
 
-export type Model = { doStream: Function; doGenerate: Function };
+export type Model = Pick<LanguageModelV3, "doStream" | "doGenerate">;
 export type EmitSSE = (
   controller: ReadableStreamDefaultController,
   delta: Record<string, unknown>,
@@ -269,6 +270,8 @@ export function appendServerStepToPrompt(
     parts.push({
       ...tc,
       type: "tool-call",
+      toolCallId: String(tc.toolCallId),
+      toolName: String(tc.toolName),
       input: safeParseJSON(
         typeof tc.input === "string"
           ? tc.input
@@ -277,10 +280,18 @@ export function appendServerStepToPrompt(
       // doStream emits thoughtSignature via providerMetadata, but providers
       // (Google) read from providerOptions when formatting outgoing messages.
       // Map explicitly so the signature survives the round-trip.
-      providerOptions: tc.providerMetadata ?? tc.providerOptions,
-    } as LanguageModelV3ToolCallPart);
+      providerOptions: providerOptionsFromToolCall(tc),
+    });
   }
   prompt.push({ role: "assistant", content: parts });
+}
+
+function providerOptionsFromToolCall(toolCall: Record<string, unknown>) {
+  const options = toolCall.providerMetadata ?? toolCall.providerOptions;
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    return undefined;
+  }
+  return Object.fromEntries(Object.entries(options));
 }
 
 /**

@@ -16,6 +16,7 @@ describe("Codex MCP config", () => {
     const servers = buildCodexMcpServers(
       "http://localhost:3777",
       "/tmp/memories.db",
+      "/home/user/project",
       clientServers,
     );
 
@@ -39,6 +40,7 @@ describe("Codex MCP config", () => {
     const servers = buildCodexMcpServers(
       "http://localhost:3777",
       "/tmp/memories.db",
+      "/home/user/project",
       clientServers,
     );
 
@@ -61,9 +63,27 @@ describe("Codex MCP config", () => {
     const servers = buildCodexMcpServers(
       "http://localhost:3777",
       "/tmp/memories.db",
+      "/home/user/project",
       clientServers,
     );
 
     expect(servers.mimir).toEqual({ url: "http://localhost:3777/mcp" });
+  });
+
+  test("includes filesystem server scoped to working directory", () => {
+    const servers = buildCodexMcpServers(
+      "http://localhost:3777",
+      "/tmp/memories.db",
+      "/home/user/project",
+    );
+
+    expect(servers.filesystem).toEqual({
+      command: "bunx",
+      args: [
+        "@modelcontextprotocol/server-filesystem",
+        "/home/user/project",
+        "/tmp",
+      ],
+    });
   });
 });

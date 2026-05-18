@@ -16,6 +16,11 @@
  *     - CC runs its own internal tool loop. We OBSERVE tool_use and
  *       tool_result events purely so the editor can show them; the
  *       agent loop must NOT execute them.
+ *
+ *   codex backend
+ *     - Codex also runs its own local tool loop. `tool_update` is used for
+ *       incremental observed output, primarily command_execution terminal
+ *       output before the item reaches item.completed.
  */
 
 import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk";
@@ -42,6 +47,12 @@ export type BackendEvent =
     }
   | {
       readonly type: "tool_result";
+      readonly id: string;
+      readonly output: string;
+      readonly observeOnly: boolean;
+    }
+  | {
+      readonly type: "tool_update";
       readonly id: string;
       readonly output: string;
       readonly observeOnly: boolean;

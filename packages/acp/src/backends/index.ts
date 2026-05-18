@@ -3,8 +3,8 @@
  *
  * Backend selection is driven by the model id (per-request), not by a
  * static config. `claude-code/*` routes through the Claude Code Agent SDK;
- * `codex/*` routes through the Codex SDK; every other model routes through
- * mimir-server.
+ * `codex/*` routes through Codex app-server; every other model routes
+ * through mimir-server.
  *
  * The two backends are constructed once and selected by model on each
  * call so users can switch models mid-conversation.

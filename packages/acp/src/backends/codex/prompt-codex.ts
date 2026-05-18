@@ -2,7 +2,7 @@
  * Codex backend prompt path.
  *
  * Codex owns the local agent/tool loop. Mimir assembles first-turn context
- * into a replacement instruction file, streams observed SDK events to ACP,
+ * into a replacement instruction file, streams observed app-server events to ACP,
  * and persists local assistant turns back to mimir-server.
  */
 
@@ -23,17 +23,17 @@ import {
   persistTurn,
   reportTokenUsage,
 } from "../../context-client";
+import { createRequestToolPermission } from "../../permissions";
 import type { UserMemoryStore } from "../../store/user-memories";
 import { buildUserContext } from "../../tools/user-memory";
 import { errMessage } from "../../util";
 import { createChildLogger, log } from "../../utils/log";
 import { formatContextForPrompt } from "../claude-code/formatting";
-import type { Backend, BackendEvent } from "../types";
+import type { Backend, BackendEvent, RequestToolPermission } from "../types";
 import {
   type CodexBootContent,
   formatCodexInstructions,
 } from "./boot-formatting";
-import { startCodexPermissionBridge } from "./permission-bridge";
 
 const logger = createChildLogger(log, "prompt-codex");
 
@@ -49,7 +49,7 @@ const writeInstructionFile = async (sessionId: string, content: string) => {
 
 type CodexToolCallInfo = Map<
   string,
-  { name: string; input: Record<string, unknown> }
+  { name: string; input: Record<string, unknown>; streamedOutput: boolean }
 >;
 
 const supportsTerminalOutput = (session: SessionState) =>
@@ -86,7 +86,11 @@ const handleToolCall = async (
   conn: acp.AgentSideConnection,
   toolCallInfo: CodexToolCallInfo,
 ) => {
-  toolCallInfo.set(event.id, { name: event.name, input: event.input });
+  toolCallInfo.set(event.id, {
+    name: event.name,
+    input: event.input,
+    streamedOutput: false,
+  });
 
   const todos = todoUpdatesFromInput(event.input);
   if (event.name === "TodoWrite" && todos.length > 0) {
@@ -117,6 +121,35 @@ const handleToolCall = async (
   });
 };
 
+const handleToolUpdate = async (
+  event: Extract<BackendEvent, { type: "tool_update" }>,
+  session: SessionState,
+  conn: acp.AgentSideConnection,
+  toolCallInfo: CodexToolCallInfo,
+) => {
+  const info = toolCallInfo.get(event.id);
+  const toolName = info?.name ?? event.id;
+  const showTerminal =
+    isTerminalTool(toolName) && supportsTerminalOutput(session);
+
+  if (!showTerminal) return;
+
+  if (info) {
+    info.streamedOutput = true;
+  }
+
+  await conn.sessionUpdate({
+    sessionId: session.sessionId,
+    update: {
+      _meta: {
+        terminal_output: { terminal_id: event.id, data: event.output },
+      },
+      sessionUpdate: "tool_call_update",
+      toolCallId: event.id,
+    },
+  });
+};
+
 const handleToolResult = async (
   event: Extract<BackendEvent, { type: "tool_result" }>,
   session: SessionState,
@@ -130,16 +163,18 @@ const handleToolResult = async (
     isTerminalTool(toolName) && supportsTerminalOutput(session);
 
   if (showTerminal) {
-    await conn.sessionUpdate({
-      sessionId: session.sessionId,
-      update: {
-        _meta: {
-          terminal_output: { terminal_id: event.id, data: event.output },
+    if (!info?.streamedOutput && event.output.length > 0) {
+      await conn.sessionUpdate({
+        sessionId: session.sessionId,
+        update: {
+          _meta: {
+            terminal_output: { terminal_id: event.id, data: event.output },
+          },
+          sessionUpdate: "tool_call_update",
+          toolCallId: event.id,
         },
-        sessionUpdate: "tool_call_update",
-        toolCallId: event.id,
-      },
-    });
+      });
+    }
     await conn.sessionUpdate({
       sessionId: session.sessionId,
       update: {
@@ -201,6 +236,10 @@ const handleCodexEvent = async (
   }
   if (event.type === "tool_call") {
     await handleToolCall(event, session, conn, toolCallInfo);
+    return;
+  }
+  if (event.type === "tool_update") {
+    await handleToolUpdate(event, session, conn, toolCallInfo);
     return;
   }
   if (event.type === "tool_result") {
@@ -282,19 +321,26 @@ export const promptViaCodex = async (opts: PromptViaCodexOptions) => {
     );
   }
 
-  if (!session.codexPermissionBridge) {
-    session.codexPermissionBridge = await startCodexPermissionBridge(
-      session,
-      conn,
-    );
-    session.codexThread = null;
-    session.codexThreadConfig = null;
-  }
-
   let assistantBuffer = "";
   let promptTokens: number | undefined;
   let streamErrored: string | null = null;
   const toolCallInfo: CodexToolCallInfo = new Map();
+  const requestToolPermission = createRequestToolPermission(
+    conn,
+    session.sessionId,
+  );
+  const cachedRequestToolPermission: RequestToolPermission = async (
+    request,
+  ) => {
+    if (session.permanentlyAllowedTools.has(request.toolName)) {
+      return { allowed: true, permanent: true };
+    }
+    const result = await requestToolPermission(request);
+    if (result.allowed && result.permanent) {
+      session.permanentlyAllowedTools.add(request.toolName);
+    }
+    return result;
+  };
 
   const iter = backend
     .run({
@@ -309,6 +355,7 @@ export const promptViaCodex = async (opts: PromptViaCodexOptions) => {
       effort: session.currentThoughtLevel,
       signal: abortController.signal,
       session,
+      requestToolPermission: cachedRequestToolPermission,
     })
     [Symbol.asyncIterator]();
 

@@ -7,18 +7,18 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
-import type {
-  ApprovalMode,
-  ModelReasoningEffort,
-  SandboxMode,
-} from "@openai/codex-sdk";
+import type { ReasoningEffort } from "./protocol/ReasoningEffort";
+import type { AskForApproval } from "./protocol/v2/AskForApproval";
+import type { SandboxMode } from "./protocol/v2/SandboxMode";
+
+type CodexThoughtLevel = Exclude<ReasoningEffort, "none">;
 
 export type CodexMode = {
   readonly id: string;
   readonly name: string;
   readonly description: string;
   readonly sandboxMode: SandboxMode;
-  readonly approvalPolicy: ApprovalMode;
+  readonly approvalPolicy: AskForApproval;
 };
 
 const DEFAULT_CODEX_MODE_CONFIG: CodexMode = {
@@ -50,7 +50,7 @@ const CODEX_MODES: readonly CodexMode[] = [
 export const DEFAULT_CODEX_MODE = "default";
 export const DEFAULT_CODEX_THOUGHT_LEVEL = "high";
 
-const CODEX_THOUGHT_LEVELS: readonly ModelReasoningEffort[] = [
+const CODEX_THOUGHT_LEVELS: readonly CodexThoughtLevel[] = [
   "minimal",
   "low",
   "medium",
@@ -58,7 +58,7 @@ const CODEX_THOUGHT_LEVELS: readonly ModelReasoningEffort[] = [
   "xhigh",
 ];
 
-const CODEX_THOUGHT_DISPLAY: Record<ModelReasoningEffort, string> = {
+const CODEX_THOUGHT_DISPLAY: Record<CodexThoughtLevel, string> = {
   minimal: "Minimal",
   low: "Low",
   medium: "Medium",
@@ -79,9 +79,7 @@ export const resolveCodexMode = (modeId: string | undefined) =>
 export const isValidCodexMode = (id: string) =>
   CODEX_MODES.some((mode) => mode.id === id);
 
-export const isValidCodexThoughtLevel = (
-  level: string,
-): level is ModelReasoningEffort =>
+export const isValidCodexThoughtLevel = (level: string) =>
   (CODEX_THOUGHT_LEVELS as readonly string[]).includes(level);
 
 export const buildCodexConfigOptions = (ctx: CodexConfigOptionsContext) => {

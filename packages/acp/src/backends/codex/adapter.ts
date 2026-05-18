@@ -1,18 +1,31 @@
 /**
  * Codex backend adapter.
  *
- * One Codex Thread is held per ACP session and reused across turns. Codex owns
- * its local tool loop; Mimir observes normalized events for ACP rendering.
+ * One Codex app-server thread is held per ACP session and reused across turns.
+ * Codex owns its local tool loop; Mimir observes normalized events for ACP
+ * rendering.
  */
 
+import type { CodexAppServerState } from "../../agent/types";
 import { getCodexModelFlag } from "../../routing";
 import type { Backend, BackendRunOptions } from "../types";
-import { createCodexThread, runCodexThread } from "./runner";
+import {
+  type AppServerApprovalHandler,
+  createAppServerApprovalHandler,
+} from "./app-server-approvals";
+import { createCodexAppServerState } from "./app-server-process";
+import type { RunCodexOptions } from "./formatting";
 
 export type CodexBackendDeps = {
   readonly serverUrl: string;
   readonly userMemoryDbPath: string;
   readonly defaultCwd: string;
+  readonly appServer?: {
+    readonly start: (
+      options: RunCodexOptions,
+      approvalHandler: AppServerApprovalHandler,
+    ) => Promise<CodexAppServerState>;
+  };
 };
 
 const requireSession = (options: BackendRunOptions) => {
@@ -24,7 +37,15 @@ const requireSession = (options: BackendRunOptions) => {
   return options.session;
 };
 
+const closeAppServer = async (session: ReturnType<typeof requireSession>) => {
+  const appServer = session.codexAppServer;
+  session.codexAppServer = null;
+  await appServer?.close();
+};
+
 export const createCodexBackend = (deps: CodexBackendDeps) => {
+  const appServer = deps.appServer ?? { start: createCodexAppServerState };
+
   const run = async function* (options: BackendRunOptions) {
     const session = requireSession(options);
     const cwd = options.projectPath ?? deps.defaultCwd;
@@ -39,30 +60,38 @@ export const createCodexBackend = (deps: CodexBackendDeps) => {
     const mode = options.permissionMode ?? session.currentMode;
 
     if (
-      session.codexThread &&
       session.codexThreadConfig &&
       (session.codexThreadConfig.modelId !== options.modelId ||
         session.codexThreadConfig.mode !== mode ||
         session.codexThreadConfig.effort !== options.effort)
     ) {
-      session.codexThread = null;
+      await closeAppServer(session);
       session.codexThreadConfig = null;
     }
 
-    if (!session.codexThread) {
-      session.codexThread = createCodexThread({
-        prompt: options.prompt,
-        instructionPath,
-        workingDirectory: cwd,
-        serverUrl: deps.serverUrl,
-        userMemoryDbPath: deps.userMemoryDbPath,
-        model,
-        clientMcpServers: options.clientMcpServers,
-        permissionBridge: session.codexPermissionBridge,
-        mode,
-        effort: options.effort,
-        signal: options.signal,
-      });
+    const runOptions = {
+      prompt: options.prompt,
+      instructionPath,
+      workingDirectory: cwd,
+      serverUrl: deps.serverUrl,
+      userMemoryDbPath: deps.userMemoryDbPath,
+      model,
+      clientMcpServers: options.clientMcpServers,
+      mode,
+      effort: options.effort,
+      signal: options.signal,
+    } satisfies RunCodexOptions;
+
+    if (!session.codexAppServer) {
+      const autoApprove = mode === "auto";
+      const approvalHandler = createAppServerApprovalHandler(
+        options.requestToolPermission,
+        autoApprove,
+      );
+      session.codexAppServer = await appServer.start(
+        runOptions,
+        approvalHandler,
+      );
       session.codexThreadConfig = {
         modelId: options.modelId,
         mode,
@@ -70,7 +99,15 @@ export const createCodexBackend = (deps: CodexBackendDeps) => {
       };
     }
 
-    yield* runCodexThread(session.codexThread, options.prompt, options.signal);
+    if (session.codexAppServer) {
+      yield* session.codexAppServer.runTurn({
+        prompt: options.prompt,
+        model,
+        effort: options.effort,
+        signal: options.signal,
+      });
+      return;
+    }
   };
 
   return { kind: "codex" as const, run } satisfies Backend;

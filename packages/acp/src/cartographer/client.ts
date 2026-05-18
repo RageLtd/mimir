@@ -40,7 +40,7 @@ type McpToolResult = {
 // ── Parsed output shapes from cartographer tools ──
 
 export type ParsedFileOutput = {
-  filePath: string;
+  file_path: string;
   language: string;
   imports: { target: string; specifier: string; symbols: string[] }[];
   symbols: {
@@ -270,7 +270,11 @@ export const spawnCartographer = async (
       project,
       file_path: filePath,
     });
-    return JSON.parse(text) as ParsedFileOutput;
+    const parsed = JSON.parse(text) as ParsedFileOutput;
+    // Cartographer's parse_file tool omits file_path from its output
+    // (the caller already supplied it). Stamp it back so downstream
+    // sync payload assembly doesn't have to special-case the gap.
+    return { ...parsed, file_path: parsed.file_path ?? filePath };
   };
 
   const indexProject = async (project: string): Promise<string> => {

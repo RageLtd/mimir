@@ -35,7 +35,17 @@ type IndexPayload = {
   readonly files: readonly {
     readonly path: string;
     readonly language: string;
-    readonly imports: readonly string[];
+    /**
+     * Imports as `{target, specifier}` pairs. `target` is the resolved
+     * absolute path, `specifier` is the raw string as written in source
+     * ("./util", "react", "@scope/pkg"). Both are needed: target drives
+     * dependency-graph queries, specifier preserves authored-side
+     * identity so refactors and aliased imports can be detected.
+     */
+    readonly imports: readonly {
+      readonly target: string;
+      readonly specifier: string;
+    }[];
     readonly exports: readonly string[];
     readonly symbols: readonly {
       readonly kind: string;
@@ -45,6 +55,13 @@ type IndexPayload = {
     }[];
     readonly size: number;
     readonly mtime: string;
+    /**
+     * SHA-256 hex digest of the file contents at sync time. Computed by
+     * the client (mimir-acp, mimir-cc-plugin) — server-side filesystems
+     * are typically not co-located with source trees. Empty string when
+     * the client couldn't read the file at hash time.
+     */
+    readonly content_hash: string;
   }[];
   readonly stats: {
     readonly totalFiles: number;
@@ -94,19 +111,28 @@ cartographer.post("/sync", async (c) => {
     for (const file of payload.files) {
       const searchable = [
         file.path,
-        ...file.imports,
+        // Imports are now {target, specifier} pairs — flatten both into
+        // the search index so a search for "react" or "./util" matches
+        // alongside resolved paths.
+        ...file.imports.map((imp) => imp.target),
+        ...file.imports.map((imp) => imp.specifier),
         ...file.exports,
         ...file.symbols.map((s: { name: string }) => s.name),
       ].join(" ");
 
       await db.query(
+        // `indexed_at` is typed `datetime` in the schema — SurrealDB
+        // does not auto-coerce ISO strings, so cast explicitly. Clients
+        // send ISO 8601 (e.g. "2026-05-18T03:52:20.164Z") and the
+        // <datetime> prefix turns that into a real datetime value.
         `CREATE cart_file CONTENT {
           project: $project,
           file_path: $file_path,
           language: $language,
           symbols: $symbols,
           searchable: $searchable,
-          indexed_at: $indexed_at
+          content_hash: $content_hash,
+          indexed_at: <datetime>$indexed_at
         }`,
         {
           project: projectKey,
@@ -114,6 +140,10 @@ cartographer.post("/sync", async (c) => {
           language: file.language,
           symbols: JSON.stringify(file.symbols),
           searchable,
+          // Defensive: clients that haven't been updated to compute the
+          // hash will be missing this field — accept it as empty string
+          // so the SCHEMAFULL constraint is met without rejecting the sync.
+          content_hash: file.content_hash ?? "",
           indexed_at: payload.indexedAt,
         },
       );
@@ -121,17 +151,21 @@ cartographer.post("/sync", async (c) => {
       // Insert import records
       for (const imp of file.imports) {
         await db.query(
+          // Same datetime cast as cart_file — schema enforces datetime,
+          // clients send ISO 8601 strings.
           `CREATE cart_import CONTENT {
             project: $project,
             source_path: $source_path,
             target_path: $target_path,
+            specifier: $specifier,
             symbols: $symbols,
-            indexed_at: $indexed_at
+            indexed_at: <datetime>$indexed_at
           }`,
           {
             project: projectKey,
             source_path: file.path,
-            target_path: imp,
+            target_path: imp.target,
+            specifier: imp.specifier,
             symbols: JSON.stringify(
               file.symbols
                 .filter(

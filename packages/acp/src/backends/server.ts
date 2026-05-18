@@ -74,7 +74,7 @@ export const createServerBackend = (serverConfig: ServerClientConfig) => {
     let usageContextWindow: number | undefined;
 
     // Drive the SSE iterator manually with `.next().catch(errMessage)` —
-    // same pattern as runner.ts:safeNext and prompt-server.ts. Avoids
+    // same pattern as the prompt handlers. Avoids
     // try/catch around the for-await loop and makes upstream errors
     // explicit as `{ ok: false, error }` results rather than thrown
     // exceptions wrapped in a translation handler.

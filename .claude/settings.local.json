@@ -32,8 +32,17 @@
       "Read(//tmp/**)",
       "Bash(bun -e \"const d = await Bun.file\\('packages/server/provider-data.json'\\).json\\(\\); const fw = d.providers?.['fireworks-ai'] ?? d.providers?.fireworks; console.log\\('Provider:', JSON.stringify\\(fw, null, 2\\)\\); const models = Object.entries\\(d.models\\).filter\\(\\([k]\\) => k.toLowerCase\\(\\).includes\\('deepseek'\\)\\); console.log\\('DeepSeek models:', JSON.stringify\\(Object.fromEntries\\(models\\), null, 2\\)\\)\")",
       "Bash(bun -e \"const d = await Bun.file\\('packages/server/provider-data.json'\\).json\\(\\); console.log\\('Top keys:', Object.keys\\(d\\)\\)\")",
-      "Bash(tail -200 ~/.mimir/acp.log 2>/dev/null | head -100)"
+      "Bash(tail -200 ~/.mimir/acp.log 2>/dev/null | head -100)",
+      "Read(//Users/rageltd/.mimir/**)",
+      "Read(//Users/rageltd/dotfiles/**)",
+      "Read(//Users/rageltd/.claude/**)",
+      "Read(//Users/rageltd/.claude/plugins/**)",
+      "Read(//Users/rageltd/**)"
     ]
   },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "notion"
+  ],
   "spinnerTipsEnabled": false
 }

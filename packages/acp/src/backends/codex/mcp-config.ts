@@ -1,9 +1,9 @@
 /**
- * MCP server config builder for the Codex SDK backend.
+ * MCP server config builder for the Codex app-server backend.
  *
  * Codex receives MCP configuration through `--config mcp_servers.*` entries.
- * The TypeScript SDK accepts a nested config object and flattens it for the
- * CLI, so we keep this as a plain JSON/TOML-compatible record.
+ * The app-server accepts the same nested config object on `thread/start`, so
+ * we keep this as a plain JSON/TOML-compatible record.
  */
 
 import type { McpServer, McpServerStdio } from "@agentclientprotocol/sdk";
@@ -64,6 +64,7 @@ const acpServerToCodexEntry = (server: McpServer): CodexMcpServerConfig => {
 export const buildCodexMcpServers = (
   serverUrl: string,
   userMemoryDbPath: string,
+  workingDirectory: string,
   clientMcpServers?: readonly McpServer[],
 ) => {
   const userMemoryScript = new URL(
@@ -83,6 +84,10 @@ export const buildCodexMcpServers = (
   };
   servers.mimir = { url: `${serverUrl}/mcp` };
   servers.context7 = { command: "bunx", args: ["@upstash/context7-mcp"] };
+  servers.filesystem = {
+    command: "bunx",
+    args: ["@modelcontextprotocol/server-filesystem", workingDirectory, "/tmp"],
+  };
 
   return servers;
 };

@@ -19,11 +19,26 @@
  *     - cartographer_stats
  */
 
+import { Glob } from "bun";
 import { createChildLogger, log } from "../utils/log";
-import { type CartographerClient, spawnCartographer } from "./client";
+import {
+  type CartographerClient,
+  type ParsedFileOutput,
+  spawnCartographer,
+} from "./client";
 import { syncIndex } from "./sync";
 
 const logger = createChildLogger(log, "cartographer-lifecycle");
+
+const SOURCE_GLOB = "**/*.{ts,tsx,js,jsx,mts,mjs,rs,go,py,rb,ex,exs}";
+const SKIP_DIRS = new Set([
+  "node_modules",
+  "target",
+  "dist",
+  "build",
+  "vendor",
+  "__pycache__",
+]);
 
 /** Tools that run locally via the cartographer binary. */
 export const LOCAL_CARTOGRAPHER_TOOLS = new Set([
@@ -44,6 +59,20 @@ const FILE_WRITE_TOOLS = new Set([
 ]);
 
 export const isFileWriteTool = (name: string) => FILE_WRITE_TOOLS.has(name);
+
+const shouldIndexFile = (path: string) =>
+  !path.split("/").some((part) => part.startsWith(".") || SKIP_DIRS.has(part));
+
+const collectProjectFiles = async (projectPath: string) => {
+  const glob = new Glob(SOURCE_GLOB);
+  const files: string[] = [];
+  for await (const match of glob.scan({ cwd: projectPath })) {
+    if (shouldIndexFile(match)) {
+      files.push(`${projectPath}/${match}`);
+    }
+  }
+  return files;
+};
 
 export type CartographerManager = {
   /** Get or spawn the client for a project path. */
@@ -126,20 +155,36 @@ export const createCartographerManager = (
     projectPath: string,
     getProjectId?: () => string | null,
   ) => {
-    // In --parse-only mode the binary has no DB access; it returns the
-    // full index as JSON via the MCP tool result. We forward that JSON
-    // directly to mimir-server's sync endpoint.
+    // In --parse-only mode the binary has no DB access, and its full-index
+    // tool returns a human summary. ACP owns the persisted index payload by
+    // walking source files, parsing each one locally, and syncing the results.
     getClient(projectPath)
       .then(async (client) => {
         logger.info("auto-indexing project:", projectPath);
-        const rawJson = await client.indexProject(projectPath);
-        if (!rawJson || rawJson.trim() === "") {
-          logger.warn("cartographer returned empty index for:", projectPath);
+        const filePaths = await collectProjectFiles(projectPath);
+        const parsedFiles: ParsedFileOutput[] = [];
+
+        for (const filePath of filePaths) {
+          const parsed = await client.parseFile(projectPath, filePath).then(
+            (result) => ({ data: result, error: null }),
+            (error) => ({ data: null, error }),
+          );
+          if (parsed.data) {
+            parsedFiles.push(parsed.data);
+          } else {
+            logger.debug("cartographer skipped file:", filePath, parsed.error);
+          }
+        }
+
+        if (parsedFiles.length === 0) {
+          logger.warn("cartographer parsed no files for:", projectPath);
           return;
         }
+
         await syncIndex(
           { serverUrl: config.serverUrl, apiKey: config.apiKey, logger },
-          rawJson,
+          projectPath,
+          parsedFiles,
           getProjectId?.() ?? null,
         );
       })

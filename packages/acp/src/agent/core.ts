@@ -155,9 +155,8 @@ export const createAgentCore = (
       ccUserStreamPush: null,
       ccEvents: null,
       ccQueryConfig: null,
-      codexThread: null,
+      codexAppServer: null,
       codexInstructionPath: null,
-      codexPermissionBridge: null,
       codexThreadConfig: null,
     };
     sessions.set(sessionId, session);
@@ -250,9 +249,8 @@ export const createAgentCore = (
       ccUserStreamPush: null,
       ccEvents: null,
       ccQueryConfig: null,
-      codexThread: null,
+      codexAppServer: null,
       codexInstructionPath: null,
-      codexPermissionBridge: null,
       codexThreadConfig: null,
     };
     sessions.set(sessionId, session);
@@ -308,14 +306,13 @@ export const createAgentCore = (
       session.ccEvents = null;
       session.ccQueryConfig = null;
     }
-    session.codexThread = null;
-    session.codexInstructionPath = null;
-    session.codexPermissionBridge
+    session.codexAppServer
       ?.close()
       .catch((err) =>
-        logger.debug("codex permission bridge close on compact failed:", err),
+        logger.debug("codex app-server close on compact failed:", err),
       );
-    session.codexPermissionBridge = null;
+    session.codexAppServer = null;
+    session.codexInstructionPath = null;
     session.codexThreadConfig = null;
     session.bootSequenceDone = false;
     return true;
@@ -478,14 +475,13 @@ export const createAgentCore = (
       session.ccUserStreamPush = null;
       session.ccEvents = null;
       session.ccQueryConfig = null;
-      session.codexThread = null;
-      session.codexInstructionPath = null;
-      session.codexPermissionBridge
+      session.codexAppServer
         ?.close()
         .catch((err) =>
-          logger.debug("codex permission bridge close on dispose failed:", err),
+          logger.debug("codex app-server close on dispose failed:", err),
         );
-      session.codexPermissionBridge = null;
+      session.codexAppServer = null;
+      session.codexInstructionPath = null;
       session.codexThreadConfig = null;
       session.clientMcp
         ?.close()

@@ -162,9 +162,18 @@ export async function initSchema(): Promise<void> {
     DEFINE FIELD IF NOT EXISTS language ON cart_file TYPE string;
     DEFINE FIELD IF NOT EXISTS symbols ON cart_file TYPE string;
     DEFINE FIELD IF NOT EXISTS searchable ON cart_file TYPE string;
+    -- SHA-256 hex of the file contents at sync time. Clients compute and
+    -- send this so the server can detect stale-index conditions without
+    -- needing filesystem access to the source tree.
+    DEFINE FIELD IF NOT EXISTS content_hash ON cart_file TYPE string;
     DEFINE FIELD IF NOT EXISTS indexed_at ON cart_file TYPE datetime DEFAULT time::now();
     DEFINE INDEX IF NOT EXISTS cart_file_project ON cart_file FIELDS project;
     DEFINE INDEX IF NOT EXISTS cart_file_path ON cart_file FIELDS file_path;
+    -- Sync uses a full DELETE-then-INSERT per project, so one row per
+    -- (project, file_path) pair is the invariant. The UNIQUE index makes
+    -- it a hard constraint rather than a convention waiting to fail.
+    DEFINE INDEX IF NOT EXISTS cart_file_unique ON cart_file
+      FIELDS project, file_path UNIQUE;
     DEFINE INDEX IF NOT EXISTS cart_file_searchable ON cart_file FIELDS searchable
       FULLTEXT ANALYZER memory_analyzer BM25;
 
@@ -172,11 +181,22 @@ export async function initSchema(): Promise<void> {
     DEFINE FIELD IF NOT EXISTS project ON cart_import TYPE string;
     DEFINE FIELD IF NOT EXISTS source_path ON cart_import TYPE string;
     DEFINE FIELD IF NOT EXISTS target_path ON cart_import TYPE string;
+    -- Raw import specifier string as it appears in source ("./util",
+    -- "react", "../config"). Distinct from target_path, which is the
+    -- resolved absolute path. Authored-side identity matters for
+    -- detecting refactors and for the (project, source, target,
+    -- specifier) UNIQUE edge.
+    DEFINE FIELD IF NOT EXISTS specifier ON cart_import TYPE string;
     DEFINE FIELD IF NOT EXISTS symbols ON cart_import TYPE string;
     DEFINE FIELD IF NOT EXISTS indexed_at ON cart_import TYPE datetime DEFAULT time::now();
     DEFINE INDEX IF NOT EXISTS cart_import_project ON cart_import FIELDS project;
     DEFINE INDEX IF NOT EXISTS cart_import_source ON cart_import FIELDS source_path;
     DEFINE INDEX IF NOT EXISTS cart_import_target ON cart_import FIELDS target_path;
+    -- One row per distinct edge — same source+target via two different
+    -- specifiers (re-export shims, aliased imports) are still separate
+    -- edges and stay as separate rows.
+    DEFINE INDEX IF NOT EXISTS cart_import_edge ON cart_import
+      FIELDS project, source_path, target_path, specifier UNIQUE;
 
     DEFINE TABLE IF NOT EXISTS cart_git_state SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS project ON cart_git_state TYPE string;
