@@ -7,7 +7,9 @@
  * whether to resubmit.
  */
 
+import type { ModelInfo } from "@agentclientprotocol/sdk";
 import { iterateSSE, type SSEEvent } from "./sse-parser";
+import { errMessage } from "./util";
 import { createChildLogger, log as rootLog } from "./utils/log";
 
 const log = createChildLogger(rootLog, "server-client");
@@ -142,4 +144,99 @@ export const getTools = async (
     );
     return [];
   }
+};
+
+// ── Model list ──
+
+const EMPTY_SERVER_MODELS = {
+  models: [] as ModelInfo[],
+  reasoningModels: new Set<string>(),
+};
+
+type ServerModelEntry = {
+  id: string;
+  object?: string;
+  owned_by?: string;
+  /** Human-readable model name from provider-data (e.g. "Kimi K2.5"). */
+  display_name?: string;
+  /** Human-readable provider name from provider-data (e.g. "OpenCode Go"). */
+  provider_name?: string;
+  /** Whether the model supports extended thinking / reasoning. */
+  reasoning?: boolean;
+};
+
+/**
+ * Titlecase fallback for `owned_by` when the server didn't include a
+ * `provider_name`. Splits on dashes and underscores, capitalises each
+ * part. Keeps unknown providers visually distinct from registered ones
+ * without requiring a client-side provider catalogue.
+ *
+ * Exported for unit testing.
+ */
+export const titlecaseProviderId = (id: string) =>
+  id
+    .split(/[-_]/g)
+    .map((part) =>
+      part.length > 0 ? part.charAt(0).toUpperCase() + part.slice(1) : "",
+    )
+    .join(" ");
+
+/**
+ * Compose the `name` field shown in the editor's model selector.
+ * `display_name (provider_name)` when both are present; falls back to
+ * `display_name` (no parenthetical), or `id (provider)` when only the
+ * provider is known, or just `id` for entries with no enrichment.
+ *
+ * Exported for unit testing.
+ */
+export const composeServerModelName = (m: ServerModelEntry) => {
+  const display = m.display_name ?? m.id;
+  if (!m.owned_by) return display;
+  const provider = m.provider_name ?? titlecaseProviderId(m.owned_by);
+  return `${display} (${provider})`;
+};
+
+/**
+ * Fetch mimir-server's `/v1/models` and return entries as ACP ModelInfo
+ * plus the set of model ids that advertise reasoning support. Returns an
+ * empty list on failure so the model picker degrades gracefully rather
+ * than the session failing to start.
+ */
+export const fetchServerModels = async (
+  serverUrl: string,
+  apiKey: string,
+  signal?: AbortSignal,
+) => {
+  const url = `${serverUrl}/v1/models`;
+  const headers = authHeaders(apiKey);
+  const res = await fetch(url, { headers, signal }).catch(errMessage);
+  if (typeof res === "string") {
+    log.warn(`server model fetch failed: ${res} (${url})`);
+    return EMPTY_SERVER_MODELS;
+  }
+  if (!res.ok) {
+    log.warn(
+      `server model fetch failed: ${res.status} ${res.statusText} (${url})`,
+    );
+    return EMPTY_SERVER_MODELS;
+  }
+  const body = await res.json().catch(errMessage);
+  if (typeof body === "string") {
+    log.warn(`server model fetch — invalid JSON: ${body} (${url})`);
+    return EMPTY_SERVER_MODELS;
+  }
+  const data = (body as { data?: ServerModelEntry[] }).data ?? [];
+  const reasoningModels = new Set<string>();
+  const models = data.map((m) => {
+    if (m.reasoning) reasoningModels.add(m.id);
+    return {
+      modelId: m.id,
+      name: composeServerModelName(m),
+      description: m.owned_by ? `Provider: ${m.owned_by}` : undefined,
+    };
+  });
+  log.info(
+    `fetched ${models.length} models from mimir-server (${reasoningModels.size} with reasoning)`,
+  );
+  return { models, reasoningModels };
 };

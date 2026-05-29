@@ -8,20 +8,8 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
-import type { BackendRouter } from "../backends";
-import {
-  buildCCConfigOptions,
-  DEFAULT_CC_MODE,
-} from "../backends/claude-code/config-options";
-import { buildCodexConfigOptions } from "../backends/codex/config-options";
 import type { MimirConfig } from "../config";
-import {
-  CC_PREFIX,
-  fetchServerModels,
-  isCCModel,
-  isCodexModel,
-  mergeModels,
-} from "../routing";
+import { fetchServerModels } from "../server-client";
 import { createChildLogger, log } from "../utils/log";
 import type { SessionState } from "./types";
 
@@ -29,10 +17,6 @@ const logger = createChildLogger(log, "model-resolution");
 
 export type ModelResolutionDeps = {
   readonly config: MimirConfig;
-  readonly router: BackendRouter;
-  readonly getDiscoveredCCModels: () => readonly acp.ModelInfo[];
-  readonly getDiscoveredCodexModels: () => readonly acp.ModelInfo[];
-  readonly getDiscoveredCopilotModels: () => readonly acp.ModelInfo[];
   /**
    * Set of server-backend model IDs that support extended thinking /
    * reasoning. Populated by `buildModelsState` from the server's
@@ -41,13 +25,6 @@ export type ModelResolutionDeps = {
    */
   serverReasoningModels: Set<string>;
 };
-
-/**
- * Resolve the CLI alias for a CC-prefixed model id. Returns undefined for
- * non-CC models so callers can skip alias-dependent lookups.
- */
-export const ccAliasFor = (modelId: string) =>
-  modelId.startsWith(CC_PREFIX) ? modelId.slice(CC_PREFIX.length) : undefined;
 
 /**
  * Assemble the merged model list and pick the current model id Zed should
@@ -69,23 +46,10 @@ export const buildModelsState = async (
   deps: ModelResolutionDeps,
   preferredModelId?: string,
 ) => {
-  const { config, router } = deps;
+  const { config } = deps;
   const serverResult = await fetchServerModels(config.serverUrl, config.apiKey);
-  const serverModels = serverResult.models;
+  const availableModels = serverResult.models;
   deps.serverReasoningModels = serverResult.reasoningModels;
-  const ccModels = router.runtime.ccEnabled ? deps.getDiscoveredCCModels() : [];
-  const codexModels = router.runtime.codexEnabled
-    ? deps.getDiscoveredCodexModels()
-    : [];
-  const copilotModels = router.runtime.copilotEnabled
-    ? deps.getDiscoveredCopilotModels()
-    : [];
-  const availableModels = mergeModels(
-    serverModels,
-    [...ccModels],
-    [...codexModels],
-    [...copilotModels],
-  );
   const preferred = preferredModelId
     ? availableModels.find((m) => m.modelId === preferredModelId)
     : undefined;
@@ -145,36 +109,15 @@ export const isValidServerEffort = (level: string) =>
   (SERVER_EFFORT_LEVELS as readonly string[]).includes(level);
 
 /**
- * Build the backend-native `configOptions[]` for the given session (mode +
- * thought-level). Does NOT include the model selector — that's composed by
- * the handler from `buildModelConfigOption` since it depends on the merged
- * models list.
+ * Build the backend-native `configOptions[]` for the given session.
+ * Surfaces a thought-level selector for reasoning-capable server models.
+ * Does NOT include the model selector — that's composed by the handler
+ * from `buildModelConfigOption` since it depends on the merged models list.
  */
 export const buildSessionConfigOptions = (
   deps: ModelResolutionDeps,
   session: SessionState,
 ) => {
-  // CC backend — surfaces mode + thought-level selectors.
-  if (isCCModel(session.currentModelId) && deps.router.runtime.ccEnabled) {
-    return buildCCConfigOptions({
-      modelAlias: ccAliasFor(session.currentModelId),
-      currentMode: session.currentMode || DEFAULT_CC_MODE,
-      currentThoughtLevel: session.currentThoughtLevel,
-      bypassPermissionsAllowed:
-        deps.config.cc.permissionMode === "bypassPermissions",
-    });
-  }
-
-  if (
-    isCodexModel(session.currentModelId) &&
-    deps.router.runtime.codexEnabled
-  ) {
-    return buildCodexConfigOptions({
-      currentMode: session.currentMode,
-      currentThoughtLevel: session.currentThoughtLevel,
-    });
-  }
-
   // Server backend — expose a thought-level selector for reasoning models.
   if (deps.serverReasoningModels.has(session.currentModelId)) {
     const currentLevel =

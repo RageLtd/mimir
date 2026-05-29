@@ -3,54 +3,39 @@
  *
  * Verifies that `buildModelsState` honours `preferredModelId` so the picker
  * in Zed reflects the session's actual current model rather than snapping
- * back to the env-var default. Uses fetch stubbing rather than a live
- * server — mimir-server isn't reachable from test runs.
+ * back to the env-var default. Server models are injected by stubbing the
+ * `/v1/models` fetch — mimir-server isn't reachable from test runs.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type * as acp from "@agentclientprotocol/sdk";
-import type { BackendRouter } from "../backends";
 import type { MimirConfig } from "../config";
 import { buildModelsState, type ModelResolutionDeps } from "./model-resolution";
 
 let originalFetch: typeof fetch;
 
-beforeEach(() => {
-  originalFetch = globalThis.fetch;
-  // Default stub: server returns empty model list. Tests that need
-  // server entries override this.
+/** Stub `/v1/models` to return the given model ids as server entries. */
+const stubServerModels = (ids: readonly string[]) => {
   globalThis.fetch = (async (
     _url: string | URL | Request,
     _init?: RequestInit,
   ) =>
-    new Response(JSON.stringify({ data: [] }), {
+    new Response(JSON.stringify({ data: ids.map((id) => ({ id })) }), {
       status: 200,
       headers: { "content-type": "application/json" },
     })) as typeof fetch;
+};
+
+beforeEach(() => {
+  originalFetch = globalThis.fetch;
+  // Default: server returns no models. Tests that need entries override.
+  stubServerModels([]);
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-const mkRouter = (
-  overrides?: Partial<BackendRouter["runtime"]>,
-): BackendRouter => ({
-  forModel: () => ({ kind: "claude-code" }) as never,
-  server: {} as never,
-  cc: {} as never,
-  copilot: {} as never,
-  codex: {} as never,
-  runtime: {
-    ccEnabled: true,
-    codexEnabled: false,
-    copilotEnabled: false,
-    copilotModelMap: new Map(),
-    ...overrides,
-  },
-});
-
-const mkConfig = (model: string): MimirConfig =>
+const mkConfig = (model: string) =>
   ({
     serverUrl: "http://test.invalid",
     apiKey: "",
@@ -61,98 +46,78 @@ const mkConfig = (model: string): MimirConfig =>
     acpLogPath: "",
     autoApproveTools: false,
     systemPromptTtlMs: 0,
-    cc: {} as never,
-    copilot: {} as never,
-    cartographer: {} as never,
-  }) as MimirConfig;
+    cartographer: { enabled: false, binaryPath: "cartographer" },
+  }) satisfies MimirConfig;
 
-const ccModel = (suffix: string): acp.ModelInfo => ({
-  modelId: `claude-code/${suffix}`,
-  name: `Claude Code (${suffix})`,
-  description: undefined,
-});
-
-const mkDeps = (
-  config: MimirConfig,
-  ccModels: readonly acp.ModelInfo[],
-): ModelResolutionDeps => ({
-  config,
-  router: mkRouter(),
-  getDiscoveredCCModels: () => ccModels,
-  getDiscoveredCodexModels: () => [],
-  getDiscoveredCopilotModels: () => [],
-  serverReasoningModels: new Set(),
-});
+const mkDeps = (config: MimirConfig) =>
+  ({
+    config,
+    serverReasoningModels: new Set<string>(),
+  }) satisfies ModelResolutionDeps;
 
 describe("buildModelsState — preferredModelId", () => {
   test("uses preferredModelId when it matches a discovered model", async () => {
-    const deps = mkDeps(mkConfig("claude-code/opus"), [
-      ccModel("opus"),
-      ccModel("sonnet"),
-      ccModel("haiku"),
+    stubServerModels([
+      "openrouter/opus",
+      "openrouter/sonnet",
+      "openrouter/haiku",
     ]);
+    const deps = mkDeps(mkConfig("openrouter/opus"));
 
-    const result = await buildModelsState(deps, "claude-code/sonnet");
+    const result = await buildModelsState(deps, "openrouter/sonnet");
 
-    expect(result.currentModelId).toBe("claude-code/sonnet");
+    expect(result.currentModelId).toBe("openrouter/sonnet");
   });
 
   test("preferred wins over the configured default", async () => {
     // The user-selected model (preferred) must take priority over MIMIR_MODEL,
-    // otherwise the picker snaps back to "Default (recommended)" after every
+    // otherwise the picker snaps back to the env-var default after every
     // setSessionConfigOption round-trip.
-    const deps = mkDeps(mkConfig("claude-code/opus"), [
-      ccModel("opus"),
-      ccModel("sonnet"),
-    ]);
+    stubServerModels(["openrouter/opus", "openrouter/sonnet"]);
+    const deps = mkDeps(mkConfig("openrouter/opus"));
 
-    const result = await buildModelsState(deps, "claude-code/sonnet");
+    const result = await buildModelsState(deps, "openrouter/sonnet");
 
-    expect(result.currentModelId).toBe("claude-code/sonnet");
-    expect(result.currentModelId).not.toBe("claude-code/opus");
+    expect(result.currentModelId).toBe("openrouter/sonnet");
+    expect(result.currentModelId).not.toBe("openrouter/opus");
   });
 
   test("falls back to configured when preferred isn't in the list", async () => {
-    const deps = mkDeps(mkConfig("claude-code/opus"), [
-      ccModel("opus"),
-      ccModel("sonnet"),
-    ]);
+    stubServerModels(["openrouter/opus", "openrouter/sonnet"]);
+    const deps = mkDeps(mkConfig("openrouter/opus"));
 
-    const result = await buildModelsState(deps, "claude-code/nonexistent");
+    const result = await buildModelsState(deps, "openrouter/nonexistent");
 
-    expect(result.currentModelId).toBe("claude-code/opus");
+    expect(result.currentModelId).toBe("openrouter/opus");
   });
 
   test("falls back to first available when neither preferred nor configured matches", async () => {
-    const deps = mkDeps(mkConfig("openrouter/auto"), [
-      ccModel("sonnet"),
-      ccModel("haiku"),
-    ]);
+    stubServerModels(["openrouter/sonnet", "openrouter/haiku"]);
+    const deps = mkDeps(mkConfig("openrouter/auto"));
 
-    const result = await buildModelsState(deps, "claude-code/missing");
+    const result = await buildModelsState(deps, "openrouter/missing");
 
-    expect(result.currentModelId).toBe("claude-code/sonnet");
+    expect(result.currentModelId).toBe("openrouter/sonnet");
   });
 
   test("preserves preferredModelId verbatim when no models discovered", async () => {
-    // Edge case: all backends offline. The session's persisted model id
-    // should still come back so it survives a transient discovery failure.
-    const deps = mkDeps(mkConfig("openrouter/auto"), []);
+    // Edge case: server discovery returns nothing. The session's persisted
+    // model id should still come back so it survives a transient failure.
+    stubServerModels([]);
+    const deps = mkDeps(mkConfig("openrouter/auto"));
 
-    const result = await buildModelsState(deps, "claude-code/sonnet");
+    const result = await buildModelsState(deps, "openrouter/sonnet");
 
-    expect(result.currentModelId).toBe("claude-code/sonnet");
+    expect(result.currentModelId).toBe("openrouter/sonnet");
     expect(result.availableModels).toHaveLength(0);
   });
 
   test("omitting preferredModelId reverts to configured-default behaviour", async () => {
-    const deps = mkDeps(mkConfig("claude-code/opus"), [
-      ccModel("opus"),
-      ccModel("sonnet"),
-    ]);
+    stubServerModels(["openrouter/opus", "openrouter/sonnet"]);
+    const deps = mkDeps(mkConfig("openrouter/opus"));
 
     const result = await buildModelsState(deps);
 
-    expect(result.currentModelId).toBe("claude-code/opus");
+    expect(result.currentModelId).toBe("openrouter/opus");
   });
 });

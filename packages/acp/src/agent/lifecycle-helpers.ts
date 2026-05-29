@@ -8,8 +8,6 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
-import { getContextWindow } from "../backends/claude-code/context-window-cache";
-import { isCCModel } from "../routing";
 import { formatLoadErrors, type LoadError } from "../rules";
 import type { ChatMessage } from "../server-client";
 import { createChildLogger, log } from "../utils/log";
@@ -121,17 +119,13 @@ export const replayHistoryToEditor = (
 };
 
 /**
- * Resolve the context-window size to advertise for `modelId`. Reads the
- * per-model cache populated by the CC runner from
- * `SDKResultMessage.modelUsage[*].contextWindow` after the first turn for
- * a given model. Returns 0 on a cache miss (initial emission for a model
- * the SDK hasn't run yet) or when the model isn't a CC model — callers
- * already guard with `if (size > 0)` and skip the emission, deferring the
- * advertised size to the post-turn emission in `prompt-cc.ts` where the
- * SDK's reported value is in hand.
+ * Context-window size to advertise at session start. The server backend has
+ * no pre-turn context source — it reports the window in each turn's `finish`
+ * event — so this returns 0 and callers (guarded by `if (size > 0)`) skip the
+ * initial emission, deferring to the post-turn `usage_update` in
+ * `prompt-server.ts` where the server's reported value is in hand.
  */
-export const advertisedContextSize = (modelId: string) =>
-  isCCModel(modelId) ? (getContextWindow(modelId) ?? 0) : 0;
+export const advertisedContextSize = (_modelId: string) => 0;
 
 /**
  * Emit a `usage_update` notification advertising context-window usage and

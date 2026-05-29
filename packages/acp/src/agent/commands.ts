@@ -9,7 +9,6 @@
 
 import * as path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
-import { isValidCCMode } from "../backends/claude-code/config-options";
 import { assembleClientMcpServers } from "../mcp-config/assemble";
 import { authenticateServer } from "../mcp-config/auth-injector";
 import { probeHttpServer } from "../mcp-config/probe";
@@ -51,18 +50,26 @@ const runModel = async (
   return END_TURN;
 };
 
-const listActiveModes = (deps: CommandDeps, sessionId: string): string => {
+/**
+ * The set of mode values the active backend advertises for this session.
+ * Empty when the backend has no mode catalogue (the server backend does
+ * not yet surface modes). `/mode` validates against this so wiring server
+ * modes later needs only a `"mode"` config option — no command changes.
+ */
+const activeModeValues = (deps: CommandDeps, sessionId: string) => {
   const session = deps.core.getSession(sessionId);
-  if (!session) return "(session not found)";
+  if (!session) return [];
   const opt = deps
     .buildSessionConfigOptions(session)
     .find((o) => o.id === "mode");
-  if (!opt || opt.type !== "select") {
-    return "(none — backend has no mode catalogue)";
-  }
-  return (opt.options as { value: string }[])
-    .map((o) => `\`${o.value}\``)
-    .join(", ");
+  if (opt?.type !== "select") return [];
+  return (opt.options as { value: string }[]).map((o) => o.value);
+};
+
+const listActiveModes = (deps: CommandDeps, sessionId: string) => {
+  const values = activeModeValues(deps, sessionId);
+  if (values.length === 0) return "(none — backend has no mode catalogue)";
+  return values.map((v) => `\`${v}\``).join(", ");
 };
 
 const runMode = async (
@@ -79,7 +86,7 @@ const runMode = async (
     );
     return END_TURN;
   }
-  if (!isValidCCMode(modeId)) {
+  if (!activeModeValues(deps, sessionId).includes(modeId)) {
     const list = listActiveModes(deps, sessionId);
     await emitAgentText(
       deps.conn,

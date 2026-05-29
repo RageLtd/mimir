@@ -1,30 +1,16 @@
 /**
  * Backend abstraction.
  *
- * A Backend yields a normalized stream of BackendEvent values regardless of
- * whether inference happens on mimir-server (HTTP+SSE) or via the Claude
- * Code Agent SDK.
+ * A Backend yields a normalized stream of BackendEvent values from
+ * mimir-server (HTTP+SSE). It emits `tool_call` for each model-requested
+ * tool; the agent loop executes it (locally or via ACP forwarding) and
+ * feeds the result back. No `tool_result` is ever emitted by the backend.
  *
- * Event semantics differ slightly per backend:
- *
- *   server backend
- *     - emits `tool_call` for each model-requested tool; the agent loop
- *       executes it (locally or via ACP forwarding) and feeds the result
- *       back. No `tool_result` is ever emitted by the backend.
- *
- *   claude-code backend
- *     - CC runs its own internal tool loop. We OBSERVE tool_use and
- *       tool_result events purely so the editor can show them; the
- *       agent loop must NOT execute them.
- *
- *   codex backend
- *     - Codex also runs its own local tool loop. `tool_update` is used for
- *       incremental observed output, primarily command_execution terminal
- *       output before the item reaches item.completed.
+ * The abstraction is intentionally backend-agnostic so additional
+ * inference backends can be slotted in behind the same event contract.
  */
 
 import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk";
-import type { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import type { SessionState, ThoughtLevel } from "../agent/types";
 import type { RuleEntry } from "../rules";
 import type { ChatMessage, ToolDefinition } from "../server-client";
@@ -42,7 +28,11 @@ export type BackendEvent =
       readonly id: string;
       readonly name: string;
       readonly input: Record<string, unknown>;
-      /** True when CC executes the tool itself; the agent loop must observe only. */
+      /**
+       * True when the backend executes the tool itself and the agent loop
+       * must only observe (not re-execute). The server backend always sets
+       * this false — its tool calls are real requests for the loop to run.
+       */
       readonly observeOnly: boolean;
     }
   | {
@@ -66,10 +56,9 @@ export type BackendEvent =
       readonly cost?: number;
       /**
        * Total context window for the model used on this turn, in tokens.
-       * Set by the CC backend from `SDKResultMessage.modelUsage[*].contextWindow`
-       * — the SDK's authoritative per-model max. Other backends may leave
-       * this undefined; callers fall back to a cached value or skip the
-       * advertised-size emission entirely.
+       * The server backend sets this from the usage chunk's mimir extension
+       * field; callers use it to advertise capacity after the turn. May be
+       * undefined when the server omits it — callers then skip the emission.
        */
       readonly contextWindow?: number;
       /**
@@ -85,48 +74,36 @@ export type BackendEvent =
 export type BackendRunOptions = {
   /** Raw user prompt text for the current turn. */
   readonly prompt: string;
-  /** Resolved system prompt (CC backend uses --system-prompt; server already has its own). */
+  /** Resolved system prompt. */
   readonly systemPrompt: string;
-  /** Full conversation history (server backend uses this). */
+  /** Full conversation history. */
   readonly messages: readonly ChatMessage[];
-  /** Tool manifest for the server backend; CC ignores it. */
+  /** Tool manifest advertised to the model. */
   readonly tools: readonly ToolDefinition[];
-  /** Project path (cwd for CC; metadata for server). */
+  /** Project path used as the working directory / metadata source. */
   readonly projectPath: string;
-  /** MCP servers provided by the ACP client to forward into CC's MCP config. */
+  /** MCP servers provided by the ACP client. */
   readonly clientMcpServers?: readonly McpServer[];
-  /**
-   * Raw ACP content blocks for the current turn.
-   * Used by the CC backend to preserve image data in the SDK prompt input.
-   * The server backend ignores this field.
-   */
+  /** Raw ACP content blocks for the current turn (preserves image data). */
   readonly promptBlocks?: readonly ContentBlock[];
   readonly metadata: Record<string, unknown>;
   readonly signal?: AbortSignal;
-  /** Resolved model id. CC backend uses this to derive --model. */
+  /** Resolved model id. */
   readonly modelId: string;
 
-  permissionMode?: PermissionMode;
   effort?: ThoughtLevel;
   /**
-   * Loaded rule entries from the engine. CC backend wires them into a
-   * PreToolUse hook; server backend intercepts tool dispatch in
-   * prompt-server.ts. Empty array = no enforcement.
+   * Loaded rule entries from the engine. The server backend intercepts
+   * tool dispatch in prompt-server.ts. Empty array = no enforcement.
    */
   rules?: readonly RuleEntry[];
-  /**
-   * The CC backend uses this to manage the long-lived streaming-input
-   * Query stored on `SessionState.ccQuery`: first turn creates it,
-   * subsequent turns push new SDKUserMessages into the existing stream.
-   * Other backends ignore this field.
-   */
+  /** Active session state, threaded through for backends that need it. */
   session?: SessionState;
 
   /**
-   * Generic permission callback for gating tool execution. The CC backend
-   * wraps this into the SDK's `CanUseTool` shape; the server backend can
-   * call it directly before executing each tool. Created once per session
-   * via `createRequestToolPermission`.
+   * Generic permission callback for gating tool execution. The server
+   * backend calls it directly before executing each tool. Created once per
+   * session via `createRequestToolPermission`.
    */
   requestToolPermission?: RequestToolPermission;
 };
@@ -160,6 +137,6 @@ export type RequestToolPermission = (
 ) => Promise<ToolPermissionResult>;
 
 export type Backend = {
-  readonly kind: "server" | "claude-code" | "codex" | "copilot";
+  readonly kind: "server";
   readonly run: (options: BackendRunOptions) => AsyncGenerator<BackendEvent>;
 };

@@ -7,17 +7,10 @@
 
 import type * as acp from "@agentclientprotocol/sdk";
 import type { BackendRouter } from "../backends";
-import { promptViaClaudeCode } from "../backends/claude-code/prompt-cc";
-import {
-  createAnchorState,
-  type VoiceAnchor,
-} from "../backends/claude-code/voice-anchors";
-import { promptViaCodex } from "../backends/codex/prompt-codex";
 import type { CartographerManager } from "../cartographer/lifecycle";
 import { formatRulesForPrompt, readProjectRules } from "../cartographer/rules";
 import { createClientMcpManager } from "../client-mcp/manager";
 import type { MimirConfig } from "../config";
-import type { ContextClientConfig } from "../context-client";
 import { collectProjectMetadata } from "../project/metadata";
 import {
   patchProjectMetadata,
@@ -33,18 +26,11 @@ import { promptViaServer } from "./prompt-server";
 import type { SessionState } from "./types";
 
 /**
- * Default mode string for new sessions. Used as a backend-agnostic starting
- * point — CC will resolve it against `isValidCCMode` which accepts `"default"`;
- * server/Copilot don't read currentMode at all, so this is inert for them.
+ * Default mode string for new sessions. The server backend does not yet
+ * read currentMode, so this is an inert placeholder until server-side
+ * modes are wired in.
  */
 const DEFAULT_MODE = "default";
-
-export type AgentCoreDeps = {
-  /** Parsed Voice in Action library used by the CC anchor wrapper. */
-  readonly voiceAnchorLibrary: readonly VoiceAnchor[];
-  /** Turns between anchor injections on the CC backend. */
-  readonly anchorInterval: number;
-};
 
 const logger = createChildLogger(log, "core");
 
@@ -116,9 +102,7 @@ export const createAgentCore = (
   appConfig: MimirConfig,
   memoryStore: UserMemoryStore,
   router: BackendRouter,
-  contextClient: ContextClientConfig,
   sessionStore: SessionStore,
-  deps: AgentCoreDeps,
   cartographer?: CartographerManager | null,
 ) => {
   const sessions = new Map<string, SessionState>();
@@ -145,19 +129,8 @@ export const createAgentCore = (
       clientMcpServers,
       clientMcp: createClientMcpManager(sessionId, clientMcpServers),
       clientCapabilities,
-      voiceAnchors: createAnchorState(
-        sessionId,
-        deps.voiceAnchorLibrary.length,
-      ),
       bootSequenceDone: false,
       permanentlyAllowedTools: new Set(),
-      ccQuery: null,
-      ccUserStreamPush: null,
-      ccEvents: null,
-      ccQueryConfig: null,
-      codexAppServer: null,
-      codexInstructionPath: null,
-      codexThreadConfig: null,
     };
     sessions.set(sessionId, session);
 
@@ -239,19 +212,8 @@ export const createAgentCore = (
       clientMcpServers,
       clientMcp: createClientMcpManager(persisted.session_id, clientMcpServers),
       clientCapabilities,
-      voiceAnchors: createAnchorState(
-        persisted.session_id,
-        deps.voiceAnchorLibrary.length,
-      ),
       bootSequenceDone: false,
       permanentlyAllowedTools: new Set(),
-      ccQuery: null,
-      ccUserStreamPush: null,
-      ccEvents: null,
-      ccQueryConfig: null,
-      codexAppServer: null,
-      codexInstructionPath: null,
-      codexThreadConfig: null,
     };
     sessions.set(sessionId, session);
 
@@ -292,28 +254,11 @@ export const createAgentCore = (
   const compact = (sessionId: string) => {
     const session = sessions.get(sessionId);
     if (!session) return false;
+    // Wipe mimir's transcript record and reset the boot flag so the next
+    // prompt re-runs the boot sequence against whatever recent messages /
+    // summaries the server now provides.
     session.messages = [];
     sessionStore.updateMessages(sessionId, []);
-    // The CC streaming-input Query holds the model's working context for
-    // this session in-memory. Compaction wipes mimir's transcript record;
-    // tearing down the Query forces the next prompt to spin up a fresh
-    // subprocess that re-runs the boot sequence with whatever the server
-    // now provides as recent messages / summaries.
-    if (session.ccQuery) {
-      session.ccQuery.close();
-      session.ccQuery = null;
-      session.ccUserStreamPush = null;
-      session.ccEvents = null;
-      session.ccQueryConfig = null;
-    }
-    session.codexAppServer
-      ?.close()
-      .catch((err) =>
-        logger.debug("codex app-server close on compact failed:", err),
-      );
-    session.codexAppServer = null;
-    session.codexInstructionPath = null;
-    session.codexThreadConfig = null;
     session.bootSequenceDone = false;
     return true;
   };
@@ -405,46 +350,17 @@ export const createAgentCore = (
     }
     const backend = route.backend;
 
-    let result: acp.PromptResponse & { filesModified?: boolean };
-    if (backend.kind === "claude-code") {
-      result = await promptViaClaudeCode({
-        session,
-        promptText: stampedPrompt,
-        conn,
-        abortController,
-        backend,
-        contextClient,
-        memoryStore,
-        anchorOpts: {
-          library: deps.voiceAnchorLibrary,
-          interval: deps.anchorInterval,
-        },
-        promptBlocks,
-      });
-    } else if (backend.kind === "codex") {
-      result = await promptViaCodex({
-        session,
-        promptText: stampedPrompt,
-        conn,
-        abortController,
-        backend,
-        contextClient,
-        memoryStore,
-        promptBlocks,
-      });
-    } else {
-      result = await promptViaServer({
-        session,
-        promptText: stampedPrompt,
-        conn,
-        abortController,
-        backend,
-        appConfig,
-        memoryStore,
-        cartographer,
-        promptBlocks,
-      });
-    }
+    const result = await promptViaServer({
+      session,
+      promptText: stampedPrompt,
+      conn,
+      abortController,
+      backend,
+      appConfig,
+      memoryStore,
+      cartographer,
+      promptBlocks,
+    });
 
     // Reindex after any turn that modified files so Cartographer queries
     // reflect the current state on the next prompt.
@@ -468,21 +384,6 @@ export const createAgentCore = (
   const dispose = () => {
     for (const session of sessions.values()) {
       session.abortController?.abort();
-      // Full teardown: close the CC subprocess. Per-prompt cancellation
-      // would have used interrupt(); dispose is the only place close() runs.
-      session.ccQuery?.close();
-      session.ccQuery = null;
-      session.ccUserStreamPush = null;
-      session.ccEvents = null;
-      session.ccQueryConfig = null;
-      session.codexAppServer
-        ?.close()
-        .catch((err) =>
-          logger.debug("codex app-server close on dispose failed:", err),
-        );
-      session.codexAppServer = null;
-      session.codexInstructionPath = null;
-      session.codexThreadConfig = null;
       session.clientMcp
         ?.close()
         .catch((err) =>

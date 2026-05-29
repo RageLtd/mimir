@@ -3,35 +3,13 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
-import type {
-  EffortLevel,
-  Query,
-  SDKUserMessage,
-} from "@anthropic-ai/claude-agent-sdk";
-import type { VoiceAnchorState } from "../backends/claude-code/voice-anchors";
-import type { ReasoningEffort } from "../backends/codex/protocol/ReasoningEffort";
-import type { BackendEvent } from "../backends/types";
 import type { ClientMcpManager } from "../client-mcp/manager";
 import type { ResolvedProject } from "../project/resolver";
 import type { LoadError, RuleEntry } from "../rules";
 import type { ChatMessage } from "../server-client";
 
-export type ThoughtLevel = EffortLevel | ReasoningEffort;
-
-export type CodexAppServerTurnOptions = {
-  readonly prompt: string;
-  readonly model: string;
-  readonly effort?: ThoughtLevel;
-  readonly signal?: AbortSignal;
-};
-
-export type CodexAppServerState = {
-  readonly threadId: string;
-  readonly close: () => Promise<void>;
-  readonly runTurn: (
-    options: CodexAppServerTurnOptions,
-  ) => AsyncGenerator<BackendEvent>;
-};
+/** Reasoning effort levels the server backend accepts. */
+export type ThoughtLevel = "none" | "low" | "medium" | "high";
 
 export type SessionState = {
   sessionId: string;
@@ -50,8 +28,7 @@ export type SessionState = {
   clientSuppliedMcpServers?: readonly acp.McpServer[];
   clientMcp: ClientMcpManager | null;
   clientCapabilities: acp.ClientCapabilities;
-  voiceAnchors: VoiceAnchorState;
-  /** First turn only: assembleContext + boot server. Subsequent: SDK handles continuity. */
+  /** First turn only: assembleContext + boot server. */
   bootSequenceDone: boolean;
   /**
    * Server backend: tools whose permission the user permanently granted
@@ -61,43 +38,6 @@ export type SessionState = {
    * contains state-mutating tools (edit, write, execute, delete).
    */
   permanentlyAllowedTools: Set<string>;
-  /**
-   * CC backend: live Query handle from a streaming-input query(). Held across
-   * ACP prompts so the subprocess and conversation state are reused instead of
-   * rebuilt each turn. Null until the first prompt creates it; nulled on
-   * compact/dispose and on effort changes (which require Query recreation
-   * since the SDK has no setEffort).
-   */
-  ccQuery: Query | null;
-  /**
-   * CC backend: pushes a new SDKUserMessage into the long-lived async iterable
-   * feeding ccQuery. Paired 1:1 with ccQuery — both null or both set.
-   */
-  ccUserStreamPush: ((msg: SDKUserMessage) => void) | null;
-  /**
-   * CC backend: long-lived BackendEvent stream from the streaming-input
-   * Query. Paused between turns at the await on the SDK iterator. The
-   * adapter drains it until each turn's `finish` event. Paired 1:1 with
-   * ccQuery — both null or both set.
-   */
-  ccEvents: AsyncGenerator<BackendEvent> | null;
-  /**
-   * CC backend: snapshot of (modelId, mode, effort) at the time ccQuery was
-   * created. Used by prompt-cc to detect mid-session changes and apply
-   * setModel/setPermissionMode, or to recreate the Query when effort changes.
-   */
-  ccQueryConfig: {
-    modelId: string;
-    mode: string;
-    effort: EffortLevel | undefined;
-  } | null;
-  codexAppServer: CodexAppServerState | null;
-  codexInstructionPath: string | null;
-  codexThreadConfig: {
-    modelId: string;
-    mode: string;
-    effort: ThoughtLevel | undefined;
-  } | null;
 };
 
 export type AgentCore = {
