@@ -1,16 +1,22 @@
 FROM oven/bun:alpine AS build
 WORKDIR /app
 
-COPY package.json ./
+# Workspace skeleton: root manifest defines the dependency catalogs, bun.lock
+# pins resolved versions, member manifests complete the graph so `catalog:`
+# references resolve. Built from the monorepo root context.
+COPY package.json bun.lock ./
+COPY packages/server/package.json packages/server/
+COPY packages/acp/package.json packages/acp/
+COPY packages/cc-plugin/package.json packages/cc-plugin/
 RUN bun install
 
-COPY src/ ./src/
-COPY provider-data.json ./provider-data.json
+COPY packages/server/src packages/server/src
+COPY packages/server/provider-data.json packages/server/provider-data.json
 
-RUN bun build src/index.ts --compile --outfile mimir-server
+WORKDIR /app/packages/server
+RUN bun build src/index.ts --compile --outfile /app/mimir-server
 
 FROM oven/bun:alpine
-
 WORKDIR /app
 
 RUN apk add --no-cache docker

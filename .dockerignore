@@ -1,0 +1,10 @@
+node_modules
+**/node_modules
+.git
+dist
+**/dist
+logs
+*.log
+.env
+packages/acp/mimir-acp
+packages/server/mimir-server
