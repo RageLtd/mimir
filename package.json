@@ -17,7 +17,39 @@
     "acp:build": "bun run --filter @mimir/acp build",
     "cc-plugin:build": "bun run --filter @mimir/cc-plugin build"
   },
-  "workspaces": [
-    "packages/*"
-  ]
+  "workspaces": {
+    "packages": [
+      "packages/*"
+    ],
+    "catalogs": {
+      "ai-sdk": {
+        "ai": "^6.0.158",
+        "@ai-sdk/amazon-bedrock": "^4.0.93",
+        "@ai-sdk/anthropic": "^3.0.69",
+        "@ai-sdk/google": "^3.0.62",
+        "@ai-sdk/mcp": "^1.0.36",
+        "@ai-sdk/moonshotai": "^2.0.16",
+        "@ai-sdk/openai": "^3.0.52",
+        "@ai-sdk/openai-compatible": "^2.0.38",
+        "@ai-sdk/provider": "^3.0.8",
+        "@ai-sdk/provider-utils": "^4.0.27",
+        "@openrouter/ai-sdk-provider": "^2.9.0"
+      },
+      "protocol": {
+        "@agentclientprotocol/sdk": "^0.19.0",
+        "@anthropic-ai/claude-agent-sdk": "^0.3.154",
+        "@modelcontextprotocol/sdk": "^1.29.0"
+      },
+      "server": {
+        "@hono/zod-validator": "^0.7.6",
+        "@tavily/core": "^0.7.2",
+        "gpt-tokenizer": "^3.4.0",
+        "hono": "^4.12.12",
+        "pino": "^10.3.1",
+        "pino-pretty": "^13.1.3",
+        "surrealdb": "^2.0.3",
+        "zod": "^4.3.6"
+      }
+    }
+  }
 }
