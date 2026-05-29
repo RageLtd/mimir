@@ -1,0 +1,16 @@
+{
+  "name": "mimir-cc-local",
+  "owner": {
+    "name": "RageLtd"
+  },
+  "metadata": {
+    "description": "Local marketplace for the mimir-cc plugin (alpha — install from a clone of the mimir monorepo)."
+  },
+  "plugins": [
+    {
+      "name": "mimir-cc",
+      "source": "./packages/cc-plugin",
+      "description": "Mimir persona and runtime for Claude Code."
+    }
+  ]
+}
