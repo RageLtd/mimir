@@ -36,6 +36,9 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # SurrealDB data
 data/
 
+# local claude settings
+.claude/settings.local.json
+
 # SQLite databases (local user data)
 *.db
 *.db-shm
