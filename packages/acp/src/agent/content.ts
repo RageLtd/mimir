@@ -1,8 +1,9 @@
 /**
  * Content block formatting and prompt assembly.
  *
- * Converts ACP ContentBlock arrays into plain text for model consumption,
- * and assembles the CC context wrapper for the claude-code backend.
+ * Converts ACP ContentBlock arrays into text, Anthropic, or OpenAI multipart
+ * content for the server backend, and builds the per-request server metadata
+ * (project id, user context, project rules).
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
@@ -193,8 +194,8 @@ export const hasImageContent = (blocks: readonly acp.ContentBlock[]) =>
  * The server can't access the client-side profile/memories directly.
  *
  * `projectRules` carries the formatted project rules (from .claude/rules,
- * CLAUDE.md, AGENTS.md) so server-side models see the same coding
- * conventions as CC/Codex backends.
+ * CLAUDE.md, AGENTS.md) so server-side models honour the project's coding
+ * conventions.
  */
 export const buildMetadata = (
   projectPath: string,

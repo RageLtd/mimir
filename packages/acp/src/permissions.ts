@@ -4,11 +4,8 @@
  * `createRequestToolPermission` returns a `RequestToolPermission` callback
  * that forwards permission prompts to the ACP client (Zed) via
  * `conn.requestPermission()`. The callback is created once per session and
- * threaded through `BackendRunOptions` so every backend can use it:
- *
- *   - CC backend wraps it into the SDK's `CanUseTool` shape (see
- *     `backends/claude-code/permissions.ts`).
- *   - Server backend can call it directly before executing each tool.
+ * threaded through `BackendRunOptions` so the server backend can call it
+ * directly before executing each tool.
  */
 
 import type {

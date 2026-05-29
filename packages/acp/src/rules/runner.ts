@@ -6,11 +6,9 @@
  * dispatches to a builtin detector, and returns a list of `Finding`
  * the formatter renders for the model.
  *
- * Backend adapters (`backends/claude-code/rule-hooks.ts` and
- * `backends/server/rule-intercept.ts`) build a `DetectorContext` from
- * their native tool-call event shape and call this. The runner does
- * not know about hooks, SSE, or which tool-execution mechanism is in
- * play — it operates on rule data.
+ * The caller builds a `DetectorContext` from its native tool-call event
+ * shape and calls this. The runner does not know about hooks, SSE, or
+ * which tool-execution mechanism is in play — it operates on rule data.
  */
 
 import * as path from "node:path";

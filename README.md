@@ -1,45 +1,47 @@
 # Mimir
 
-A coding agent with persistent memory, personality, and multi-provider inference. Mimir runs as two components: a server that owns knowledge and context, and an ACP adapter that connects your editor to inference backends.
+A coding agent with persistent memory, personality, and multi-provider inference. Mimir runs as three components: a server that owns knowledge and context, an ACP adapter that connects ACP editors (Zed) to the server's inference, and a Claude Code plugin that runs Mimir inside Claude Code against that same server.
 
 ## Architecture
 
 ```
-Editor (Zed) ──ACP (stdio)──▶ @mimir/acp (user's machine)
-                                  │
-                                  ├── Backend: mimir-server
-                                  │     POST /v1/chat/completions
-                                  │     └── vLLM / Zen / OpenRouter / any OpenAI-compatible provider
-                                  │
-                                  ├── Backend: Claude Code
-                                  │     claude -p (subprocess, pipe mode)
-                                  │     └── Opus / Sonnet via Pro plan, no API key needed
-                                  │
-                                  ├── Context from mimir-server (both backends):
-                                  │     ├── System prompt (cached)
-                                  │     ├── Goldfish memories (vector search)
-                                  │     ├── Conversation summaries (compaction)
-                                  │     └── Conversation persistence
-                                  │
-                                  └── Local state:
-                                        ├── User memories (bun:sqlite)
-                                        └── Cartographer index (tree-sitter)
+Editor (Zed) ──ACP (stdio)──▶ @mimir/acp
+                                  └── POST /v1/chat/completions ──▶ mimir-server
+                                        └── vLLM / Zen / OpenRouter / any OpenAI-compatible provider
+
+Claude Code ──plugin──▶ @mimir/cc-plugin
+                                  ├── MCP (HTTP) ──▶ mimir-server /mcp
+                                  │     └── Goldfish memory · Cartographer · web search
+                                  ├── lifecycle hooks: persona system prompt, boot context,
+                                  │     project rules, transcript persistence, cartographer reindex
+                                  └── inference: Claude Code's own Anthropic plan (no API key)
+
+mimir-server (shared by both paths):
+  ├── System prompt + persona
+  ├── Goldfish memories (vector search, SurrealDB)
+  ├── Conversation summaries (compaction) + persistence
+  └── Knowledge tools (web search, Context7, Cartographer)
+
+Local state (user's machine):
+  ├── User memories (bun:sqlite, ~/.mimir/user-memories.db)
+  └── Cartographer index (tree-sitter)
 ```
 
-Backend selection is per-request via the model dropdown in your editor. Models prefixed with `claude-code/` route through a Claude Code subprocess. Everything else routes through mimir-server.
+The two paths are independent. The ACP adapter routes **every** model through mimir-server's OpenAI-compatible API — there is no per-backend switch. The Claude Code plugin runs inside Claude Code (inference billed to your Anthropic plan) and reaches mimir-server only for memory, context, and knowledge tools over MCP.
 
 ## Packages
 
 | Package | Description |
 |---------|-------------|
 | `packages/server` | Inference server, memory, context assembly, conversation persistence |
-| `packages/acp` | ACP agent adapter — connects editors to inference backends |
+| `packages/acp` | ACP agent adapter — connects ACP editors (Zed) to mimir-server |
+| `packages/cc-plugin` | Claude Code plugin — Mimir persona, MCP wiring, lifecycle hooks, and the `mimir` wrapper command |
 
 ## Prerequisites
 
 - [Bun](https://bun.sh) v1.3+
 - [Docker](https://docs.docker.com/get-docker/) and Docker Compose (for the server)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (optional, for the CC backend)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (optional, to run the `cc-plugin`)
 
 ## Quick Start
 
@@ -122,28 +124,41 @@ Replace the path and server URL with your actual values.
 
 #### ACP Environment Variables
 
-- `MIMIR_SERVER_URL` — mimir-server address (**required**, no default that works across machines)
+- `MIMIR_SERVER_URL` — mimir-server address (default: `http://mimir.conhost.lan`; override per machine)
 - `MIMIR_API_KEY` — server API key (if you've configured auth)
-- `MIMIR_MODEL` — default model for the server backend (default: `openrouter/auto`)
+- `MIMIR_MODEL` — default model (default: `openrouter/auto`)
+- `MIMIR_USER_MEMORY_DB` — local user-memory SQLite path (default: `~/.mimir/user-memories.db`)
+- `MIMIR_SESSION_DB` — local session SQLite path (default: `~/.mimir/sessions.db`)
+- `MIMIR_ACP_LOG_FILE` — ACP log file; empty string disables file logging (default: `~/.mimir/acp.log`)
+- `AUTO_APPROVE_TOOLS` — auto-approve read/search tool calls (default: `false`)
 - `MIMIR_SYSTEM_PROMPT_TTL` — system prompt cache TTL in ms (default: `300000` / 5 min)
-- `MIMIR_CC_ENABLED` — enable/disable Claude Code backend (default: auto-detected from PATH)
-- `MIMIR_CC_MCP_CONFIG` — path to MCP config for CC (default: `./mimir-mcp.json`)
-- `MIMIR_CC_PERMISSION_MODE` — CC permission mode (default: `bypassPermissions`)
-- `MIMIR_CC_WORKING_DIR` — working directory for CC subprocess
+- `MIMIR_CARTOGRAPHER_ENABLED` — enable cartographer integration (default: `true`)
+- `MIMIR_CARTOGRAPHER_BIN` — cartographer binary path (default: `cartographer`, resolved on `PATH`)
 - `LOG_LEVEL` — `debug`, `info`, `warn`, `error` (default: `info`)
 
 ### 3. Select a Model
 
-Open the agent panel in Zed and pick a model from the dropdown:
+Open the agent panel in Zed and pick a model from the dropdown. Every entry
+resolves through mimir-server — your vLLM, Zen, and OpenRouter models appear
+by name. Reasoning-capable models also expose a **Thought Level** selector
+(none / low / medium / high).
 
-- **Server models** — your vLLM, Zen, OpenRouter models appear by name
-- **Claude Code (opus)** — Opus via Claude Code subprocess
-- **Claude Code (sonnet)** — Sonnet via Claude Code subprocess
-- **Claude Code (opus-1m)** — Opus with 1M context window
-- **Claude Code (sonnet-1m)** — Sonnet with 1M context window
-- **Claude Code (haiku)** — Haiku for simple tasks
+To run Mimir on Anthropic models (Opus, Sonnet, Haiku), use the Claude Code
+plugin below rather than the Zed dropdown.
 
-Claude Code models require the `claude` CLI installed and authenticated. No API key needed — it uses your Pro/Max plan.
+### 4. (Optional) Install the Claude Code Plugin
+
+`packages/cc-plugin` runs Mimir inside Claude Code. It installs the persona
+system prompt, wires mimir-server's MCP endpoint (Goldfish memory,
+Cartographer, web search) alongside the local user-memory store, registers
+the lifecycle hooks, and adds a `mimir` wrapper that launches Claude Code as
+Mimir. Inference is billed to your Anthropic plan — no API key needed.
+
+The repo ships a local plugin marketplace at `.claude-plugin/marketplace.json`
+(it resolves the `mimir-cc` plugin from `./packages/cc-plugin`). Add that
+marketplace from your clone in Claude Code, install the plugin, then run
+`/mimir-cc:mimir-install` to set up `~/.mimir/`, the wrapper, MCP servers, and
+hooks. Launch sessions with the `mimir` command.
 
 ## Providers and Model Resolution
 
@@ -250,17 +265,17 @@ When requesting a model, use one of these patterns:
 - **Provider-prefixed**: `opencode-go/glm-5` — forces resolution through a specific provider
 - **HuggingFace-style**: `Qwen/Qwen3.5-122B-A10B` — the part after the slash is also registered as a bare name
 
-The model dropdown in Zed shows all registered models. Claude Code models are prefixed with `claude-code/` and handled entirely by the ACP adapter.
+The model dropdown in Zed shows all registered models, every one resolved through mimir-server.
 
 ## How It Works
 
-### Server Backend
+### ACP Adapter (Zed)
 
 The editor sends messages through ACP to mimir-acp, which forwards them to mimir-server's `/v1/chat/completions` endpoint. The server runs the full middleware pipeline: system prompt injection, Goldfish memory retrieval, context assembly with summaries, tool classification, and the agent loop. Tool calls come back to mimir-acp for execution (filesystem ops forwarded to the editor, memory queries run locally).
 
-### Claude Code Backend
+### Claude Code Plugin
 
-mimir-acp fetches context from mimir-server (system prompt, relevant memories, conversation summaries), assembles it into a prompt, and spawns `claude -p` as a subprocess. Claude Code handles its own tool execution (file reads, writes, bash commands) internally. mimir-acp observes tool calls from the stream for editor visibility and persists the conversation back to mimir-server after completion.
+The `cc-plugin` runs Mimir inside Claude Code itself rather than spawning a subprocess. It installs as a Claude Code plugin: lifecycle hooks inject the persona system prompt, boot context, and project rules; an MCP connection to mimir-server's `/mcp` endpoint exposes Goldfish memory, Cartographer, and web search; a local stdio server exposes the user-memory store; and post-session hooks persist the transcript back to mimir-server and trigger cartographer reindexing. Claude Code handles inference (billed to your Anthropic plan) and its own tool execution.
 
 The system prompt is converted from markdown to XML tags for Anthropic's models, with an additional model override block that suppresses Claude's default personality patterns.
 
@@ -286,13 +301,19 @@ Every request gets assembled context regardless of backend:
 bun run acp:start
 
 # Run the server in dev mode (outside Docker, with --watch)
-cd packages/server && bun run dev
+bun run server:dev
 
-# Run all checks (biome)
+# Build the Claude Code plugin binaries
+bun run cc-plugin:build
+
+# Lint + format (biome)
 bun run check
 
-# Run server tests
-cd packages/server && bun test
+# Run tests — always via the root harness, never `bun test <path>`
+bun run test            # all packages
+bun run test:server     # or a single package
+bun run test:acp
+bun run test:cc-plugin
 ```
 
 ## Project Structure
@@ -300,34 +321,53 @@ cd packages/server && bun test
 ```
 mimir/
 ├── packages/
-│   ├── acp/                    # ACP agent adapter
+│   ├── acp/                    # ACP agent adapter (server backend only)
 │   │   ├── src/
-│   │   │   ├── agent/          # Agent loop, prompt paths (server + CC)
-│   │   │   ├── backends/       # Backend abstraction (server, claude-code)
+│   │   │   ├── agent/          # Agent loop, session, model resolution, commands
+│   │   │   ├── backends/       # Backend abstraction — server only
+│   │   │   ├── cartographer/   # Cartographer index sync client
+│   │   │   ├── client-mcp/     # MCP servers exposed to the editor
+│   │   │   ├── mcp-config/     # MCP configuration assembly
+│   │   │   ├── project/        # Project resolution
+│   │   │   ├── rules/          # Project-rule loader + runner
 │   │   │   ├── store/          # Local user memory (bun:sqlite)
 │   │   │   ├── tools/          # User memory tools
-│   │   │   ├── utils/          # Logging, markdown-to-xml
-│   │   │   ├── config.ts       # Configuration
+│   │   │   ├── config.ts       # Configuration (env vars)
 │   │   │   ├── context-client.ts # REST client for mimir-server context
-│   │   │   ├── routing.ts      # Model-based backend routing
-│   │   │   ├── server-client.ts # HTTP client for mimir-server completions
+│   │   │   ├── server-client.ts  # HTTP client for mimir-server completions
 │   │   │   └── sse-parser.ts   # SSE stream parsing
 │   │   └── index.ts            # Entry point
 │   │
-│   └── server/                 # Inference server
+│   ├── cc-plugin/              # Claude Code plugin (@mimir/cc-plugin)
+│   │   ├── .claude-plugin/     # plugin.json manifest
+│   │   ├── artifacts/          # mcp.json / settings.json / wrapper.sh templates
+│   │   ├── commands/           # Slash commands (mimir-install, mimir-update, switch-model)
+│   │   ├── src/
+│   │   │   ├── *-hook.ts       # Lifecycle hooks (session-start, persist, precompact, reindex, …)
+│   │   │   ├── boot-context.ts # Cross-session context snapshot
+│   │   │   ├── voice-anchor.ts # Persona voice enforcement
+│   │   │   ├── markdown-to-xml.ts # System-prompt markdown → XML
+│   │   │   ├── cartographer/   # Index sync client
+│   │   │   ├── project/ rules/ store/ tools/
+│   │   │   └── cli.ts          # `mimir` wrapper entry point
+│   │   └── build.sh            # Compiles per-platform binaries
+│   │
+│   └── server/                 # Inference server (@mimir/server)
 │       ├── src/
 │       │   ├── agent/          # Provider registry, agent runner
 │       │   ├── agent-loop/     # Message log, compaction, server tools
 │       │   ├── db/             # SurrealDB client
 │       │   ├── goldfish/       # Memory storage, retrieval, extraction
-│       │   ├── hooks/          # Behavioral enforcement
 │       │   ├── middleware/     # System prompt, memories, context assembly
-│       │   ├── routes/         # HTTP endpoints
+│       │   ├── projects/       # Project registry
+│       │   ├── routes/         # HTTP + MCP endpoints
 │       │   └── util/           # Logging, result type
 │       ├── system-prompt.md    # Mimir's personality and rules
 │       ├── docker-compose.yml  # Server + SurrealDB
 │       └── Dockerfile
 │
-├── mimir-mcp.json              # Empty MCP config (strips CC account servers)
+├── tests/run-tests.ts          # Root test harness (bun run test[:pkg])
+├── .claude-plugin/             # Local plugin marketplace (marketplace.json)
+├── mimir-mcp.json              # Sample MCP config (mimir + context7 servers)
 └── biome.json                  # Shared linting config
 ```

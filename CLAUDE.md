@@ -42,76 +42,17 @@ test("hello world", () => {
 });
 ```
 
-## Frontend
+## Repository Layout
 
-Use HTML imports with `Bun.serve()`. Don't use `vite`. HTML imports fully support React, CSS, Tailwind.
+Bun workspace — the root `package.json` defines `workspaces` plus dependency catalogs. Three packages:
 
-Server:
+- `packages/server` — inference server, memory, context assembly, conversation persistence. Owns the OpenAI-compatible API and the `/mcp` endpoint.
+- `packages/acp` — ACP adapter connecting ACP editors (Zed) to mimir-server. **Server backend only** — every model routes through mimir-server; there is no per-backend switch.
+- `packages/cc-plugin` — Claude Code plugin: Mimir persona, MCP wiring, lifecycle hooks, and the `mimir` wrapper command that launches Claude Code as Mimir.
 
-```ts#index.ts
-import index from "./index.html"
+Tests run through the root harness, never `bun test <path>`:
 
-Bun.serve({
-  routes: {
-    "/": index,
-    "/api/users/:id": {
-      GET: (req) => {
-        return new Response(JSON.stringify({ id: req.params.id }));
-      },
-    },
-  },
-  // optional websocket support
-  websocket: {
-    open: (ws) => {
-      ws.send("Hello, world!");
-    },
-    message: (ws, message) => {
-      ws.send(message);
-    },
-    close: (ws) => {
-      // handle close
-    }
-  },
-  development: {
-    hmr: true,
-    console: true,
-  }
-})
-```
+- `bun run test` — all packages
+- `bun run test:server` / `test:acp` / `test:cc-plugin` — a single package
 
-HTML files can import .tsx, .jsx or .js files directly and Bun's bundler will transpile & bundle automatically. `<link>` tags can point to stylesheets and Bun's CSS bundler will bundle.
-
-```html#index.html
-<html>
-  <body>
-    <h1>Hello, world!</h1>
-    <script type="module" src="./frontend.tsx"></script>
-  </body>
-</html>
-```
-
-With the following `frontend.tsx`:
-
-```tsx#frontend.tsx
-import React from "react";
-import { createRoot } from "react-dom/client";
-
-// import .css files directly and it works
-import './index.css';
-
-const root = createRoot(document.body);
-
-export default function Frontend() {
-  return <h1>Hello, world!</h1>;
-}
-
-root.render(<Frontend />);
-```
-
-Then, run index.ts
-
-```sh
-bun --hot ./index.ts
-```
-
-For more information, read the Bun API docs in `node_modules/bun-types/docs/**.mdx`.
+Shared dependencies are elevated to the root `package.json` catalogs (`ai-sdk`, `protocol`, `server`); reference them with `catalog:<name>`.
