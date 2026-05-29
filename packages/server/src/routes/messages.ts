@@ -22,12 +22,21 @@ import { modelContentToString } from "../agent-loop/message-log/message-utils";
 import { appendTurn } from "../agent-loop/message-log/persistence";
 import { extractMemoriesFromResponse } from "../agent-loop/post-processing";
 import { requestLog } from "../util/logger";
+import { attempt } from "../util/result";
 
 export const messages = new Hono();
 
 type PersistRequest = {
   messages: ModelMessage[];
+  /** Legacy cwd-style path. Always required for back-compat. */
   project: string;
+  /**
+   * Canonical project UUID from /v1/projects/resolve. Optional during the
+   * transition window — Slice-1 plugins send only `project`, Slice-2-aware
+   * plugins send both. When present, stored alongside `project` on the
+   * message_log row for future UUID-keyed queries.
+   */
+  projectId?: string;
   /** Optional cost report from the CC backend (USD for the turn). */
   totalCostUsd?: number;
 };
@@ -55,49 +64,59 @@ messages.post("/persist", async (c) => {
     return c.json({ error: "Missing required field: project" }, 400);
   }
 
-  try {
-    const ids = await appendTurn(body.messages, body.project);
+  const projectId =
+    typeof body.projectId === "string" && body.projectId.length > 0
+      ? body.projectId
+      : null;
 
-    if (typeof body.totalCostUsd === "number" && body.totalCostUsd > 0) {
-      log.info(
-        { project: body.project, totalCostUsd: body.totalCostUsd },
-        "cc turn cost",
-      );
-    }
+  const [appendErr, ids] = await attempt(() =>
+    appendTurn(body.messages, body.project, projectId),
+  );
+  if (appendErr) {
+    log.error(
+      { error: appendErr.message, project: body.project, projectId },
+      "conversation persist failed",
+    );
+    return c.json({ error: appendErr.message }, 500);
+  }
 
-    // Mirror server-backend post-processing: kick off async memory
-    // extraction from the latest user/assistant exchange. Fire-and-forget;
-    // never blocks the response.
-    if (ids.length > 0) {
-      const lastAssistant = [...body.messages]
-        .reverse()
-        .find((m) => m.role === "assistant");
-      const lastUser = [...body.messages]
-        .reverse()
-        .find((m) => m.role === "user");
-      if (lastAssistant && lastUser) {
-        const assistantText = modelContentToString(lastAssistant.content);
-        if (assistantText) {
-          extractMemoriesFromResponse(assistantText, lastUser, body.project);
-        }
-      }
-    }
-
+  if (typeof body.totalCostUsd === "number" && body.totalCostUsd > 0) {
     log.info(
       {
         project: body.project,
-        clientCount: body.messages.length,
-        appended: ids.length,
+        projectId,
+        totalCostUsd: body.totalCostUsd,
       },
-      "conversation persisted",
+      "cc turn cost",
     );
-    return c.json({ appended: ids.length, ids });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.error(
-      { error: msg, project: body.project },
-      "conversation persist failed",
-    );
-    return c.json({ error: msg }, 500);
   }
+
+  // Mirror server-backend post-processing: kick off async memory
+  // extraction from the latest user/assistant exchange. Fire-and-forget;
+  // never blocks the response.
+  if (ids.length > 0) {
+    const lastAssistant = [...body.messages]
+      .reverse()
+      .find((m) => m.role === "assistant");
+    const lastUser = [...body.messages]
+      .reverse()
+      .find((m) => m.role === "user");
+    if (lastAssistant && lastUser) {
+      const assistantText = modelContentToString(lastAssistant.content);
+      if (assistantText) {
+        extractMemoriesFromResponse(assistantText, lastUser, body.project);
+      }
+    }
+  }
+
+  log.info(
+    {
+      project: body.project,
+      projectId,
+      clientCount: body.messages.length,
+      appended: ids.length,
+    },
+    "conversation persisted",
+  );
+  return c.json({ appended: ids.length, ids });
 });

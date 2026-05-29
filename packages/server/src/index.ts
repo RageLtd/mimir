@@ -11,6 +11,7 @@ import { completions } from "./routes/completions";
 import { context } from "./routes/context";
 import { mcp } from "./routes/mcp";
 import { messages } from "./routes/messages";
+import { messagesIngress } from "./routes/messages-ingress";
 import { models as modelsRoute } from "./routes/models";
 import { projects } from "./routes/projects";
 import { systemPrompt } from "./routes/system-prompt";
@@ -113,6 +114,7 @@ app.route("/", modelsRoute);
 app.route("/v1/system-prompt", systemPrompt);
 app.route("/v1/context", context);
 app.route("/v1/messages", messages);
+app.route("/v1/messages", messagesIngress);
 
 // Cartographer and tools
 app.route("/v1/cartographer", cartographer);

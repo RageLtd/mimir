@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+#
+# mimir — launch vanilla Claude Code with the Mimir persona, MCP config,
+# and lifecycle hooks installed by mimir-cc-plugin. The MIMIR_ACTIVE flag
+# lets hooks distinguish a real Mimir turn from a nested `claude`
+# subprocess that happens to inherit the same settings file.
+#
+# This script is a launch-and-check-marker loop rather than a single
+# `exec` so the plugin can switch backing models mid-session: the plugin
+# writes ~/.mimir/next-session.json with { model, env, flags } before
+# calling exit, and the next iteration of this loop picks up the marker,
+# consumes it (reads + deletes), and re-launches claude with the marker's
+# env overrides and extra flags merged in. Crash-safe — an orphaned
+# marker is picked up on the next launch rather than dropped.
+
+set -eo pipefail
+export MIMIR_ACTIVE=1
+
+MIMIR_MARKER="$HOME/.mimir/next-session.json"
+BASE_ARGS=(
+  --system-prompt-file "$HOME/.mimir/system-prompt.md"
+  --mcp-config "$HOME/.mimir/mcp.json"
+  --settings "$HOME/.mimir/settings.json"
+)
+USER_ARGS=("$@")
+EXTRA_ARGS=()
+EXTRA_ENV=()
+MODEL_ARGS=()
+
+while true; do
+  CMD=()
+  if [[ ${#EXTRA_ENV[@]} -gt 0 ]]; then
+    CMD+=(env "${EXTRA_ENV[@]}")
+  fi
+  CMD+=(claude "${BASE_ARGS[@]}")
+  if [[ ${#USER_ARGS[@]} -gt 0 ]]; then
+    CMD+=("${USER_ARGS[@]}")
+  fi
+  # Marker-contributed args come last so a model/flag from /switch-model
+  # overrides whatever the user originally passed on the first launch.
+  if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
+    CMD+=("${EXTRA_ARGS[@]}")
+  fi
+  if [[ ${#MODEL_ARGS[@]} -gt 0 ]]; then
+    CMD+=("${MODEL_ARGS[@]}")
+  fi
+
+  # Reset per-launch state before invoking so the next iteration's
+  # marker (if any) rebuilds it from scratch. claude's exit code is
+  # tolerated so we always reach the marker check.
+  EXTRA_ARGS=()
+  EXTRA_ENV=()
+  MODEL_ARGS=()
+
+  "${CMD[@]}" || true
+
+  if [[ ! -f "$MIMIR_MARKER" ]]; then
+    break
+  fi
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "mimir: next-session marker present but jq is not installed — ignoring." >&2
+    rm -f "$MIMIR_MARKER"
+    break
+  fi
+
+  MARKER_MODEL=$(jq -r '.model // empty' "$MIMIR_MARKER")
+  if [[ -n "$MARKER_MODEL" ]]; then
+    MODEL_ARGS=(--model "$MARKER_MODEL")
+  fi
+
+  while IFS= read -r kv; do
+    [[ -z "$kv" ]] && continue
+    EXTRA_ENV+=("$kv")
+  done < <(jq -r '(.env // {}) | to_entries[] | "\(.key)=\(.value)"' "$MIMIR_MARKER")
+
+  while IFS= read -r flag; do
+    [[ -z "$flag" ]] && continue
+    EXTRA_ARGS+=("$flag")
+  done < <(jq -r '(.flags // []) | .[]' "$MIMIR_MARKER")
+
+  rm -f "$MIMIR_MARKER"
+done

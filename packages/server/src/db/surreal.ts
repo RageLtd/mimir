@@ -138,8 +138,18 @@ export async function initSchema(): Promise<void> {
     -- Message log (Phase 6: Single Brain Architecture)
     -- Global append-only log keyed by [project, timestamp]
     -- Enables efficient time-range queries for context assembly
+    --
+    -- Project keying:
+    --   project (string)     - legacy cwd-style path. Always populated for
+    --                          back-compat; pre-Slice-2 rows have only this.
+    --   project_id (option)  - canonical UUID from /v1/projects/resolve.
+    --                          Populated by Slice-2-aware clients alongside
+    --                          project. Future queries should prefer this
+    --                          when present. New column is optional so old
+    --                          rows remain valid without backfill.
     DEFINE TABLE IF NOT EXISTS message_log SCHEMALESS;
     DEFINE FIELD IF NOT EXISTS project ON message_log TYPE string;
+    DEFINE FIELD IF NOT EXISTS project_id ON message_log TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS role ON message_log TYPE string;
     DEFINE FIELD IF NOT EXISTS content ON message_log TYPE string | array;
     DEFINE FIELD IF NOT EXISTS tool_call_id ON message_log TYPE option<string>;

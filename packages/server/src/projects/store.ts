@@ -142,18 +142,25 @@ export async function resolveProject(input: ResolveInput) {
     }
   }
 
+  // Optional fields are declared `option<string>` in the schema (see
+  // db/surreal.ts:222-226). SurrealDB's `option<T>` accepts T or NONE —
+  // literal `null` trips a coercion error ("Expected 'none | string'
+  // but found 'NULL'"), so we build the CONTENT payload with absent
+  // fields rather than sending null. `technologies` stays in because
+  // its schema is `array<string> DEFAULT []` — null would be wrong
+  // there too, but `[]` is the right default.
+  const fields: Record<string, unknown> = {
+    title: deriveTitle(input),
+    technologies: input.technologies ?? [],
+  };
+  if (input.description) fields.description = input.description;
+  if (input.gitRemote) fields.git_remote = input.gitRemote;
+  if (input.localPath) fields.local_path = input.localPath;
+  if (input.purpose) fields.purpose = input.purpose;
+
   const created = await queryFirst<ProjectRow>(
     `CREATE project CONTENT $fields RETURN AFTER`,
-    {
-      fields: {
-        title: deriveTitle(input),
-        description: input.description ?? null,
-        git_remote: input.gitRemote ?? null,
-        local_path: input.localPath ?? null,
-        technologies: input.technologies ?? [],
-        purpose: input.purpose ?? null,
-      },
-    },
+    { fields },
   );
   if (!created) return null;
   log.info(
@@ -185,16 +192,49 @@ export interface UpdateInput {
 }
 
 export async function updateProject(id: string, patch: UpdateInput) {
-  const fields: Record<string, unknown> = { updated_at: new Date() };
-  if (patch.title !== undefined) fields.title = patch.title;
-  if (patch.description !== undefined) fields.description = patch.description;
-  if (patch.technologies !== undefined)
-    fields.technologies = patch.technologies;
-  if (patch.purpose !== undefined) fields.purpose = patch.purpose;
+  // Build SET clauses dynamically so nullable option<string> fields can be
+  // CLEARED via `field = NONE` rather than `field = NULL`. The previous
+  // MERGE-with-fields-object approach passed literal `null` through to
+  // SurrealDB, which rejects it for `option<string>` schemas with the
+  // same coercion error that bit resolveProject's CREATE path:
+  //   "Expected `none | string` but found `NULL`"
+  //
+  // UpdateInput semantics:
+  //   undefined → skip the field entirely (preserve current value)
+  //   null      → clear (only valid for fields typed `string | null` in
+  //               UpdateInput, i.e. description and purpose today)
+  //   T         → set to T
+  const setParts: string[] = ["updated_at = time::now()"];
+  const params: Record<string, unknown> = { id: new RecordId("project", id) };
+
+  if (patch.title !== undefined) {
+    setParts.push("title = $title");
+    params.title = patch.title;
+  }
+  if (patch.description !== undefined) {
+    if (patch.description === null) {
+      setParts.push("description = NONE");
+    } else {
+      setParts.push("description = $description");
+      params.description = patch.description;
+    }
+  }
+  if (patch.technologies !== undefined) {
+    setParts.push("technologies = $technologies");
+    params.technologies = patch.technologies;
+  }
+  if (patch.purpose !== undefined) {
+    if (patch.purpose === null) {
+      setParts.push("purpose = NONE");
+    } else {
+      setParts.push("purpose = $purpose");
+      params.purpose = patch.purpose;
+    }
+  }
 
   const row = await queryFirst<ProjectRow>(
-    `UPDATE $id MERGE $fields RETURN AFTER`,
-    { id: new RecordId("project", id), fields },
+    `UPDATE $id SET ${setParts.join(", ")} RETURN AFTER`,
+    params,
   );
   return row ? rowToProject(row) : null;
 }

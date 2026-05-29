@@ -54,6 +54,7 @@ import {
 export async function appendModelMessage(
   message: ModelMessage,
   project: string,
+  projectId?: string | null,
 ) {
   const start = Date.now();
   const db = await getDb();
@@ -63,7 +64,7 @@ export async function appendModelMessage(
   const timestamp = Bun.nanoseconds();
   const recordId = `[${JSON.stringify(project)}, ${timestamp}]`;
 
-  const fields = modelMessageToFields(message, project);
+  const fields = modelMessageToFields(message, project, undefined, projectId);
   fields.id = recordId;
 
   const [err, result] = await attempt(() =>
@@ -74,13 +75,19 @@ export async function appendModelMessage(
   );
 
   if (err) {
-    log.error({ err, project, role: message.role }, "failed to append message");
+    log.error(
+      { err, project, projectId, role: message.role },
+      "failed to append message",
+    );
     return null;
   }
 
   const created = result?.[0]?.[0];
   if (!created?.id) {
-    log.error({ project, role: message.role }, "message append returned no ID");
+    log.error(
+      { project, projectId, role: message.role },
+      "message append returned no ID",
+    );
     return null;
   }
 
@@ -88,6 +95,7 @@ export async function appendModelMessage(
     {
       id: created.id,
       project,
+      projectId,
       role: message.role,
       elapsed: `${Date.now() - start}ms`,
     },
@@ -244,6 +252,7 @@ export async function appendAssistantOutput(
 export async function appendTurn(
   messages: readonly ModelMessage[],
   project: string,
+  projectId?: string | null,
 ) {
   if (messages.length === 0) return [];
 
@@ -255,7 +264,7 @@ export async function appendTurn(
     const allMatch = dbFps.every((fp, idx) => fp === msgFps[idx]);
     if (allMatch) {
       log.debug(
-        { count: messages.length, project },
+        { count: messages.length, project, projectId },
         "appendTurn: delta matches DB tail, skipping (retry)",
       );
       return [];
@@ -264,7 +273,7 @@ export async function appendTurn(
 
   const appendedIds: (string | null)[] = [];
   for (const message of messages) {
-    const id = await appendModelMessage(message, project);
+    const id = await appendModelMessage(message, project, projectId);
     appendedIds.push(id ?? null);
   }
 
@@ -272,6 +281,7 @@ export async function appendTurn(
     {
       appended: appendedIds.length,
       project,
+      projectId,
       roles: messages.map((m) => m.role),
     },
     "appendTurn complete",

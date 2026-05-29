@@ -28,11 +28,29 @@ function buildQuery(messages: ModelMessage[]) {
 
 /**
  * Retrieve relevant memories for the current conversation (global search).
+ *
+ * Tuning knobs:
+ *   topK         — cap on base memories kept after scoring (default 10).
+ *                  Per-turn callers like /v1/context/retrieve pass a much
+ *                  smaller value (3) so the injection doesn't bloat every
+ *                  user message; the boot-context / assemble path keeps
+ *                  the default for richer first-turn priming.
+ *   includeRelated — fold graph-neighbour memories into the result.
+ *                    Default true (matches prior behaviour); per-turn
+ *                    retrieval passes false to keep the budget tight.
  */
+type RetrieveOpts = {
+  readonly topK?: number;
+  readonly includeRelated?: boolean;
+};
+
 export async function retrieveMemories(
   messages: ModelMessage[],
-): Promise<string | null> {
+  opts: RetrieveOpts = {},
+) {
   const start = Date.now();
+  const topK = opts.topK ?? 10;
+  const includeRelated = opts.includeRelated ?? true;
   const query = buildQuery(messages);
   if (!query) {
     log.debug("no user messages for memory query, skipping retrieval");
@@ -100,19 +118,19 @@ export async function retrieveMemories(
 
   const topMemories = scoredMemories
     .sort((a, b) => b.score - a.score)
-    .slice(0, 10)
+    .slice(0, topK)
     .filter((m) => m.score > 0.05);
 
   if (topMemories.length === 0) {
     log.debug(
-      { totalScored: scoredMemories.length },
+      { totalScored: scoredMemories.length, topK },
       "all memories below score threshold",
     );
     return null;
   }
 
   const topIds = topMemories.map((m) => m.id);
-  const related = await getRelatedMemories(topIds, 5);
+  const related = includeRelated ? await getRelatedMemories(topIds, 5) : [];
 
   const allAccessedIds = [
     ...topIds,
@@ -133,6 +151,8 @@ export async function retrieveMemories(
     {
       topMemories: topMemories.length,
       related: related.length,
+      topK,
+      includeRelated,
       topScores: topMemories
         .slice(0, 3)
         .map((m) => ({ score: m.score.toFixed(4), content: m.content })),

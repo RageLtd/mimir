@@ -1,24 +1,23 @@
 {
   "name": "mimir",
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.16",
+    "@types/bun": "latest"
+  },
   "private": true,
-  "workspaces": [
-    "packages/*"
-  ],
   "scripts": {
     "check": "biome check --write .",
     "test": "bun run tests/run-tests.ts",
     "test:server": "bun run tests/run-tests.ts server",
     "test:acp": "bun run tests/run-tests.ts acp",
+    "test:cc-plugin": "bun run tests/run-tests.ts cc-plugin",
     "server:dev": "bun run --filter @mimir/server dev",
     "server:start": "bun run --filter @mimir/server start",
     "acp:start": "bun run --filter @mimir/acp start",
-    "acp:build": "bun run --filter @mimir/acp build"
+    "acp:build": "bun run --filter @mimir/acp build",
+    "cc-plugin:build": "bun run --filter @mimir/cc-plugin build"
   },
-  "devDependencies": {
-    "@biomejs/biome": "^2.4.14",
-    "@types/bun": "latest"
-  },
-  "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.141"
-  }
+  "workspaces": [
+    "packages/*"
+  ]
 }

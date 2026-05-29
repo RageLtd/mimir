@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    {{CARTOGRAPHER_BLOCK}}"user-memory": {
+      "command": "{{MIMIR_CC_BIN}}",
+      "args": ["user-memory-mcp"],
+      "env": {
+        "MIMIR_USER_MEMORY_DB": "{{USER_MEMORY_DB}}"
+      }
+    },
+    "mimir": {
+      "type": "http",
+      "url": "{{MIMIR_SERVER_URL}}/mcp"
+    }
+  }
+}

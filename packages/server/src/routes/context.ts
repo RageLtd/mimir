@@ -6,6 +6,9 @@
  *   POST /v1/context/memories     — goldfish retrieval, formatted block
  *   GET  /v1/context/summaries    — last N conversation summaries
  *   POST /v1/context/token-report — token usage tracking; returns needsCompaction
+ *   POST /v1/context/retrieve     — per-turn retrieval (memories + summaries)
+ *                                   flattened to a single `<retrieved_context>`
+ *                                   string for plugin injection into UserPromptSubmit
  *
  * Thin wrappers around the canonical internal functions so the CC backend
  * gets the same context the server backend's middleware pipeline produces.
@@ -22,7 +25,14 @@ import { retrieveMemories } from "../goldfish/memory";
 import { getLastSummaries } from "../goldfish/store";
 import { buildContextInjection } from "../middleware/context-assembly";
 import { requestLog } from "../util/logger";
+import { attempt } from "../util/result";
 import { loadPrompt } from "./system-prompt";
+
+// Per-turn retrieval defaults — kept small so the injection budget stays
+// modest. The full assemble path uses larger windows; retrieve is the
+// per-prompt micro-injection.
+const RETRIEVE_SUMMARY_COUNT = 3;
+const RETRIEVE_MEMORY_TOP_K = 3;
 
 export const context = new Hono();
 
@@ -36,6 +46,8 @@ type MemoriesRequest = {
 type TokenReportRequest = {
   promptTokens: number;
   project?: string;
+  /** Canonical project UUID. Logged only — compaction is global. */
+  projectId?: string;
   modelId?: string;
 };
 
@@ -135,7 +147,11 @@ context.post("/token-report", async (c) => {
     // when the threshold is reached. Fire-and-forget.
     if (needsCompaction) {
       log.info(
-        { project: body.project, modelId: body.modelId },
+        {
+          project: body.project,
+          projectId: body.projectId,
+          modelId: body.modelId,
+        },
         "token-report triggered async compaction",
       );
       runCompaction(body.modelId).catch((err) =>
@@ -161,6 +177,13 @@ context.post("/token-report", async (c) => {
 type AssembleRequest = {
   query: string;
   project?: string;
+  /**
+   * Canonical project UUID from /v1/projects/resolve. Optional; the
+   * assemble path is global (memories and summaries cross projects by
+   * design), so this is logged for observability but not used for
+   * scoping today. Reserved for per-project query endpoints in future.
+   */
+  projectId?: string;
 };
 
 type SimpleMessage = { role: "user" | "assistant"; content: string };
@@ -269,6 +292,7 @@ context.post("/assemble", async (c) => {
     log.info(
       {
         project: body.project,
+        projectId: body.projectId,
         summaries: summaries.length,
         recentMessages: recentMessages.length,
         renderedHistory: renderedHistory.length,
@@ -287,4 +311,93 @@ context.post("/assemble", async (c) => {
     log.error({ error: msg }, "context assembly failed");
     return c.json({ error: msg }, 500);
   }
+});
+
+// ── POST /v1/context/retrieve ──
+//
+// Per-turn micro-retrieval for plugin UserPromptSubmit injection.
+// Returns the formatted context block as a single string ready to inject
+// as additionalContext, plus the counts so the caller can render a small
+// "↻ Retrieved N memories / M summaries" status note.
+//
+// Reuses buildContextInjection so the format stays canonical with the
+// middleware pipeline. The synthetic user/assistant pair returned by
+// that helper is flattened to the user-side content and wrapped in
+// <retrieved_context>...</retrieved_context>.
+
+type RetrieveRequest = {
+  query: string;
+  project?: string;
+  /** Canonical project UUID. Logged only — retrieval is global by design. */
+  projectId?: string;
+};
+
+context.post("/retrieve", async (c) => {
+  const rid = c.req.header("x-request-id") ?? "retrieve";
+  const log = requestLog(rid);
+
+  const [bodyErr, body] = await attempt(() => c.req.json<RetrieveRequest>());
+  if (bodyErr) {
+    log.debug({ err: bodyErr.message }, "invalid JSON body");
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  if (!body.query || typeof body.query !== "string") {
+    return c.json({ error: "Missing required field: query" }, 400);
+  }
+
+  const [retrievalErr, retrieval] = await attempt(() =>
+    Promise.all([
+      retrieveMemories([{ role: "user", content: body.query }], {
+        topK: RETRIEVE_MEMORY_TOP_K,
+        includeRelated: false,
+      }),
+      getLastSummaries(RETRIEVE_SUMMARY_COUNT),
+    ]),
+  );
+  if (retrievalErr) {
+    log.error({ err: retrievalErr.message }, "retrieve failed");
+    return c.json({ error: retrievalErr.message }, 500);
+  }
+
+  const [memories, summaries] = retrieval;
+  const injection = buildContextInjection(summaries, memories, null);
+  // Count actual `- ` items, not raw newlines — memory bodies can span
+  // multiple lines and would otherwise inflate the displayed count.
+  const memoryCount = memories
+    ? memories.split("\n").filter((l) => l.startsWith("- ")).length
+    : 0;
+  const summaryCount = summaries.length;
+
+  // Empty injection → empty contextBlock; caller skips injection entirely.
+  if (injection.length === 0) {
+    log.debug(
+      { project: body.project, projectId: body.projectId },
+      "retrieve: no memories or summaries to inject",
+    );
+    return c.json({ contextBlock: "", memoryCount: 0, summaryCount: 0 });
+  }
+
+  // First entry is the synthetic user message — its content is the
+  // already-formatted "Session context:\n<summaries>...<memories>..."
+  // payload. Strip the "Session context:\n" preamble (it's redundant
+  // inside our wrapper) and wrap in <retrieved_context>.
+  const userMsg = injection[0];
+  const rawContent =
+    userMsg && typeof userMsg.content === "string" ? userMsg.content : "";
+  const stripped = rawContent.replace(/^Session context:\s*/, "");
+  const contextBlock = `<retrieved_context>\n${stripped}\n</retrieved_context>`;
+
+  log.info(
+    {
+      project: body.project,
+      projectId: body.projectId,
+      summaryCount,
+      memoryCount,
+      blockChars: contextBlock.length,
+    },
+    "retrieve: returning context block",
+  );
+
+  return c.json({ contextBlock, memoryCount, summaryCount });
 });

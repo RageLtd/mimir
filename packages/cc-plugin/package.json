@@ -1,0 +1,16 @@
+{
+  "name": "@mimir/cc-plugin",
+  "module": "src/cli.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "./build.sh",
+    "build:darwin-arm64": "bun build src/cli.ts --compile --target=bun-darwin-arm64 --outfile=dist/darwin-arm64/mimir-cc",
+    "build:linux-x64": "bun build src/cli.ts --compile --target=bun-linux-x64 --outfile=dist/linux-x64/mimir-cc",
+    "test": "bun run ../../tests/run-tests.ts cc-plugin"
+  },
+  "dependencies": {
+    "@ai-sdk/provider-utils": "^4.0.27",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.154"
+  }
+}

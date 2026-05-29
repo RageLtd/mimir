@@ -52,6 +52,8 @@ export function modelContentToString(
 export interface MessageRow {
   id: string;
   project: string;
+  /** Optional canonical project UUID. Populated by Slice-2-aware writers; old rows omit it. */
+  project_id?: string | null;
   role: string;
   /** JSON-serialized content — either a JSON string or a JSON array of content parts */
   content: string;
@@ -63,12 +65,17 @@ export interface MessageRow {
 /**
  * Serialize a ModelMessage for DB storage.
  * Content is always JSON — either a JSON string or a JSON array of content parts.
+ *
+ * `projectId` is the optional canonical UUID. When omitted (server-internal
+ * writes from appendTrailingTurn / appendAssistantOutput that have no
+ * resolver context) the column is left null and reads still see the row.
  */
 export function modelMessageToFields(
   msg: ModelMessage,
   project: string,
   seq?: number,
-): Record<string, unknown> {
+  projectId?: string | null,
+) {
   const fields: Record<string, unknown> = {
     project,
     role: msg.role,
@@ -76,6 +83,9 @@ export function modelMessageToFields(
   };
   if (seq !== undefined) {
     fields.seq = seq;
+  }
+  if (projectId) {
+    fields.project_id = projectId;
   }
   return fields;
 }

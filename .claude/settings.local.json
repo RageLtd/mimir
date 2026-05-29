@@ -1,48 +1,12 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [
-      "mcp__plugin_context7_context7__resolve-library-id",
-      "mcp__plugin_context7_context7__query-docs",
-      "Bash(python3 -c \"import sys,json; [print\\(json.dumps\\(json.loads\\(l\\), indent=2\\)[:300]\\) for l in sys.stdin]\")",
-      "WebFetch(domain:agentclientprotocol.com)",
-      "WebFetch(domain:docs.anthropic.com)",
-      "WebFetch(domain:docs.claude.com)",
-      "Bash(bun test:*)",
-      "Bash(bunx tsc:*)",
-      "mcp__claude_ai_Context7__resolve-library-id",
-      "WebSearch",
-      "Read(//Users/nathandevuono/.local/share/**)",
-      "Read(//Users/nathandevuono/.claude/**)",
-      "WebFetch(domain:github.com)",
-      "Bash(grep *)",
-      "Bash(bun run *)",
-      "mcp__mimir__cartographer_search",
-      "mcp__mimir__web_search",
-      "mcp__context7__resolve-library-id",
-      "mcp__context7__query-docs",
-      "Bash(bun add *)",
-      "mcp__mimir__project_memory_search",
-      "mcp__mimir__cartographer_file_info",
-      "mcp__mimir__cartographer_query",
-      "mcp__mimir__read_mimir_logs",
-      "Bash(bun -e \"const d = JSON.parse\\(await Bun.file\\('provider-data.json'\\).text\\(\\)\\); const first = Object.entries\\(d\\)[0]; console.log\\(JSON.stringify\\({ [first[0]]: first[1] }, null, 2\\).slice\\(0, 2000\\)\\)\")",
-      "Bash(bun -e ' *)",
-      "Bash(grep -n \"create_terminal\\\\|must decode\\\\|parseToolCallArgs\\\\|Invalid tool call\\\\|got str\" ~/.mimir/acp.log | tail -30)",
-      "Bash(grep -n \"create_terminal\\\\|must decode\\\\|parseToolCallArgs\\\\|Invalid tool call\\\\|got str\" ~/.mimir/acp.log)",
-      "Read(//tmp/**)",
-      "Bash(bun -e \"const d = await Bun.file\\('packages/server/provider-data.json'\\).json\\(\\); const fw = d.providers?.['fireworks-ai'] ?? d.providers?.fireworks; console.log\\('Provider:', JSON.stringify\\(fw, null, 2\\)\\); const models = Object.entries\\(d.models\\).filter\\(\\([k]\\) => k.toLowerCase\\(\\).includes\\('deepseek'\\)\\); console.log\\('DeepSeek models:', JSON.stringify\\(Object.fromEntries\\(models\\), null, 2\\)\\)\")",
-      "Bash(bun -e \"const d = await Bun.file\\('packages/server/provider-data.json'\\).json\\(\\); console.log\\('Top keys:', Object.keys\\(d\\)\\)\")",
-      "Bash(tail -200 ~/.mimir/acp.log 2>/dev/null | head -100)",
-      "Read(//Users/rageltd/.mimir/**)",
-      "Read(//Users/rageltd/dotfiles/**)",
-      "Read(//Users/rageltd/.claude/**)",
-      "Read(//Users/rageltd/.claude/plugins/**)",
       "Read(//Users/rageltd/**)"
     ]
   },
   "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "notion"
-  ],
-  "spinnerTipsEnabled": false
+  ]
 }

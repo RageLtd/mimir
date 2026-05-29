@@ -15,8 +15,12 @@
 import { Hono } from "hono";
 import { getDb, queryOne } from "../db/surreal";
 import { log } from "../util/logger";
+import { attempt } from "../util/result";
+import { fileInfoHandler } from "./cartographer-file-info";
 
 export const cartographer = new Hono();
+
+cartographer.post("/file-info", fileInfoHandler);
 
 /**
  * Index payload from mimir-acp.
@@ -31,6 +35,18 @@ type IndexPayload = {
    * with older clients.
    */
   readonly projectId?: string;
+  /**
+   * Sync mode:
+   *   "replace" — wipe the project's entire cart_file/cart_import set
+   *               and re-insert from this payload. Default for back-compat.
+   *               Used by full project scans (e.g. SessionStart reindex).
+   *   "upsert"  — for each file in the payload, delete existing rows
+   *               keyed by (project, file_path) then insert the new ones,
+   *               leaving the rest of the project's index untouched.
+   *               Used by single-file reindexes after Edit/Write so the
+   *               index isn't wiped on every keystroke.
+   */
+  readonly mode?: "replace" | "upsert";
   readonly indexedAt: string;
   readonly files: readonly {
     readonly path: string;
@@ -79,12 +95,9 @@ type IndexPayload = {
 cartographer.post("/sync", async (c) => {
   const start = Date.now();
 
-  let payload: IndexPayload;
-  try {
-    payload = await c.req.json();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.error({ error: msg }, "invalid cartographer sync payload");
+  const [bodyErr, payload] = await attempt(() => c.req.json<IndexPayload>());
+  if (bodyErr) {
+    log.error({ error: bodyErr.message }, "invalid cartographer sync payload");
     return c.json({ error: "Invalid JSON payload" }, 400);
   }
 
@@ -95,17 +108,37 @@ cartographer.post("/sync", async (c) => {
 
   // Prefer the canonical project id; fall back to rootPath for back-compat.
   const projectKey = payload.projectId ?? payload.rootPath;
+  const mode = payload.mode ?? "replace";
 
-  try {
+  const [syncErr] = await attempt(async () => {
     const db = await getDb();
 
-    // Delete existing records for this project (full replace)
-    await db.query(`DELETE cart_file WHERE project = $project`, {
-      project: projectKey,
-    });
-    await db.query(`DELETE cart_import WHERE project = $project`, {
-      project: projectKey,
-    });
+    if (mode === "replace") {
+      // Wipe the whole project's index — used for full scans (initial
+      // import, periodic re-sync, deletion-aware refresh from SessionStart).
+      await db.query(`DELETE cart_file WHERE project = $project`, {
+        project: projectKey,
+      });
+      await db.query(`DELETE cart_import WHERE project = $project`, {
+        project: projectKey,
+      });
+    } else {
+      // Upsert mode: delete only the rows for the files in this payload.
+      // Leaves every other indexed file in the project intact — this is
+      // what single-file Edit/Write reindexes should use, so a per-keystroke
+      // reindex doesn't evict the rest of the project.
+      const filePaths = payload.files.map((f) => f.path);
+      if (filePaths.length > 0) {
+        await db.query(
+          `DELETE cart_file WHERE project = $project AND file_path IN $paths`,
+          { project: projectKey, paths: filePaths },
+        );
+        await db.query(
+          `DELETE cart_import WHERE project = $project AND source_path IN $paths`,
+          { project: projectKey, paths: filePaths },
+        );
+      }
+    }
 
     // Insert new file records
     for (const file of payload.files) {
@@ -114,8 +147,8 @@ cartographer.post("/sync", async (c) => {
         // Imports are now {target, specifier} pairs — flatten both into
         // the search index so a search for "react" or "./util" matches
         // alongside resolved paths.
-        ...file.imports.map((imp) => imp.target),
-        ...file.imports.map((imp) => imp.specifier),
+        ...file.imports.map((imp: { target: string }) => imp.target),
+        ...file.imports.map((imp: { specifier: string }) => imp.specifier),
         ...file.exports,
         ...file.symbols.map((s: { name: string }) => s.name),
       ].join(" ");
@@ -178,30 +211,36 @@ cartographer.post("/sync", async (c) => {
         );
       }
     }
+  });
 
-    const elapsed = Date.now() - start;
-    log.info(
-      {
-        project: projectKey,
-        rootPath: payload.rootPath,
-        files: payload.stats.totalFiles,
-        symbols: payload.stats.totalSymbols,
-        elapsed: `${elapsed}ms`,
-      },
-      "cartographer index synced",
+  if (syncErr) {
+    log.error(
+      { error: syncErr.message, project: projectKey },
+      "cartographer sync failed",
     );
+    return c.json({ error: syncErr.message }, 500);
+  }
 
-    return c.json({
-      ok: true,
+  const elapsed = Date.now() - start;
+  log.info(
+    {
       project: projectKey,
+      rootPath: payload.rootPath,
+      mode,
       files: payload.stats.totalFiles,
       symbols: payload.stats.totalSymbols,
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.error({ error: msg, project: projectKey }, "cartographer sync failed");
-    return c.json({ error: msg }, 500);
-  }
+      elapsed: `${elapsed}ms`,
+    },
+    "cartographer index synced",
+  );
+
+  return c.json({
+    ok: true,
+    project: projectKey,
+    mode,
+    files: payload.stats.totalFiles,
+    symbols: payload.stats.totalSymbols,
+  });
 });
 
 /**
