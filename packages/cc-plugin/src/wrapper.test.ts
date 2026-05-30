@@ -21,6 +21,10 @@ const wrapperTemplate = await Bun.file(
   join(import.meta.dir, "..", "artifacts", "wrapper.sh.template"),
 ).text();
 
+// The model pinned in BASE_ARGS — present on every launch unless a user
+// `--model` arg or a marker model overrides it later on the command line.
+const BASE_MODEL_ARG = "--model claude-opus-4-6[1m]";
+
 let tmp = "";
 let wrapperPath = "";
 let mockClaudeDir = "";
@@ -102,6 +106,8 @@ exit 0
     const records = await readLog();
     expect(records).toHaveLength(1);
     expect(records[0]).toContain("ANTHROPIC_BASE_URL=unset");
+    // The pinned default model rides along on a plain launch.
+    expect(records[0]).toContain(BASE_MODEL_ARG);
   });
 
   test("pre-staged marker triggers a second invocation with merged env + flags", async () => {
@@ -127,12 +133,13 @@ exit 0
     const records = await readLog();
     expect(records).toHaveLength(2);
 
-    // First call: pre-existing env (marker not consumed yet).
+    // First call: pre-existing env, base default model, marker not consumed.
     expect(records[0]).toContain("ANTHROPIC_BASE_URL=unset");
-    expect(records[0]).not.toContain("--model");
+    expect(records[0]).toContain(BASE_MODEL_ARG);
+    expect(records[0]).not.toContain("glm-5.1");
     expect(records[0]).not.toContain("--continue");
 
-    // Second call: marker consumed, env + flags merged in.
+    // Second call: marker consumed, env + flags merged, marker model wins.
     expect(records[1]).toContain(
       "ANTHROPIC_BASE_URL=http://mimir-server:3000",
     );
@@ -178,7 +185,8 @@ exit 0
     expect(records).toHaveLength(2);
     expect(records[0]).toContain("CUSTOM_VAR=unset");
     expect(records[1]).toContain("CUSTOM_VAR=value-from-marker");
-    expect(records[1]).not.toContain("--model");
+    // No marker model, so the base default persists across the relaunch.
+    expect(records[1]).toContain(BASE_MODEL_ARG);
   });
 
   test("user-supplied args pass through on both invocations", async () => {
@@ -200,6 +208,26 @@ exit 0
     expect(records[0]).toContain("--resume session-id");
     expect(records[1]).toContain("--resume session-id");
     expect(records[1]).toContain("--model glm-5.1");
+  });
+
+  test("user --model is ordered after the base default so it overrides", async () => {
+    await writeMockClaude(`#!/usr/bin/env bash
+echo "args=$*" >> "$MIMIR_LOG"
+echo "---" >> "$MIMIR_LOG"
+exit 0
+`);
+
+    await runWrapper(["--model", "sonnet"]);
+
+    const records = await readLog();
+    expect(records).toHaveLength(1);
+    // Both flags are present; the base default precedes the user's, so
+    // claude's last-wins resolution lands on the user's choice.
+    const record = records[0] ?? "";
+    const baseIdx = record.indexOf(BASE_MODEL_ARG);
+    const userIdx = record.indexOf("--model sonnet");
+    expect(baseIdx).toBeGreaterThanOrEqual(0);
+    expect(userIdx).toBeGreaterThan(baseIdx);
   });
 
   test("claude exit code does not abort the marker check", async () => {
