@@ -91,8 +91,90 @@ export async function queryFirst<T>(
   return rows[0] ?? null;
 }
 
+/**
+ * Cartographer schema convergence.
+ *
+ * `initSchema` can only ADD fields — every statement is `DEFINE ... IF NOT
+ * EXISTS`, a no-op once a field exists. So it cannot heal a live table that
+ * has drifted EXTRA fields the source no longer declares. A stray required
+ * field with no DEFAULT (e.g. `last_parsed_epoch int`) makes every CREATE
+ * fail coercion ("Expected `int` but found `NONE`").
+ *
+ * cart_file / cart_import are SCHEMAFULL and their DEFINE block in initSchema
+ * is the single source of truth for their field set, so at boot we drop any
+ * live field the schema no longer declares. This converges the live schema
+ * instead of chasing drift one field at a time.
+ *
+ * Keep these lists in lockstep with the cart_file / cart_import DEFINE
+ * statements below. Anything live but absent here is removed at boot.
+ */
+const CART_DECLARED_FIELDS: Record<string, readonly string[]> = {
+  cart_file: [
+    "project",
+    "file_path",
+    "language",
+    "symbols",
+    "searchable",
+    "content_hash",
+    "indexed_at",
+  ],
+  cart_import: [
+    "project",
+    "source_path",
+    "target_path",
+    "specifier",
+    "symbols",
+    "indexed_at",
+  ],
+};
+
+/**
+ * Pure: given a table's live field names and its declared set, return the
+ * idempotent `REMOVE FIELD` statements for every live field the schema no
+ * longer declares. Nested field keys (`foo.bar`, `foo[*]`) are left alone so
+ * a declared parent's sub-definitions are never orphaned. Exported for tests.
+ */
+export const buildDriftRemovalSql = (
+  table: string,
+  liveFields: readonly string[],
+  declaredFields: readonly string[],
+) => {
+  const declared = new Set(declaredFields);
+  return liveFields
+    .filter((field) => !field.includes(".") && !field.includes("["))
+    .filter((field) => !declared.has(field))
+    .map((field) => `REMOVE FIELD IF EXISTS ${field} ON TABLE ${table};`);
+};
+
+/** Read the live top-level field names for a table via INFO FOR TABLE. */
+const liveTableFields = async (db: Surreal, table: string) => {
+  // INFO FOR TABLE returns a single info object (not a row array), so query
+  // directly rather than via queryOne/queryFirst, which assume row arrays.
+  const [info] = await db.query<[{ fields: Record<string, string> } | null]>(
+    `INFO FOR TABLE ${table}`,
+  );
+  return info?.fields ? Object.keys(info.fields) : [];
+};
+
+/**
+ * Drop any live cart_file / cart_import field the schema no longer declares.
+ * Runs after the DEFINE block in initSchema. Returns the statements executed
+ * so the caller can log what was pruned. No-op on a clean schema.
+ */
+const removeDriftedCartFields = async (db: Surreal) => {
+  const statements: string[] = [];
+  for (const [table, declared] of Object.entries(CART_DECLARED_FIELDS)) {
+    const live = await liveTableFields(db, table);
+    statements.push(...buildDriftRemovalSql(table, live, declared));
+  }
+  if (statements.length > 0) {
+    await db.query(statements.join("\n"));
+  }
+  return statements;
+};
+
 /** Run once at startup to ensure schema exists */
-export async function initSchema(): Promise<void> {
+export async function initSchema() {
   const start = Date.now();
   const db = await getDb();
 
@@ -229,6 +311,14 @@ export async function initSchema(): Promise<void> {
     DEFINE INDEX IF NOT EXISTS project_git_remote ON project FIELDS git_remote UNIQUE;
     DEFINE INDEX IF NOT EXISTS project_local_path ON project FIELDS local_path;
   `);
+
+  const pruned = await removeDriftedCartFields(db);
+  if (pruned.length > 0) {
+    log.warn(
+      { pruned },
+      "converged cartographer schema — removed drifted fields",
+    );
+  }
 
   log.info({ elapsed: `${Date.now() - start}ms` }, "schema initialized");
 }
