@@ -60,7 +60,7 @@ Run the plugin's binary fetcher. It detects the platform, downloads the matching
 
 This needs the GitHub CLI (`gh`) installed and authenticated as an account with read access to `RageLtd/mimir` — alpha testers are repo collaborators, so they qualify. If `gh` is absent it falls back to `curl` + `$GITHUB_TOKEN`. Surface the script's output verbatim. If it exits non-zero — unsupported platform, no repo access, or no network and no existing binary — stop and let the user resolve the cause before retrying.
 
-> **Developing the plugin locally?** Skip this step and build from source instead: `cd "${CLAUDE_PLUGIN_ROOT}" && ./build.sh`, then in Step 5 run `"${CLAUDE_PLUGIN_ROOT}/dist/<platform>/mimir-cc" install ...` instead of the installed binary. A marketplace clone can't build (it lacks the monorepo's dependency catalogs), which is why the default path downloads a released binary.
+> **Developing the plugin locally?** Skip this step and build from source instead: `cd "${CLAUDE_PLUGIN_ROOT}" && ./build.sh`, then in Step 5 run `"${CLAUDE_PLUGIN_ROOT}/dist/<platform>/mimir-cc" install ...` instead of the installed binary. A marketplace clone can't build (it lacks the monorepo's dependency catalogs), which is why the default path downloads a released binary. Once you've installed once, `scripts/dev-install.sh` is the fast iterate loop — it builds, atomically swaps the binary in, and pins dev mode so the updater won't overwrite your build.
 
 ## Step 5 — run the installer binary
 

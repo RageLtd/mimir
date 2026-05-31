@@ -16,6 +16,17 @@ BINARY_NAME="mimir-cc"
 INSTALL_DIR="${HOME}/.local/bin"
 BINARY_PATH="${INSTALL_DIR}/${BINARY_NAME}"
 VERSION_FILE="${HOME}/.mimir/.cc-version"
+DEV_PIN="${HOME}/.mimir/.cc-dev"
+
+# Developer pin: scripts/dev-install.sh drops ~/.mimir/.cc-dev after swapping a
+# local build over ~/.local/bin/mimir-cc. While it's present, never check for
+# or download a release — that would clobber the dev build mid-iteration.
+# Remove it (and re-run ensure-binary.sh or /mimir-install) to resume tracking
+# releases.
+if [ -f "${DEV_PIN}" ]; then
+  echo "[mimir] dev build pinned (${DEV_PIN} present) — skipping release check." >&2
+  exit 0
+fi
 
 # --- platform detection (alpha ships darwin-arm64 + linux-x64 only) ----------
 OS="$(uname -s)"

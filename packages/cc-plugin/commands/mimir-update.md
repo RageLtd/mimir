@@ -32,7 +32,7 @@ Run the plugin's binary fetcher. It detects the platform, downloads the latest `
 
 This needs `gh` installed and authenticated as an account with read access to `RageLtd/mimir` (or `curl` + `$GITHUB_TOKEN` as a fallback). Surface the script's output verbatim. Stop on a non-zero exit.
 
-> **Developing the plugin locally?** Skip the download and build instead: `cd "${CLAUDE_PLUGIN_ROOT}" && ./build.sh`, then run `"${CLAUDE_PLUGIN_ROOT}/dist/<platform>/mimir-cc" update ...` in Step 3 instead of the installed binary.
+> **Developing the plugin locally?** Use `scripts/dev-install.sh` — it builds from source, atomically swaps the binary over `~/.local/bin/mimir-cc`, and pins dev mode so the updater won't overwrite it. For a one-off, you can instead `cd "${CLAUDE_PLUGIN_ROOT}" && ./build.sh` then run `"${CLAUDE_PLUGIN_ROOT}/dist/<platform>/mimir-cc" update ...` directly.
 
 ## Step 3 — run the installer binary
 
