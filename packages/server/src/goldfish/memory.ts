@@ -39,9 +39,17 @@ function buildQuery(messages: ModelMessage[]) {
  *                    Default true (matches prior behaviour); per-turn
  *                    retrieval passes false to keep the budget tight.
  */
+/** Additive score bonus for memories matching the active project.
+ * Strictly a tiebreaker — a highly relevant cross-project memory must
+ * beat a tangentially related same-project memory. */
+const PROJECT_MATCH_BONUS = 0.02;
+
 type RetrieveOpts = {
   readonly topK?: number;
   readonly includeRelated?: boolean;
+  /** Canonical project UUID. When set, same-project memories get a
+   * light scoring boost (tiebreaker, not filter). */
+  readonly projectId?: string;
 };
 
 export async function retrieveMemories(
@@ -51,6 +59,7 @@ export async function retrieveMemories(
   const start = Date.now();
   const topK = opts.topK ?? 10;
   const includeRelated = opts.includeRelated ?? true;
+  const projectId = opts.projectId;
   const query = buildQuery(messages);
   if (!query) {
     log.debug("no user messages for memory query, skipping retrieval");
@@ -110,7 +119,10 @@ export async function retrieveMemories(
       const combinedScore = Math.max(vectorScore * 0.7, textScore * 0.3);
 
       const freshness = computeFreshness(m.last_accessed);
-      const finalScore = (combinedScore || 0.5) * freshness;
+      const baseScore = (combinedScore || 0.5) * freshness;
+      const projectBonus =
+        projectId && m.project === projectId ? PROJECT_MATCH_BONUS : 0;
+      const finalScore = baseScore + projectBonus;
 
       return { id: m.id, content: m.content, score: finalScore };
     })

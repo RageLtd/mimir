@@ -13,6 +13,7 @@ import {
   storeMemory,
   updateMemory,
 } from "../../goldfish/store";
+import { resolveProjectForQuery } from "../../projects/resolve-for-query";
 import { log } from "../../util/logger";
 import { CACHE_CONTROL } from "./shared";
 
@@ -31,7 +32,12 @@ export const MemoryStoreSchema = z.object({
   content: z
     .string()
     .describe("The fact to remember — single, self-contained statement"),
-  project: z.string().optional().describe("Project path to scope memory to"),
+  project: z
+    .string()
+    .optional()
+    .describe(
+      "Project identifier (UUID, path, or git remote). Resolved to canonical UUID before storing.",
+    ),
 });
 
 const MemoryUpdateSchema = z.object({
@@ -120,6 +126,13 @@ export const executeMemoryStore = async ({
   content,
   project,
 }: z.infer<typeof MemoryStoreSchema>) => {
+  // Resolve project identifier to canonical UUID before storing.
+  // Failures are non-fatal — store with the raw value rather than
+  // blocking memory creation on a resolution hiccup.
+  const resolvedProject = project
+    ? (await resolveProjectForQuery(project)).project || project
+    : undefined;
+
   const embedding = await embedOne(content);
 
   if (!embedding) {
@@ -135,7 +148,11 @@ export const executeMemoryStore = async ({
     };
   }
 
-  const memoryId = await storeMemory({ content, project, embedding });
+  const memoryId = await storeMemory({
+    content,
+    project: resolvedProject,
+    embedding,
+  });
   if (!memoryId) {
     return { stored: false, error: "Failed to store memory" };
   }

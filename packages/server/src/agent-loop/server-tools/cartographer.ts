@@ -1,6 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { getDb } from "../../db/surreal";
+import { resolveProjectForQuery } from "../../projects/resolve-for-query";
 import { log } from "../../util/logger";
 import { CACHE_CONTROL } from "./shared";
 
@@ -8,11 +9,11 @@ import { CACHE_CONTROL } from "./shared";
 // Schemas
 // ---------------------------------------------------------------------------
 
+const PROJECT_DESC =
+  "Project identifier (UUID, path, or git remote). Omit to auto-detect.";
+
 export const SearchSchema = z.object({
-  project: z
-    .string()
-    .optional()
-    .describe("Project root path. Omit to auto-detect."),
+  project: z.string().optional().describe(PROJECT_DESC),
   query: z
     .string()
     .describe("Search query — matches file paths and symbol names"),
@@ -20,18 +21,12 @@ export const SearchSchema = z.object({
 });
 
 export const FileInfoSchema = z.object({
-  project: z
-    .string()
-    .optional()
-    .describe("Project root path. Omit to auto-detect."),
+  project: z.string().optional().describe(PROJECT_DESC),
   file_path: z.string().describe("Absolute path to the file"),
 });
 
 export const QuerySchema = z.object({
-  project: z
-    .string()
-    .optional()
-    .describe("Project root path. Omit to auto-detect."),
+  project: z.string().optional().describe(PROJECT_DESC),
   entry_points: z
     .array(z.string())
     .describe("File paths or search terms to start from"),
@@ -59,39 +54,12 @@ function parseJson<T>(fallback: T) {
   };
 }
 
-interface ProjectResolution {
-  project: string;
-  error: string | null;
-}
-
-async function resolveProject(project?: string): Promise<ProjectResolution> {
-  if (project) return { project, error: null };
-
-  const db = await getDb();
-  const [result] = await db.query<[Array<{ project: string; count: number }>]>(
-    `SELECT project, count() AS count FROM cart_file GROUP BY project`,
-  );
-
-  const projects = result ?? [];
-
-  if (projects.length === 0) {
-    return {
-      project: "",
-      error:
-        "No projects indexed. Cartographer auto-indexes when launched from Zed.",
-    };
-  }
-
-  if (projects.length === 1) {
-    return { project: projects[0]?.project ?? "", error: null };
-  }
-
-  const list = projects
-    .map(
-      (projectRow) => `  - ${projectRow.project} (${projectRow.count} files)`,
-    )
-    .join("\n");
-  return { project: "", error: `Multiple projects. Specify one:\n${list}` };
+/**
+ * Resolve a project identifier for cart queries. Delegates to the
+ * canonical resolver which tries ID → git remote → path → raw fallback.
+ */
+async function resolveProject(project?: string) {
+  return resolveProjectForQuery(project);
 }
 
 // ---------------------------------------------------------------------------

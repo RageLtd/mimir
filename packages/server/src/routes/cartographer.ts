@@ -14,6 +14,7 @@
 
 import { Hono } from "hono";
 import { getDb, queryOne } from "../db/surreal";
+import { resolveProjectForQuery } from "../projects/resolve-for-query";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 import { fileInfoHandler } from "./cartographer-file-info";
@@ -250,35 +251,41 @@ cartographer.post("/sync", async (c) => {
  * Returns file paths and metadata, not the full index.
  */
 cartographer.get("/:project", async (c) => {
-  const project = decodeURIComponent(c.req.param("project"));
+  const rawProject = decodeURIComponent(c.req.param("project"));
+  const resolved = await resolveProjectForQuery(rawProject);
+  if (resolved.error) {
+    return c.json({ error: resolved.error }, 400);
+  }
+  const project = resolved.project;
 
-  try {
-    const files = await queryOne<{
+  const [fetchErr, files] = await attempt(() =>
+    queryOne<{
       file_path: string;
       language: string;
       indexed_at: string;
     }>(
       `SELECT file_path, language, indexed_at FROM cart_file WHERE project = $project ORDER BY file_path`,
       { project },
-    );
+    ),
+  );
 
-    if (files.length === 0) {
-      return c.json({ error: "Project not found" }, 404);
-    }
-
-    return c.json({
-      project,
-      files: files.map((f) => ({
-        path: f.file_path,
-        language: f.language,
-        indexedAt: f.indexed_at,
-      })),
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.error({ error: msg, project }, "cartographer fetch failed");
-    return c.json({ error: msg }, 500);
+  if (fetchErr) {
+    log.error({ error: fetchErr.message, project }, "cartographer fetch failed");
+    return c.json({ error: fetchErr.message }, 500);
   }
+
+  if (files.length === 0) {
+    return c.json({ error: "Project not found" }, 404);
+  }
+
+  return c.json({
+    project,
+    files: files.map((f) => ({
+      path: f.file_path,
+      language: f.language,
+      indexedAt: f.indexed_at,
+    })),
+  });
 });
 
 /**
