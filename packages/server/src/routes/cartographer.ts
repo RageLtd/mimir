@@ -182,8 +182,17 @@ cartographer.post("/sync", async (c) => {
         },
       );
 
-      // Insert import records
+      // Insert import records — deduplicate by (target, specifier) within
+      // a single file. Multiple import statements pulling different names
+      // from the same module (e.g. `import { a } from "./x"` and
+      // `import { b } from "./x"`) produce duplicate edges that would
+      // violate the cart_import_edge UNIQUE index.
+      const seenEdges = new Set<string>();
       for (const imp of file.imports) {
+        const edgeKey = `${imp.target}\0${imp.specifier}`;
+        if (seenEdges.has(edgeKey)) continue;
+        seenEdges.add(edgeKey);
+
         await db.query(
           // Same datetime cast as cart_file — schema enforces datetime,
           // clients send ISO 8601 strings.
@@ -270,7 +279,10 @@ cartographer.get("/:project", async (c) => {
   );
 
   if (fetchErr) {
-    log.error({ error: fetchErr.message, project }, "cartographer fetch failed");
+    log.error(
+      { error: fetchErr.message, project },
+      "cartographer fetch failed",
+    );
     return c.json({ error: fetchErr.message }, 500);
   }
 

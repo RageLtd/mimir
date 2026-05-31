@@ -38,18 +38,15 @@ const idString = (id: string | RecordId) => {
  *
  * When input is omitted, auto-detects from cart_file.
  */
-export async function resolveProjectForQuery(
-  input?: string,
-) {
+export async function resolveProjectForQuery(input?: string) {
   if (!input) return autoDetect();
 
   // 1. Try as project record ID — SELECT FROM a RecordId returns the row
   //    if it exists, empty array if not. No error for missing records.
   const [idErr, byId] = await attempt(() =>
-    queryFirst<{ id: string | RecordId }>(
-      `SELECT id FROM $id`,
-      { id: new RecordId("project", input) },
-    ),
+    queryFirst<{ id: string | RecordId }>(`SELECT id FROM $id`, {
+      id: new RecordId("project", input),
+    }),
   );
   if (!idErr && byId) {
     return { project: idString(byId.id), error: null };

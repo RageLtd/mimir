@@ -85,7 +85,7 @@ const fetchSessionContext = async (
     log.warn("assemble fetch failed", { error: errMessage(err) });
     return null;
   });
-  if (!response || !response.ok) {
+  if (!response?.ok) {
     if (response) {
       log.warn("assemble returned non-OK", { status: response.status });
     }
