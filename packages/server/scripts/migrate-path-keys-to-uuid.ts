@@ -3,6 +3,8 @@
  * One-shot migration: re-key cart_file / cart_import rows from filesystem
  * path keys to the canonical project UUID.
  *
+ * Self-contained — connects to SurrealDB directly, no server imports.
+ *
  * During the Slice 1→2 transition window, new syncs write UUID-keyed rows
  * while orphaned path-keyed rows from earlier sessions remain. This script
  * reconciles them:
@@ -14,14 +16,27 @@
  *   - If no UUID-keyed row exists, re-key the path row to the UUID.
  *   - Same logic for cart_import.
  *
+ * Environment variables:
+ *   SURREAL_URL  — SurrealDB endpoint (default: http://surreal.conhost.lan)
+ *   SURREAL_USER — SurrealDB username (default: root)
+ *   SURREAL_PASS — SurrealDB password (default: root)
+ *   SURREAL_NS   — namespace (default: mimir)
+ *   SURREAL_DB   — database (default: mimir)
+ *
  * Usage: bun packages/server/scripts/migrate-path-keys-to-uuid.ts
  *
  * Safe to run multiple times — idempotent. Logs what it does.
  */
 
-import { RecordId } from "surrealdb";
-import { initSchema } from "../src/db/surreal";
-import { getDb, queryOne } from "../src/db/surreal";
+import { RecordId, Surreal } from "surrealdb";
+
+const SURREAL_URL = process.env.SURREAL_URL ?? "http://surreal.conhost.lan";
+const SURREAL_USER = process.env.SURREAL_USER ?? "root";
+const SURREAL_PASS = process.env.SURREAL_PASS ?? "root";
+const SURREAL_NS = process.env.SURREAL_NS ?? "mimir";
+const SURREAL_DB = process.env.SURREAL_DB ?? "mimir";
+
+// ── Types ─────────────────────────────────────────────────────────────
 
 type ProjectRow = {
   id: string | RecordId;
@@ -42,20 +57,33 @@ type CartImportRow = {
   indexed_at: string;
 };
 
+// ── Helpers ───────────────────────────────────────────────────────────
+
 const idString = (id: string | RecordId) => {
   if (id instanceof RecordId) return String(id.id);
   const colon = id.indexOf(":");
   return colon >= 0 ? id.slice(colon + 1) : id;
 };
 
-const recordRef = (table: string, id: string | RecordId) =>
-  id instanceof RecordId ? id : `${table}:⟨${id}⟩`;
+/** Unwrap SurrealDB's [[rows]] result shape to a flat rows array. */
+function queryOne<T>(db: Surreal, sql: string, vars?: Record<string, unknown>) {
+  return db.query<[T[]]>(sql, vars).then(([rows]) => rows ?? []);
+}
+
+// ── Main ──────────────────────────────────────────────────────────────
 
 async function main() {
-  await initSchema();
-  const db = await getDb();
+  console.log(`Connecting to ${SURREAL_URL} (${SURREAL_NS}/${SURREAL_DB})`);
+
+  const db = new Surreal();
+  await db.connect(SURREAL_URL);
+  await db.signin({ username: SURREAL_USER, password: SURREAL_PASS });
+  await db.use({ namespace: SURREAL_NS, database: SURREAL_DB });
+
+  console.log("Connected.\n");
 
   const projects = await queryOne<ProjectRow>(
+    db,
     `SELECT id, local_path FROM project WHERE local_path IS NOT NONE`,
   );
 
@@ -63,7 +91,6 @@ async function main() {
 
   let totalReKeyed = 0;
   let totalDeleted = 0;
-  let totalSkipped = 0;
 
   for (const proj of projects) {
     const projectId = idString(proj.id);
@@ -74,6 +101,7 @@ async function main() {
 
     // ── cart_file ──
     const pathFiles = await queryOne<CartFileRow>(
+      db,
       `SELECT id, file_path, indexed_at FROM cart_file WHERE project = $path`,
       { path: localPath },
     );
@@ -85,13 +113,14 @@ async function main() {
     }
 
     for (const pathRow of pathFiles) {
-      const uuidRow = await queryOne<CartFileRow>(
+      const uuidRows = await queryOne<CartFileRow>(
+        db,
         `SELECT id, file_path, indexed_at FROM cart_file
          WHERE project = $uuid AND file_path = $fp LIMIT 1`,
         { uuid: projectId, fp: pathRow.file_path },
       );
 
-      const existing = uuidRow[0];
+      const existing = uuidRows[0];
       if (existing) {
         const pathTime = new Date(pathRow.indexed_at).getTime();
         const uuidTime = new Date(existing.indexed_at).getTime();
@@ -99,32 +128,33 @@ async function main() {
         if (pathTime > uuidTime) {
           // Path row is newer — delete UUID row, re-key path row
           await db.query(`DELETE $id`, {
-            id: recordRef("cart_file", existing.id),
+            id: new RecordId("cart_file", idString(existing.id)),
           });
-          await db.query(
-            `UPDATE $id SET project = $uuid`,
-            { id: recordRef("cart_file", pathRow.id), uuid: projectId },
-          );
+          await db.query(`UPDATE $id SET project = $uuid`, {
+            id: new RecordId("cart_file", idString(pathRow.id)),
+            uuid: projectId,
+          });
           totalReKeyed++;
         } else {
           // UUID row is newer or same — just delete the path row
           await db.query(`DELETE $id`, {
-            id: recordRef("cart_file", pathRow.id),
+            id: new RecordId("cart_file", idString(pathRow.id)),
           });
           totalDeleted++;
         }
       } else {
         // No UUID-keyed row — re-key
-        await db.query(
-          `UPDATE $id SET project = $uuid`,
-          { id: recordRef("cart_file", pathRow.id), uuid: projectId },
-        );
+        await db.query(`UPDATE $id SET project = $uuid`, {
+          id: new RecordId("cart_file", idString(pathRow.id)),
+          uuid: projectId,
+        });
         totalReKeyed++;
       }
     }
 
     // ── cart_import ──
     const pathImports = await queryOne<CartImportRow>(
+      db,
       `SELECT id, source_path, target_path, specifier, indexed_at
        FROM cart_import WHERE project = $path`,
       { path: localPath },
@@ -137,7 +167,8 @@ async function main() {
     }
 
     for (const pathRow of pathImports) {
-      const uuidRow = await queryOne<CartImportRow>(
+      const uuidRows = await queryOne<CartImportRow>(
+        db,
         `SELECT id, source_path, target_path, specifier, indexed_at
          FROM cart_import
          WHERE project = $uuid
@@ -153,37 +184,40 @@ async function main() {
         },
       );
 
-      const existing = uuidRow[0];
+      const existing = uuidRows[0];
       if (existing) {
         const pathTime = new Date(pathRow.indexed_at).getTime();
         const uuidTime = new Date(existing.indexed_at).getTime();
 
         if (pathTime > uuidTime) {
           await db.query(`DELETE $id`, {
-            id: recordRef("cart_import", existing.id),
+            id: new RecordId("cart_import", idString(existing.id)),
           });
-          await db.query(
-            `UPDATE $id SET project = $uuid`,
-            { id: recordRef("cart_import", pathRow.id), uuid: projectId },
-          );
+          await db.query(`UPDATE $id SET project = $uuid`, {
+            id: new RecordId("cart_import", idString(pathRow.id)),
+            uuid: projectId,
+          });
           totalReKeyed++;
         } else {
           await db.query(`DELETE $id`, {
-            id: recordRef("cart_import", pathRow.id),
+            id: new RecordId("cart_import", idString(pathRow.id)),
           });
           totalDeleted++;
         }
       } else {
-        await db.query(
-          `UPDATE $id SET project = $uuid`,
-          { id: recordRef("cart_import", pathRow.id), uuid: projectId },
-        );
+        await db.query(`UPDATE $id SET project = $uuid`, {
+          id: new RecordId("cart_import", idString(pathRow.id)),
+          uuid: projectId,
+        });
         totalReKeyed++;
       }
     }
   }
 
-  console.log(`\nDone. Re-keyed: ${totalReKeyed}, deleted (stale): ${totalDeleted}, skipped: ${totalSkipped}`);
+  console.log(
+    `\nDone. Re-keyed: ${totalReKeyed}, deleted (stale): ${totalDeleted}`,
+  );
+  await db.close();
   process.exit(0);
 }
 

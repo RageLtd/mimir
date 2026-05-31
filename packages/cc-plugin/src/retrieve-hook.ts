@@ -176,10 +176,17 @@ export const runRetrieveHook = async () => {
     return 0;
   }
 
+  // Prepend the project UUID so the model can pass it to MCP tools.
+  // Re-injected every turn so it survives compaction.
+  const projectPrefix = projectId
+    ? `<active_project id="${projectId}" />\n`
+    : "";
+  const contextBlock = `${projectPrefix}${payload.contextBlock}`;
+
   const memoryCount = payload.memoryCount ?? 0;
   const summaryCount = payload.summaryCount ?? 0;
 
-  emitInjection(payload.contextBlock, memoryCount, summaryCount);
+  emitInjection(contextBlock, memoryCount, summaryCount);
 
   log.info("retrieved context injected", {
     sessionId,

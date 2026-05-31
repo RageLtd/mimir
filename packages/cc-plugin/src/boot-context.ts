@@ -174,8 +174,21 @@ export const assembleBootContext = async (
     hasSessionContext: sessionContext !== null,
   });
 
-  return [
-    "<boot_context>",
+  const sections = ["<boot_context>"];
+
+  // Project UUID — tells the model which project key to pass to
+  // cartographer and memory MCP tools. Omitted when resolution failed;
+  // the model falls back to auto-detect in that case.
+  if (projectId) {
+    sections.push(
+      "<project_context>",
+      `  <active_project id="${projectId}" />`,
+      "</project_context>",
+      "",
+    );
+  }
+
+  sections.push(
     "<user_profile_section>",
     profileSection,
     "</user_profile_section>",
@@ -184,5 +197,7 @@ export const assembleBootContext = async (
     sessionContextSection,
     "</session_context_section>",
     "</boot_context>",
-  ].join("\n");
+  );
+
+  return sections.join("\n");
 };
