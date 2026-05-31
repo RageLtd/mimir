@@ -7,6 +7,10 @@
         "MIMIR_USER_MEMORY_DB": "{{USER_MEMORY_DB}}"
       }
     },
+    "mimir-logs": {
+      "command": "{{MIMIR_CC_BIN}}",
+      "args": ["log-mcp"]
+    },
     "mimir": {
       "type": "http",
       "url": "{{MIMIR_SERVER_URL}}/mcp"

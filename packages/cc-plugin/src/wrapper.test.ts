@@ -21,10 +21,6 @@ const wrapperTemplate = await Bun.file(
   join(import.meta.dir, "..", "artifacts", "wrapper.sh.template"),
 ).text();
 
-// The model pinned in BASE_ARGS — present on every launch unless a user
-// `--model` arg or a marker model overrides it later on the command line.
-const BASE_MODEL_ARG = "--model claude-opus-4-6[1m]";
-
 let tmp = "";
 let wrapperPath = "";
 let mockClaudeDir = "";
@@ -33,6 +29,12 @@ let markerPath = "";
 
 const writeMockClaude = async (script: string) => {
   const path = join(mockClaudeDir, "claude");
+  await writeFile(path, script);
+  await chmod(path, 0o755);
+};
+
+const writeUpdater = async (script: string) => {
+  const path = join(tmp, ".mimir", "ensure-binary.sh");
   await writeFile(path, script);
   await chmod(path, 0o755);
 };
@@ -106,8 +108,6 @@ exit 0
     const records = await readLog();
     expect(records).toHaveLength(1);
     expect(records[0]).toContain("ANTHROPIC_BASE_URL=unset");
-    // The pinned default model rides along on a plain launch.
-    expect(records[0]).toContain(BASE_MODEL_ARG);
   });
 
   test("pre-staged marker triggers a second invocation with merged env + flags", async () => {
@@ -133,13 +133,12 @@ exit 0
     const records = await readLog();
     expect(records).toHaveLength(2);
 
-    // First call: pre-existing env, base default model, marker not consumed.
+    // First call: pre-existing env (marker not consumed yet).
     expect(records[0]).toContain("ANTHROPIC_BASE_URL=unset");
-    expect(records[0]).toContain(BASE_MODEL_ARG);
-    expect(records[0]).not.toContain("glm-5.1");
+    expect(records[0]).not.toContain("--model");
     expect(records[0]).not.toContain("--continue");
 
-    // Second call: marker consumed, env + flags merged, marker model wins.
+    // Second call: marker consumed, env + flags merged in.
     expect(records[1]).toContain(
       "ANTHROPIC_BASE_URL=http://mimir-server:3000",
     );
@@ -185,8 +184,7 @@ exit 0
     expect(records).toHaveLength(2);
     expect(records[0]).toContain("CUSTOM_VAR=unset");
     expect(records[1]).toContain("CUSTOM_VAR=value-from-marker");
-    // No marker model, so the base default persists across the relaunch.
-    expect(records[1]).toContain(BASE_MODEL_ARG);
+    expect(records[1]).not.toContain("--model");
   });
 
   test("user-supplied args pass through on both invocations", async () => {
@@ -210,24 +208,45 @@ exit 0
     expect(records[1]).toContain("--model glm-5.1");
   });
 
-  test("user --model is ordered after the base default so it overrides", async () => {
+  test("runs ensure-binary.sh before launch when present and executable", async () => {
+    await writeUpdater(`#!/usr/bin/env bash
+touch "$HOME/updater-ran"
+exit 0
+`);
     await writeMockClaude(`#!/usr/bin/env bash
 echo "args=$*" >> "$MIMIR_LOG"
 echo "---" >> "$MIMIR_LOG"
 exit 0
 `);
 
-    await runWrapper(["--model", "sonnet"]);
+    const result = await runWrapper();
+    expect(result.exitCode).toBe(0);
+
+    // The updater ran...
+    expect(await Bun.file(join(tmp, "updater-ran")).exists()).toBe(true);
+    // ...and claude still launched exactly once.
+    const records = await readLog();
+    expect(records).toHaveLength(1);
+  });
+
+  test("a failing ensure-binary.sh warns but does not abort the launch", async () => {
+    await writeUpdater(`#!/usr/bin/env bash
+echo "boom" >&2
+exit 1
+`);
+    await writeMockClaude(`#!/usr/bin/env bash
+echo "args=$*" >> "$MIMIR_LOG"
+echo "---" >> "$MIMIR_LOG"
+exit 0
+`);
+
+    const result = await runWrapper();
+    // set -e must not let the updater's non-zero exit kill the launch.
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("binary update check failed");
 
     const records = await readLog();
     expect(records).toHaveLength(1);
-    // Both flags are present; the base default precedes the user's, so
-    // claude's last-wins resolution lands on the user's choice.
-    const record = records[0] ?? "";
-    const baseIdx = record.indexOf(BASE_MODEL_ARG);
-    const userIdx = record.indexOf("--model sonnet");
-    expect(baseIdx).toBeGreaterThanOrEqual(0);
-    expect(userIdx).toBeGreaterThan(baseIdx);
   });
 
   test("claude exit code does not abort the marker check", async () => {

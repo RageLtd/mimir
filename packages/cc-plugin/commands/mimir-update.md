@@ -18,49 +18,39 @@ Otherwise, check whether `~/.mimir/config.json` exists:
 test -f "$HOME/.mimir/config.json" && echo found || echo missing
 ```
 
-If it exists, run the binary with the `update` subcommand and no URL argument — it will recover the URL from the existing config:
-
-```bash
-"${CLAUDE_PLUGIN_ROOT}/dist/<platform>/mimir-cc" update
-```
-
-This path preserves the existing `userMemoryDb` and `cartographerBinary` settings. Skip to Step 4.
+If it exists, you'll run `update` with no URL argument in Step 3 — the binary recovers the URL (and preserves the existing `userMemoryDb` and `cartographerBinary` settings) from the config. Bind `<url>` to empty and continue to Step 2.
 
 If the config file does not exist, call `AskUserQuestion` to obtain the URL exactly as `/mimir-install` does (default `https://mimir.rageltd.ca`, alternative `http://localhost:8080`). You may also want to re-prompt for DB path and cartographer binary if the user is moving from a pre-config-file install — but treat this as the rare case.
 
-## Step 2 — detect the platform
+## Step 2 — fetch the mimir-cc binary
 
-Run `uname -sm`. Map to `darwin-arm64` or `linux-x64` as in `/mimir-install`. Stop on unsupported platforms.
-
-## Step 3 — rebuild the installer binary
-
-The dist binary is built from local source. A stale binary silently installs old code — running update against a binary older than HEAD undoes any recent commits. Always rebuild before invoking the installer:
+Run the plugin's binary fetcher. It detects the platform, downloads the latest `mimir-cc` release asset from the (private) `RageLtd/mimir` repo into `~/.local/bin/mimir-cc`, and on macOS re-signs it:
 
 ```bash
-cd "${CLAUDE_PLUGIN_ROOT}" && ./build.sh
+"${CLAUDE_PLUGIN_ROOT}/scripts/ensure-binary.sh"
 ```
 
-`build.sh` uses `set -euo pipefail` and exits non-zero on any failure. Surface the build output verbatim. If the build fails, stop and let the user fix the cause before retrying — common failure is `bun: command not found`, meaning Bun isn't on PATH on this machine.
+This needs `gh` installed and authenticated as an account with read access to `RageLtd/mimir` (or `curl` + `$GITHUB_TOKEN` as a fallback). Surface the script's output verbatim. Stop on a non-zero exit.
 
-If the build succeeds, the `dist/<platform>/mimir-cc` binary is guaranteed fresh; continue to Step 4.
+> **Developing the plugin locally?** Skip the download and build instead: `cd "${CLAUDE_PLUGIN_ROOT}" && ./build.sh`, then run `"${CLAUDE_PLUGIN_ROOT}/dist/<platform>/mimir-cc" update ...` in Step 3 instead of the installed binary.
 
-## Step 4 — run the installer binary
+## Step 3 — run the installer binary
 
-If you obtained the URL in Step 1 (no existing config):
+If you obtained a URL in Step 1 (no existing config):
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/dist/<platform>/mimir-cc" update "<url>"
+"$HOME/.local/bin/mimir-cc" update "<url>"
 ```
 
-If you recovered from existing config:
+If you're recovering from existing config (no URL):
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/dist/<platform>/mimir-cc" update
+"$HOME/.local/bin/mimir-cc" update
 ```
 
 Show the binary's output verbatim.
 
-## Step 5 — final instructions
+## Step 4 — final instructions
 
 If the binary exited zero, tell the user:
 

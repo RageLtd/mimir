@@ -27,7 +27,7 @@ export type MimirConfig = {
   /**
    * Filesystem path for the ACP log file. Lines are appended to this file
    * in addition to being written to stderr. Empty string disables file
-   * logging. Default: `~/.mimir/acp.log`.
+   * logging. Default: `~/.mimir/logs/acp.log`.
    */
   readonly acpLogPath: string;
   readonly autoApproveTools: boolean;
@@ -55,7 +55,7 @@ export const loadConfig = () => {
     ),
     logLevel: (process.env.LOG_LEVEL as MimirConfig["logLevel"]) ?? "info",
     acpLogPath: expandHome(
-      process.env.MIMIR_ACP_LOG_FILE ?? "~/.mimir/acp.log",
+      process.env.MIMIR_ACP_LOG_FILE ?? "~/.mimir/logs/acp.log",
     ),
     autoApproveTools: process.env.AUTO_APPROVE_TOOLS === "true",
     systemPromptTtlMs: parseInt(

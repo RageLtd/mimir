@@ -18,8 +18,11 @@
 
 import { chmod, copyFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
+import ensureBinaryScript from "../scripts/ensure-binary.sh" with {
+  type: "text",
+};
 import mcpTemplate from "../artifacts/mcp.json.template" with { type: "text" };
 import settingsTemplate from "../artifacts/settings.json.template" with {
   type: "text",
@@ -128,6 +131,15 @@ const installSelfBinary = async (
     );
   }
 
+  // In the release-install flow, ensure-binary.sh has already downloaded the
+  // binary to the destination, so process.execPath IS the destination. Copying
+  // a file onto itself truncates it to zero — skip the copy and just confirm
+  // the mode.
+  if (resolve(source) === resolve(destination)) {
+    await chmod(destination, 0o755);
+    return ok(true);
+  }
+
   await ensureDir(dirname(destination));
   await copyFile(source, destination);
   await chmod(destination, 0o755);
@@ -221,10 +233,15 @@ export const runInstall = async (
     selfPath,
   });
 
+  const ensureBinaryPath = join(home, "ensure-binary.sh");
+
   await writeText(promptPath, xml);
   await writeText(mcpPath, templates.mcp);
   await writeText(settingsPath, templates.settings);
   await writeExecutable(wrapperPath, wrapperTemplate);
+  // The wrapper self-updates the binary on launch by running this from
+  // ~/.mimir, so it must not depend on the plugin clone still being present.
+  await writeExecutable(ensureBinaryPath, ensureBinaryScript);
 
   await writeConfig({
     serverUrl: opts.serverUrl.replace(/\/+$/, ""),
@@ -278,6 +295,7 @@ export const runInstallCommand = async (
       carto,
       `  Wrapper:        ${binDir}/mimir`,
       `  Binary:         ${binDir}/mimir-cc`,
+      `  Updater:        ${home}/ensure-binary.sh`,
       `  Logs:           ${home}/logs/mimir-cc.log`,
       ``,
       `Make sure ${binDir} is on your PATH, then exit Claude Code and run`,

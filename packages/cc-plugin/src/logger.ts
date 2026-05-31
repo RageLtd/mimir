@@ -21,7 +21,7 @@
  * One line per call. Context is appended as compact JSON when present.
  */
 
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile, mkdir, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { mimirHome } from "./util";
@@ -40,7 +40,11 @@ const currentLevel: LogLevel =
 
 const minPriority = LEVEL_PRIORITY[currentLevel];
 
-const logPath = () => join(mimirHome(), "logs", "mimir-cc.log");
+const LOG_NAME = "mimir-cc.log";
+const PREV_NAME = "mimir-cc.prev.log";
+
+const logPath = () => join(mimirHome(), "logs", LOG_NAME);
+const prevPath = () => join(mimirHome(), "logs", PREV_NAME);
 
 /**
  * Render the optional context payload. JSON.stringify can throw on
@@ -66,10 +70,12 @@ const formatLine = (
 
 // ── Pending-write chain ──
 // Every writeLine call appends onto `pending`. The first link mkdir's the
-// log directory; subsequent links append text. Failures at any step are
-// absorbed into a no-op so the chain never enters a rejected state.
+// log directory, rotates the previous log, then subsequent links append
+// text. Failures at any step are absorbed into a no-op so the chain
+// never enters a rejected state.
 
 let pending: Promise<void> = mkdir(dirname(logPath()), { recursive: true })
+  .then(() => rename(logPath(), prevPath()).catch(() => undefined))
   .then(() => undefined)
   .catch(() => undefined);
 

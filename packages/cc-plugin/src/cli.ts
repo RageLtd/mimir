@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { readConfig } from "./config";
 import { runFileContextHook } from "./file-context-hook";
 import { type InstallOptions, runInstallCommand } from "./install";
+import { runLogMcp } from "./log-mcp";
 import { flushLogs } from "./logger";
 import { runPersistHook } from "./persist-hook";
 import { runPreCompactHook } from "./precompact-hook";
@@ -53,6 +54,7 @@ const USAGE = [
   "  precompact              PreCompact hook: pre-discard persistence.",
   "  session-start           SessionStart hook: full project re-index (replace mode).",
   "  user-memory-mcp         Stdio MCP server for user-memory tools.",
+  "  log-mcp                 Stdio MCP server for reading plugin logs.",
 ].join("\n");
 
 type McpConfig = {
@@ -254,6 +256,9 @@ const dispatch = async (argv: readonly string[]): Promise<number> => {
 
     case "user-memory-mcp":
       return runUserMemoryMcp();
+
+    case "log-mcp":
+      return runLogMcp();
 
     case undefined:
     case "":

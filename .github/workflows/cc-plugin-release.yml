@@ -1,0 +1,113 @@
+name: cc-plugin Release
+
+# Auto-versioned release for packages/cc-plugin, driven by conventional
+# commits — no manual tagging. On a push to main that touches the package,
+# release.sh analyzes commits, bumps plugin.json, commits chore(release),
+# and tags cc-plugin/v<version>. The release job then builds the binaries,
+# publishes a GitHub Release on that tag, and notifies the marketplace.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/cc-plugin/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  version-bump:
+    name: Analyze & Bump Version
+    runs-on: ubuntu-latest
+    # Avoid the release commit re-triggering the workflow.
+    if: "!startsWith(github.event.head_commit.message, 'chore(release): cc-plugin')"
+    outputs:
+      should_release: ${{ steps.dry-run.outputs.should_release }}
+      new_version: ${{ steps.dry-run.outputs.new_version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Analyze commits (dry run)
+        id: dry-run
+        run: |
+          OUTPUT=$(sh packages/cc-plugin/scripts/release.sh --dry-run 2>&1)
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -q "Nothing to do"; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            NEW_VERSION=$(echo "$OUTPUT" | grep "Version:" | sed 's/.*→ //' | tr -d '[:space:]')
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump, commit, tag
+        if: steps.dry-run.outputs.should_release == 'true'
+        run: sh packages/cc-plugin/scripts/release.sh
+
+      - name: Push changes and tags
+        if: steps.dry-run.outputs.should_release == 'true'
+        run: git push --follow-tags
+
+  release:
+    name: Build & Publish
+    runs-on: ubuntu-latest
+    needs: [version-bump]
+    if: needs.version-bump.outputs.should_release == 'true'
+    env:
+      NEW_VERSION: ${{ needs.version-bump.outputs.new_version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Pull latest (release commit + tag)
+        run: git pull origin main --tags
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # build.sh cross-compiles darwin-arm64 + linux-x64 from this Linux
+      # runner and skips its codesign step off-Darwin; ensure-binary.sh
+      # re-signs on the user's Mac after download. No macOS runner or signing
+      # secrets needed here.
+      - name: Build binaries
+        working-directory: packages/cc-plugin
+        run: ./build.sh
+
+      - name: Stage release assets
+        working-directory: packages/cc-plugin
+        run: |
+          cp dist/darwin-arm64/mimir-cc mimir-cc-darwin-arm64
+          cp dist/linux-x64/mimir-cc mimir-cc-linux-x64
+
+      - name: Publish GitHub Release
+        working-directory: packages/cc-plugin
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "cc-plugin/v${NEW_VERSION}" \
+            mimir-cc-darwin-arm64 \
+            mimir-cc-linux-x64 \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "cc-plugin v${NEW_VERSION}" \
+            --generate-notes
+
+      - name: Notify marketplace
+        env:
+          GH_TOKEN: ${{ secrets.MARKETPLACE_PAT }}
+        run: |
+          gh api repos/RageLtd/claude-plugins/dispatches \
+            -f event_type=plugin-release \
+            -f "client_payload[plugin_name]=mimir-cc" \
+            -f "client_payload[version]=${NEW_VERSION}" \
+            -f "client_payload[ref]=cc-plugin/v${NEW_VERSION}"

@@ -50,33 +50,19 @@ If the user picks "Detect via $(which cartographer)", run `which cartographer` a
 
 If the user picks "Other" and provides a path, bind that to `<carto-path>` after expanding leading `~`.
 
-## Step 4 — detect the platform
+## Step 4 — fetch the mimir-cc binary
 
-Run:
-
-```bash
-uname -sm
-```
-
-Parse the output:
-
-- `Darwin arm64` → platform = `darwin-arm64`
-- `Linux x86_64` → platform = `linux-x64`
-- anything else → stop and report: `Unsupported platform — alpha ships darwin-arm64 and linux-x64 only. Detected: <output>`
-
-## Step 5 — rebuild the installer binary
-
-The binary is built locally — alpha doesn't ship pre-built artifacts, and a stale binary silently installs old code. Always rebuild before invoking the installer:
+Run the plugin's binary fetcher. It detects the platform, downloads the matching `mimir-cc` release asset from the (private) `RageLtd/mimir` repo into `~/.local/bin/mimir-cc`, and on macOS re-signs it to clear Gatekeeper:
 
 ```bash
-cd "${CLAUDE_PLUGIN_ROOT}" && ./build.sh
+"${CLAUDE_PLUGIN_ROOT}/scripts/ensure-binary.sh"
 ```
 
-`build.sh` uses `set -euo pipefail` and exits non-zero on any failure. Surface the build output verbatim. If the build fails, stop and let the user fix the cause before retrying — common failure on a fresh machine is `bun: command not found`, meaning Bun isn't installed or isn't on PATH. The fix is to install Bun (`curl -fsSL https://bun.sh/install | bash`) and re-run `/mimir-install`.
+This needs the GitHub CLI (`gh`) installed and authenticated as an account with read access to `RageLtd/mimir` — alpha testers are repo collaborators, so they qualify. If `gh` is absent it falls back to `curl` + `$GITHUB_TOKEN`. Surface the script's output verbatim. If it exits non-zero — unsupported platform, no repo access, or no network and no existing binary — stop and let the user resolve the cause before retrying.
 
-If the build succeeds, the `dist/<platform>/mimir-cc` binary is guaranteed fresh; continue to Step 6.
+> **Developing the plugin locally?** Skip this step and build from source instead: `cd "${CLAUDE_PLUGIN_ROOT}" && ./build.sh`, then in Step 5 run `"${CLAUDE_PLUGIN_ROOT}/dist/<platform>/mimir-cc" install ...` instead of the installed binary. A marketplace clone can't build (it lacks the monorepo's dependency catalogs), which is why the default path downloads a released binary.
 
-## Step 6 — run the installer binary
+## Step 5 — run the installer binary
 
 Build the argument list:
 
@@ -84,15 +70,15 @@ Build the argument list:
 - if `<db-path>` is non-empty AND differs from the default: append `--user-memory-db "<db-path>"`
 - if `<carto-path>` is non-empty: append `--cartographer "<carto-path>"`
 
-Run:
+Run the binary Step 4 just installed:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/dist/<platform>/mimir-cc" install "<url>" [optional flags]
+"$HOME/.local/bin/mimir-cc" install "<url>" [optional flags]
 ```
 
 Show the binary's stdout and stderr to the user verbatim.
 
-## Step 7 — final instructions
+## Step 6 — final instructions
 
 If the binary exited zero, tell the user:
 

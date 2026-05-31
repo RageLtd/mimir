@@ -16,17 +16,21 @@
 set -eo pipefail
 export MIMIR_ACTIVE=1
 
+# Keep ~/.local/bin/mimir-cc current before launching. ensure-binary.sh exits 0
+# when the binary is already up to date or when it's present but the release
+# check can't reach GitHub, so a routine launch never blocks on the network;
+# it only downloads when a newer release exists. A hard failure (no binary and
+# no way to fetch one) is surfaced but not fatal — claude still launches.
+ENSURE_BINARY="$HOME/.mimir/ensure-binary.sh"
+if [[ -x "$ENSURE_BINARY" ]]; then
+  "$ENSURE_BINARY" || echo "mimir: binary update check failed — continuing with the installed binary." >&2
+fi
+
 MIMIR_MARKER="$HOME/.mimir/next-session.json"
 BASE_ARGS=(
   --system-prompt-file "$HOME/.mimir/system-prompt.md"
   --mcp-config "$HOME/.mimir/mcp.json"
   --settings "$HOME/.mimir/settings.json"
-  # Pin Opus 4.6 with the 1M context window — CC's native /model picker no
-  # longer lists 4.6, so the launch flag is the only reliable way to select
-  # it. Sits in BASE_ARGS (low precedence): a user `mimir --model …` arg or a
-  # /switch-model marker's MODEL_ARGS both come later on the command line and
-  # win, so this is a default, not a lock.
-  --model 'claude-opus-4-6[1m]'
 )
 USER_ARGS=("$@")
 EXTRA_ARGS=()

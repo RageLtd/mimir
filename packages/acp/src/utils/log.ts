@@ -13,7 +13,7 @@
  * call.
  */
 import { createWriteStream } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rename } from "node:fs/promises";
 import { dirname } from "node:path";
 import { format } from "node:util";
 
@@ -49,15 +49,20 @@ const getFileStream = (path: string) => {
   if (_fileStreamFailed) return null;
   if (_fileStream) return _fileStream;
 
-  // Best-effort parent dir creation. mkdir errors land in stderr — if the
-  // directory truly can't exist, the createWriteStream error handler below
-  // will report the file open failure separately. Logging here makes the
-  // failure mode visible rather than silently swallowed.
-  void mkdir(dirname(path), { recursive: true }).catch((err) => {
-    process.stderr.write(
-      `[mimir-acp] log dir ${dirname(path)} mkdir failed: ${err instanceof Error ? err.message : String(err)}\n`,
-    );
-  });
+  // Best-effort parent dir creation + log rotation. Rotate the current
+  // log to .prev before opening a fresh append stream, keeping the
+  // current and previous sessions. Errors are surfaced on stderr but
+  // never block the open.
+  void mkdir(dirname(path), { recursive: true })
+    .then(() => {
+      const prev = path.replace(/\.log$/, ".prev.log");
+      return rename(path, prev).catch(() => undefined);
+    })
+    .catch((err) => {
+      process.stderr.write(
+        `[mimir-acp] log dir ${dirname(path)} mkdir failed: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    });
 
   const stream = createWriteStream(path, { flags: "a" });
   stream.on("error", (err) => {
