@@ -25,9 +25,52 @@ The wrapper invokes `claude --system-prompt-file ... --mcp-config ... --settings
 
 ## Install (alpha testers)
 
-The plugin doesn't ship pre-built binaries — alpha testers build locally. It lives as the `@mimir/cc-plugin` package inside the `mimir` monorepo.
+There are two ways in. The **marketplace path** is the normal one — no clone, no local build; Claude Code pulls the plugin from GitHub and `/mimir-install` downloads a prebuilt binary. The **from-source path** is only for hacking on the plugin itself. Both converge on `/mimir-install`.
 
-1. Clone the `mimir` monorepo somewhere persistent.
+### Prerequisites
+
+- **The GitHub CLI (`gh`), authenticated.** Release binaries live in the **private** `RageLtd/mimir` repo, and `/mimir-install` fetches them with your own `gh` credentials — so you need read access (alpha testers are repo collaborators, which qualifies) and an active login:
+
+  ```bash
+  gh auth login
+  ```
+
+  No `gh`? `ensure-binary.sh` falls back to `curl` + `$GITHUB_TOKEN`, but `gh` is the path of least resistance.
+- **`~/.local/bin` on your `PATH`.** That's where the `mimir` wrapper and the `mimir-cc` binary land. Without it, the `mimir` command won't resolve after install.
+
+### Marketplace install (recommended)
+
+1. Add RageLtd's plugin marketplace. The argument is `owner/repo` on GitHub — Claude Code reads `.claude-plugin/marketplace.json` from that repo and registers it under its declared name, **`rageltd`** (the same marketplace also carries goldfish, cartographer, and claude-rules):
+
+   ```
+   /plugin marketplace add RageLtd/claude-plugins
+   ```
+
+2. Install the plugin. The `@rageltd` suffix is the *marketplace* name, not the GitHub owner:
+
+   ```
+   /plugin install mimir-cc@rageltd
+   ```
+
+   The marketplace pins mimir-cc to a `git-subdir` source: it fetches `packages/cc-plugin` out of the `RageLtd/mimir` monorepo at the released tag (e.g. `cc-plugin/v0.1.0`), so you get the slash commands, scripts, and bundled artifacts without cloning the whole repo. The compiled `mimir-cc` binary is *not* in here — that arrives in the next step.
+
+3. Run the installer inside Claude Code:
+
+   ```
+   /mimir-install
+   ```
+
+   It asks for three things — the mimir-server URL (default `https://mimir.rageltd.ca`), the user-memory SQLite DB path (default `~/.mimir/user-memories.db`), and the cartographer binary path (default: skip, which leaves the reindex hook off). Then `ensure-binary.sh` downloads the matching `mimir-cc-<platform>` asset from `RageLtd/mimir` releases, re-signs it on macOS to clear Bun's broken adhoc signature, and the installer writes out `~/.mimir/` plus the wrapper.
+
+4. Exit Claude Code and run `mimir` from any terminal.
+
+To track a newer release later, run `/plugin marketplace update rageltd` to refresh the pinned tag, then `/mimir-update` to re-fetch the binary and re-land the runtime (without arguments it reuses the server URL stored in `~/.mimir/mcp.json`). `ensure-binary.sh` also runs on every `mimir` launch, so simply starting the wrapper usually pulls the latest release on its own — unless you've pinned a dev build (see below).
+
+### From source (contributors)
+
+Only needed if you're working on the plugin itself. It lives as the `@mimir/cc-plugin` package inside the `mimir` monorepo, and a marketplace clone can't build it (it lacks the monorepo's dependency catalogs), which is exactly why the marketplace path ships a prebuilt binary instead.
+
+1. Clone the monorepo somewhere persistent.
 2. Install workspace dependencies and build the installer binary:
 
    ```bash
@@ -36,22 +79,15 @@ The plugin doesn't ship pre-built binaries — alpha testers build locally. It l
    ```
 
    This produces `packages/cc-plugin/dist/darwin-arm64/mimir-cc` and `packages/cc-plugin/dist/linux-x64/mimir-cc`. On Darwin the script also runs `codesign --sign - --force` against the macOS binary — Bun's `bun build --compile` emits a broken adhoc signature that Gatekeeper kills on exec with no stderr (exit 137), so the re-sign is mandatory.
-3. Add the marketplace and install the plugin into Claude Code:
+3. Add the monorepo as a local marketplace and install from it:
 
    ```
    /plugin marketplace add /path/to/mimir
-   /plugin install mimir-cc
+   /plugin install mimir-cc@mimir-cc-local
    ```
 
-   The monorepo root ships a `.claude-plugin/marketplace.json` pointing at `./packages/cc-plugin`.
-4. Inside Claude Code, run `/mimir-install`. The slash command asks for:
-   - the mimir-server URL (default `https://mimir.rageltd.ca`),
-   - where the user-memory SQLite DB should live (default `~/.mimir/user-memories.db`),
-   - the path to your cartographer binary (default: skip, which disables the reindex hook).
-5. Ensure `~/.local/bin` is on your `PATH`.
-6. Exit Claude Code and run `mimir` from any terminal.
-
-To re-install (e.g. to pick up a system-prompt update from the server), run `/mimir-update`. Without arguments it reuses the server URL stored in `~/.mimir/mcp.json`. When you update the plugin itself, rerun `./build.sh` so the installer binary matches.
+   The monorepo root ships a `.claude-plugin/marketplace.json` naming the `mimir-cc-local` marketplace, pointed at `./packages/cc-plugin`.
+4. Run `/mimir-install`. When developing, skip the release download and point the installer at your local `dist/<platform>/mimir-cc` build — the slash command spells out how. After the first install, `scripts/dev-install.sh` is the fast iterate loop: it rebuilds, atomically swaps `~/.local/bin/mimir-cc`, and drops `~/.mimir/.cc-dev` to pin the dev build so `ensure-binary.sh` won't clobber it mid-iteration. Delete that pin to resume tracking releases.
 
 ## Supported platforms
 
@@ -113,7 +149,7 @@ bun install                              # from the monorepo root — hoists wor
 bun run --filter @mimir/cc-plugin build  # or: cd packages/cc-plugin && ./build.sh
 ```
 
-`dist/` is gitignored. The slash command resolves the binary at `${CLAUDE_PLUGIN_ROOT}/dist/<platform>/mimir-cc` at runtime, so a fresh clone needs `./build.sh` once before `/mimir-install` will work. The build step ad-hoc-signs the Darwin binary; without that, the binary dies with SIGKILL on every invocation. Moving to GitHub Releases (or in-Claude on-demand build) is future work.
+`dist/` is gitignored. For local development the slash command resolves the binary at `${CLAUDE_PLUGIN_ROOT}/dist/<platform>/mimir-cc`, so a fresh clone needs `./build.sh` once before `/mimir-install` will work. The build step ad-hoc-signs the Darwin binary; without that, the binary dies with SIGKILL on every invocation. For released installs the binary instead comes from `RageLtd/mimir` GitHub Releases: the `cc-plugin Release` workflow (`.github/workflows/cc-plugin-release.yml`) auto-versions from conventional commits, cross-compiles both platforms, publishes the assets on a `cc-plugin/v<version>` tag, and dispatches an event to the `RageLtd/claude-plugins` marketplace to bump its pinned ref. `scripts/ensure-binary.sh` is what pulls those assets onto the user's machine.
 
 ## Layout
 
