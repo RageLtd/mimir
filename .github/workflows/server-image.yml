@@ -14,7 +14,9 @@ on:
       - "packages/server/**"
       - "package.json"
       - "bun.lock"
-      - ".github/workflows/server-image.yml"
+  # Note: this workflow is deliberately NOT in its own paths filter — editing the
+  # build definition shouldn't republish an unchanged image. Use workflow_dispatch
+  # to rebuild on demand after a build-definition change.
   workflow_dispatch:
 
 env:
