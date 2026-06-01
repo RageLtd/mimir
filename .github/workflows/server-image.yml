@@ -1,0 +1,71 @@
+name: server Image (:next)
+
+# Rolling pre-release image for packages/server. While we're in
+# late-alpha/early-beta there are no semver tags — every push to main that
+# touches the server (or the workspace manifests its Docker build depends on)
+# rebuilds and republishes the moving `:next` tag, plus an immutable
+# `sha-<short>` tag for rollback/traceability. Publishes to GHCR using the
+# built-in GITHUB_TOKEN, so the image stays private alongside the repo with no
+# extra secret.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/server/**"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/server-image.yml"
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/rageltd/mimir-server
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    name: Test
+    uses: ./.github/workflows/test.yml
+
+  build-push:
+    name: Build & Push
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=next
+            type=sha,format=short
+
+      # Build context is the monorepo root — the Dockerfile copies the root
+      # manifest + bun.lock + member package.json files to resolve the
+      # `catalog:` dependency graph before compiling the server binary.
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/server/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

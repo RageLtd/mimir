@@ -39,6 +39,10 @@ data/
 # local claude settings
 .claude/settings.local.json
 
+# local docker compose override (dev builds from source instead of pulling)
+compose.override.yaml
+compose.override.yml
+
 # SQLite databases (local user data)
 *.db
 *.db-shm

@@ -52,11 +52,9 @@ bun install
 
 ### 1. Deploy the Server
 
-The server runs in Docker alongside SurrealDB.
+The server runs in Docker alongside SurrealDB. Run from the repo root, where `docker-compose.yml` and `.env.example` live:
 
 ```bash
-cd packages/server
-
 # Configure environment
 cp .env.example .env
 # Edit .env — at minimum set SURREAL_PASS and your inference provider(s)
@@ -65,7 +63,23 @@ cp .env.example .env
 docker compose up -d
 ```
 
+The committed `docker-compose.yml` pulls the prebuilt server image (`ghcr.io/rageltd/mimir-server:next`) from GitHub Container Registry rather than building. The image is **private**, so the host needs a one-time GHCR login before that first `docker compose up` can pull — the read-only token setup lives in [`packages/server/README.md`](packages/server/README.md#pulling-the-published-image).
+
 The server exposes an OpenAI-compatible API at `http://localhost:8080` (or whatever `MIMIR_PORT` is set to). Caddy labels in the compose file expose it as `http://mimir.conhost.lan` if you're using caddy-docker-proxy.
+
+#### Building from source instead of pulling
+
+For local development — compiling your working tree instead of pulling `:next` — drop a `compose.override.yaml` next to `docker-compose.yml`. It's gitignored, and Compose auto-merges it on every command in that directory:
+
+```yaml
+services:
+  mimir:
+    build:
+      context: .
+      dockerfile: packages/server/Dockerfile
+```
+
+With `image:` (from the base file) and `build:` (from the override) both set, `docker compose up` builds locally and tags the result — no registry pull, no GHCR auth needed. A checkout without this file (a deploy host) pulls the published image untouched.
 
 #### Server Environment Variables
 

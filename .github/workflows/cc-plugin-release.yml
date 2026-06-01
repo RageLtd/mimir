@@ -16,8 +16,13 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    name: Test
+    uses: ./.github/workflows/test.yml
+
   version-bump:
     name: Analyze & Bump Version
+    needs: [test]
     runs-on: ubuntu-latest
     # Avoid the release commit re-triggering the workflow.
     if: "!startsWith(github.event.head_commit.message, 'chore(release): cc-plugin')"
