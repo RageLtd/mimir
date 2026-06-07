@@ -6,9 +6,14 @@ import { refreshToolNames } from "./agent-loop/server-tools";
 import { closeMcpClients, initMcpTools } from "./agent-loop/server-tools/mcp";
 import { config, OPENROUTER_API_URL } from "./config";
 import { closeDb, getDb, initSchema } from "./db/surreal";
+import {
+  startHygieneScheduler,
+  stopHygieneScheduler,
+} from "./goldfish/hygiene";
 import { cartographer } from "./routes/cartographer";
 import { completions } from "./routes/completions";
 import { context } from "./routes/context";
+import { hygiene } from "./routes/hygiene";
 import { mcp } from "./routes/mcp";
 import { messages } from "./routes/messages";
 import { messagesIngress } from "./routes/messages-ingress";
@@ -123,6 +128,9 @@ app.route("/v1/tools", tools);
 // Project registry
 app.route("/v1/projects", projects);
 
+// Memory hygiene — manual sweep trigger
+app.route("/v1/hygiene", hygiene);
+
 // MCP server for Claude Code tool injection
 app.route("/mcp", mcp);
 
@@ -172,7 +180,9 @@ async function boot() {
     fetch: app.fetch,
     port: config.port,
     hostname: config.host,
-    idleTimeout: 120, // seconds — Ollama cold starts + vLLM long generations
+    idleTimeout: 0, // disabled — long-running requests (Ollama cold starts,
+    // vLLM long generations, multi-merge hygiene sweeps) own their own
+    // duration; a fixed idle ceiling here is our limit to impose, not Bun's.
   });
 
   log.info(
@@ -186,11 +196,19 @@ async function boot() {
     },
     "listening",
   );
+
+  // Periodic memory hygiene sweep (clears its own stale lock on start).
+  const [hygieneErr] = await attempt(startHygieneScheduler);
+  if (hygieneErr) {
+    log.warn({ err: hygieneErr }, "hygiene scheduler failed to start");
+  }
 }
 
 // Graceful shutdown
 async function shutdown(signal: string) {
   log.info({ signal }, "shutdown requested");
+
+  stopHygieneScheduler();
 
   if (server) {
     server.stop(true); // graceful — finishes in-flight requests

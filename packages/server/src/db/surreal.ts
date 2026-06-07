@@ -247,6 +247,14 @@ export async function initSchema() {
     DEFINE FIELD IF NOT EXISTS last_compaction ON compaction_state TYPE option<datetime>;
     DEFINE FIELD IF NOT EXISTS updated_at ON compaction_state TYPE datetime DEFAULT time::now();
 
+    -- Memory hygiene state — single global lock for the periodic sweep.
+    -- Mirrors compaction_state: atomic acquire via UPDATE ... WHERE is_running
+    -- = false, stale-clear on boot to recover from a crash mid-sweep.
+    DEFINE TABLE IF NOT EXISTS hygiene_state SCHEMALESS;
+    DEFINE FIELD IF NOT EXISTS is_running ON hygiene_state TYPE bool DEFAULT false;
+    DEFINE FIELD IF NOT EXISTS last_run ON hygiene_state TYPE option<datetime>;
+    DEFINE FIELD IF NOT EXISTS updated_at ON hygiene_state TYPE datetime DEFAULT time::now();
+
     -- Cartographer tables
     DEFINE TABLE IF NOT EXISTS cart_file SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS project ON cart_file TYPE string;

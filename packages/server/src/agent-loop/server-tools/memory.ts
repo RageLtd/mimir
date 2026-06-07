@@ -113,10 +113,11 @@ export const executeMemorySearch = async ({
   }
 
   // Vector matches come first (ordered by distance), text matches appended after dedup.
-  // Slice to maxResults — no reranker needed.
+  // Slice to maxResults — no reranker needed. Include the id so callers can feed
+  // it straight into project_memory_update/_delete without a list round-trip.
   const results = candidates
     .slice(0, maxResults)
-    .map((candidate) => candidate.content);
+    .map((candidate) => ({ id: candidate.id, content: candidate.content }));
 
   log.info({ query, results: results.length }, "project_memory_search");
   return { results, message: null };
