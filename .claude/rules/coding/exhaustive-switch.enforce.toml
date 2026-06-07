@@ -1,0 +1,19 @@
+id = "coding/exhaustive-switch"
+body = "./exhaustive-switch.md"
+enabled = true
+event = "file"
+exclude_globs = ["*.d.ts", "*.test.*", "*.spec.*", "*.md"]
+message = "Two or more `else if` branches dispatch on equality against literals/variants — prefer an exhaustive switch/match. See the paired rule."
+
+# Fires when the edit contains a chain of >= 2 `else if` branches that dispatch
+# on a known variant — in TS/JS via `===`/`==`, or in Rust via `==` against an
+# enum path or an `if let` / `else if let` chain. The right-hand side must be a
+# string literal or a Capitalised path (`Event.OPEN`, `Kind::Literal`), which is
+# what separates variant dispatch from numeric ranges, null checks, and
+# heterogeneous guards (lowercase/expression RHS) — those are deliberately
+# skipped to keep this precise rather than noisy. `!==`/`!=` chains are excluded
+# by requiring the operand to end in a word/`)`/`]` char immediately before `==`.
+[[conditions]]
+field = "new_text"
+operator = "regex_match"
+pattern = '''else\s+if\s+(?:let\s+[A-Z][\w:]*|\(?[^{};\n]*?[\w)\]]\s*==[=]?\s*(?:["'][^"']*["']|[A-Z][\w.:]*))[\s\S]{0,600}?else\s+if\s+(?:let\s+[A-Z][\w:]*|\(?[^{};\n]*?[\w)\]]\s*==[=]?\s*(?:["'][^"']*["']|[A-Z][\w.:]*))'''
