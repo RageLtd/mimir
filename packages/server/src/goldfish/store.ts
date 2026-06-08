@@ -4,7 +4,7 @@ import { log } from "../util/logger";
 
 /** Convert a string ID like "memory:abc123" to a SurrealDB RecordId.
  *  Passes through RecordId objects unchanged — safe to call on query results. */
-function toRecordId(id: string | RecordId) {
+export function toRecordId(id: string | RecordId) {
   if (id instanceof RecordId) return id;
   const colonIdx = id.indexOf(":");
   return new RecordId(id.slice(0, colonIdx), id.slice(colonIdx + 1));

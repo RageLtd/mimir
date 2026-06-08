@@ -52,6 +52,28 @@ type RetrieveOpts = {
   readonly projectId?: string;
 };
 
+/**
+ * Combine the retrieval signals into one rank score.
+ *
+ * Confidence is a multiplier so a demoted/superseded fact (the contradiction
+ * pass drives confidence down) sinks below an equal-relevance high-confidence
+ * one, and routine untouched-decay gently downranks stale facts. The project
+ * match is an additive tiebreaker outside the multiply so it can't be scaled
+ * away. combinedScore falls back to 0.5 for a candidate that matched neither
+ * search cleanly, keeping a stray match ranked rather than zeroed.
+ */
+export function scoreRetrievalCandidate(opts: {
+  readonly combinedScore: number;
+  readonly freshness: number;
+  readonly confidence: number;
+  readonly projectBonus: number;
+}) {
+  return (
+    (opts.combinedScore || 0.5) * opts.freshness * opts.confidence +
+    opts.projectBonus
+  );
+}
+
 export async function retrieveMemories(
   messages: ModelMessage[],
   opts: RetrieveOpts = {},
@@ -119,10 +141,14 @@ export async function retrieveMemories(
       const combinedScore = Math.max(vectorScore * 0.7, textScore * 0.3);
 
       const freshness = computeFreshness(m.last_accessed);
-      const baseScore = (combinedScore || 0.5) * freshness;
       const projectBonus =
         projectId && m.project === projectId ? PROJECT_MATCH_BONUS : 0;
-      const finalScore = baseScore + projectBonus;
+      const finalScore = scoreRetrievalCandidate({
+        combinedScore,
+        freshness,
+        confidence: m.confidence ?? 1,
+        projectBonus,
+      });
 
       return { id: m.id, content: m.content, score: finalScore };
     })

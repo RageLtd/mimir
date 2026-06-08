@@ -8,7 +8,7 @@
 
 import { queryFirst, queryOne } from "../db/surreal";
 import { log } from "../util/logger";
-import type { Memory } from "./store";
+import { type Memory, toRecordId } from "./store";
 
 /**
  * Stream every memory in pages. The sweep needs the whole set (embeddings
@@ -105,9 +105,48 @@ export async function decayUntouchedConfidence(
 }
 
 /** Count of memories currently stored — for sweep reporting. */
-export async function countMemories(): Promise<number> {
+export async function countMemories() {
   const row = await queryFirst<{ count: number }>(
     `SELECT count() AS count FROM memory GROUP ALL`,
   );
   return row?.count ?? 0;
+}
+
+/**
+ * Multiply one memory's confidence by `factor` (in (0,1]). The contradiction
+ * pass uses this to demote a superseded fact WITHOUT deleting it — the lowered
+ * confidence both sinks it in retrieval ranking and feeds the prune pass, so a
+ * superseded fact fades over subsequent sweeps rather than vanishing now.
+ * Returns the post-demotion confidence, or null if the memory was not found.
+ */
+export async function demoteConfidence(id: string, factor: number) {
+  const updated = await queryFirst<{ confidence: number }>(
+    /* surql */ `
+    UPDATE $id SET confidence = confidence * $factor RETURN AFTER
+    `,
+    { id: toRecordId(id), factor },
+  );
+  if (!updated) {
+    log.warn({ id }, "demoteConfidence — memory not found");
+    return null;
+  }
+  log.info(
+    { id, factor, confidence: updated.confidence },
+    "demoted memory confidence",
+  );
+  return updated.confidence;
+}
+
+/**
+ * Every supersedes edge currently in the graph, as {from, to} string-id pairs.
+ * The contradiction pass consults these to skip pairs it has already ruled on,
+ * so a confirmed contradiction is demoted exactly once instead of every sweep.
+ */
+export async function listSupersedesEdges() {
+  const rows = await queryOne<{ in: unknown; out: unknown }>(
+    /* surql */ `
+    SELECT in, out FROM relates_to WHERE relation_type = 'supersedes'
+    `,
+  );
+  return rows.map((r) => ({ from: String(r.in), to: String(r.out) }));
 }

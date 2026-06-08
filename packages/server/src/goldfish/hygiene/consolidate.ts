@@ -183,8 +183,10 @@ export async function runConsolidation(
   };
 }
 
-/** Replace a cluster with a single canonical memory. */
-async function applyMerge(members: Memory[], canonicalText: string) {
+/** Replace a cluster (or a judge-routed pair) with a single canonical memory.
+ *  Exported so the contradiction pass can reuse this proven merge path when its
+ *  judge rules a pair "merge" rather than "demote". */
+export async function applyMerge(members: Memory[], canonicalText: string) {
   const embedding = await embedOne(canonicalText);
   if (!embedding) {
     return { ok: false as const, error: "failed to embed canonical text" };

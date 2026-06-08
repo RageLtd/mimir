@@ -122,6 +122,28 @@ export const config = {
       /** Hard cap on deletions applied in a single sweep. */
       maxPrunesPerSweep: parseInt(Bun.env.HYGIENE_MAX_PRUNES ?? "50", 10),
     },
+    contradiction: {
+      /** Whether the contradiction pass runs at all. */
+      enabled: (Bun.env.HYGIENE_CONTRADICTION_ENABLED ?? "true") === "true",
+      /** Upper distance bound for a contradiction candidate pair. Pairs at or
+       *  below mergeDistance (0.18) are consolidation's job; this is the ceiling
+       *  of the band ABOVE that, where conflicting-but-differently-worded claims
+       *  live. 0.30 matches the existing neighbour-edge threshold — tune from
+       *  dry runs before widening (false positives expected past it). */
+      contradictionDistance: parseFloat(
+        Bun.env.HYGIENE_CONTRADICTION_DISTANCE ?? "0.30",
+      ),
+      /** Hard cap on judge calls per sweep — each candidate pair costs one
+       *  model call in BOTH dry and live runs, so this bounds sweep cost. */
+      maxChecks: parseInt(Bun.env.HYGIENE_CONTRADICTION_MAX_CHECKS ?? "20", 10),
+      /** Multiply a superseded fact's confidence by this on a confirmed
+       *  contradiction. Sharper than the routine 0.9 untouched-decay because a
+       *  contradiction is a stronger signal; 0.3 still leaves a 1.0 fact above
+       *  the 0.15 prune floor for one sweep rather than reaping it instantly. */
+      demotionFactor: parseFloat(
+        Bun.env.HYGIENE_CONTRADICTION_DEMOTION_FACTOR ?? "0.3",
+      ),
+    },
   },
 
   /** SurrealDB */
