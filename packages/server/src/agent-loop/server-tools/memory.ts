@@ -40,6 +40,20 @@ export const MemoryStoreSchema = z.object({
     ),
 });
 
+export const PlaybookStoreSchema = z.object({
+  content: z
+    .string()
+    .describe(
+      "The playbook — a generic, reusable procedure: the steps, checks, or sequence for doing a recurring kind of task. Write it so a future session facing the same kind of task could follow it.",
+    ),
+  project: z
+    .string()
+    .optional()
+    .describe(
+      "Optional project identifier (UUID, path, or git remote) when the procedure is specific to one repo. Omit for a fully generic playbook. Resolved to canonical UUID before storing.",
+    ),
+});
+
 const MemoryUpdateSchema = z.object({
   id: z.string().describe("Memory ID to update (e.g. 'memory:abc123')"),
   content: z.string().describe("New content for this memory"),
@@ -123,10 +137,22 @@ export const executeMemorySearch = async ({
   return { results, message: null };
 };
 
-export const executeMemoryStore = async ({
+/**
+ * Embed → dedup → store → link a single typed memory. Shared by the fact store
+ * (project_memory_store) and the playbook store (project_playbook_store) — the
+ * only difference between them is the `type` stamped on the row, which decides
+ * how the hygiene passes treat it (facts are consolidated/forgotten; playbooks
+ * are in PROTECTED_TYPES and ride retrieval untouched).
+ */
+const storeTypedMemory = async ({
   content,
   project,
-}: z.infer<typeof MemoryStoreSchema>) => {
+  type,
+}: {
+  content: string;
+  project?: string;
+  type: "fact" | "playbook";
+}) => {
   // Resolve project identifier to canonical UUID before storing.
   // Failures are non-fatal — store with the raw value rather than
   // blocking memory creation on a resolution hiccup.
@@ -140,6 +166,9 @@ export const executeMemoryStore = async ({
     return { stored: false, error: "Failed to generate embedding" };
   }
 
+  // Dedup is global across all memory types. A generic playbook that lands
+  // within the dedup threshold of an existing memory is almost certainly a
+  // restatement, so blocking it is the right call for v1.
   const duplicate = await findDuplicate(embedding);
   if (duplicate) {
     return {
@@ -152,6 +181,7 @@ export const executeMemoryStore = async ({
   const memoryId = await storeMemory({
     content,
     project: resolvedProject,
+    type,
     embedding,
   });
   if (!memoryId) {
@@ -169,7 +199,7 @@ export const executeMemoryStore = async ({
     ),
   );
 
-  log.info({ memoryId, neighbors: neighbors.length }, "project_memory_store");
+  log.info({ memoryId, neighbors: neighbors.length, type }, "stored memory");
   return {
     stored: true,
     id: memoryId,
@@ -177,6 +207,18 @@ export const executeMemoryStore = async ({
     error: null,
   };
 };
+
+export const executeMemoryStore = ({
+  content,
+  project,
+}: z.infer<typeof MemoryStoreSchema>) =>
+  storeTypedMemory({ content, project, type: "fact" });
+
+export const executePlaybookStore = ({
+  content,
+  project,
+}: z.infer<typeof PlaybookStoreSchema>) =>
+  storeTypedMemory({ content, project, type: "playbook" });
 
 const executeMemoryUpdate = async ({
   id,
@@ -258,6 +300,14 @@ export const memoryTools = {
     inputSchema: MemoryStoreSchema,
     providerOptions: CACHE_CONTROL,
     execute: executeMemoryStore,
+  }),
+
+  project_playbook_store: tool({
+    description:
+      "Persist a generic, reusable playbook — the procedure, sequence, or checklist for handling a recurring KIND of task — so future sessions can follow it. Use when you've worked out a repeatable how-to that would save the next session from rediscovering it: a multi-step workflow, a debugging routine, a setup/release sequence, the gotchas-and-order for a class of change. Write the transferable steps, not a one-off result. This is the HOW; for one-off facts ABOUT this codebase (a decision made, a convention, a session outcome) use project_memory_store, and for facts about the developer themselves use user_memory_store. Playbooks are protected from memory hygiene and surface through normal memory retrieval.",
+    inputSchema: PlaybookStoreSchema,
+    providerOptions: CACHE_CONTROL,
+    execute: executePlaybookStore,
   }),
 
   project_memory_update: tool({

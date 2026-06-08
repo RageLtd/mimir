@@ -14,7 +14,7 @@ export interface Memory {
   id?: string;
   content: string;
   project?: string;
-  type?: "fact" | "summary";
+  type?: "fact" | "summary" | "playbook" | "skill";
   message_count?: number;
   last_message_id?: string;
   token_count?: number;

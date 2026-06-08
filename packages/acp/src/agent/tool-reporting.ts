@@ -33,6 +33,7 @@ const TOOL_KIND_MAP: Record<string, acp.ToolKind> = {
   // Server tools (project-scoped memory via Goldfish)
   project_memory_search: "search",
   project_memory_store: "other",
+  project_playbook_store: "other",
   project_memory_update: "other",
   project_memory_list: "read",
   project_memory_delete: "delete",
@@ -84,6 +85,7 @@ export const toolTitle = (name: string, args: Record<string, unknown>) => {
   if (name === "project_memory_search" && typeof args.query === "string")
     return `Search memories: ${args.query.length > 50 ? `${args.query.slice(0, 47)}...` : args.query}`;
   if (name === "project_memory_store") return "Store project memory";
+  if (name === "project_playbook_store") return "Store playbook";
   if (name === "project_memory_update") return "Update project memory";
   if (name === "project_memory_list") return "List project memories";
   if (name === "project_memory_delete") return "Delete project memory";

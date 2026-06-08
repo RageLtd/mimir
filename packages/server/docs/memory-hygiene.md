@@ -1,7 +1,8 @@
 # Memory Hygiene & Skill Generation
 
 Status: **Phase 1 production-validated. Phase 2 contradiction pass shipped
-(pending real-store validation). Skill/playbook layer next.**
+(pending real-store validation). Skill/playbook layer v1 shipped
+(`project_playbook_store`, retrieved-as-memory).**
 Owner: Rage · Last updated: 2026-06-07
 
 A server-side background loop that keeps the memory store healthy and, later,
@@ -301,11 +302,22 @@ they're now frozen out.
 
 ---
 
-## Phase 2 — Skill / Playbook layer (NEXT — decisions locked)
+## Phase 2 — Skill / Playbook layer (v1 SHIPPED — decisions locked)
 
 Contextual playbook injection (see Vision). Playbooks are a special memory
 `type`; `PROTECTED_TYPES` already reserves `playbook`/`skill` so the forget pass
 never reaps them.
+
+**v1 shipped:** the `project_playbook_store` MCP tool persists a generic,
+reusable procedure as a `type="playbook"` memory. Storage reuses the shared
+`storeTypedMemory` helper in `agent-loop/server-tools/memory.ts` (embed → dedup →
+store → link), and the tool rides the existing `getMcpPublicTools()` → `/mcp`
+path, so every client (CC plugin, Zed) discovers it dynamically with no extra
+wiring. Delivery is retrieved-as-memory: playbooks surface through the
+type-agnostic `retrieveMemories` path. Protection is inherited — both hygiene
+passes gate on `type === "fact"` and the forget pass shields `PROTECTED_TYPES`.
+Auto-distillation, a dedicated `<playbooks>` block, and client-side
+user-specific playbooks remain deferred.
 
 **Decisions locked (2026-06-07):**
 
@@ -322,8 +334,9 @@ never reaps them.
   `retrieveMemories` path, already type-agnostic). A dedicated `<playbooks>`
   injection block with intent/JIT triggers is a later upgrade. Not yet locked.
 
-- [ ] `project_playbook_store` write path (sets `type="playbook"`, server-side, generic)
-- [ ] Retrieval surfacing (retrieved-as-memory vs dedicated channel)
+- [x] `project_playbook_store` write path (sets `type="playbook"`, server-side, generic)
+- [x] Retrieval surfacing — retrieved-as-memory (rides type-agnostic `retrieveMemories`)
+- [ ] (later) dedicated `<playbooks>` injection block with intent/JIT triggers
 - [ ] (later) auto-distillation generation trigger
 - [ ] (later) client-side user-specific playbooks
 
