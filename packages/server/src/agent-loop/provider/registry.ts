@@ -135,29 +135,6 @@ export let initialized = false;
 export let providerData: Record<string, ProviderEntry> = {};
 
 // ---------------------------------------------------------------------------
-// Env var resolution
-// ---------------------------------------------------------------------------
-
-// ZEN_API_KEY maps to OPENCODE_API_KEY in provider-data.json
-const ENV_KEY_ALIASES: Record<string, string> = {
-  ZEN_API_KEY: "OPENCODE_API_KEY",
-};
-
-function getApiKey(envVar: string) {
-  const key = Bun.env[envVar];
-  if (key) return key;
-
-  const alias = ENV_KEY_ALIASES[envVar];
-  if (alias) return Bun.env[alias];
-
-  for (const [aliasName, targetVar] of Object.entries(ENV_KEY_ALIASES)) {
-    if (targetVar === envVar && Bun.env[aliasName]) return Bun.env[aliasName];
-  }
-
-  return undefined;
-}
-
-// ---------------------------------------------------------------------------
 // SDK cache for per-model npm overrides
 // ---------------------------------------------------------------------------
 
@@ -290,7 +267,7 @@ export async function initProviderRegistry() {
 
   // --- Remote providers (from provider-data.json) ---
   for (const [envVar, providerIds] of envVarToProviders) {
-    const apiKey = getApiKey(envVar);
+    const apiKey = Bun.env[envVar];
     if (!apiKey) continue;
 
     for (const providerId of providerIds) {

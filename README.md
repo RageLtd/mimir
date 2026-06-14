@@ -7,7 +7,7 @@ A coding agent with persistent memory, personality, and multi-provider inference
 ```
 Editor (Zed) ──ACP (stdio)──▶ @mimir/acp
                                   └── POST /v1/chat/completions ──▶ mimir-server
-                                        └── vLLM / Zen / OpenRouter / any OpenAI-compatible provider
+                                        └── vLLM / LM Studio / Zen / OpenRouter / any OpenAI-compatible provider
 
 Claude Code ──plugin──▶ @mimir/cc-plugin
                                   ├── MCP (HTTP) ──▶ mimir-server /mcp
@@ -19,6 +19,7 @@ Claude Code ──plugin──▶ @mimir/cc-plugin
 mimir-server (shared by both paths):
   ├── System prompt + persona
   ├── Goldfish memories (vector search, SurrealDB)
+  ├── Memory hygiene (background consolidation · contradiction · forgetting)
   ├── Conversation summaries (compaction) + persistence
   └── Knowledge tools (web search, Context7, Cartographer)
 
@@ -65,7 +66,7 @@ docker compose up -d
 
 The committed `docker-compose.yml` pulls the prebuilt server image (`ghcr.io/rageltd/mimir-server:next`) from GitHub Container Registry rather than building. The image is **private**, so the host needs a one-time GHCR login before that first `docker compose up` can pull — the read-only token setup lives in [`packages/server/README.md`](packages/server/README.md#pulling-the-published-image).
 
-The server exposes an OpenAI-compatible API at `http://localhost:8080` (or whatever `MIMIR_PORT` is set to). Caddy labels in the compose file expose it as `http://mimir.conhost.lan` if you're using caddy-docker-proxy.
+The server exposes an OpenAI-compatible API at `http://localhost:8080` (or whatever `MIMIR_PORT` is set to), plus an Anthropic Messages-compatible ingress at `/v1/messages` for clients that speak that protocol. Caddy labels in the compose file expose it as `http://mimir.conhost.lan` if you're using caddy-docker-proxy.
 
 #### Building from source instead of pulling
 
@@ -83,20 +84,27 @@ With `image:` (from the base file) and `build:` (from the override) both set, `d
 
 #### Server Environment Variables
 
-The `.env.example` documents all available variables. The critical ones:
+`.env.example` is the canonical template — copy it and fill in the blanks. It covers the common variables; a few advanced knobs (the `CONTEXT_*`, `EMBED_*`, and full `SMALL_MODEL_*` sets) live in `packages/server/src/config.ts`. The critical ones:
 
 **Required:**
 - `SURREAL_PASS` — SurrealDB root password (must match between server and db)
 
 **Inference providers (configure at least one):**
 - `VLLM_BASE_URL` — local vLLM instance (e.g. `http://llm.spark.lan`)
-- `ZEN_API_KEY` / `ZEN_BASE_URL` — OpenCode Zen gateway
+- `LMSTUDIO_BASE_URL` — LM Studio's OpenAI-compatible server (models discovered from `/v1/models`)
+- `OPENCODE_API_KEY` — OpenCode Zen gateway (the key name models.dev ships for the `opencode` provider). Set `ZEN_GO_ENABLED=true` to surface OpenCode Go subscription models
 - `OPENROUTER_API_KEY` — OpenRouter multi-provider gateway
+- `CHUTES_API_KEY` — Chutes gateway (activated via `provider-data.json`)
 
 **Knowledge tools:**
-- `OLLAMA_BASE_URL` — Ollama for embeddings (required for Goldfish memory)
+- `EMBED_BASE_URL` / `EMBED_MODEL` — embedding endpoint and model (defaults to Ollama at `OLLAMA_BASE_URL`; required for Goldfish memory)
 - `TAVILY_API_KEY` — web search tool
 - `CONTEXT7_API_KEY` — documentation lookup (free tier works without key)
+
+**Memory hygiene (background sweep):**
+- `HYGIENE_MODEL` — judgment model for fusing merged memories; no default, the sweep refuses to run while unset
+- `HYGIENE_DRY_RUN` — report proposed merges/prunes without mutating (default: `true`)
+- See the `HYGIENE_*` block in `.env.example` for the full set of tuning knobs
 
 **Context management:**
 - `SYSTEM_PROMPT_PATH` — path to the system prompt markdown (default: `./system-prompt.md`)
@@ -143,7 +151,7 @@ Replace the path and server URL with your actual values.
 - `MIMIR_MODEL` — default model (default: `openrouter/auto`)
 - `MIMIR_USER_MEMORY_DB` — local user-memory SQLite path (default: `~/.mimir/user-memories.db`)
 - `MIMIR_SESSION_DB` — local session SQLite path (default: `~/.mimir/sessions.db`)
-- `MIMIR_ACP_LOG_FILE` — ACP log file; empty string disables file logging (default: `~/.mimir/acp.log`)
+- `MIMIR_ACP_LOG_FILE` — ACP log file; empty string disables file logging (default: `~/.mimir/logs/acp.log`)
 - `AUTO_APPROVE_TOOLS` — auto-approve read/search tool calls (default: `false`)
 - `MIMIR_SYSTEM_PROMPT_TTL` — system prompt cache TTL in ms (default: `300000` / 5 min)
 - `MIMIR_CARTOGRAPHER_ENABLED` — enable cartographer integration (default: `true`)
@@ -195,8 +203,8 @@ Local providers are configured via base URL env vars. At boot, the server querie
 | Provider | Env Var | Notes |
 |----------|---------|-------|
 | vLLM | `VLLM_BASE_URL` | Primary local inference. Models auto-discovered. |
-| Ollama | `OLLAMA_BASE_URL` | Used for embeddings and small models. |
-| Featherless | `FEATHERLESS_BASE_URL` + `FEATHERLESS_API_KEY` | Set `FEATHERLESS_MODEL` for the model ID (default: `Qwen/Qwen3.5-397B-A17B`). |
+| LM Studio | `LMSTUDIO_BASE_URL` | OpenAI-compatible local server (default port 1234). Models discovered from `/v1/models`; restart the server to pick up newly loaded models. |
+| Ollama | `OLLAMA_BASE_URL` | Used for embeddings and the small utility model. |
 
 **2. Remote providers (from provider-data.json):**
 
@@ -230,7 +238,7 @@ When the server finds an API key for a provider's `env` field, it initializes an
 
 | Provider | Env Var | Endpoint |
 |----------|---------|----------|
-| OpenCode Zen | `ZEN_API_KEY` | `ZEN_BASE_URL` (default: `https://opencode.ai/zen/v1`) |
+| OpenCode Zen | `OPENCODE_API_KEY` | `ZEN_BASE_URL` (default: `https://opencode.ai/zen/v1`). `ZEN_GO_ENABLED=true` surfaces OpenCode Go models. |
 | OpenRouter | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1` |
 
 These fetch their model lists from their `/models` endpoints and cache them for 5 minutes.
@@ -247,15 +255,15 @@ VLLM_BASE_URL=http://your-server:8000
 
 Models are auto-discovered. Request them by the ID the server reports (e.g., `Qwen/Qwen3.5-122B-A10B`).
 
-**Any OpenAI-compatible endpoint with auth:**
+**Local OpenAI-compatible server with a UI (LM Studio):**
 
-Use the Featherless pattern:
+Point mimir-server at a running LM Studio instance:
 
 ```bash
-FEATHERLESS_BASE_URL=https://api.your-provider.com/v1
-FEATHERLESS_API_KEY=your-key
-FEATHERLESS_MODEL=org/model-name
+LMSTUDIO_BASE_URL=http://localhost:1234
 ```
+
+Models are whatever you've loaded in the LM Studio UI, discovered from `/v1/models` at boot. Restart mimir-server after loading new models to refresh the list. For an arbitrary **authenticated** gateway, use the provider-data.json path below rather than a bespoke env var.
 
 **Provider from provider-data.json:**
 
@@ -269,7 +277,7 @@ All of that provider's models become available automatically.
 
 **Models with non-default SDKs:**
 
-Most providers use `@ai-sdk/openai-compatible`. Some require a specific SDK (Anthropic, Google, MoonshotAI). The registry handles this through the `npm` field in `provider-data.json` — models can also override the provider's default SDK via a `provider.npm` field on the model entry. Supported SDKs: `@ai-sdk/anthropic`, `@ai-sdk/google`, `@ai-sdk/moonshotai`, `@ai-sdk/openai-compatible` (default).
+Most providers use `@ai-sdk/openai-compatible`. Some require a specific SDK (Anthropic, Google, MoonshotAI, OpenAI, OpenRouter). The registry handles this through the `npm` field in `provider-data.json` — models can also override the provider's default SDK via a `provider.npm` field on the model entry. Supported SDKs: `@ai-sdk/anthropic`, `@ai-sdk/google` (and `@ai-sdk/google-vertex`), `@ai-sdk/moonshotai`, `@ai-sdk/openai`, `@openrouter/ai-sdk-provider`, `@ai-sdk/openai-compatible` (default).
 
 ### Model ID Conventions
 
@@ -298,6 +306,8 @@ The system prompt is converted from markdown to XML tags for Anthropic's models,
 **Goldfish** (server-side) — conversation-level memories stored in SurrealDB with vector embeddings. Automatically extracted from conversations and retrieved by relevance on each request. Compacted into summaries when the context window fills up.
 
 **User memories** (local) — static profile facts and queryable entries stored in SQLite on the user's machine. Profile entries are injected into every request. Queryable memories are available as tools the model can call.
+
+**Memory hygiene** (server-side) — a background sweep keeps the Goldfish store healthy on a timer (default every 6 hours, in-process, guarded by a DB lock). It runs three ordered passes: consolidation fuses near-duplicate memories into one canonical record, contradiction resolution demotes the losing side of conflicting facts and records a supersedes edge, and forgetting prunes low-value facts past an age and score floor. It defaults to dry-run (reports proposed changes without mutating) and refuses to run until `HYGIENE_MODEL` is set. Trigger a manual sweep with `POST /v1/hygiene/sweep`; see `packages/server/docs/memory-hygiene.md` for the full design and the `HYGIENE_*` block in `.env.example` for the tuning knobs.
 
 ### Context Assembly
 
@@ -346,8 +356,11 @@ mimir/
 │   │   │   ├── rules/          # Project-rule loader + runner
 │   │   │   ├── store/          # Local user memory (bun:sqlite)
 │   │   │   ├── tools/          # User memory tools
+│   │   │   ├── types/          # Shared type declarations
+│   │   │   ├── utils/          # Helpers
 │   │   │   ├── config.ts       # Configuration (env vars)
 │   │   │   ├── context-client.ts # REST client for mimir-server context
+│   │   │   ├── permissions.ts  # Tool permission gating
 │   │   │   ├── server-client.ts  # HTTP client for mimir-server completions
 │   │   │   └── sse-parser.ts   # SSE stream parsing
 │   │   └── index.ts            # Entry point
@@ -369,18 +382,21 @@ mimir/
 │   └── server/                 # Inference server (@mimir/server)
 │       ├── src/
 │       │   ├── agent/          # Provider registry, agent runner
-│       │   ├── agent-loop/     # Message log, compaction, server tools
+│       │   ├── agent-loop/     # Message log, compaction, providers, server tools
 │       │   ├── db/             # SurrealDB client
-│       │   ├── goldfish/       # Memory storage, retrieval, extraction
+│       │   ├── goldfish/       # Memory storage, retrieval, extraction, hygiene
 │       │   ├── middleware/     # System prompt, memories, context assembly
 │       │   ├── projects/       # Project registry
 │       │   ├── routes/         # HTTP + MCP endpoints
 │       │   └── util/           # Logging, result type
+│       ├── docs/               # Server docs (memory hygiene, …)
+│       ├── provider-data.json  # Provider + model registry (refreshed from models.dev)
 │       ├── system-prompt.md    # Mimir's personality and rules
-│       ├── docker-compose.yml  # Server + SurrealDB
 │       └── Dockerfile
 │
 ├── tests/run-tests.ts          # Root test harness (bun run test[:pkg])
+├── docker-compose.yml          # Server + SurrealDB (pulls the published image)
+├── .env.example                # Server environment template
 ├── .claude-plugin/             # Local plugin marketplace (marketplace.json)
 ├── mimir-mcp.json              # Sample MCP config (mimir + context7 servers)
 └── biome.json                  # Shared linting config

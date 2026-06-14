@@ -50,7 +50,7 @@ export const config = {
       Bun.env.ZEN_BASE_URL ??
       "https://opencode.ai/zen/v1",
     /** API key for the endpoint */
-    apiKey: Bun.env.SMALL_MODEL_API_KEY ?? Bun.env.ZEN_API_KEY ?? "",
+    apiKey: Bun.env.SMALL_MODEL_API_KEY ?? Bun.env.OPENCODE_API_KEY ?? "",
     /** Model identifier */
     model: Bun.env.SMALL_MODEL_MODEL ?? "gpt-5-nano",
     /** Provider type for self-hosted: "ollama" | "lmstudio" | "openai". If unset, uses provider registry. */
@@ -90,7 +90,7 @@ export const config = {
       Bun.env.ZEN_GO_BASE_URL ??
       "https://opencode.ai/zen/go/v1",
     /** Credential for the hygiene model endpoint. Shares the OpenCode key. */
-    apiKey: Bun.env.HYGIENE_MODEL_API_KEY ?? Bun.env.ZEN_API_KEY ?? "",
+    apiKey: Bun.env.HYGIENE_MODEL_API_KEY ?? Bun.env.OPENCODE_API_KEY ?? "",
     /** Max completion tokens for a merge call. Generous because reasoning
      *  models (GLM-5.1) spend most of the budget thinking before they emit the
      *  short merged statement — too low and `content` comes back empty. */
@@ -167,7 +167,7 @@ export const config = {
 
   /** OpenCode Zen — multi-provider gateway for frontier model escalation */
   zen: {
-    apiKey: Bun.env.ZEN_API_KEY ?? "",
+    apiKey: Bun.env.OPENCODE_API_KEY ?? "",
     baseUrl: Bun.env.ZEN_BASE_URL ?? "https://opencode.ai/zen/v1",
     goBaseUrl: Bun.env.ZEN_GO_BASE_URL ?? "https://opencode.ai/zen/go/v1",
     /**

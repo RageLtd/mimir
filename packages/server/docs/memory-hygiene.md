@@ -1,9 +1,9 @@
 # Memory Hygiene & Skill Generation
 
-Status: **Phase 1 production-validated. Phase 2 contradiction pass shipped
-(pending real-store validation). Skill/playbook layer v1 shipped
+Status: **Phase 1 production-validated. Phase 2 contradiction pass
+production-validated (2026-06-07). Skill/playbook layer v1 shipped
 (`project_playbook_store`, retrieved-as-memory).**
-Owner: Rage · Last updated: 2026-06-07
+Owner: Rage · Last updated: 2026-06-14
 
 A server-side background loop that keeps the memory store healthy and, later,
 distills repeated work into contextual playbooks. The goal: a model that doesn't
@@ -31,7 +31,8 @@ relevant know-how is surfaced at the right moment.
 ## Phase 1 — Memory Hygiene (SHIPPED)
 
 In-process scheduler, modelled on the existing compaction lock. Default sweep
-every 6h. Two passes behind a global DB lock. Dry-run by default.
+every 6h. Three passes behind a global DB lock, ordered consolidation →
+contradiction → forgetting (contradiction added in Phase 2). Dry-run by default.
 
 ### File map
 
@@ -53,7 +54,7 @@ every 6h. Two passes behind a global DB lock. Dry-run by default.
 ### How the passes work
 
 **Consolidation.** Fact memories cluster via union-find over `findNeighbors`
-edges at distance ≤ `mergeDistance` (0.08 — looser than the 0.05 write-time
+edges at distance ≤ `mergeDistance` (0.18 — looser than the 0.05 write-time
 dedup, tighter than the 0.3 neighbour edge). Each cluster goes to the hygiene
 model, which fuses it into one canonical statement. On a live run the canonical
 memory is created (summed access counts, max confidence carried forward),
@@ -76,8 +77,9 @@ live run would cut. Prune gates: `type === 'fact'` only (summaries and reserved
 | `HYGIENE_DRY_RUN` | `true` | Compute & report, mutate nothing |
 | `HYGIENE_MODEL` | *(none)* | **Required** — sweep refuses to run if unset |
 | `HYGIENE_MODEL_BASE_URL` | `ZEN_GO_BASE_URL` | opencode-go by default |
-| `HYGIENE_MODEL_API_KEY` | `ZEN_API_KEY` | Shared OpenCode credential |
-| `HYGIENE_MERGE_DISTANCE` | `0.08` | Consolidation cluster threshold |
+| `HYGIENE_MODEL_API_KEY` | `OPENCODE_API_KEY` | Shared OpenCode credential |
+| `HYGIENE_MAX_TOKENS` | `8192` | Completion budget for a merge call |
+| `HYGIENE_MERGE_DISTANCE` | `0.18` | Consolidation cluster threshold |
 | `HYGIENE_MAX_CLUSTER_SIZE` | `5` | Max members per merge |
 | `HYGIENE_MAX_MERGES` | `20` | Merge cap per sweep |
 | `HYGIENE_SCORE_FLOOR` | `0.15` | Prune below this score |
@@ -113,9 +115,9 @@ The report returns every merge proposal (model-written `canonicalText` +
 - [x] Biome clean
 - [x] 16/16 server test suites pass (`bun run test:server`)
 - [x] Lock, scoring, clustering covered by colocated TDD tests
-- [ ] **Validated against the real memory store (dry-run)** ← next
-- [ ] Thresholds tuned from real data
-- [ ] One armed (`dryRun:false`) sweep observed and audited
+- [x] **Validated against the real memory store** — first live sweep 130 → 115 (12 merges)
+- [x] Thresholds tuned from real data — `HYGIENE_MERGE_DISTANCE` 0.08 → 0.18 (zero false positives at 0.18)
+- [x] One armed (`dryRun:false`) sweep observed and audited
 
 ---
 
