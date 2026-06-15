@@ -85,8 +85,7 @@ src/
 │   └── user-memory-mcp.ts  # Stdio MCP server for user memory (JSON-RPC 2.0)
 │
 ├── utils/                  # Shared utilities
-│   ├── log.ts              # Pino logger setup
-│   └── markdown-to-xml.ts  # Markdown → XML prompt conversion with CC-specific blocks
+│   └── log.ts              # Pino logger setup
 │
 ├── config.ts               # Environment-based configuration
 ├── routing.ts              # Model-based backend routing and model list management

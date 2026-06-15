@@ -35,10 +35,12 @@ export type ModelResolutionDeps = {
  *      live `currentModelId` (just-set or persisted) survive the round-trip
  *      so Zed's picker reflects the user's actual override instead of snapping
  *      back to the env-var default.
- *   2. `config.model` (from `MIMIR_MODEL`) if present in the merged list.
- *   3. First available entry — so the picker highlights something real when
- *      the configured default isn't in the discovered list (common when
- *      `MIMIR_MODEL` is unset and defaults to "openrouter/auto").
+ *   2. `config.model` (from `MIMIR_MODEL`) if set and present in the merged
+ *      list.
+ *   3. First available entry — the default when `MIMIR_MODEL` is unset
+ *      (`config.model` empty) or names a model the server doesn't serve. This
+ *      is what lets Zed render the picker with a valid selection instead of
+ *      relying on a configured default that may not exist.
  *   4. The preferred or configured id as-is — preserves the value even when
  *      no models are discovered (e.g. all backends offline).
  */
@@ -53,11 +55,14 @@ export const buildModelsState = async (
   const preferred = preferredModelId
     ? availableModels.find((m) => m.modelId === preferredModelId)
     : undefined;
-  const configured = availableModels.find((m) => m.modelId === config.model);
+  // Empty `config.model` means "no configured default" — skip the lookup so
+  // resolution falls through to first-available rather than matching "".
+  const configured = config.model
+    ? availableModels.find((m) => m.modelId === config.model)
+    : undefined;
   if (!preferred && !configured && availableModels.length > 0) {
     logger.info(
-      `neither preferred "${preferredModelId ?? "<none>"}" nor configured ` +
-        `"${config.model}" in discovered list; falling back to ` +
+      `no preferred/configured model matched; defaulting to first available ` +
         `"${availableModels[0]?.modelId}"`,
     );
   }

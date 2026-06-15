@@ -20,6 +20,7 @@ import {
   modelToProvider,
   providerConfig,
   providerData,
+  providerModels,
   providers,
 } from "./registry";
 
@@ -46,10 +47,14 @@ export function listProviders() {
 }
 
 export function listModels() {
-  return [...modelToProvider.entries()].map(([modelId, providerId]) => ({
-    modelId,
-    providerId,
-  }));
+  // Enumerate the per-provider index, not `modelToProvider`. The latter is keyed
+  // by model ID, so a model offered by several providers collapses to one
+  // winner and bare-name aliases double-list every HF-style id. `providerModels`
+  // keeps each provider's full catalogue (canonical IDs only), so every
+  // (provider, model) pair surfaces once and stays separately selectable.
+  return [...providerModels.entries()].flatMap(([providerId, modelIds]) =>
+    modelIds.map((modelId) => ({ modelId, providerId })),
+  );
 }
 
 export function hasModel(modelId: string) {

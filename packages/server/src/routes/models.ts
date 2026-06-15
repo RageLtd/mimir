@@ -1,8 +1,11 @@
 /**
  * Routes: GET /v1/models
  *
- * Model registry endpoint — returns local model + Zen + OpenRouter + provider registry models.
- * This is a thin wrapper around the existing listModels() function.
+ * Model registry endpoint. Returns the optional local self-hosted model, the
+ * provider registry's catalogue (provider-qualified ids, from
+ * provider-data.json — includes OpenCode Zen + Go), and OpenRouter's filtered
+ * list. Every model id is provider-qualified (e.g. "opencode-go/glm-5.1") so a
+ * model offered by multiple providers stays separately selectable.
  */
 
 import { Hono } from "hono";
@@ -62,16 +65,29 @@ const titlecaseProviderId = (id: string) =>
     .join(" ");
 
 /**
+ * Strip the leading `${owned_by}/` provider qualifier from an entry's id to
+ * recover the bare model id used as the key in provider-data lookups. Entries
+ * are now listed provider-qualified (e.g. "opencode-go/glm-5.1"), but the
+ * metadata maps are keyed by the bare model id ("glm-5.1"). Local entries
+ * (owned_by "mimir") carry an unqualified id and pass through unchanged.
+ */
+export const bareModelId = (entry: Pick<ModelEntry, "id" | "owned_by">) =>
+  entry.id.startsWith(`${entry.owned_by}/`)
+    ? entry.id.slice(entry.owned_by.length + 1)
+    : entry.id;
+
+/**
  * Augment a raw `ModelEntry` with `display_name` / `provider_name` from
  * provider-data lookups. Pure function — passes the entry through
  * unchanged when no enrichments are available.
  */
 const enrichEntry = (entry: ModelEntry) => {
-  const display_name = getModelDisplayName(entry.id);
+  const lookupId = bareModelId(entry);
+  const display_name = getModelDisplayName(lookupId);
   const provider_name =
     getProviderDisplayName(entry.owned_by) ??
     titlecaseProviderId(entry.owned_by);
-  const meta = getModelMetadata(entry.id);
+  const meta = getModelMetadata(lookupId);
   return {
     ...entry,
     ...(display_name ? { display_name } : {}),
@@ -80,29 +96,12 @@ const enrichEntry = (entry: ModelEntry) => {
   };
 };
 
-// Zen model list cache (refreshed every 5 minutes)
-let zenModelsCache: ModelEntry[] = [];
-let zenModelsCacheTime = 0;
-const ZEN_CACHE_TTL = 5 * 60 * 1000;
-
-async function getZenModels(): Promise<ModelEntry[]> {
-  if (!config.zen.apiKey) return [];
-  if (Date.now() - zenModelsCacheTime < ZEN_CACHE_TTL) return zenModelsCache;
-
-  const [err, res] = await attempt(() =>
-    fetch(`${config.zen.baseUrl}/models`, {
-      headers: { Authorization: `Bearer ${config.zen.apiKey}` },
-      signal: AbortSignal.timeout(5_000),
-    }).then((r) => r.json() as Promise<{ data: ModelEntry[] }>),
-  );
-
-  if (!err && res?.data) {
-    zenModelsCache = res.data;
-    zenModelsCacheTime = Date.now();
-  }
-
-  return zenModelsCache;
-}
+// Remote model-list cache TTL. Only OpenRouter is fetched directly now — Zen
+// (OpenCode) is served through the registry from provider-data.json, the same
+// endpoint a direct fetch would hit, so a bespoke Zen fetch was pure
+// duplication. OpenRouter stays direct because its ZDR / pricing / modality
+// filtering relies on live OpenRouter API data that provider-data.json lacks.
+const MODEL_CACHE_TTL = 5 * 60 * 1000;
 
 // OpenRouter model list cache (refreshed every 5 minutes)
 let orModelsCache: ModelEntry[] = [];
@@ -126,7 +125,7 @@ async function fetchZdrModelIds() {
 
 async function getOpenRouterModels(): Promise<ModelEntry[]> {
   if (!config.openrouter.apiKey) return [];
-  if (Date.now() - orModelsCacheTime < ZEN_CACHE_TTL) return orModelsCache;
+  if (Date.now() - orModelsCacheTime < MODEL_CACHE_TTL) return orModelsCache;
 
   // Fetch models and (when ZDR is enabled) ZDR endpoints in parallel
   const [modelsResult, zdrIds] = await Promise.all([
@@ -183,7 +182,7 @@ async function getOpenRouterModels(): Promise<ModelEntry[]> {
     }
 
     orModelsCache = models.map((m) => ({
-      id: m.id,
+      id: `openrouter/${m.id}`,
       object: "model",
       created: m.created ?? now,
       owned_by: "openrouter",
@@ -194,6 +193,24 @@ async function getOpenRouterModels(): Promise<ModelEntry[]> {
   return orModelsCache;
 }
 
+/**
+ * The local self-hosted model entry, when one is configured. An empty
+ * `vllmModel` (hosted-only deployments where `VLLM_MODEL=""`) yields no
+ * entry rather than a blank-id model — a `{ id: "" }` entry sorts first in
+ * the client picker and gets selected as the default, breaking model
+ * selection. Exported for unit testing.
+ */
+export const buildLocalModels = (vllmModel: string, now: number) => {
+  if (!vllmModel) return [];
+  const local: ModelEntry = {
+    id: vllmModel,
+    object: "model",
+    created: now,
+    owned_by: "mimir",
+  };
+  return [local];
+};
+
 // ---------------------------------------------------------------------------
 // Route Handler
 // ---------------------------------------------------------------------------
@@ -201,43 +218,44 @@ async function getOpenRouterModels(): Promise<ModelEntry[]> {
 models.get("/v1/models", async (c) => {
   const now = Math.floor(Date.now() / 1000);
 
-  // Local model
-  const local: ModelEntry = {
-    id: config.vllm.model,
-    object: "model",
-    created: now,
-    owned_by: "mimir",
-  };
+  // Local model — only advertised when a self-hosted model is configured.
+  const localModels = buildLocalModels(config.vllm.model, now);
 
-  // Fetch remote model lists in parallel
-  const [zenModels, orModels] = await Promise.all([
-    getZenModels(),
-    getOpenRouterModels(),
-  ]);
+  // OpenRouter is the only direct fetch (filtered by ZDR/pricing/modality).
+  const orModels = await getOpenRouterModels();
 
-  // Add provider registry models (chutes, opencode, etc.). Skip
-  // `opencode-go` entries when ZEN_GO_ENABLED is false — Go models share
-  // OPENCODE_API_KEY with regular Zen models, so the registry initialises
-  // them whenever the key is present; users without a Go subscription
-  // need to opt out explicitly.
+  // Provider registry models (chutes, opencode, opencode-go, ollama-cloud, …),
+  // each emitted under a provider-qualified id so a model offered by several
+  // providers stays separately selectable and round-trips through
+  // `resolveModel`'s first-slash provider hint. Skips:
+  //   - `opencode-go` when ZEN_GO_ENABLED is false (Go shares OPENCODE_API_KEY
+  //     with regular Zen, so the registry initialises it whenever the key is
+  //     present; non-subscribers opt out explicitly).
+  //   - `openrouter`, whose entries come from `getOpenRouterModels` instead —
+  //     the registry's copy is unfiltered and would bypass ZDR/pricing gates.
   const registryModels: ModelEntry[] = [];
-  const allModels = listModels();
-  for (const { modelId, providerId } of allModels) {
+  for (const { modelId, providerId } of listModels()) {
     if (providerId === "opencode-go" && !config.zen.goEnabled) continue;
+    if (providerId === "openrouter") continue;
     registryModels.push({
-      id: modelId,
+      id: `${providerId}/${modelId}`,
       object: "model",
       created: now,
       owned_by: providerId,
     });
   }
 
-  // Enrich every entry with `display_name` / `provider_name` so ACP
-  // clients can render `"<Friendly Name> (<Provider>)"` without their own
-  // provider-data lookup.
-  const data = [local, ...zenModels, ...orModels, ...registryModels].map(
-    enrichEntry,
-  );
+  // Dedup by id (safety net — the qualified-id namespaces don't overlap) and
+  // enrich every entry with `display_name` / `provider_name` so ACP clients can
+  // render `"<Friendly Name> (<Provider>)"` without their own provider lookup.
+  const seen = new Set<string>();
+  const data = [...localModels, ...orModels, ...registryModels]
+    .filter((entry) => {
+      if (seen.has(entry.id)) return false;
+      seen.add(entry.id);
+      return true;
+    })
+    .map(enrichEntry);
 
   return c.json({ object: "list", data });
 });

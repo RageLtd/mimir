@@ -100,6 +100,18 @@ describe("buildModelsState — preferredModelId", () => {
     expect(result.currentModelId).toBe("openrouter/sonnet");
   });
 
+  test("empty config.model defaults to first available (no configured default)", async () => {
+    // MIMIR_MODEL unset → config.model is "". Resolution must skip the
+    // configured lookup and select the first discovered model so Zed's
+    // picker renders with a valid current selection rather than "".
+    stubServerModels(["claude-fable-5", "claude-opus-4-8"]);
+    const deps = mkDeps(mkConfig(""));
+
+    const result = await buildModelsState(deps);
+
+    expect(result.currentModelId).toBe("claude-fable-5");
+  });
+
   test("preserves preferredModelId verbatim when no models discovered", async () => {
     // Edge case: server discovery returns nothing. The session's persisted
     // model id should still come back so it survives a transient failure.

@@ -20,6 +20,7 @@ export type CartographerConfig = {
 export type MimirConfig = {
   readonly serverUrl: string;
   readonly apiKey: string;
+  /** Configured default model, or empty string for "no preference". */
   readonly model: string;
   readonly userMemoryDbPath: string;
   readonly sessionDbPath: string;
@@ -46,7 +47,11 @@ export const loadConfig = () => {
   const config: MimirConfig = {
     serverUrl: process.env.MIMIR_SERVER_URL ?? "http://mimir.conhost.lan",
     apiKey: process.env.MIMIR_API_KEY ?? "",
-    model: process.env.MIMIR_MODEL ?? "openrouter/auto",
+    // Empty = no configured default. Model selection is left to the picker:
+    // `buildModelsState` defaults to the first discovered model and Zed's
+    // selector drives it from there. Avoids depending on a hardcoded default
+    // that the server may not serve.
+    model: process.env.MIMIR_MODEL ?? "",
     userMemoryDbPath: expandHome(
       process.env.MIMIR_USER_MEMORY_DB ?? "~/.mimir/user-memories.db",
     ),

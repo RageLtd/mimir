@@ -129,6 +129,24 @@ export const modelMetadata = new Map<string, ModelEntry>();
 /** Bare model name → full registered model ID (for HF-style IDs like "Qwen/Qwen3.5") */
 export const bareNameToFullId = new Map<string, string>();
 
+/**
+ * Provider → its canonical model IDs. Unlike `modelToProvider` (which is keyed
+ * by model ID and so collapses a model offered by several providers down to a
+ * single winner), this index keeps every provider's full catalogue intact. It
+ * is the source of truth for `listModels` / the picker, where a model served by
+ * both OpenCode Zen and OpenCode Go must appear as two distinct, separately
+ * selectable entries. Holds canonical IDs only — never bare-name aliases.
+ */
+export const providerModels = new Map<string, string[]>();
+
+/** Append canonical model IDs to a provider's listing index, deduped. */
+function addProviderModels(providerId: string, ids: string[]) {
+  if (ids.length === 0) return;
+  const merged = new Set(providerModels.get(providerId) ?? []);
+  for (const id of ids) merged.add(id);
+  providerModels.set(providerId, [...merged]);
+}
+
 export let initialized = false;
 
 /** Runtime-loaded provider data — populated during initProviderRegistry(). */
@@ -172,6 +190,7 @@ function registerModels(
   providerId: string,
   models: Record<string, ModelEntry>,
 ) {
+  addProviderModels(providerId, Object.keys(models));
   for (const [modelId, meta] of Object.entries(models)) {
     modelToProvider.set(modelId, providerId);
     modelMetadata.set(modelId, meta);
@@ -216,6 +235,7 @@ export async function initProviderRegistry() {
     );
     const models = await fetchModels(`${vllmBaseUrl}/v1/models`);
     for (const id of models) modelToProvider.set(id, "vllm");
+    addProviderModels("vllm", models);
     log.info(
       { baseUrl: vllmBaseUrl, count: models.length },
       "vllm initialized",
@@ -235,6 +255,7 @@ export async function initProviderRegistry() {
     );
     const models = await fetchModels(`${ollamaBaseUrl}/v1/models`);
     for (const id of models) modelToProvider.set(id, "ollama");
+    addProviderModels("ollama", models);
     log.info(
       { baseUrl: ollamaBaseUrl, count: models.length },
       "ollama initialized",
@@ -259,6 +280,7 @@ export async function initProviderRegistry() {
     );
     const models = await fetchModels(`${lmstudioBaseUrl}/v1/models`);
     for (const id of models) modelToProvider.set(id, "lmstudio");
+    addProviderModels("lmstudio", models);
     log.info(
       { baseUrl: lmstudioBaseUrl, count: models.length },
       "lmstudio initialized",
