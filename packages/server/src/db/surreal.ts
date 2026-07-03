@@ -212,6 +212,14 @@ export async function initSchema() {
     DEFINE FIELD IF NOT EXISTS token_count ON memory TYPE option<int>;
     DEFINE INDEX IF NOT EXISTS memory_type ON memory FIELDS type;
 
+    -- Playbook structure (skill-parity layer). Optional so existing rows
+    -- stay valid; populated only on type="playbook" memories. The stored
+    -- embedding for a playbook is computed from name+trigger (the "when to
+    -- use" line), NOT the body — the trigger matches a task description far
+    -- better than procedure steps, making ambient injection mechanical.
+    DEFINE FIELD IF NOT EXISTS name ON memory TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS trigger ON memory TYPE option<string>;
+
     -- Memory relationships
     DEFINE TABLE IF NOT EXISTS relates_to SCHEMAFULL TYPE RELATION FROM memory TO memory;
     DEFINE FIELD IF NOT EXISTS weight ON relates_to TYPE float;

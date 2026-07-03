@@ -1,5 +1,5 @@
 import type { ModelMessage } from "@ai-sdk/provider-utils";
-import { modelContentToString } from "../agent-loop/message-log/message-utils";
+import { modelContentToString } from "../agent/message-log/message-utils";
 import { log } from "../util/logger";
 import { embed, embedOne, extractMemories } from "./clients";
 import {
@@ -103,6 +103,11 @@ export async function retrieveMemories(
 
   const seen = new Set<string>();
   const candidates = [...vectorResults, ...textResults].filter((m) => {
+    // Playbooks have their own surfacing paths (always-injected index +
+    // trigger-matched ambient bodies, see goldfish/playbook.ts) on a budget
+    // separate from facts. Excluding them here keeps the two from crowding
+    // each other out of the shared top-K and avoids double-injection.
+    if (m.type === "playbook") return false;
     if (!m.id || seen.has(m.id)) return false;
     seen.add(m.id);
     return true;

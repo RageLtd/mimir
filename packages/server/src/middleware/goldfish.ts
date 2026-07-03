@@ -6,8 +6,9 @@
  */
 
 import type { ModelMessage } from "ai";
-import { modelContentToString } from "../agent-loop/message-log/message-utils";
+import { modelContentToString } from "../agent/message-log/message-utils";
 import { retrieveMemories } from "../goldfish/memory";
+import { buildPlaybookContext } from "../goldfish/playbook";
 import { log } from "../util/logger";
 import type { MimirContext } from "./types";
 
@@ -32,6 +33,7 @@ export async function injectMemories(ctx: MimirContext) {
 
   if (!query) {
     ctx.memories = null;
+    ctx.playbooks = null;
     log.debug("user message has no text content, skipping memory retrieval");
     return;
   }
@@ -39,14 +41,22 @@ export async function injectMemories(ctx: MimirContext) {
   // Build a mini message array for the retrieval API
   const messages: ModelMessage[] = [lastUser];
 
-  const memories = await retrieveMemories(messages);
+  // Memories (shared fact top-K) and playbooks (separate index + ambient
+  // budget, keyed on the active project) are retrieved together but kept on
+  // independent budgets — see goldfish/playbook.ts.
+  const [memories, playbooks] = await Promise.all([
+    retrieveMemories(messages),
+    buildPlaybookContext(query, { projectIdentifier: ctx.project }),
+  ]);
   ctx.memories = memories;
+  ctx.playbooks = playbooks;
 
   log.info(
     {
       queryLength: query.length,
       hasMemories: !!memories,
       memoriesLength: memories?.length ?? 0,
+      hasPlaybooks: !!playbooks,
       elapsed: `${Date.now() - start}ms`,
     },
     "memory retrieval complete",

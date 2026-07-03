@@ -15,6 +15,11 @@ export interface Memory {
   content: string;
   project?: string;
   type?: "fact" | "summary" | "playbook" | "skill";
+  /** Playbook only — short label shown in the always-injected index. */
+  name?: string;
+  /** Playbook only — the "use this when…" line. Doubles as the embedding
+   *  key (see storeTypedMemory) so ambient matching keys on intent. */
+  trigger?: string;
   message_count?: number;
   last_message_id?: string;
   token_count?: number;
@@ -37,6 +42,12 @@ export async function storeMemory(memory: Memory): Promise<string | null> {
   };
   if (memory.project) {
     fields.project = memory.project;
+  }
+  if (memory.name) {
+    fields.name = memory.name;
+  }
+  if (memory.trigger) {
+    fields.trigger = memory.trigger;
   }
   if (memory.message_count !== undefined) {
     fields.message_count = memory.message_count;
