@@ -21,7 +21,7 @@ import {
   type EmitUsage,
   type Model,
 } from "../agent/run/loop";
-import type { buildCallOptions } from "../agent/run/tools";
+import { prepareTurn } from "../agent/run/turn";
 import type { MimirContext } from "../middleware/types";
 import { log } from "../util/logger";
 import {
@@ -305,73 +305,77 @@ const extractToolCalls = (delta: Record<string, unknown>) => {
   return out.length > 0 ? out : undefined;
 };
 
-export function anthropicStreamingResponse(
-  model: Model,
-  baseOptions: ReturnType<typeof buildCallOptions>,
-  ctx: MimirContext,
-) {
+export function anthropicStreamingResponse(model: Model, ctx: MimirContext) {
   const messageId = generateMessageId();
   const encoder = new TextEncoder();
   const modelId = ctx.request.model ?? "unknown";
 
   let state: AnthropicStreamState = initialAnthropicStreamState();
 
-  const writeEvents = (
-    controller: ReadableStreamDefaultController,
-    events: AnthropicEvent[],
-  ) => {
-    for (const e of events) {
-      controller.enqueue(
-        encoder.encode(
-          `event: ${e.event}\ndata: ${JSON.stringify(e.data)}\n\n`,
-        ),
-      );
-    }
-  };
-
-  const emitSSE: EmitSSE = (controller, delta, finishReason) => {
-    if (typeof delta.content === "string" && delta.content.length > 0) {
-      const step = processTextDelta(state, delta.content, modelId, messageId);
-      state = step.state;
-      writeEvents(controller, step.events);
-    }
-    if (
-      typeof delta.reasoning_content === "string" &&
-      delta.reasoning_content.length > 0
-    ) {
-      const step = processReasoningDelta(
-        state,
-        delta.reasoning_content,
-        modelId,
-        messageId,
-      );
-      state = step.state;
-      writeEvents(controller, step.events);
-    }
-    const toolCalls = extractToolCalls(delta);
-    if (toolCalls) {
-      const step = processToolCalls(state, toolCalls, modelId, messageId);
-      state = step.state;
-      writeEvents(controller, step.events);
-    }
-    if (finishReason !== null && finishReason !== undefined) {
-      const step = processFinish(state, finishReason);
-      state = step.state;
-      writeEvents(controller, step.events);
-    }
-  };
-
-  const emitUsage: EmitUsage = (controller, usage) => {
-    const step = processUsage(state, usage);
-    state = step.state;
-    writeEvents(controller, step.events);
-  };
-
   const readable = new ReadableStream({
     start(controller) {
-      enqueueLlmCall(() =>
-        agentLoop(model, baseOptions, ctx, controller, emitSSE, emitUsage),
-      )
+      // Emitters close over this response's controller — the loop never
+      // sees it.
+      const writeEvents = (events: AnthropicEvent[]) => {
+        for (const e of events) {
+          controller.enqueue(
+            encoder.encode(
+              `event: ${e.event}\ndata: ${JSON.stringify(e.data)}\n\n`,
+            ),
+          );
+        }
+      };
+
+      const emitSSE: EmitSSE = (delta, finishReason) => {
+        if (typeof delta.content === "string" && delta.content.length > 0) {
+          const step = processTextDelta(
+            state,
+            delta.content,
+            modelId,
+            messageId,
+          );
+          state = step.state;
+          writeEvents(step.events);
+        }
+        if (
+          typeof delta.reasoning_content === "string" &&
+          delta.reasoning_content.length > 0
+        ) {
+          const step = processReasoningDelta(
+            state,
+            delta.reasoning_content,
+            modelId,
+            messageId,
+          );
+          state = step.state;
+          writeEvents(step.events);
+        }
+        const toolCalls = extractToolCalls(delta);
+        if (toolCalls) {
+          const step = processToolCalls(state, toolCalls, modelId, messageId);
+          state = step.state;
+          writeEvents(step.events);
+        }
+        if (finishReason !== null && finishReason !== undefined) {
+          const step = processFinish(state, finishReason);
+          state = step.state;
+          writeEvents(step.events);
+        }
+      };
+
+      const emitUsage: EmitUsage = (usage) => {
+        const step = processUsage(state, usage);
+        state = step.state;
+        writeEvents(step.events);
+      };
+
+      // Same contract as agent/run/response.ts: context assembly runs
+      // inside the queued task so history snapshots serialize with the
+      // in-flight turn.
+      enqueueLlmCall(async () => {
+        const options = await prepareTurn(ctx);
+        return agentLoop(model, options, ctx, emitSSE, emitUsage);
+      })
         .catch((err) => {
           log.error({ err }, "anthropic agent loop error");
           const message = err instanceof Error ? err.message : String(err);
@@ -382,7 +386,7 @@ export function anthropicStreamingResponse(
             messageId,
           );
           state = errStep.state;
-          writeEvents(controller, errStep.events);
+          writeEvents(errStep.events);
 
           const closeStep = processUsage(state, {
             prompt_tokens: 0,
@@ -390,7 +394,7 @@ export function anthropicStreamingResponse(
             total_tokens: 0,
           });
           state = closeStep.state;
-          writeEvents(controller, closeStep.events);
+          writeEvents(closeStep.events);
         })
         .finally(() => {
           controller.close();

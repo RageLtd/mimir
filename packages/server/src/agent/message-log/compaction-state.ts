@@ -22,7 +22,7 @@ export interface CompactionState {
 /**
  * Get the global compaction state.
  */
-export async function getCompactionState(): Promise<CompactionState | null> {
+export async function getCompactionState() {
   return queryFirst<CompactionState>(`SELECT * FROM compaction_state:global`);
 }
 
@@ -31,10 +31,7 @@ export async function getCompactionState(): Promise<CompactionState | null> {
  * Uses atomic compare-and-set to prevent race conditions between concurrent requests.
  * Returns true if compaction threshold is reached.
  */
-export async function updateTokenCount(
-  promptTokens: number,
-  modelId?: string,
-): Promise<{ needsCompaction: boolean; state: CompactionState }> {
+export async function updateTokenCount(promptTokens: number, modelId?: string) {
   const modelContextWindow = modelId ? getContextWindow(modelId) : undefined;
   // Cap at config.context.maxTokens regardless of what the model advertises.
   // Opus advertises 1M on some tiers, but pricing jumps 4x past 256k — we
@@ -157,7 +154,7 @@ export async function updateTokenCount(
  * Mark compaction as started (prevents concurrent compactions).
  * Returns true if successfully acquired the lock, false if already compacting.
  */
-export async function startCompaction(): Promise<boolean> {
+export async function startCompaction() {
   const db = await getDb();
 
   // Try to create state if it doesn't exist
@@ -183,9 +180,7 @@ export async function startCompaction(): Promise<boolean> {
  *
  * Call this at server startup to recover from crashes mid-compaction.
  */
-export async function clearStaleCompaction(
-  staleMinutes: number = 5,
-): Promise<boolean> {
+export async function clearStaleCompaction(staleMinutes: number = 5) {
   // Clear is_compacting if it's been true for more than staleMinutes
   const result = await queryOne<CompactionState>(
     `UPDATE compaction_state:global
@@ -204,7 +199,7 @@ export async function clearStaleCompaction(
 /**
  * Reset compaction state after completion.
  */
-export async function finishCompaction(): Promise<void> {
+export async function finishCompaction() {
   const db = await getDb();
 
   await db.query(

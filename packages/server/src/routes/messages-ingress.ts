@@ -15,42 +15,19 @@
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { resolveModel } from "../agent/provider-registry";
-import { buildPrompt } from "../agent/run/prompt";
-import { buildCallOptions, buildTools } from "../agent/run/tools";
-import { assembleContext } from "../middleware/context-assembly";
-import { injectMemories } from "../middleware/goldfish";
-import { injectProjectRules } from "../middleware/project-rules";
-import { injectSystemPrompt } from "../middleware/system-prompt";
-import { classifyTools } from "../middleware/tool-classification";
-import type { ChatRequest, MimirContext } from "../middleware/types";
-import { injectUserProfile } from "../middleware/user-profile";
+import { runAgent } from "../agent/run";
+import {
+  createMimirContext,
+  generateRequestId,
+  prepareContext,
+} from "../middleware/pipeline";
+import type { ChatRequest } from "../middleware/types";
 import { requestLog } from "../util/logger";
 import {
   type AnthropicRequest,
   normalizeAnthropicRequest,
 } from "./anthropic-format";
 import { anthropicStreamingResponse } from "./anthropic-stream";
-
-const generateRequestId = () =>
-  `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-
-const fingerprint = (req: ChatRequest) => {
-  const first = req.messages.find((m) => m.role === "user");
-  if (!first) {
-    return Bun.hash(JSON.stringify(req)).toString(36);
-  }
-  const content =
-    typeof first.content === "string"
-      ? first.content
-      : Array.isArray(first.content)
-        ? first.content
-            .filter((p) => p.type === "text")
-            .map((p) => (p as { text?: string }).text ?? "")
-            .join(" ")
-        : "";
-  return Bun.hash(content).toString(36);
-};
 
 // ---------------------------------------------------------------------------
 // Zod Schema — validates inbound Anthropic Messages API requests
@@ -143,58 +120,42 @@ messagesIngress.post("/", async (c) => {
     metadata: (parsed.data.metadata ?? undefined) as ChatRequest["metadata"],
   };
 
-  const project =
-    (chatRequest.metadata?.project as string | undefined) ?? "default";
+  try {
+    const ctx = createMimirContext(chatRequest);
 
-  const ctx: MimirContext = {
-    request: chatRequest,
-    project,
-    sessionId: fingerprint(chatRequest),
-    systemPrompt: "",
-    memories: null,
-    projectRules: null,
-    conversationMessages: [],
-    contextInjection: [],
-    compactionTriggered: false,
-    serverTools: {},
-    clientTools: {},
-    allTools: {},
-    resolvedModel: null,
-  };
+    // System prompt resolution: prefer the client's `system` field (CC
+    // launched via wrapper carries the Mimir prompt verbatim through
+    // --system-prompt-file). A pre-set systemPrompt short-circuits the
+    // pipeline's system-prompt stage; the server's on-disk prompt is the
+    // fallback so the assistant is never promptless.
+    if (normalized.systemPrompt) {
+      ctx.systemPrompt = normalized.systemPrompt;
+    }
 
-  // System prompt resolution: prefer the client's `system` field (CC
-  // launched via wrapper carries the Mimir prompt verbatim through
-  // --system-prompt-file). Fall back to the server's on-disk prompt
-  // when the client supplies nothing so the assistant is never
-  // promptless.
-  if (normalized.systemPrompt) {
-    ctx.systemPrompt = normalized.systemPrompt;
-  } else {
-    await injectSystemPrompt(ctx);
+    await prepareContext(ctx);
+
+    log.info(
+      {
+        model: ctx.request.model,
+        messageCount: chatRequest.messages.length,
+        hasSystem: Boolean(normalized.systemPrompt),
+        clientToolCount: normalized.tools?.length ?? 0,
+      },
+      "anthropic ingress dispatched",
+    );
+
+    return runAgent(ctx, anthropicStreamingResponse);
+  } catch (err) {
+    log.error({ err }, "anthropic ingress pipeline failed");
+    return c.json(
+      {
+        type: "error",
+        error: {
+          type: "api_error",
+          message: err instanceof Error ? err.message : "Pipeline error",
+        },
+      },
+      500,
+    );
   }
-
-  await injectMemories(ctx);
-  injectUserProfile(ctx);
-  injectProjectRules(ctx);
-  await assembleContext(ctx);
-  await classifyTools(ctx);
-
-  const model = resolveModel(ctx.request.model);
-  ctx.resolvedModel = model;
-
-  const prompt = buildPrompt(ctx);
-  const tools = buildTools(ctx);
-  const options = buildCallOptions(ctx, prompt, tools);
-
-  log.info(
-    {
-      model: ctx.request.model,
-      messageCount: chatRequest.messages.length,
-      hasSystem: Boolean(normalized.systemPrompt),
-      clientToolCount: normalized.tools?.length ?? 0,
-    },
-    "anthropic ingress dispatched",
-  );
-
-  return anthropicStreamingResponse(model, options, ctx);
 });

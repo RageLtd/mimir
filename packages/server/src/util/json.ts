@@ -24,3 +24,21 @@ export function safeParseJSON(str: string) {
     return str;
   }
 }
+
+/**
+ * Coerce a tool-call input to a plain object — the ONE tool-input
+ * normalizer. Inputs arrive as JSON strings (wire format, old DB rows),
+ * parsed objects (AI SDK parts, new DB rows), or null/undefined.
+ * Providers require a plain object — not a string, not an array, not
+ * null — so anything unparseable or non-object collapses to `{}`.
+ */
+export function parseToolInput(raw: unknown) {
+  if (raw === null || raw === undefined) return {};
+  if (typeof raw === "object" && !Array.isArray(raw)) return raw;
+  if (typeof raw !== "string" || !raw.trim()) return {};
+  const parsed = safeParseJSON(raw);
+  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return parsed;
+  }
+  return {};
+}

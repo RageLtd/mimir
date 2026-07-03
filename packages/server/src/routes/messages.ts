@@ -18,9 +18,9 @@
 
 import type { ModelMessage } from "@ai-sdk/provider-utils";
 import { Hono } from "hono";
-import { modelContentToString } from "../agent-loop/message-log/message-utils";
-import { appendTurn } from "../agent-loop/message-log/persistence";
-import { extractMemoriesFromResponse } from "../agent-loop/post-processing";
+import { modelContentToString } from "../agent/message-log/message-utils";
+import { appendTurn } from "../agent/message-log/persistence";
+import { extractMemoriesFromResponse } from "../agent/post-processing";
 import { requestLog } from "../util/logger";
 import { attempt } from "../util/result";
 

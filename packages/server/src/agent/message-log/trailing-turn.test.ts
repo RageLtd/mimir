@@ -1,6 +1,6 @@
 /**
  * Tests for the single-brain write helpers:
- * extractTrailingTurn, appendTrailingTurn, getLastNModelMessages.
+ * extractTrailingTurn, appendTrailingTurn, getLastModelMessages.
  *
  * Kept in a separate file from message-log.test.ts — that file is already
  * near the file-length limit and the new helpers form a coherent subject
@@ -22,7 +22,7 @@ import {
   appendTrailingTurn,
   appendTurn,
   extractTrailingTurn,
-  getLastNModelMessages,
+  getLastModelMessages,
 } from "./index";
 
 describe("trailing-turn helpers", () => {
@@ -344,10 +344,10 @@ describe("trailing-turn helpers", () => {
   });
 
   // ---------------------------------------------------------------------
-  // getLastNModelMessages
+  // getLastModelMessages
   // ---------------------------------------------------------------------
 
-  describe("getLastNModelMessages", () => {
+  describe("getLastModelMessages", () => {
     test("returns the last N in chronological order", async () => {
       // Query returns DESC order; helper reverses to chronological.
       queryOneMock.mockResolvedValueOnce([
@@ -374,7 +374,7 @@ describe("trailing-turn helpers", () => {
         },
       ]);
 
-      const result = await getLastNModelMessages(3);
+      const result = await getLastModelMessages(3);
 
       expect(result).toHaveLength(3);
       expect((result[0] as ModelMessage & { content: string }).content).toBe(
@@ -390,7 +390,7 @@ describe("trailing-turn helpers", () => {
 
     test("returns empty array when log is empty", async () => {
       queryOneMock.mockResolvedValueOnce([]);
-      const result = await getLastNModelMessages(50);
+      const result = await getLastModelMessages(50);
       expect(result).toEqual([]);
     });
   });

@@ -11,7 +11,7 @@
 
 import type { ToolSet } from "ai";
 import { jsonSchema, tool } from "ai";
-import { getServerTools } from "../agent-loop/server-tools";
+import { getServerTools } from "../agent/server-tools";
 import { log } from "../util/logger";
 import type { MimirContext, OpenAIToolDef } from "./types";
 
@@ -28,7 +28,7 @@ export const BLOCKED_CLIENT_TOOLS = new Set([
  * Client tools get NO execute function — when the model calls them,
  * the agent loop stops and returns them as tool_calls in the response.
  */
-function convertClientTools(openaiTools: OpenAIToolDef[]): ToolSet {
+function convertClientTools(openaiTools: OpenAIToolDef[]) {
   const tools: ToolSet = {};
 
   for (const t of openaiTools) {
@@ -44,13 +44,13 @@ function convertClientTools(openaiTools: OpenAIToolDef[]): ToolSet {
     // Using jsonSchema() instead of Zod avoids the broken
     // z.object({}).catchall(z.unknown()) → {properties: {}, additionalProperties: false}
     // serialization that stripped all parameter info from client tools.
+    // $schema stripping happens once at the model boundary (buildTools),
+    // not here — one strip, one place.
     const params = fn.parameters ?? { type: "object", properties: {} };
-    // Strip $schema — provider-level transformRequestBody handles the rest
-    const { $schema, ...cleanParams } = params as Record<string, unknown>;
 
     tools[fn.name] = tool({
       description: fn.description ?? `Tool: ${fn.name}`,
-      inputSchema: jsonSchema(cleanParams),
+      inputSchema: jsonSchema(params),
       // NO execute — this is what makes it a client tool.
       // The hasClientToolCall stop condition halts the agent loop
       // when the model calls one of these.
@@ -66,7 +66,7 @@ function convertClientTools(openaiTools: OpenAIToolDef[]): ToolSet {
  * Server tools take priority over client tools with the same name.
  * This prevents MCP duplicates from overwriting working server-side implementations.
  */
-export async function classifyTools(ctx: MimirContext): Promise<void> {
+export async function classifyTools(ctx: MimirContext) {
   const start = Date.now();
 
   // Server tools — defined in our codebase with execute()

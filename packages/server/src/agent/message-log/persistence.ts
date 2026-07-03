@@ -16,7 +16,7 @@
  *                             idempotency.
  *
  * Read side:
- *   - `getLastNModelMessages(N)` is the canonical read for context
+ *   - `getLastModelMessages(N)` is the canonical read for context
  *     assembly. Summaries sit alongside — never in place of — raw
  *     messages in the prompt.
  *
@@ -35,6 +35,7 @@ import { getDb, queryOne } from "../../db/surreal";
 import { log } from "../../util/logger";
 import { attempt } from "../../util/result";
 import {
+  fingerprintMessage,
   type MessageRow,
   modelMessageToFields,
   rowToModelMessage,
@@ -106,18 +107,6 @@ export async function appendModelMessage(
 }
 
 /**
- * Fingerprint a message for dedup matching.
- * Uses role + content hash. Stable across serialization round-trips.
- */
-function fingerprint(msg: ModelMessage) {
-  const content =
-    typeof msg.content === "string"
-      ? msg.content
-      : JSON.stringify(msg.content ?? "");
-  return `${msg.role}:${Bun.hash(content).toString(36)}`;
-}
-
-/**
  * Extract the trailing `user` / `tool` block from a client's request.
  *
  * Under the single-brain model, the client contributes only its trailing new
@@ -179,8 +168,8 @@ export async function appendTrailingTurn(
   // compare fingerprints in order. If identical, skip — this is a retry.
   const dbTail = await getLastModelMessages(trailing.length);
   if (dbTail.length === trailing.length) {
-    const dbFps = dbTail.map(fingerprint);
-    const trailingFps = trailing.map(fingerprint);
+    const dbFps = dbTail.map(fingerprintMessage);
+    const trailingFps = trailing.map(fingerprintMessage);
     const allMatch = dbFps.every((fp, idx) => fp === trailingFps[idx]);
     if (allMatch) {
       log.debug(
@@ -259,8 +248,8 @@ export async function appendTurn(
   // Retry idempotency — compare the incoming delta against the DB tail.
   const dbTail = await getLastModelMessages(messages.length);
   if (dbTail.length === messages.length) {
-    const dbFps = dbTail.map(fingerprint);
-    const msgFps = messages.map(fingerprint);
+    const dbFps = dbTail.map(fingerprintMessage);
+    const msgFps = messages.map(fingerprintMessage);
     const allMatch = dbFps.every((fp, idx) => fp === msgFps[idx]);
     if (allMatch) {
       log.debug(
@@ -293,11 +282,9 @@ export async function appendTurn(
  * Get messages since a specific timestamp from the global log.
  * Used by the async compaction path to gather the tail since the last
  * summary for summarization. Not used on the read path — context
- * assembly uses `getLastNModelMessages`.
+ * assembly uses `getLastModelMessages`.
  */
-export async function getModelMessagesSince(
-  since: Date,
-): Promise<ModelMessage[]> {
+export async function getModelMessagesSince(since: Date) {
   const start = Date.now();
 
   // Use > not >= to exclude messages created at the same instant as the summary
@@ -337,19 +324,10 @@ export async function getModelMessagesSince(
  * This is the canonical read for context assembly under the single-brain
  * model: always return the last N raw messages regardless of summary
  * state. Summaries sit alongside these messages in the prompt, never in
- * place of them.
+ * place of them. Also used for retry-idempotency tail matching in the
+ * append paths.
  */
-export async function getLastNModelMessages(count: number) {
-  return getLastModelMessages(count);
-}
-
-/**
- * Get the last N messages from the global log, in chronological order.
- * Used for sequence-based anchor matching in appendNewMessages.
- */
-export async function getLastModelMessages(
-  count: number,
-): Promise<ModelMessage[]> {
+export async function getLastModelMessages(count: number) {
   const [err, entries] = await attempt(() =>
     queryOne<MessageRow>(
       `SELECT * FROM message_log ORDER BY created_at DESC LIMIT $count`,

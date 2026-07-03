@@ -1,9 +1,8 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { initProviderRegistry } from "./agent/provider-registry";
-import { clearStaleCompaction } from "./agent-loop/message-log";
-import { refreshToolNames } from "./agent-loop/server-tools";
-import { closeMcpClients, initMcpTools } from "./agent-loop/server-tools/mcp";
+import { clearStaleCompaction } from "./agent/message-log";
+import { initProviderRegistry } from "./agent/provider";
+import { closeMcpClients, initMcpTools } from "./agent/server-tools/mcp";
 import { config, OPENROUTER_API_URL } from "./config";
 import { closeDb, getDb, initSchema } from "./db/surreal";
 import {
@@ -165,15 +164,15 @@ async function boot() {
     );
   }
 
-  // Connect to external MCP servers (non-fatal)
+  // Connect to external MCP servers (non-fatal). No name-set refresh
+  // needed — tool classification reads ctx.serverTools, which picks up
+  // MCP tools from getServerTools() on every request.
   const [mcpErr] = await attempt(initMcpTools);
   if (mcpErr) {
     log.warn(
       { err: mcpErr },
       "MCP tools init failed — docs lookup unavailable",
     );
-  } else {
-    refreshToolNames();
   }
 
   server = Bun.serve({

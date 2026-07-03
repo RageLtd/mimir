@@ -21,40 +21,35 @@ import type {
   LanguageModelV3ToolCallPart,
   LanguageModelV3ToolResultPart,
 } from "@ai-sdk/provider";
-import {
-  classifyToolCalls,
-  finalizeTurn,
-} from "../../agent-loop/post-processing";
-import { getContextWindow } from "../../agent-loop/provider/query";
 import type { MimirContext } from "../../middleware/types";
-import { safeParseJSON } from "../../util/json";
+import { parseToolInput } from "../../util/json";
 import { log } from "../../util/logger";
+import { classifyToolCalls, finalizeTurn } from "../post-processing";
+import { getContextWindow } from "../provider/query";
 import type { buildCallOptions } from "./tools";
 
 export const MAX_AGENT_STEPS = 20;
 
 export type Model = Pick<LanguageModelV3, "doStream" | "doGenerate">;
+// Emitters close over their response's stream controller — the encoders
+// define them inside ReadableStream.start(controller), so the loop never
+// sees the controller at all.
 export type EmitSSE = (
-  controller: ReadableStreamDefaultController,
   delta: Record<string, unknown>,
   finishReason?: string | null,
 ) => void;
-export type EmitUsage = (
-  controller: ReadableStreamDefaultController,
-  usage: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-    /** Non-standard mimir extension — model's max context window in tokens. */
-    context_window?: number;
-  },
-) => void;
+export type EmitUsage = (usage: {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  /** Non-standard mimir extension — model's max context window in tokens. */
+  context_window?: number;
+}) => void;
 
 export async function agentLoop(
   model: Model,
   baseOptions: ReturnType<typeof buildCallOptions>,
   ctx: MimirContext,
-  controller: ReadableStreamDefaultController,
   emitSSE: EmitSSE,
   emitUsage: EmitUsage,
 ) {
@@ -81,15 +76,18 @@ export async function agentLoop(
       "agent step — calling doStream",
     );
 
+    let streamTimeout: ReturnType<typeof setTimeout> | undefined;
     const doStreamResult = await Promise.race([
       model.doStream({ ...baseOptions, prompt }),
-      new Promise<never>((_, reject) =>
-        setTimeout(
+      new Promise<never>((_, reject) => {
+        streamTimeout = setTimeout(
           () => reject(new Error("doStream timed out after 120s")),
           120_000,
-        ),
-      ),
-    ]);
+        );
+      }),
+      // Clear the timer on either outcome — otherwise every step leaks a
+      // live 120s timeout that keeps the process from idling.
+    ]).finally(() => clearTimeout(streamTimeout));
     const { stream } = doStreamResult;
 
     log.info({ step }, "doStream returned — reading chunks");
@@ -114,25 +112,21 @@ export async function agentLoop(
         switch (part.type) {
           case "text-delta":
             textChunks.push(part.delta);
-            emitSSE(controller, { content: part.delta });
+            emitSSE({ content: part.delta });
             break;
 
           case "reasoning-delta":
             reasoningChunks.push(part.delta);
-            emitSSE(controller, { reasoning_content: part.delta });
+            emitSSE({ reasoning_content: part.delta });
             break;
 
-          case "tool-call": {
-            const input =
-              typeof part.input === "string"
-                ? safeParseJSON(part.input)
-                : (part.input ?? {});
-            toolCalls.push({
-              ...part,
-              input: JSON.stringify(input),
-            });
+          case "tool-call":
+            // Normalize input to a parsed object ONCE at stream ingress.
+            // Every downstream consumer (prompt replay, server-tool
+            // execution, persistence) works with the object; the OpenAI
+            // SSE boundary stringifies at emission.
+            toolCalls.push({ ...part, input: parseToolInput(part.input) });
             break;
-          }
 
           case "finish":
             finishReason = part.finishReason.unified;
@@ -173,12 +167,16 @@ export async function agentLoop(
 
     // No tool calls → done
     if (toolCalls.length === 0) {
-      emitSSE(controller, {}, finishReason === "stop" ? "stop" : finishReason);
+      emitSSE({}, finishReason === "stop" ? "stop" : finishReason);
       break;
     }
 
-    // Classify: server vs client
-    const { serverCalls, clientCalls } = classifyToolCalls(toolCalls);
+    // Classify: server vs client — against the actual server ToolSet, so
+    // MCP tools connected after boot classify correctly by construction.
+    const { serverCalls, clientCalls } = classifyToolCalls(
+      toolCalls,
+      ctx.serverTools,
+    );
 
     // Client tool calls → emit and stop
     if (clientCalls.length > 0) {
@@ -186,7 +184,6 @@ export async function agentLoop(
       let i = 0;
       for (const tc of clientCalls) {
         emitSSE(
-          controller,
           {
             tool_calls: [
               {
@@ -195,7 +192,10 @@ export async function agentLoop(
                 type: "function",
                 function: {
                   name: String(tc.toolName),
-                  arguments: String(tc.input),
+                  // Input is a parsed object throughout the loop — the
+                  // OpenAI wire format wants the arguments as a string,
+                  // so this is the ONE stringify boundary.
+                  arguments: JSON.stringify(tc.input ?? {}),
                 },
               },
             ],
@@ -214,7 +214,7 @@ export async function agentLoop(
       reasoningChunks,
       serverCalls,
     );
-    await executeServerTools(prompt, serverCalls, ctx);
+    await executeServerTools(prompt, serverCalls, ctx, emitSSE);
   }
 
   // Emit the OpenAI-spec usage chunk (empty choices + top-level usage)
@@ -223,7 +223,7 @@ export async function agentLoop(
   // call. `lastStepInputTokens` is the right "prompt size at end of turn"
   // value because each agent step appends to the prompt — the final
   // step's input includes all accumulated context.
-  emitUsage(controller, {
+  emitUsage({
     prompt_tokens: lastStepInputTokens,
     completion_tokens: totalOutputTokens,
     total_tokens: lastStepInputTokens + totalOutputTokens,
@@ -262,21 +262,23 @@ export function appendServerStepToPrompt(
     | LanguageModelV3ReasoningPart
     | LanguageModelV3ToolCallPart
   > = [];
-  if (text) parts.push({ type: "text", text });
+  // Reasoning precedes text: providers that accept thinking replay
+  // (Anthropic strictly) require the thinking block FIRST in an
+  // assistant turn — text-before-reasoning gets rejected or silently
+  // drops the signature.
   if (reasoning.length > 0) {
     parts.push({ type: "reasoning", text: reasoning.join("") });
   }
+  if (text) parts.push({ type: "text", text });
   for (const tc of toolCalls) {
     parts.push({
       ...tc,
       type: "tool-call",
       toolCallId: String(tc.toolCallId),
       toolName: String(tc.toolName),
-      input: safeParseJSON(
-        typeof tc.input === "string"
-          ? tc.input
-          : JSON.stringify(tc.input ?? {}),
-      ),
+      // Already a parsed object from stream ingress; parseToolInput is an
+      // identity passthrough for objects and a guard for legacy strings.
+      input: parseToolInput(tc.input),
       // doStream emits thoughtSignature via providerMetadata, but providers
       // (Google) read from providerOptions when formatting outgoing messages.
       // Map explicitly so the signature survives the round-trip.
@@ -297,11 +299,17 @@ function providerOptionsFromToolCall(toolCall: Record<string, unknown>) {
 /**
  * Execute server tools sequentially, always producing a result.
  * Appends tool result message to prompt.
+ *
+ * After each tool execution, emits an SSE observation chunk so the ACP
+ * adapter can render the server tool call in the editor. The observation
+ * carries both the call (name, input) and the result — the server already
+ * has the output, so there's no second round-trip.
  */
 export async function executeServerTools(
   prompt: LanguageModelV3Message[],
   toolCalls: Array<Record<string, unknown>>,
   ctx: MimirContext,
+  emitSSE: EmitSSE,
 ) {
   const toolResults: LanguageModelV3ToolResultPart[] = [];
 
@@ -309,9 +317,7 @@ export async function executeServerTools(
     const toolName = String(tc.toolName);
     const toolCallId = String(tc.toolCallId);
     const tool = ctx.serverTools[toolName];
-    const parsedInput = safeParseJSON(
-      typeof tc.input === "string" ? tc.input : JSON.stringify(tc.input ?? {}),
-    );
+    const parsedInput = parseToolInput(tc.input);
     let resultValue: string;
 
     if (!tool?.execute) {
@@ -336,6 +342,17 @@ export async function executeServerTools(
       toolCallId,
       toolName,
       output: { type: "text" as const, value: resultValue },
+    });
+
+    // Emit observation so the ACP adapter can show the server tool
+    // execution in the editor without re-executing it.
+    emitSSE({
+      mimir_tool_observation: {
+        id: toolCallId,
+        name: toolName,
+        input: parsedInput,
+        result: resultValue,
+      },
     });
   }
 

@@ -25,10 +25,7 @@ let lastMtime = 0;
  * Load the system prompt from disk with in-memory caching.
  * Re-reads when the file changes (hot-reload via mtime check).
  */
-export async function loadPrompt(): Promise<{
-  content: string;
-  version: string;
-}> {
+export async function loadPrompt() {
   const file = Bun.file(config.systemPromptPath);
   const stat = await file.stat();
 

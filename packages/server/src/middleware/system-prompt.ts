@@ -17,14 +17,16 @@ let lastModified: number = 0;
 /**
  * Load the system prompt from disk with caching.
  */
-async function loadSystemPrompt(): Promise<string> {
+async function loadSystemPrompt() {
   const file = Bun.file(config.systemPromptPath);
   const stat = await file.stat();
 
   if (!cachedPrompt || stat.mtimeMs !== lastModified) {
-    cachedPrompt = await file.text();
+    const text = await file.text();
+    cachedPrompt = text;
     lastModified = stat.mtimeMs;
     log.debug({ path: config.systemPromptPath }, "loaded system prompt");
+    return text;
   }
 
   return cachedPrompt;
@@ -40,7 +42,7 @@ async function loadSystemPrompt(): Promise<string> {
  * status, background tasks) is injected by assembleContext() as a synthetic
  * user+assistant message pair at the start of the conversation.
  */
-export async function injectSystemPrompt(ctx: MimirContext): Promise<void> {
+export async function injectSystemPrompt(ctx: MimirContext) {
   const raw = await loadSystemPrompt();
 
   // Inject current date

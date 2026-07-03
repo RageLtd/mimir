@@ -10,7 +10,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { providerModels } from "../agent-loop/provider/registry";
+import { providerModels } from "../agent/provider/registry";
 import { bareModelId, buildLocalModels, models } from "./models";
 
 describe("buildLocalModels", () => {

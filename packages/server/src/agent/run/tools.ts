@@ -11,7 +11,7 @@ import type {
 } from "@ai-sdk/provider";
 import { asSchema } from "ai";
 import type { MimirContext } from "../../middleware/types";
-import { getReasoningOptions } from "../provider-registry";
+import { getReasoningOptions } from "../provider";
 
 export function buildTools(ctx: MimirContext) {
   if (Object.keys(ctx.allTools).length === 0) return undefined;

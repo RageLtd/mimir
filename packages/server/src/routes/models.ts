@@ -9,12 +9,12 @@
  */
 
 import { Hono } from "hono";
-import { listModels } from "../agent/provider-registry";
+import { listModels } from "../agent/provider";
 import {
   getModelDisplayName,
   getModelMetadata,
   getProviderDisplayName,
-} from "../agent-loop/provider/query";
+} from "../agent/provider/query";
 import { config, OPENROUTER_API_URL } from "../config";
 import { attempt } from "../util/result";
 
@@ -123,7 +123,7 @@ async function fetchZdrModelIds() {
   return new Set(res.data.map((e) => e.model_id));
 }
 
-async function getOpenRouterModels(): Promise<ModelEntry[]> {
+async function getOpenRouterModels() {
   if (!config.openrouter.apiKey) return [];
   if (Date.now() - orModelsCacheTime < MODEL_CACHE_TTL) return orModelsCache;
 

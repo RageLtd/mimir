@@ -50,13 +50,13 @@ export interface MimirContext {
   // -- Set at input boundary --
   request: ChatRequest;
   project: string; // from metadata.project or "default"
-  sessionId: string; // from metadata.session_id or fingerprint
 
   // -- Set by MW1: system prompt --
   systemPrompt: string;
 
   // -- Set by MW2: goldfish --
   memories: string | null; // formatted memory text for context injection
+  playbooks: string | null; // formatted playbook index + ambient bodies
 
   // -- Set by MW2.6: project rules (from ACP metadata) --
   projectRules: string | null;

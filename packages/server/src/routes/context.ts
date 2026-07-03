@@ -16,11 +16,12 @@
 
 import { countTokens } from "gpt-tokenizer";
 import { Hono } from "hono";
-import { runCompaction } from "../agent-loop/compaction";
-import { getLastNModelMessages } from "../agent-loop/message-log";
-import { updateTokenCount } from "../agent-loop/message-log/compaction-state";
-import { modelContentToString } from "../agent-loop/message-log/message-utils";
+import { runCompaction } from "../agent/compaction";
+import { getLastModelMessages } from "../agent/message-log";
+import { updateTokenCount } from "../agent/message-log/compaction-state";
+import { modelContentToString } from "../agent/message-log/message-utils";
 import { config } from "../config";
+import { retrieveContextBundle } from "../goldfish/context-bundle";
 import { retrieveMemories } from "../goldfish/memory";
 import { getLastSummaries } from "../goldfish/store";
 import { buildContextInjection } from "../middleware/context-assembly";
@@ -243,24 +244,31 @@ context.post("/assemble", async (c) => {
   }
 
   try {
-    const [{ content: rawPrompt }, memories, summaries] = await Promise.all([
-      loadPrompt(),
-      retrieveMemories([{ role: "user", content: body.query }]),
-      getLastSummaries(3),
-    ]);
+    const [{ content: rawPrompt }, { memories, summaries, playbooks }] =
+      await Promise.all([
+        loadPrompt(),
+        retrieveContextBundle(body.query, {
+          projectIdentifier: body.projectId ?? body.project,
+        }),
+      ]);
 
     const today = new Date().toISOString().split("T")[0] ?? "";
     const systemPrompt = rawPrompt.replace("{{DATE}}", today);
 
     // Mirror context-assembly middleware: last N raw messages, always.
     // Summaries are additive — they never replace raw recent history.
-    const recentMessages = await getLastNModelMessages(
+    const recentMessages = await getLastModelMessages(
       config.context.keepRecentMessages,
     );
 
     // Build context injection pair — shared with server middleware.
     // Rules are null here — the CC backend gets them via boot tools, not this route.
-    const injection = buildContextInjection(summaries, memories, null);
+    const injection = buildContextInjection(
+      summaries,
+      memories,
+      null,
+      playbooks,
+    );
 
     const messages: SimpleMessage[] = injection.map((m) => ({
       role: m.role as "user" | "assistant",
@@ -347,21 +355,20 @@ context.post("/retrieve", async (c) => {
   }
 
   const [retrievalErr, retrieval] = await attempt(() =>
-    Promise.all([
-      retrieveMemories([{ role: "user", content: body.query }], {
-        topK: RETRIEVE_MEMORY_TOP_K,
-        includeRelated: false,
-      }),
-      getLastSummaries(RETRIEVE_SUMMARY_COUNT),
-    ]),
+    retrieveContextBundle(body.query, {
+      projectIdentifier: body.projectId ?? body.project,
+      topK: RETRIEVE_MEMORY_TOP_K,
+      includeRelated: false,
+      summaryCount: RETRIEVE_SUMMARY_COUNT,
+    }),
   );
   if (retrievalErr) {
     log.error({ err: retrievalErr.message }, "retrieve failed");
     return c.json({ error: retrievalErr.message }, 500);
   }
 
-  const [memories, summaries] = retrieval;
-  const injection = buildContextInjection(summaries, memories, null);
+  const { memories, summaries, playbooks } = retrieval;
+  const injection = buildContextInjection(summaries, memories, null, playbooks);
   // Count actual `- ` items, not raw newlines — memory bodies can span
   // multiple lines and would otherwise inflate the displayed count.
   const memoryCount = memories

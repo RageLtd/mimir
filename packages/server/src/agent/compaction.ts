@@ -37,7 +37,7 @@ import {
  * Run compaction asynchronously.
  * Called after response completes when threshold is reached.
  */
-export async function runCompaction(modelId?: string): Promise<void> {
+export async function runCompaction(modelId?: string) {
   const start = Date.now();
 
   // Mark as compacting to prevent concurrent runs

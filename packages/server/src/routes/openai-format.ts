@@ -16,10 +16,10 @@
  */
 
 import type { ImagePart, ModelMessage, TextPart } from "ai";
-import { log } from "../util/logger";
+import { parseToolInput } from "../util/json";
 
 /** Extract text from either a string or array-of-parts content field. */
-export const extractTextContent = (content: unknown) => {
+const extractTextContent = (content: unknown) => {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return (content as Array<{ type?: string; text?: string }>)
@@ -28,28 +28,6 @@ export const extractTextContent = (content: unknown) => {
       .join("\n");
   }
   return String(content ?? "");
-};
-
-/**
- * Best-effort JSON parse. Returns a discriminated result so callers can
- * choose how to surface a malformed payload — typically by passing the
- * raw string through to whatever consumer wanted the parsed shape.
- *
- * The internal try/catch wraps the unavoidably-throwing `JSON.parse`;
- * the function's exposed contract is the result object, not exception
- * propagation. Logging at debug keeps the failure observable without
- * screaming at every malformed model output.
- */
-export const parseJsonSafe = (str: string) => {
-  try {
-    return { ok: true as const, value: JSON.parse(str) as unknown };
-  } catch (err) {
-    log.debug(
-      { err: err instanceof Error ? err.message : String(err) },
-      "parseJsonSafe failed, returning raw string",
-    );
-    return { ok: false as const, raw: str };
-  }
 };
 
 type RawMessage = {
@@ -135,21 +113,13 @@ export const normalizeMessages = (messages: unknown[]) => {
       }> = [];
       if (text) parts.push({ type: "text", text });
       for (const tc of msg.tool_calls) {
-        const parsed = parseJsonSafe(tc.function.arguments ?? "{}");
-        // Upstream providers require input to be a plain object. If parsing
-        // failed (malformed JSON) or decoded to a non-object (bare string,
-        // array, null), fall back to empty object rather than passing a raw
-        // string that the AI SDK would double-encode on re-serialization.
-        const value = parsed.ok ? parsed.value : undefined;
-        const input =
-          value !== null && typeof value === "object" && !Array.isArray(value)
-            ? value
-            : {};
         parts.push({
           type: "tool-call",
           toolCallId: tc.id,
           toolName: tc.function.name,
-          input,
+          // Malformed or non-object arguments collapse to {} — providers
+          // require a plain object, and a raw string would double-encode.
+          input: parseToolInput(tc.function.arguments ?? "{}"),
         });
       }
       return { role: "assistant", content: parts } as ModelMessage;

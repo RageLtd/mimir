@@ -29,7 +29,7 @@ export function modelContentToString(
     | ToolContent
     | null
     | undefined,
-): string {
+) {
   if (typeof content === "string") return content;
   if (!content) return "";
   if (Array.isArray(content)) {
@@ -42,6 +42,22 @@ export function modelContentToString(
       .join("\n");
   }
   return "";
+}
+
+// ---------------------------------------------------------------------------
+// Message identity + trailing-turn verification
+// ---------------------------------------------------------------------------
+
+/**
+ * Fingerprint a message for dedup matching.
+ * Uses role + content hash. Stable across serialization round-trips.
+ */
+export function fingerprintMessage(msg: ModelMessage) {
+  const content =
+    typeof msg.content === "string"
+      ? msg.content
+      : JSON.stringify(msg.content ?? "");
+  return `${msg.role}:${Bun.hash(content).toString(36)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +110,7 @@ export function modelMessageToFields(
  * Deserialize a DB row back to a ModelMessage.
  * Content stored as JSON.
  */
-export function rowToModelMessage(row: MessageRow): ModelMessage {
+export function rowToModelMessage(row: MessageRow) {
   const role = row.role as ModelMessage["role"];
   const content =
     typeof row.content === "string" ? JSON.parse(row.content) : row.content;

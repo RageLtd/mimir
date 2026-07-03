@@ -15,7 +15,7 @@
 
 import { asSchema } from "ai";
 import { Hono } from "hono";
-import { getMcpPublicTools } from "../agent-loop/server-tools";
+import { getMcpPublicTools } from "../agent/server-tools";
 
 export const tools = new Hono();
 

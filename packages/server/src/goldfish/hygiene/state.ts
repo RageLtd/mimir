@@ -2,7 +2,7 @@
  * Hygiene sweep lock — a single global row guarding the periodic memory
  * hygiene sweep so two never overlap.
  *
- * Mirrors the compaction lock (agent-loop/message-log/compaction-state.ts):
+ * Mirrors the compaction lock (agent/message-log/compaction-state.ts):
  *   - atomic acquire via UPDATE ... WHERE is_running = false
  *   - finish resets the flag and stamps last_run
  *   - clearStaleHygiene recovers a lock left stuck by a crash mid-sweep

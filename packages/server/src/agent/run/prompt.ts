@@ -16,7 +16,7 @@ import type {
 } from "@ai-sdk/provider";
 import type { ModelMessage } from "ai";
 import type { MimirContext } from "../../middleware/types";
-import { safeParseJSON } from "../../util/json";
+import { parseToolInput } from "../../util/json";
 import { log } from "../../util/logger";
 
 export function buildPrompt(ctx: MimirContext) {
@@ -256,22 +256,6 @@ function normalizeAssistantParts(parts: unknown) {
     }
   }
   return result;
-}
-
-/**
- * Coerce tool-call input to an object. DB rows store `input` as a JSON
- * string; AI SDK ModelMessages provide it as a parsed object. Either way,
- * upstream providers require a plain object — not a string, not null.
- */
-function parseToolInput(raw: unknown) {
-  if (raw === null || raw === undefined) return {};
-  if (typeof raw === "object" && !Array.isArray(raw)) return raw;
-  if (typeof raw !== "string" || !raw.trim()) return {};
-  const parsed = safeParseJSON(raw);
-  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-    return parsed;
-  }
-  return {};
 }
 
 function normalizeToolParts(parts: unknown) {

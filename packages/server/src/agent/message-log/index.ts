@@ -24,6 +24,6 @@ export {
   appendTrailingTurn,
   appendTurn,
   extractTrailingTurn,
-  getLastNModelMessages,
+  getLastModelMessages,
   getModelMessagesSince,
 } from "./persistence";

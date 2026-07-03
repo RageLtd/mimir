@@ -1,15 +1,9 @@
-import type {
-  AssistantContent,
-  ModelMessage,
-  ToolSet,
-  TypedToolCall,
-} from "ai";
+import type { AssistantContent, ModelMessage, ToolSet } from "ai";
 
 import { extractAndStoreMemories } from "../goldfish/memory";
 import { log } from "../util/logger";
 import { runCompaction } from "./compaction";
 import { appendAssistantOutput, updateTokenCount } from "./message-log/index";
-import { SERVER_TOOL_NAMES } from "./server-tools";
 
 /**
  * Post-processing shared between streaming and non-streaming agent runs.
@@ -31,18 +25,25 @@ import { SERVER_TOOL_NAMES } from "./server-tools";
 /**
  * Split a set of tool calls into server-side (executed internally) and
  * client-side (emitted to the caller). Single source of truth for the
- * classification — both streaming and non-streaming loops use this.
+ * classification.
+ *
+ * Classifies against the actual server ToolSet on the context — a call is
+ * server-side iff a tool by that name exists in `serverTools`. Since
+ * getServerTools() merges connected MCP servers' tools by construction,
+ * late-connecting MCP servers classify correctly with no name-set to
+ * refresh.
  *
  * Accepts Record<string, unknown> to carry providerMetadata (Google
  * thoughtSignature) and any future SDK fields without enumerating.
  */
-export function classifyToolCalls(toolCalls: Array<Record<string, unknown>>) {
+export function classifyToolCalls(
+  toolCalls: Array<Record<string, unknown>>,
+  serverTools: ToolSet,
+) {
   return {
-    serverCalls: toolCalls.filter((tc) =>
-      SERVER_TOOL_NAMES.has(String(tc.toolName)),
-    ),
+    serverCalls: toolCalls.filter((tc) => String(tc.toolName) in serverTools),
     clientCalls: toolCalls.filter(
-      (tc) => !SERVER_TOOL_NAMES.has(String(tc.toolName)),
+      (tc) => !(String(tc.toolName) in serverTools),
     ),
   };
 }
@@ -131,19 +132,20 @@ export function triggerCompactionIfNeeded(
  * log. Client requests only contribute trailing user/tool messages; the
  * assistant side of the conversation is always server-written.
  *
+ * `clientToolCalls` must already be client-only — the loop classifies via
+ * classifyToolCalls before the turn finalizes, and server tool calls are
+ * ephemeral by design (never persisted).
+ *
  * Fire-and-forget at call sites — persistence failure must not fail the
  * response. Errors are logged. Returns immediately when there's no text
  * and no tool calls (e.g., cancellation before any emission).
  */
 export async function persistAssistantTurn(
   text: string,
-  toolCalls: Array<Record<string, unknown>>,
+  clientToolCalls: Array<Record<string, unknown>>,
   project: string | null | undefined,
   reasoning?: string,
 ) {
-  const clientToolCalls = toolCalls.filter(
-    (tc) => !SERVER_TOOL_NAMES.has(String(tc.toolName)),
-  );
   const hasText = text.trim().length > 0;
   const hasToolCalls = clientToolCalls.length > 0;
   const hasReasoning = reasoning && reasoning.trim().length > 0;
@@ -194,29 +196,4 @@ export function extractMemoriesFromResponse(
   extractAndStoreMemories(messages, project ?? undefined).catch((err) =>
     log.error({ err }, "extraction error"),
   );
-}
-
-// ---------------------------------------------------------------------------
-// Client tool call formatting
-// ---------------------------------------------------------------------------
-
-/**
- * Filter tool calls to client-only and format in OpenAI spec.
- * Server tool calls are excluded — they're persisted separately.
- *
- * Uses AI SDK's TypedToolCall for better type safety.
- */
-export function formatClientToolCalls<TOOLS extends ToolSet>(
-  toolCalls: Array<TypedToolCall<TOOLS>>,
-) {
-  return toolCalls
-    .filter((tc) => !SERVER_TOOL_NAMES.has(tc.toolName))
-    .map((tc) => ({
-      id: tc.toolCallId,
-      type: "function" as const,
-      function: {
-        name: tc.toolName,
-        arguments: JSON.stringify(tc.input),
-      },
-    }));
 }

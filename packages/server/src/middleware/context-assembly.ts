@@ -24,8 +24,8 @@
 import type { ModelMessage } from "ai";
 import {
   appendTrailingTurn,
-  getLastNModelMessages,
-} from "../agent-loop/message-log/index";
+  getLastModelMessages,
+} from "../agent/message-log/index";
 import { config } from "../config";
 import { getLastSummaries } from "../goldfish/store";
 import { log } from "../util/logger";
@@ -43,6 +43,7 @@ export function buildContextInjection(
   summaries: Array<{ content: string }>,
   memories: string | null | undefined,
   projectRules?: string | null,
+  playbooks?: string | null,
 ) {
   const contextParts: string[] = [];
 
@@ -55,6 +56,10 @@ export function buildContextInjection(
 
   if (memories) {
     contextParts.push(`<memories>\n${memories}\n</memories>`);
+  }
+
+  if (playbooks) {
+    contextParts.push(`<playbooks>\n${playbooks}\n</playbooks>`);
   }
 
   if (projectRules) {
@@ -97,9 +102,21 @@ export async function assembleContext(ctx: MimirContext) {
     const nonSystemMessages = ctx.request.messages.filter(
       (m) => m.role !== "system",
     );
-    await appendTrailingTurn(nonSystemMessages, ctx.project).catch((err) =>
-      log.error({ err }, "failed to append trailing turn"),
+    // Persist failure aborts the turn. The DB is the source of truth —
+    // running inference on input the log never recorded would fork the
+    // conversation (the client sees a reply the brain has no record of
+    // being asked for). Fail loudly; the client retries.
+    // appendModelMessage logs-and-returns-null per message, so a null id
+    // is the failure signal here.
+    const appendedIds = await appendTrailingTurn(
+      nonSystemMessages,
+      ctx.project,
     );
+    if (appendedIds.some((id) => id === null)) {
+      throw new Error(
+        "context assembly aborted: failed to persist the trailing turn to the message log",
+      );
+    }
   } else {
     log.debug(
       "skipping message persistence — no tools (likely utility request)",
@@ -117,15 +134,16 @@ export async function assembleContext(ctx: MimirContext) {
   //    compaction work without the "back in time" symptom: the summary
   //    covers the longer tail, while the most recent exchanges remain
   //    verbatim.
-  const recentMessages: ModelMessage[] = await getLastNModelMessages(
+  const recentMessages: ModelMessage[] = await getLastModelMessages(
     config.context.keepRecentMessages,
   );
 
-  // 4. Build context injection from summaries + memories + rules
+  // 4. Build context injection from summaries + memories + playbooks + rules
   ctx.contextInjection = buildContextInjection(
     summaries,
     ctx.memories,
     ctx.projectRules,
+    ctx.playbooks,
   );
   ctx.conversationMessages = recentMessages;
 
@@ -134,6 +152,7 @@ export async function assembleContext(ctx: MimirContext) {
       summaries: summaries.length,
       recentMessages: recentMessages.length,
       hasMemories: !!ctx.memories,
+      hasPlaybooks: !!ctx.playbooks,
       injectionPairs: ctx.contextInjection.length,
       conversationMessages: ctx.conversationMessages.length,
       elapsed: `${Date.now() - start}ms`,

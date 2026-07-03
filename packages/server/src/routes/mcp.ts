@@ -16,7 +16,7 @@
 
 import { asSchema } from "ai";
 import { Hono } from "hono";
-import { getMcpPublicTools } from "../agent-loop/server-tools";
+import { getMcpPublicTools } from "../agent/server-tools";
 import { log } from "../util/logger";
 
 export const mcp = new Hono();
@@ -35,16 +35,9 @@ type JsonRpcRequest = {
   id?: string | number | null;
 };
 
-type JsonRpcResponse = {
-  jsonrpc: "2.0";
-  result?: unknown;
-  error?: { code: number; message: string };
-  id: string | number | null;
-};
-
 // ── JSON-RPC dispatch ──────────────────────────────────────────────────────
 
-async function dispatch(req: JsonRpcRequest): Promise<JsonRpcResponse | null> {
+async function dispatch(req: JsonRpcRequest) {
   // Notifications (no id) require no response
   if (req.id === undefined) return null;
 

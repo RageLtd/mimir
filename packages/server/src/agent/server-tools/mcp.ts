@@ -24,7 +24,7 @@ let mcpTools: ToolSet = {};
  * Initialize MCP clients and fetch their tools.
  * Call once during server boot. Failures are non-fatal.
  */
-export async function initMcpTools(): Promise<void> {
+export async function initMcpTools() {
   const tools: ToolSet = {};
 
   // --- Context7 ---
@@ -93,17 +93,12 @@ export async function initMcpTools(): Promise<void> {
 }
 
 /** Get all tools from connected MCP servers */
-export function getMcpTools(): ToolSet {
+export function getMcpTools() {
   return mcpTools;
 }
 
-/** Get all MCP tool names (for SERVER_TOOL_NAMES set) */
-export function getMcpToolNames(): string[] {
-  return Object.keys(mcpTools);
-}
-
 /** Close all MCP clients (for graceful shutdown) */
-export async function closeMcpClients(): Promise<void> {
+export async function closeMcpClients() {
   for (const client of clients) {
     await attempt(() => client.close());
   }

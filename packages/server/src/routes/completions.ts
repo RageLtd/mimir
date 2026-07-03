@@ -10,31 +10,20 @@
 
 import { type Context, Hono } from "hono";
 import { z } from "zod";
+import { getSmallModelConfig } from "../agent/provider/query";
 import { runAgent } from "../agent/run";
-import { getSmallModelConfig } from "../agent-loop/provider/query";
-import { assembleContext } from "../middleware/context-assembly";
-import { injectMemories } from "../middleware/goldfish";
-import { injectProjectRules } from "../middleware/project-rules";
-import { injectSystemPrompt } from "../middleware/system-prompt";
-import { classifyTools } from "../middleware/tool-classification";
-import type {
-  ChatRequest,
-  MimirContext,
-  OpenAIToolDef,
-} from "../middleware/types";
-import { injectUserProfile } from "../middleware/user-profile";
+import {
+  createMimirContext,
+  generateRequestId,
+  prepareContext,
+} from "../middleware/pipeline";
+import type { ChatRequest, OpenAIToolDef } from "../middleware/types";
 import { requestLog } from "../util/logger";
 import { normalizeMessages } from "./openai-format";
 
 // Message format translation (OpenAI ↔ AI SDK ModelMessage) lives in
-// ./openai-format.ts so this file reads as routing logic.
-
-/**
- * Generate a correlation ID for request logging.
- */
-function generateRequestId() {
-  return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-}
+// ./openai-format.ts so this file reads as routing logic. Context
+// creation and the middleware chain live in ../middleware/pipeline.ts.
 
 // ---------------------------------------------------------------------------
 // Zod Schema — the ONE place we validate/parse
@@ -113,7 +102,6 @@ completions.post("/v1/chat/completions", async (c) => {
   }
 
   let req = parsed.data as ChatRequest;
-  const project = (req.metadata?.project as string) ?? "default";
 
   // --- Utility request short-circuit ---
   // No tools = utility request (title gen, summarization, etc.)
@@ -122,6 +110,23 @@ completions.post("/v1/chat/completions", async (c) => {
   if (!hasTools) {
     log.debug("utility request detected (no tools) — proxying to small model");
     return proxyToSmallModel(req, c);
+  }
+
+  // The agent path streams exclusively — the non-streaming JSON builder was
+  // removed because the loop relies on SSE for tool-observation visibility and
+  // the ACP client never requests non-streaming. Utility requests (short-
+  // circuited above) may still be non-streaming. Reject a non-streaming agent
+  // request rather than silently returning a stream the caller didn't ask for.
+  if (!req.stream) {
+    return c.json(
+      {
+        error: {
+          message:
+            "Non-streaming agent requests are not supported. Set stream: true.",
+        },
+      },
+      400,
+    );
   }
 
   // Normalize messages to AI SDK format before passing to middleware
@@ -143,34 +148,8 @@ completions.post("/v1/chat/completions", async (c) => {
 
   logRequest(requestLog(requestId), req);
 
-  // Build initial context — the typed object for the pipeline
-  const ctx: MimirContext = {
-    request: req,
-    project,
-    sessionId: fingerprint(req),
-    // Filled by middleware:
-    systemPrompt: "",
-    memories: null,
-    projectRules: null,
-    conversationMessages: [],
-    contextInjection: [],
-    compactionTriggered: false,
-    serverTools: {},
-    clientTools: {},
-    allTools: {},
-    resolvedModel: null,
-  };
-
   try {
-    // Run middleware pipeline — each mutates ctx
-    await injectSystemPrompt(ctx);
-    await injectMemories(ctx);
-    injectUserProfile(ctx);
-    injectProjectRules(ctx);
-    await assembleContext(ctx);
-    await classifyTools(ctx);
-
-    // Run agent and return response
+    const ctx = await prepareContext(createMimirContext(req));
     return runAgent(ctx);
   } catch (err) {
     log.error({ err }, "middleware pipeline failed");
@@ -203,37 +182,11 @@ function logRequest(log: ReturnType<typeof requestLog>, req: ChatRequest) {
 }
 
 /**
- * Deterministic session ID from first user message content.
- * Falls back to request hash if no user message found.
- */
-function fingerprint(req: ChatRequest) {
-  const first = req.messages.find((m) => m.role === "user");
-  if (!first) {
-    return Bun.hash(JSON.stringify(req)).toString(36);
-  }
-
-  const content =
-    typeof first.content === "string"
-      ? first.content
-      : Array.isArray(first.content)
-        ? first.content
-            .filter((p) => p.type === "text")
-            .map((p) => p.text)
-            .join(" ")
-        : "";
-
-  return Bun.hash(content).toString(36);
-}
-
-/**
  * Proxy a utility request (no tools) directly to the small model.
  * Skips the entire middleware pipeline — no system prompt, no memories,
  * no persistence. Just a clean pass-through.
  */
-async function proxyToSmallModel(
-  req: ChatRequest,
-  c: Context,
-): Promise<Response> {
+async function proxyToSmallModel(req: ChatRequest, c: Context) {
   const smallModel = getSmallModelConfig();
   if (!smallModel) {
     return c.json(
