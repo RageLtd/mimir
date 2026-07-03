@@ -54,6 +54,7 @@ const kickOffSessionInit = (
   serverUrl: string,
   apiKey: string,
   onResolved: (project: import("../project/resolver").ResolvedProject) => void,
+  settleProjectId: (id: string | null) => void,
   onRuleErrors?: (errors: readonly LoadError[]) => void,
 ) => {
   readProjectRules(projectPath)
@@ -82,8 +83,16 @@ const kickOffSessionInit = (
 
   resolveProjectForPath({ serverUrl, apiKey }, projectPath)
     .then(async (project) => {
-      if (!project) return;
+      if (!project) {
+        // Resolution returned nothing — settle so autoIndex stops waiting
+        // and syncs under the filesystem path (the server's back-compat key).
+        settleProjectId(null);
+        return;
+      }
       onResolved(project);
+      // Settle before the metadata PATCH so a slow second round-trip never
+      // delays the index sync.
+      settleProjectId(project.id);
 
       // Collect metadata from manifest files and PATCH unconditionally —
       // the project entity is the source of truth and should reflect the
@@ -93,9 +102,10 @@ const kickOffSessionInit = (
         await patchProjectMetadata({ serverUrl, apiKey }, project.id, metadata);
       }
     })
-    .catch((err) =>
-      logger.warn("project resolver failed: %s", errMessage(err)),
-    );
+    .catch((err) => {
+      settleProjectId(null);
+      logger.warn("project resolver failed: %s", errMessage(err));
+    });
 };
 
 export const createAgentCore = (
@@ -114,11 +124,16 @@ export const createAgentCore = (
     onRuleErrors?: (errors: readonly LoadError[]) => void,
   ) => {
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    let settleProjectId: (id: string | null) => void = () => {};
+    const projectIdReady = new Promise<string | null>((resolve) => {
+      settleProjectId = resolve;
+    });
     const session: SessionState = {
       sessionId,
       messages: [],
       projectPath,
       projectId: null,
+      projectIdReady,
       projectInfo: null,
       abortController: null,
       currentModelId: appConfig.model,
@@ -144,6 +159,7 @@ export const createAgentCore = (
         session.projectInfo = project;
         sessionStore.updateMeta(sessionId, { projectId: project.id });
       },
+      settleProjectId,
       onRuleErrors,
     );
 
@@ -194,11 +210,16 @@ export const createAgentCore = (
     }
     const persisted = sessionStore.get(sessionId);
     if (!persisted) return null;
+    let settleProjectId: (id: string | null) => void = () => {};
+    const projectIdReady = new Promise<string | null>((resolve) => {
+      settleProjectId = resolve;
+    });
     const session: SessionState = {
       sessionId: persisted.session_id,
       messages: JSON.parse(persisted.messages),
       projectPath: persisted.project_path,
       projectId: persisted.project_id,
+      projectIdReady,
       projectInfo: null,
       abortController: null,
       currentModelId: persisted.model_id,
@@ -233,6 +254,7 @@ export const createAgentCore = (
           sessionStore.updateMeta(sessionId, { projectId: project.id });
         }
       },
+      settleProjectId,
       onRuleErrors,
     );
 
@@ -365,7 +387,7 @@ export const createAgentCore = (
     // Reindex after any turn that modified files so Cartographer queries
     // reflect the current state on the next prompt.
     if (result.filesModified && cartographer && session.projectPath) {
-      cartographer.autoIndex(session.projectPath, () => session.projectId);
+      cartographer.autoIndex(session.projectPath, session.projectIdReady);
     }
 
     return result;

@@ -63,6 +63,37 @@ export const isFileWriteTool = (name: string) => FILE_WRITE_TOOLS.has(name);
 const shouldIndexFile = (path: string) =>
   !path.split("/").some((part) => part.startsWith(".") || SKIP_DIRS.has(part));
 
+/**
+ * Max time autoIndex waits for the project resolver before syncing under the
+ * filesystem path. The resolver is normally sub-second (one git call + one
+ * edge-deployed POST); this only bounds the wait so a hung resolver can't
+ * wedge indexing forever.
+ */
+const PROJECT_ID_WAIT_MS = 10_000;
+
+/**
+ * Await the resolved project id, bounded by a deadline. Returns the UUID once
+ * the resolver settles, or null when there's no resolver, it resolved to null,
+ * or it didn't answer in time (the server then keys the index by path as a
+ * back-compat fallback). Awaiting here — rather than reading a snapshot at fire
+ * time — is what closes the race: a projectId that's still unresolved when
+ * autoIndex starts is picked up once it settles, instead of syncing as null and
+ * fragmenting the project across path- and UUID-keyed records.
+ */
+export const awaitProjectId = async (
+  projectIdReady: Promise<string | null> | undefined,
+  timeoutMs = PROJECT_ID_WAIT_MS,
+) => {
+  if (!projectIdReady) return null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs);
+  });
+  const resolved = await Promise.race([projectIdReady, deadline]);
+  if (timer) clearTimeout(timer);
+  return resolved;
+};
+
 const collectProjectFiles = async (projectPath: string) => {
   const glob = new Glob(SOURCE_GLOB);
   const files: string[] = [];
@@ -83,14 +114,14 @@ export type CartographerManager = {
     args: Record<string, unknown>,
   ) => Promise<string>;
   /**
-   * Trigger an auto-index for a project (fire-and-forget). The optional
-   * `getProjectId` accessor is called at sync time — the resolver may have
-   * completed between this invocation and the actual HTTP call, so we read
-   * the latest value rather than capturing a potentially null snapshot.
+   * Trigger an auto-index for a project (fire-and-forget). `projectIdReady`
+   * is the session's project-resolution promise; autoIndex awaits it (bounded
+   * by a timeout) before posting, so the sync is keyed by the canonical UUID
+   * rather than racing the resolver into a path-keyed duplicate record.
    */
   readonly autoIndex: (
     projectPath: string,
-    getProjectId?: () => string | null,
+    projectIdReady?: Promise<string | null>,
   ) => void;
   /** Kill all child processes. */
   readonly dispose: () => void;
@@ -153,7 +184,7 @@ export const createCartographerManager = (
 
   const autoIndex = (
     projectPath: string,
-    getProjectId?: () => string | null,
+    projectIdReady?: Promise<string | null>,
   ) => {
     // In --parse-only mode the binary has no DB access, and its full-index
     // tool returns a human summary. ACP owns the persisted index payload by
@@ -181,11 +212,16 @@ export const createCartographerManager = (
           return;
         }
 
+        // Wait for the canonical project id before posting so the index is
+        // keyed by the UUID, not the filesystem path. Parsing above usually
+        // outlasts resolution, so this rarely blocks.
+        const projectId = await awaitProjectId(projectIdReady);
+
         await syncIndex(
           { serverUrl: config.serverUrl, apiKey: config.apiKey, logger },
           projectPath,
           parsedFiles,
-          getProjectId?.() ?? null,
+          projectId,
         );
       })
       .catch((err) => {

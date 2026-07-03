@@ -16,6 +16,14 @@ export type SessionState = {
   messages: ChatMessage[];
   projectPath: string;
   projectId: string | null;
+  /**
+   * Settles with the canonical project UUID once the resolver completes,
+   * or null when resolution fails or the path can't be resolved. Cartographer
+   * `autoIndex` awaits this before syncing so the index is always keyed by the
+   * UUID rather than racing the resolver and falling back to path-keying — the
+   * fragmentation that split one repo across two index records.
+   */
+  projectIdReady: Promise<string | null>;
   projectInfo: ResolvedProject | null;
   abortController: AbortController | null;
   currentModelId: string;
