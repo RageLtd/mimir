@@ -136,6 +136,24 @@ export const createServerBackend = (serverConfig: ServerClientConfig) => {
           usageCompletionTokens = event.completionTokens;
           usageContextWindow = event.contextWindow;
           break;
+        case "tool_observation":
+          // Server-side tool observation — the tool was already executed
+          // by mimir-server. Yield observe-only events so the agent loop
+          // renders the call in the editor without re-executing it.
+          yield {
+            type: "tool_call" as const,
+            id: event.id,
+            name: event.name,
+            input: event.input,
+            observeOnly: true,
+          };
+          yield {
+            type: "tool_result" as const,
+            id: event.id,
+            output: event.result,
+            observeOnly: true,
+          };
+          break;
         case "error":
           yield { type: "error" as const, error: event.error };
           return;

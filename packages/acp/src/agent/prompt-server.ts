@@ -49,7 +49,12 @@ import {
   buildMetadata,
   hasImageContent,
 } from "./content";
-import { emitAgentText, emitPlanUpdate } from "./lifecycle-helpers";
+import { emitAgentText } from "./lifecycle-helpers";
+import {
+  completeObservedToolCall,
+  type ObservedCall,
+  renderObservedToolCall,
+} from "./observe-render";
 import {
   buildToolCallContent,
   extractLocations,
@@ -134,6 +139,11 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
     let contentBuffer = "";
     let hasContent = false;
 
+    // Observe-only tool calls from the server backend — rendered in the
+    // editor but not re-executed. Map call ID → { name, kind, title } so
+    // the paired tool_result can complete the card.
+    const observedCalls = new Map<string, ObservedCall>();
+
     // Manually drive the backend stream — same pattern as prompt-cc.ts.
     // `iter.next().catch(errMessage)` makes abort vs real error explicit
     // without try/catch wrapping the whole loop.
@@ -184,6 +194,22 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
           name: event.name,
           input: event.input,
         });
+      } else if (event.type === "tool_call" && event.observeOnly) {
+        // Server-executed tool observed — render without re-executing.
+        // TodoWrite renders as a plan update; everything else as a card.
+        await renderObservedToolCall(
+          conn,
+          session.sessionId,
+          event,
+          observedCalls,
+        );
+      } else if (event.type === "tool_result" && event.observeOnly) {
+        await completeObservedToolCall(
+          conn,
+          session.sessionId,
+          event,
+          observedCalls,
+        );
       } else if (event.type === "finish") {
         // Emit a usage_update so Zed's progress bar updates per turn —
         // mirrors prompt-cc.ts:248. The server backend now reports
@@ -402,20 +428,6 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
         : resultContent;
 
       if (isFileWrite) filesModified = true;
-
-      // TodoWrite → emit a plan update so Zed's plan panel stays in sync,
-      // mirroring the CC event handler's behaviour.
-      if (tc.name === "TodoWrite" && Array.isArray(tc.input.todos)) {
-        await emitPlanUpdate(
-          conn,
-          session.sessionId,
-          tc.input.todos as {
-            content: string;
-            status: string;
-            activeForm?: string;
-          }[],
-        );
-      }
 
       session.messages.push({
         role: "tool",

@@ -76,7 +76,14 @@ export type SSEEvent =
       readonly contextWindow?: number;
     }
   | { readonly type: "finish"; readonly reason: string | null }
-  | { readonly type: "error"; readonly error: string };
+  | { readonly type: "error"; readonly error: string }
+  | {
+      readonly type: "tool_observation";
+      readonly id: string;
+      readonly name: string;
+      readonly input: Record<string, unknown>;
+      readonly result: string;
+    };
 
 export const parseSSELine = (line: string) => {
   if (!line.startsWith("data: ")) return null;
@@ -114,6 +121,34 @@ export const chunkToEvents = (chunk: ChatCompletionChunk) => {
 
     if (choice.finish_reason) {
       events.push({ type: "finish", reason: choice.finish_reason });
+    }
+  }
+
+  // Mimir extension: server-side tool observations carry both call and result
+  // in a single SSE chunk. The delta's mimir_tool_observation field is a
+  // non-standard wire format that the ACP parser translates into observe-only
+  // tool_call + tool_result events.
+  const firstChoice = chunk.choices[0];
+  if (
+    firstChoice &&
+    firstChoice.delta &&
+    "mimir_tool_observation" in firstChoice.delta
+  ) {
+    const obs = (firstChoice.delta as Record<string, unknown>)
+      .mimir_tool_observation as {
+      id: string;
+      name: string;
+      input: Record<string, unknown>;
+      result: string;
+    };
+    if (obs && typeof obs === "object" && typeof obs.id === "string") {
+      events.push({
+        type: "tool_observation",
+        id: obs.id,
+        name: obs.name,
+        input: obs.input ?? {},
+        result: typeof obs.result === "string" ? obs.result : String(obs.result ?? ""),
+      });
     }
   }
 
