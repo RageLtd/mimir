@@ -21,8 +21,8 @@
  *     messages in the prompt.
  *
  * Implementation notes:
- *   - Array-based record ID: `message_log:[project, timestamp_ns]`
- *   - `project` is metadata for display; reads are unscoped (global)
+ *   - Array-based record ID: `message_log:[project_id, timestamp_ns]`
+ *   - `project_id` is the canonical project ULID; reads are unscoped (global)
  *   - Token-based compaction triggers are handled in compaction-state.ts
  *
  * TODO: TTL cleanup for old messages. The log grows unbounded today;
@@ -54,8 +54,7 @@ import {
  */
 export async function appendModelMessage(
   message: ModelMessage,
-  project: string,
-  projectId?: string | null,
+  projectId: string,
 ) {
   const start = Date.now();
   const db = await getDb();
@@ -63,9 +62,9 @@ export async function appendModelMessage(
   // Use nanoseconds to prevent collisions when multiple messages
   // arrive within the same millisecond (e.g., user message + tool result)
   const timestamp = Bun.nanoseconds();
-  const recordId = `[${JSON.stringify(project)}, ${timestamp}]`;
+  const recordId = `[${JSON.stringify(projectId)}, ${timestamp}]`;
 
-  const fields = modelMessageToFields(message, project, undefined, projectId);
+  const fields = modelMessageToFields(message, projectId);
   fields.id = recordId;
 
   const [err, result] = await attempt(() =>
@@ -77,7 +76,7 @@ export async function appendModelMessage(
 
   if (err) {
     log.error(
-      { err, project, projectId, role: message.role },
+      { err, projectId, role: message.role },
       "failed to append message",
     );
     return null;
@@ -86,7 +85,7 @@ export async function appendModelMessage(
   const created = result?.[0]?.[0];
   if (!created?.id) {
     log.error(
-      { project, projectId, role: message.role },
+      { projectId, role: message.role },
       "message append returned no ID",
     );
     return null;
@@ -95,7 +94,6 @@ export async function appendModelMessage(
   log.debug(
     {
       id: created.id,
-      project,
       projectId,
       role: message.role,
       elapsed: `${Date.now() - start}ms`,
@@ -152,7 +150,7 @@ export function extractTrailingTurn(clientMessages: readonly ModelMessage[]) {
  */
 export async function appendTrailingTurn(
   clientMessages: readonly ModelMessage[],
-  project: string,
+  projectId: string,
 ) {
   const trailing = extractTrailingTurn(clientMessages);
   if (trailing.length === 0) {
@@ -182,13 +180,13 @@ export async function appendTrailingTurn(
 
   const appendedIds: (string | null)[] = [];
   for (const message of trailing) {
-    const id = await appendModelMessage(message, project);
+    const id = await appendModelMessage(message, projectId);
     appendedIds.push(id ?? null);
   }
 
   log.info(
     {
-      project,
+      projectId,
       appended: appendedIds.length,
       roles: trailing.map((m) => m.role),
     },
@@ -208,7 +206,7 @@ export async function appendTrailingTurn(
  */
 export async function appendAssistantOutput(
   message: ModelMessage,
-  project: string,
+  projectId: string,
 ) {
   if (message.role !== "assistant") {
     log.warn(
@@ -217,8 +215,11 @@ export async function appendAssistantOutput(
     );
     return null;
   }
-  const id = await appendModelMessage(message, project);
-  log.info({ project, id }, "appendAssistantOutput: assistant turn persisted");
+  const id = await appendModelMessage(message, projectId);
+  log.info(
+    { projectId, id },
+    "appendAssistantOutput: assistant turn persisted",
+  );
   return id;
 }
 
@@ -240,8 +241,7 @@ export async function appendAssistantOutput(
  */
 export async function appendTurn(
   messages: readonly ModelMessage[],
-  project: string,
-  projectId?: string | null,
+  projectId: string,
 ) {
   if (messages.length === 0) return [];
 
@@ -253,7 +253,7 @@ export async function appendTurn(
     const allMatch = dbFps.every((fp, idx) => fp === msgFps[idx]);
     if (allMatch) {
       log.debug(
-        { count: messages.length, project, projectId },
+        { count: messages.length, projectId },
         "appendTurn: delta matches DB tail, skipping (retry)",
       );
       return [];
@@ -262,14 +262,13 @@ export async function appendTurn(
 
   const appendedIds: (string | null)[] = [];
   for (const message of messages) {
-    const id = await appendModelMessage(message, project, projectId);
+    const id = await appendModelMessage(message, projectId);
     appendedIds.push(id ?? null);
   }
 
   log.info(
     {
       appended: appendedIds.length,
-      project,
       projectId,
       roles: messages.map((m) => m.role),
     },

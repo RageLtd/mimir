@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildDriftRemovalSql } from "./surreal";
+import { buildDriftRemovalSql, buildOrphanValuePurgeSql } from "./surreal";
 
 // Mirrors the cart_file DEFINE block in initSchema. content_hash is a LEGIT
 // declared field (drifted once, now part of the source) and must survive.
@@ -43,5 +43,30 @@ describe("buildDriftRemovalSql", () => {
     const declared = ["project", "symbols"];
     const sql = buildDriftRemovalSql("cart_file", live, declared);
     expect(sql).toEqual(["REMOVE FIELD IF EXISTS stray ON TABLE cart_file;"]);
+  });
+});
+
+describe("buildOrphanValuePurgeSql", () => {
+  test("purges all orphans in ONE statement so the post-image validates", () => {
+    // A row carrying several orphans must have them unset together —
+    // unsetting one at a time leaves the others rejecting the UPDATE.
+    const sql = buildOrphanValuePurgeSql("cart_file", [
+      "last_parsed_epoch",
+      "symbol_names",
+    ]);
+    expect(sql).toBe(
+      "UPDATE cart_file UNSET last_parsed_epoch, symbol_names WHERE last_parsed_epoch != NONE OR symbol_names != NONE;",
+    );
+  });
+
+  test("single orphan produces a single-field purge", () => {
+    const sql = buildOrphanValuePurgeSql("cart_import", ["stray"]);
+    expect(sql).toBe(
+      "UPDATE cart_import UNSET stray WHERE stray != NONE;",
+    );
+  });
+
+  test("no orphans → null (no statement issued)", () => {
+    expect(buildOrphanValuePurgeSql("cart_file", [])).toBeNull();
   });
 });

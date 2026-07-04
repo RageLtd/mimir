@@ -15,6 +15,7 @@
 import { Hono } from "hono";
 import { getDb, queryOne } from "../db/surreal";
 import { resolveProjectForQuery } from "../projects/resolve-for-query";
+import { ensureProjectId } from "../projects/store";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 import { fileInfoHandler } from "./cartographer-file-info";
@@ -30,10 +31,10 @@ cartographer.post("/file-info", fileInfoHandler);
 type IndexPayload = {
   readonly rootPath: string;
   /**
-   * Canonical project id from /v1/projects/resolve. When present, used as
-   * the key in cart_file / cart_import rows — stable across machines and
-   * path changes. When absent, we fall back to rootPath for back-compat
-   * with older clients.
+   * Canonical project id from /v1/projects/resolve. Preferred key for
+   * cart_file / cart_import rows — stable across machines and path
+   * changes. When absent, rootPath is resolved (get-or-create) to a
+   * canonical id at this boundary; the raw path never reaches storage.
    */
   readonly projectId?: string;
   /**
@@ -107,8 +108,18 @@ cartographer.post("/sync", async (c) => {
     return c.json({ error: "Missing rootPath or files" }, 400);
   }
 
-  // Prefer the canonical project id; fall back to rootPath for back-compat.
-  const projectKey = payload.projectId ?? payload.rootPath;
+  // Resolve to the canonical project id at the boundary — prefer the
+  // client-resolved id, get-or-create from rootPath otherwise.
+  const projectId = await ensureProjectId(
+    payload.projectId ?? payload.rootPath,
+  );
+  if (!projectId) {
+    log.error(
+      { rootPath: payload.rootPath, projectId: payload.projectId },
+      "cartographer sync: failed to resolve project identifier",
+    );
+    return c.json({ error: "Failed to resolve project identifier" }, 500);
+  }
   const mode = payload.mode ?? "replace";
 
   const [syncErr] = await attempt(async () => {
@@ -117,11 +128,11 @@ cartographer.post("/sync", async (c) => {
     if (mode === "replace") {
       // Wipe the whole project's index — used for full scans (initial
       // import, periodic re-sync, deletion-aware refresh from SessionStart).
-      await db.query(`DELETE cart_file WHERE project = $project`, {
-        project: projectKey,
+      await db.query(`DELETE cart_file WHERE project_id = $project_id`, {
+        project_id: projectId,
       });
-      await db.query(`DELETE cart_import WHERE project = $project`, {
-        project: projectKey,
+      await db.query(`DELETE cart_import WHERE project_id = $project_id`, {
+        project_id: projectId,
       });
     } else {
       // Upsert mode: delete only the rows for the files in this payload.
@@ -131,12 +142,12 @@ cartographer.post("/sync", async (c) => {
       const filePaths = payload.files.map((f) => f.path);
       if (filePaths.length > 0) {
         await db.query(
-          `DELETE cart_file WHERE project = $project AND file_path IN $paths`,
-          { project: projectKey, paths: filePaths },
+          `DELETE cart_file WHERE project_id = $project_id AND file_path IN $paths`,
+          { project_id: projectId, paths: filePaths },
         );
         await db.query(
-          `DELETE cart_import WHERE project = $project AND source_path IN $paths`,
-          { project: projectKey, paths: filePaths },
+          `DELETE cart_import WHERE project_id = $project_id AND source_path IN $paths`,
+          { project_id: projectId, paths: filePaths },
         );
       }
     }
@@ -160,7 +171,7 @@ cartographer.post("/sync", async (c) => {
         // send ISO 8601 (e.g. "2026-05-18T03:52:20.164Z") and the
         // <datetime> prefix turns that into a real datetime value.
         `CREATE cart_file CONTENT {
-          project: $project,
+          project_id: $project_id,
           file_path: $file_path,
           language: $language,
           symbols: $symbols,
@@ -169,7 +180,7 @@ cartographer.post("/sync", async (c) => {
           indexed_at: <datetime>$indexed_at
         }`,
         {
-          project: projectKey,
+          project_id: projectId,
           file_path: file.path,
           language: file.language,
           symbols: JSON.stringify(file.symbols),
@@ -197,7 +208,7 @@ cartographer.post("/sync", async (c) => {
           // Same datetime cast as cart_file — schema enforces datetime,
           // clients send ISO 8601 strings.
           `CREATE cart_import CONTENT {
-            project: $project,
+            project_id: $project_id,
             source_path: $source_path,
             target_path: $target_path,
             specifier: $specifier,
@@ -205,7 +216,7 @@ cartographer.post("/sync", async (c) => {
             indexed_at: <datetime>$indexed_at
           }`,
           {
-            project: projectKey,
+            project_id: projectId,
             source_path: file.path,
             target_path: imp.target,
             specifier: imp.specifier,
@@ -225,7 +236,7 @@ cartographer.post("/sync", async (c) => {
 
   if (syncErr) {
     log.error(
-      { error: syncErr.message, project: projectKey },
+      { error: syncErr.message, projectId },
       "cartographer sync failed",
     );
     return c.json({ error: syncErr.message }, 500);
@@ -234,7 +245,7 @@ cartographer.post("/sync", async (c) => {
   const elapsed = Date.now() - start;
   log.info(
     {
-      project: projectKey,
+      projectId,
       rootPath: payload.rootPath,
       mode,
       files: payload.stats.totalFiles,
@@ -246,7 +257,7 @@ cartographer.post("/sync", async (c) => {
 
   return c.json({
     ok: true,
-    project: projectKey,
+    project: projectId,
     mode,
     files: payload.stats.totalFiles,
     symbols: payload.stats.totalSymbols,
@@ -273,8 +284,8 @@ cartographer.get("/:project", async (c) => {
       language: string;
       indexed_at: string;
     }>(
-      `SELECT file_path, language, indexed_at FROM cart_file WHERE project = $project ORDER BY file_path`,
-      { project },
+      `SELECT file_path, language, indexed_at FROM cart_file WHERE project_id = $project_id ORDER BY file_path`,
+      { project_id: project },
     ),
   );
 
@@ -308,16 +319,16 @@ cartographer.get("/:project", async (c) => {
 cartographer.get("/", async (c) => {
   try {
     const projects = await queryOne<{
-      project: string;
+      project_id: string;
       count: number;
       indexed_at: string;
     }>(
-      `SELECT project, count() AS count, math::max(indexed_at) AS indexed_at FROM cart_file GROUP BY project`,
+      `SELECT project_id, count() AS count, math::max(indexed_at) AS indexed_at FROM cart_file GROUP BY project_id`,
     );
 
     return c.json({
       projects: projects.map((p) => ({
-        rootPath: p.project,
+        projectId: p.project_id,
         files: p.count,
         indexedAt: p.indexed_at,
       })),

@@ -11,16 +11,17 @@
  * Empty arrays / null / "" on miss — the plugin treats absence as
  * "skip injection," not as an error, so 404 would be the wrong shape.
  *
- * Slice 2 addition: optional `projectId` field in the request body.
- * When present, cart_file / cart_import lookups switch to keying by
- * project = $projectId (matching what Slice 1's sync route writes for
- * UUID-keyed rows). When absent, the route falls back to the legacy
- * localPath-keyed query so pre-Slice-2 plugins keep working.
+ * Storage keys exclusively on canonical project ULIDs (project_id).
+ * The request may carry either `projectId` (preferred) or the legacy
+ * `project` path — both are resolved to the canonical id at this
+ * boundary via resolveProjectForQuery. Unresolvable identifiers fall
+ * through to queries that match nothing, which returns the empty shape.
  */
 
 import type { Context } from "hono";
 import { queryFirst, queryOne } from "../db/surreal";
 import { retrieveMemories } from "../goldfish/memory";
+import { resolveProjectForQuery } from "../projects/resolve-for-query";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 
@@ -44,8 +45,8 @@ type FileInfoRequest = {
   /** Legacy cwd-style path. Always required for back-compat. */
   project: string;
   /**
-   * Canonical project UUID. When present, lookups key by this instead of
-   * `project`. Slice-1 plugins omit it; Slice-2-aware plugins send both.
+   * Canonical project ULID. Preferred — when present it wins over
+   * `project`. Older plugins omit it and send only the path.
    */
   projectId?: string;
   filePath: string;
@@ -64,16 +65,6 @@ type CartImportRow = {
 
 type SymbolRow = { kind: string; name: string; line: number; column: number };
 
-/**
- * Resolve the SurrealDB column key for cart_file / cart_import lookups.
- * UUID wins when both are populated (Slice 2 precedence rule); the route
- * falls back to localPath when only the legacy field is present.
- */
-const resolveProjectKey = (body: FileInfoRequest) =>
-  typeof body.projectId === "string" && body.projectId.length > 0
-    ? body.projectId
-    : body.project;
-
 export const fileInfoHandler = async (c: Context) => {
   const [bodyErr, body] = await attempt(() => c.req.json<FileInfoRequest>());
   if (bodyErr) {
@@ -88,14 +79,22 @@ export const fileInfoHandler = async (c: Context) => {
     return c.json({ error: "Missing required field: filePath" }, 400);
   }
 
-  const projectKey = resolveProjectKey(body);
+  // Resolve to the canonical project id — prefers the client-sent id,
+  // falls back to resolving the legacy path field. Read path: no
+  // get-or-create; an unknown identifier just matches nothing.
+  const resolved = await resolveProjectForQuery(
+    typeof body.projectId === "string" && body.projectId.length > 0
+      ? body.projectId
+      : body.project,
+  );
+  const projectKey = resolved.project;
 
   const [fileErr, fileRow] = await attempt(() =>
     queryFirst<CartFileRow>(
       `SELECT symbols, content_hash FROM cart_file
-        WHERE project = $project AND file_path = $file_path
+        WHERE project_id = $project_id AND file_path = $file_path
         LIMIT 1`,
-      { project: projectKey, file_path: body.filePath },
+      { project_id: projectKey, file_path: body.filePath },
     ),
   );
 
@@ -137,8 +136,8 @@ export const fileInfoHandler = async (c: Context) => {
   const [importErr, importRows] = await attempt(() =>
     queryOne<CartImportRow>(
       `SELECT target_path, specifier FROM cart_import
-        WHERE project = $project AND source_path = $file_path`,
-      { project: projectKey, file_path: body.filePath },
+        WHERE project_id = $project_id AND source_path = $file_path`,
+      { project_id: projectKey, file_path: body.filePath },
     ),
   );
   if (importErr) {
@@ -152,10 +151,10 @@ export const fileInfoHandler = async (c: Context) => {
   const [depErr, dependentRows] = await attempt(() =>
     queryOne<CartImportRow>(
       `SELECT source_path, specifier FROM cart_import
-        WHERE project = $project AND target_path = $file_path
+        WHERE project_id = $project_id AND target_path = $file_path
         LIMIT $limit`,
       {
-        project: projectKey,
+        project_id: projectKey,
         file_path: body.filePath,
         limit: FILE_INFO_DEPENDENT_LIMIT,
       },

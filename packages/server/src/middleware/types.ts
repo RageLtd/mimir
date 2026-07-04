@@ -49,7 +49,12 @@ export interface OpenAIToolDef {
 export interface MimirContext {
   // -- Set at input boundary --
   request: ChatRequest;
-  project: string; // from metadata.project or "default"
+  /**
+   * Canonical project ULID, resolved from metadata.project (path or id)
+   * by the pipeline's resolve stage. Null only before that stage runs —
+   * everything downstream may assert it via requireProjectId.
+   */
+  projectId: string | null;
 
   // -- Set by MW1: system prompt --
   systemPrompt: string;

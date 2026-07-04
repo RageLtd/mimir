@@ -176,8 +176,11 @@ describe("runCompaction", () => {
       expect.objectContaining({
         content: "Compacted summary of conversation",
         type: "summary",
-        project: "global",
       }),
+    );
+    // Summaries are global — no project_id sentinel on the stored row.
+    expect(mockStoreMemory).not.toHaveBeenCalledWith(
+      expect.objectContaining({ project_id: expect.anything() }),
     );
   });
 

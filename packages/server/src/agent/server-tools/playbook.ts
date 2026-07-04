@@ -116,7 +116,7 @@ export const executePlaybookList = async ({
       id: p.id,
       name: p.name ?? null,
       trigger: p.trigger ?? null,
-      project: p.project ?? null,
+      project_id: p.project_id ?? null,
     })),
     error: null,
   };
@@ -140,7 +140,7 @@ export const executePlaybookLoad = async ({
     name: playbook.name ?? null,
     trigger: playbook.trigger ?? null,
     content: playbook.content,
-    project: playbook.project ?? null,
+    project_id: playbook.project_id ?? null,
     error: null,
   };
 };

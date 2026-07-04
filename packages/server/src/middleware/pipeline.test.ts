@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { createMimirContext } from "./pipeline";
-import type { ChatRequest } from "./types";
+import { createMimirContext, requireProjectId } from "./pipeline";
+import type { ChatRequest, MimirContext } from "./types";
 
 const baseRequest = (overrides: Partial<ChatRequest> = {}): ChatRequest => ({
   model: "test-model",
@@ -10,16 +10,9 @@ const baseRequest = (overrides: Partial<ChatRequest> = {}): ChatRequest => ({
 });
 
 describe("createMimirContext", () => {
-  test("defaults project when metadata is absent", () => {
+  test("starts with projectId unresolved — resolution is a pipeline stage", () => {
     const ctx = createMimirContext(baseRequest());
-    expect(ctx.project).toBe("default");
-  });
-
-  test("reads project from request metadata", () => {
-    const ctx = createMimirContext(
-      baseRequest({ metadata: { project: "/Users/rage/proj" } }),
-    );
-    expect(ctx.project).toBe("/Users/rage/proj");
+    expect(ctx.projectId).toBeNull();
   });
 
   test("starts with an empty pipeline state", () => {
@@ -35,5 +28,18 @@ describe("createMimirContext", () => {
     expect(Object.keys(ctx.clientTools)).toHaveLength(0);
     expect(Object.keys(ctx.allTools)).toHaveLength(0);
     expect(ctx.resolvedModel).toBeNull();
+  });
+});
+
+describe("requireProjectId", () => {
+  test("throws before the resolve stage has run", () => {
+    const ctx: MimirContext = createMimirContext(baseRequest());
+    expect(() => requireProjectId(ctx)).toThrow(/not resolved/);
+  });
+
+  test("returns the resolved id once set", () => {
+    const ctx: MimirContext = createMimirContext(baseRequest());
+    ctx.projectId = "01TESTULID";
+    expect(requireProjectId(ctx)).toBe("01TESTULID");
   });
 });

@@ -197,12 +197,12 @@ export async function applyMerge(members: Memory[], canonicalText: string) {
     (max, m) => Math.max(max, m.confidence ?? 1),
     0,
   );
-  const project = members.find((m) => m.project)?.project;
+  const projectId = members.find((m) => m.project_id)?.project_id;
 
   const canonicalId = await createCanonicalMemory({
     content: canonicalText,
     embedding,
-    project,
+    project_id: projectId,
     accessCount,
     confidence,
   });

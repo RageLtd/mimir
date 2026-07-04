@@ -43,7 +43,7 @@ function makeCtx(model: string): MimirContext {
       messages: [{ role: "user", content: "hi" }],
       stream: true,
     },
-    project: "test",
+    projectId: "test",
     systemPrompt: "system",
     memories: null,
     playbooks: null,

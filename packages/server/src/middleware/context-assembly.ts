@@ -29,6 +29,7 @@ import {
 import { config } from "../config";
 import { getLastSummaries } from "../goldfish/store";
 import { log } from "../util/logger";
+import { requireProjectId } from "./pipeline";
 import type { MimirContext } from "./types";
 
 /**
@@ -110,7 +111,7 @@ export async function assembleContext(ctx: MimirContext) {
     // is the failure signal here.
     const appendedIds = await appendTrailingTurn(
       nonSystemMessages,
-      ctx.project,
+      requireProjectId(ctx),
     );
     if (appendedIds.some((id) => id === null)) {
       throw new Error(

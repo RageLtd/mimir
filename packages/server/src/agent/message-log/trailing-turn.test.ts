@@ -141,7 +141,7 @@ describe("trailing-turn helpers", () => {
       queryOneMock.mockResolvedValueOnce([
         {
           id: "id-1",
-          project: "p",
+          project_id: "p",
           role: "user",
           content: '"something else"',
           created_at: "2024-01-01",
@@ -152,7 +152,7 @@ describe("trailing-turn helpers", () => {
         [
           {
             id: "message_log:[p,1]",
-            project: "p",
+            project_id: "p",
             role: "user",
             content: '"new"',
             created_at: "2024-01-02",
@@ -178,7 +178,7 @@ describe("trailing-turn helpers", () => {
       queryOneMock.mockResolvedValueOnce([
         {
           id: "id-1",
-          project: "p",
+          project_id: "p",
           role: "user",
           content: '"retry me"',
           created_at: "2024-01-01",
@@ -208,7 +208,7 @@ describe("trailing-turn helpers", () => {
           [
             {
               id: "message_log:[p,1]",
-              project: "p",
+              project_id: "p",
               role: "tool",
               content: "",
               created_at: "2024-01-02",
@@ -219,7 +219,7 @@ describe("trailing-turn helpers", () => {
           [
             {
               id: "message_log:[p,2]",
-              project: "p",
+              project_id: "p",
               role: "tool",
               content: "",
               created_at: "2024-01-02",
@@ -273,7 +273,7 @@ describe("trailing-turn helpers", () => {
           [
             {
               id: "message_log:[p,1]",
-              project: "p",
+              project_id: "p",
               role: "user",
               content: '"q"',
               created_at: "2024-01-02",
@@ -284,7 +284,7 @@ describe("trailing-turn helpers", () => {
           [
             {
               id: "message_log:[p,2]",
-              project: "p",
+              project_id: "p",
               role: "assistant",
               content: '"a"',
               created_at: "2024-01-02",
@@ -309,14 +309,14 @@ describe("trailing-turn helpers", () => {
       queryOneMock.mockResolvedValueOnce([
         {
           id: "m2",
-          project: "p",
+          project_id: "p",
           role: "assistant",
           content: '"a"',
           created_at: "2024-01-02",
         },
         {
           id: "m1",
-          project: "p",
+          project_id: "p",
           role: "user",
           content: '"q"',
           created_at: "2024-01-01",
@@ -353,21 +353,21 @@ describe("trailing-turn helpers", () => {
       queryOneMock.mockResolvedValueOnce([
         {
           id: "m3",
-          project: "p",
+          project_id: "p",
           role: "user",
           content: '"third"',
           created_at: "2024-01-03",
         },
         {
           id: "m2",
-          project: "p",
+          project_id: "p",
           role: "user",
           content: '"second"',
           created_at: "2024-01-02",
         },
         {
           id: "m1",
-          project: "p",
+          project_id: "p",
           role: "user",
           content: '"first"',
           created_at: "2024-01-01",

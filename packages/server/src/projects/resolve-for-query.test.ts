@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 let queryFirstStub: ReturnType<typeof mock>;
 let getDbStub: ReturnType<typeof mock>;
 
-const mockQueryResult: Array<{ project: string; count: number }> = [];
+const mockQueryResult: Array<{ project_id: string; count: number }> = [];
 
 mock.module("../db/surreal", () => {
   queryFirstStub = mock();
@@ -103,7 +103,7 @@ describe("resolveProjectForQuery", () => {
   });
 
   test("auto-detects single project when input omitted", async () => {
-    mockQueryResult.push({ project: "only-project", count: 42 });
+    mockQueryResult.push({ project_id: "only-project", count: 42 });
 
     const result = await resolveProjectForQuery();
 
@@ -113,8 +113,8 @@ describe("resolveProjectForQuery", () => {
 
   test("errors on multiple projects when input omitted", async () => {
     mockQueryResult.push(
-      { project: "proj-a", count: 10 },
-      { project: "proj-b", count: 20 },
+      { project_id: "proj-a", count: 10 },
+      { project_id: "proj-b", count: 20 },
     );
 
     const result = await resolveProjectForQuery();

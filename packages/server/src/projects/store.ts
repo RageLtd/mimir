@@ -175,6 +175,29 @@ export async function resolveProject(input: ResolveInput) {
   return rowToProject(created);
 }
 
+/**
+ * Resolve any client-sent project identifier to the canonical project id,
+ * creating the project record when the identifier is unknown. This is the
+ * API-boundary funnel: downstream tables key exclusively on the id this
+ * returns — no path string ever reaches storage.
+ *
+ * Identifier forms, in resolution order:
+ *   1. A canonical id (no slash) — verified against the project table.
+ *   2. A cwd-style path — get-or-create by local_path (resolveProject).
+ *   3. A bare bucket name like "default" (no slash, no record) — treated
+ *      as a pseudo-path so it get-or-creates a stable project record.
+ *      A stale id from another machine lands here too: it becomes its
+ *      own bucket rather than failing the request.
+ */
+export async function ensureProjectId(identifier: string) {
+  if (!identifier.includes("/")) {
+    const existing = await getProject(identifier);
+    if (existing) return existing.id;
+  }
+  const project = await resolveProject({ localPath: identifier });
+  return project?.id ?? null;
+}
+
 /** Fetch a project by its id portion (no "project:" prefix). */
 export async function getProject(id: string) {
   const row = await queryFirst<ProjectRow>(`SELECT * FROM $id`, {

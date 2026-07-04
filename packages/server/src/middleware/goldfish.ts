@@ -46,7 +46,9 @@ export async function injectMemories(ctx: MimirContext) {
   // independent budgets — see goldfish/playbook.ts.
   const [memories, playbooks] = await Promise.all([
     retrieveMemories(messages),
-    buildPlaybookContext(query, { projectIdentifier: ctx.project }),
+    buildPlaybookContext(query, {
+      projectIdentifier: ctx.projectId ?? undefined,
+    }),
   ]);
   ctx.memories = memories;
   ctx.playbooks = playbooks;

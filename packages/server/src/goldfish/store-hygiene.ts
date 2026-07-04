@@ -22,7 +22,7 @@ export async function listAllMemories(pageSize = 500): Promise<Memory[]> {
   for (;;) {
     const page = await queryOne<Memory>(
       /* surql */ `
-      SELECT id, content, project, type, confidence, access_count,
+      SELECT id, content, project_id, type, confidence, access_count,
              last_accessed, created_at, embedding
       FROM memory
       ORDER BY created_at
@@ -41,7 +41,7 @@ export async function listAllMemories(pageSize = 500): Promise<Memory[]> {
 export interface CanonicalInput {
   readonly content: string;
   readonly embedding: number[];
-  readonly project?: string;
+  readonly project_id?: string;
   /** Summed access counts of the merged members — preserves earned signal. */
   readonly accessCount: number;
   /** Highest confidence among the merged members. */
@@ -63,7 +63,7 @@ export async function createCanonicalMemory(input: CanonicalInput) {
     access_count: input.accessCount,
     confidence: input.confidence,
   };
-  if (input.project) fields.project = input.project;
+  if (input.project_id) fields.project_id = input.project_id;
 
   const created = await queryFirst<Memory>(
     /* surql */ `

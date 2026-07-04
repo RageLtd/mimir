@@ -52,7 +52,7 @@ export async function injectSystemPrompt(ctx: MimirContext) {
   log.debug(
     {
       promptLength: ctx.systemPrompt.length,
-      project: ctx.project,
+      projectId: ctx.projectId,
     },
     "system prompt injected",
   );

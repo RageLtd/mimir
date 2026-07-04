@@ -64,29 +64,32 @@ export function finalizeTurn(
   toolCalls: Array<Record<string, unknown>>,
   reasoning: string | undefined,
   ctx: {
-    project: string | null | undefined;
+    projectId: string | null;
     request: { messages: ModelMessage[]; model: string };
   },
   lastStepInputTokens: number,
 ) {
-  persistAssistantTurn(text, toolCalls, ctx.project, reasoning).catch((err) =>
+  const projectId = ctx.projectId;
+  if (!projectId) {
+    // The pipeline's resolve stage runs before any turn — a null here is
+    // an ordering bug, and persisting under a fake key would corrupt the
+    // log. Skip loudly.
+    log.error(
+      "finalizeTurn: ctx.projectId not resolved — skipping persistence, compaction, and extraction",
+    );
+    return;
+  }
+
+  persistAssistantTurn(text, toolCalls, projectId, reasoning).catch((err) =>
     log.error({ err }, "persistAssistantTurn failed"),
   );
 
-  triggerCompactionIfNeeded(
-    lastStepInputTokens,
-    ctx.project ?? null,
-    ctx.request.model,
-  );
+  triggerCompactionIfNeeded(lastStepInputTokens, projectId, ctx.request.model);
 
   const lastUserMessage = [...ctx.request.messages]
     .reverse()
     .find((m) => m.role === "user");
-  extractMemoriesFromResponse(
-    text || null,
-    lastUserMessage ?? null,
-    ctx.project,
-  );
+  extractMemoriesFromResponse(text || null, lastUserMessage ?? null, projectId);
 }
 
 // ---------------------------------------------------------------------------
@@ -102,16 +105,13 @@ export function finalizeTurn(
  */
 export function triggerCompactionIfNeeded(
   promptTokens: number,
-  project: string | null,
+  projectId: string,
   modelId?: string,
 ) {
   updateTokenCount(promptTokens, modelId)
     .then(({ needsCompaction }) => {
       if (needsCompaction) {
-        log.info(
-          { project: project ?? "default" },
-          "triggering async compaction",
-        );
+        log.info({ projectId }, "triggering async compaction");
         runCompaction(modelId).catch((err) =>
           log.error({ err }, "compaction failed"),
         );
@@ -143,7 +143,7 @@ export function triggerCompactionIfNeeded(
 export async function persistAssistantTurn(
   text: string,
   clientToolCalls: Array<Record<string, unknown>>,
-  project: string | null | undefined,
+  projectId: string,
   reasoning?: string,
 ) {
   const hasText = text.trim().length > 0;
@@ -169,7 +169,7 @@ export async function persistAssistantTurn(
     role: "assistant",
     content: parts,
   };
-  await appendAssistantOutput(message, project ?? "default").catch((err) =>
+  await appendAssistantOutput(message, projectId).catch((err) =>
     log.error({ err }, "failed to persist assistant turn"),
   );
 }
@@ -185,7 +185,7 @@ export async function persistAssistantTurn(
 export function extractMemoriesFromResponse(
   assistantContent: string | null | undefined,
   lastUserMessage: ModelMessage | null,
-  project: string | null | undefined,
+  projectId: string,
 ) {
   if (!assistantContent || !lastUserMessage) return;
 
@@ -193,7 +193,7 @@ export function extractMemoriesFromResponse(
     lastUserMessage,
     { role: "assistant", content: assistantContent },
   ];
-  extractAndStoreMemories(messages, project ?? undefined).catch((err) =>
+  extractAndStoreMemories(messages, projectId).catch((err) =>
     log.error({ err }, "extraction error"),
   );
 }

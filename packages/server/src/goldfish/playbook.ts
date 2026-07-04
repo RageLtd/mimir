@@ -43,7 +43,8 @@ export interface PlaybookRow {
   name?: string;
   trigger?: string;
   content: string;
-  project?: string;
+  /** Canonical project ULID; unset on global playbooks. */
+  project_id?: string;
 }
 
 export interface PlaybookWithEmbedding extends PlaybookRow {
@@ -64,7 +65,7 @@ function toRow(m: Memory) {
     name: m.name,
     trigger: m.trigger,
     content: m.content,
-    project: m.project,
+    project_id: m.project_id,
   };
   return row;
 }
@@ -101,11 +102,12 @@ export function scopePlaybooks<T extends PlaybookRow>(
   projectId?: string,
 ) {
   const inScope = playbooks.filter(
-    (p) => !p.project || (projectId !== undefined && p.project === projectId),
+    (p) =>
+      !p.project_id || (projectId !== undefined && p.project_id === projectId),
   );
   return inScope.sort((a, b) => {
-    const aProj = a.project ? 0 : 1;
-    const bProj = b.project ? 0 : 1;
+    const aProj = a.project_id ? 0 : 1;
+    const bProj = b.project_id ? 0 : 1;
     return aProj - bProj;
   });
 }
@@ -174,8 +176,8 @@ export function formatPlaybookBlock(
  *  ambient match — the index path doesn't touch them. */
 async function fetchPlaybooks(withEmbeddings: boolean) {
   const cols = withEmbeddings
-    ? "id, name, trigger, content, project, embedding"
-    : "id, name, trigger, content, project";
+    ? "id, name, trigger, content, project_id, embedding"
+    : "id, name, trigger, content, project_id";
   const rows = await queryOne<Memory>(
     `SELECT ${cols} FROM memory WHERE type = $type`,
     { type: PLAYBOOK_TYPE },
@@ -207,14 +209,14 @@ export async function getPlaybook(selector: { id?: string; name?: string }) {
     // Direct record fetch (the codebase's proven pattern for id lookups),
     // then guard the type in TS so non-playbook ids resolve to null.
     const row = await queryFirst<Memory>(
-      `SELECT id, name, trigger, content, project, type FROM $id`,
+      `SELECT id, name, trigger, content, project_id, type FROM $id`,
       { id: toRecordId(selector.id) },
     );
     return row && row.type === PLAYBOOK_TYPE ? toRow(row) : null;
   }
   if (selector.name) {
     const rows = await queryOne<Memory>(
-      `SELECT id, name, trigger, content, project FROM memory
+      `SELECT id, name, trigger, content, project_id FROM memory
        WHERE type = $type AND name = $name
        ORDER BY created_at DESC LIMIT 1`,
       { type: PLAYBOOK_TYPE, name: selector.name },
@@ -266,7 +268,7 @@ export async function updatePlaybook(
   }
 
   log.info({ id, triggerChanged }, "updated playbook");
-  return { id, name, trigger, content, project: existing.project };
+  return { id, name, trigger, content, project_id: existing.project_id };
 }
 
 // ---------------------------------------------------------------------------

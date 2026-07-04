@@ -81,9 +81,9 @@ export const executeSearch = async ({
     [Array<{ file_path: string; symbols: string; score: number }>]
   >(
     `SELECT file_path, symbols, search::score(1) AS score FROM cart_file
-     WHERE project = $project AND searchable @1@ $query
+     WHERE project_id = $project_id AND searchable @1@ $query
      ORDER BY score DESC LIMIT $limit`,
-    { project: resolved.project, query, limit: maxResults },
+    { project_id: resolved.project, query, limit: maxResults },
   );
 
   const files = (result ?? []).map((fileRow) => ({
@@ -120,8 +120,8 @@ export const executeFileInfo = async ({
     [Array<{ language: string; symbols: string }>]
   >(
     `SELECT language, symbols FROM cart_file
-     WHERE project = $project AND file_path = $file_path LIMIT 1`,
-    { project: resolved.project, file_path },
+     WHERE project_id = $project_id AND file_path = $file_path LIMIT 1`,
+    { project_id: resolved.project, file_path },
   );
 
   const file = fileResult?.[0];
@@ -138,12 +138,12 @@ export const executeFileInfo = async ({
 
   const [imports, dependents] = await Promise.all([
     db.query<[Array<{ target_path: string; symbols: string }>]>(
-      `SELECT target_path, symbols FROM cart_import WHERE project = $project AND source_path = $file_path`,
-      { project: resolved.project, file_path },
+      `SELECT target_path, symbols FROM cart_import WHERE project_id = $project_id AND source_path = $file_path`,
+      { project_id: resolved.project, file_path },
     ),
     db.query<[Array<{ source_path: string; symbols: string }>]>(
-      `SELECT source_path, symbols FROM cart_import WHERE project = $project AND target_path = $file_path`,
-      { project: resolved.project, file_path },
+      `SELECT source_path, symbols FROM cart_import WHERE project_id = $project_id AND target_path = $file_path`,
+      { project_id: resolved.project, file_path },
     ),
   ]);
 
@@ -193,8 +193,8 @@ export const executeQuery = async ({
         ? [entryPoint]
         : db
             .query<[Array<{ file_path: string }>]>(
-              `SELECT file_path FROM cart_file WHERE project = $project AND searchable @1@ $query LIMIT 5`,
-              { project: resolved.project, query: entryPoint },
+              `SELECT file_path FROM cart_file WHERE project_id = $project_id AND searchable @1@ $query LIMIT 5`,
+              { project_id: resolved.project, query: entryPoint },
             )
             .then((queryResult) =>
               (queryResult[0] ?? []).map((fileRow) => fileRow.file_path),
@@ -227,12 +227,12 @@ export const executeQuery = async ({
 
     const [dependencies, importers] = await Promise.all([
       db.query<[Array<{ target_path: string }>]>(
-        `SELECT target_path FROM cart_import WHERE project = $project AND source_path = $source`,
-        { project: resolved.project, source: currentNode.path },
+        `SELECT target_path FROM cart_import WHERE project_id = $project_id AND source_path = $source`,
+        { project_id: resolved.project, source: currentNode.path },
       ),
       db.query<[Array<{ source_path: string }>]>(
-        `SELECT source_path FROM cart_import WHERE project = $project AND target_path = $target`,
-        { project: resolved.project, target: currentNode.path },
+        `SELECT source_path FROM cart_import WHERE project_id = $project_id AND target_path = $target`,
+        { project_id: resolved.project, target: currentNode.path },
       ),
     ]);
 

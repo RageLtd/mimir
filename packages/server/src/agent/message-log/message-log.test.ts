@@ -169,7 +169,7 @@ describe("message-log", () => {
       ]);
     });
 
-    test("stores project as metadata in fields", async () => {
+    test("stores project_id in fields", async () => {
       queryMock.mockResolvedValueOnce([
         [{ id: "message_log:[proj,1]", role: "user", content: '"x"' }],
       ]);
@@ -180,7 +180,7 @@ describe("message-log", () => {
         string,
         { id: string; fields: Record<string, unknown> },
       ];
-      expect(params.fields.project).toBe("my-project");
+      expect(params.fields.project_id).toBe("my-project");
     });
 
     test("does not set created_at — lets SurrealDB default handle it", async () => {
@@ -207,14 +207,14 @@ describe("message-log", () => {
       queryOneMock.mockResolvedValueOnce([
         {
           id: "m1",
-          project: "p",
+          project_id: "p",
           role: "user",
           content: '"after cutoff"',
           created_at: "2024-01-16",
         },
         {
           id: "m2",
-          project: "p",
+          project_id: "p",
           role: "assistant",
           content: '"response"',
           created_at: "2024-01-17",

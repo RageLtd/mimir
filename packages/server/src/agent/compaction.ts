@@ -10,7 +10,8 @@
  *
  * Global state:
  * - Compaction state is singular (one row) since the message log is global
- * - Project field on summary is metadata for display, not a filter
+ * - Summaries carry no project_id — they compact the global log, so the
+ *   optional field stays unset rather than holding a fake sentinel
  */
 
 import { embedOne } from "../goldfish/clients";
@@ -123,8 +124,8 @@ export async function runCompaction(modelId?: string) {
       return;
     }
 
-    // Store summary as Goldfish memory
-    // Project is metadata for display - the summary is global
+    // Store summary as Goldfish memory. No project_id — the summary spans
+    // the global message log, so it stays a global memory.
     const embedding = await embedOne(summary);
     if (!embedding) {
       log.error("failed to embed summary");
@@ -134,7 +135,6 @@ export async function runCompaction(modelId?: string) {
 
     const summaryId = await storeMemory({
       content: summary,
-      project: "global",
       type: "summary",
       message_count: messages.length,
       embedding,

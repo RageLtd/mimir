@@ -2,6 +2,7 @@ import { Surreal } from "surrealdb";
 import { config } from "../config";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
+import { migrateLegacyProjectKeys } from "./migrate-project-keys";
 
 let db: Surreal | null = null;
 
@@ -110,7 +111,7 @@ export async function queryFirst<T>(
  */
 const CART_DECLARED_FIELDS: Record<string, readonly string[]> = {
   cart_file: [
-    "project",
+    "project_id",
     "file_path",
     "language",
     "symbols",
@@ -119,7 +120,7 @@ const CART_DECLARED_FIELDS: Record<string, readonly string[]> = {
     "indexed_at",
   ],
   cart_import: [
-    "project",
+    "project_id",
     "source_path",
     "target_path",
     "specifier",
@@ -127,6 +128,15 @@ const CART_DECLARED_FIELDS: Record<string, readonly string[]> = {
     "indexed_at",
   ],
 };
+
+/**
+ * Fields tolerated on cart rows beyond the declared schema: the record id,
+ * plus the legacy `project` key during the project_id transition —
+ * migrateLegacyProjectKeys owns `project` and removes it itself after
+ * backfilling; purging it here would destroy the keys the migration still
+ * needs to read.
+ */
+const CART_TOLERATED_EXTRAS = ["id", "project"] as const;
 
 /**
  * Pure: given a table's live field names and its declared set, return the
@@ -146,6 +156,22 @@ export const buildDriftRemovalSql = (
     .map((field) => `REMOVE FIELD IF EXISTS ${field} ON TABLE ${table};`);
 };
 
+/**
+ * Pure: one UPDATE purging orphaned stored values for undeclared fields.
+ * All orphans are unset in a single statement so the row's post-image
+ * passes SCHEMAFULL validation even when it carries several. Exported for
+ * tests.
+ */
+export const buildOrphanValuePurgeSql = (
+  table: string,
+  orphanFields: readonly string[],
+) => {
+  if (orphanFields.length === 0) return null;
+  const fields = orphanFields.join(", ");
+  const where = orphanFields.map((f) => `${f} != NONE`).join(" OR ");
+  return `UPDATE ${table} UNSET ${fields} WHERE ${where};`;
+};
+
 /** Read the live top-level field names for a table via INFO FOR TABLE. */
 const liveTableFields = async (db: Surreal, table: string) => {
   // INFO FOR TABLE returns a single info object (not a row array), so query
@@ -157,20 +183,52 @@ const liveTableFields = async (db: Surreal, table: string) => {
 };
 
 /**
- * Drop any live cart_file / cart_import field the schema no longer declares.
- * Runs after the DEFINE block in initSchema. Returns the statements executed
- * so the caller can log what was pruned. No-op on a clean schema.
+ * Union of field names present in a table's stored row data. Sees orphaned
+ * VALUES whose definitions are already gone — INFO FOR TABLE only lists
+ * definitions and is blind to them. Cart tables stay small (thousands of
+ * rows), so the per-boot scan is cheap.
+ */
+const storedFieldNames = async (db: Surreal, table: string) => {
+  const [rows] = await db.query<[string[][]]>(
+    `SELECT VALUE object::keys($this) FROM ${table}`,
+  );
+  return [...new Set((rows ?? []).flat())];
+};
+
+/**
+ * Converge cart_file / cart_import onto their declared schema: drop drifted
+ * field DEFINITIONS (INFO-based) and purge orphaned stored VALUES
+ * (row-data-based). Both are needed — REMOVE FIELD never deletes stored
+ * data, and on SCHEMAFULL tables a lingering undeclared value rejects every
+ * subsequent UPDATE touching the row (this is what stranded
+ * last_parsed_epoch values and blocked the project_id backfill). Runs after
+ * the DEFINE block and BEFORE migrateLegacyProjectKeys so the migration's
+ * UPDATEs see clean rows. Returns the statements executed for logging.
  */
 const removeDriftedCartFields = async (db: Surreal) => {
   const statements: string[] = [];
   for (const [table, declared] of Object.entries(CART_DECLARED_FIELDS)) {
+    const tolerated = [...declared, ...CART_TOLERATED_EXTRAS];
     const live = await liveTableFields(db, table);
-    statements.push(...buildDriftRemovalSql(table, live, declared));
+    statements.push(...buildDriftRemovalSql(table, live, tolerated));
+
+    const stored = await storedFieldNames(db, table);
+    const orphans = stored.filter(
+      (f) => !tolerated.includes(f) && !f.includes(".") && !f.includes("["),
+    );
+    // Remove any lingering definitions for the orphans too (no-op if absent),
+    // then purge the values.
+    statements.push(
+      ...orphans.map((f) => `REMOVE FIELD IF EXISTS ${f} ON TABLE ${table};`),
+    );
+    const purge = buildOrphanValuePurgeSql(table, orphans);
+    if (purge) statements.push(purge);
   }
-  if (statements.length > 0) {
-    await db.query(statements.join("\n"));
+  const deduped = [...new Set(statements)];
+  if (deduped.length > 0) {
+    await db.query(deduped.join("\n"));
   }
-  return statements;
+  return deduped;
 };
 
 /** Run once at startup to ensure schema exists */
@@ -187,7 +245,9 @@ export async function initSchema() {
     -- Goldfish memories
     DEFINE TABLE IF NOT EXISTS memory SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS content ON memory TYPE string;
-    DEFINE FIELD IF NOT EXISTS project ON memory TYPE option<string>;
+    -- Canonical project ULID (id portion of the project table record).
+    -- Optional: user-level memories are not tied to a project.
+    DEFINE FIELD IF NOT EXISTS project_id ON memory TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS created_at ON memory TYPE datetime DEFAULT time::now();
     DEFINE FIELD IF NOT EXISTS last_accessed ON memory TYPE datetime DEFAULT time::now();
     DEFINE FIELD IF NOT EXISTS confidence ON memory TYPE float DEFAULT 1.0;
@@ -226,19 +286,15 @@ export async function initSchema() {
     DEFINE FIELD IF NOT EXISTS relation_type ON relates_to TYPE string;
 
     -- Message log (Phase 6: Single Brain Architecture)
-    -- Global append-only log keyed by [project, timestamp]
+    -- Global append-only log keyed by [project_id, timestamp]
     -- Enables efficient time-range queries for context assembly
     --
-    -- Project keying:
-    --   project (string)     - legacy cwd-style path. Always populated for
-    --                          back-compat; pre-Slice-2 rows have only this.
-    --   project_id (option)  - canonical UUID from /v1/projects/resolve.
-    --                          Populated by Slice-2-aware clients alongside
-    --                          project. Future queries should prefer this
-    --                          when present. New column is optional so old
-    --                          rows remain valid without backfill.
+    -- project_id is the canonical project ULID from /v1/projects/resolve.
+    -- The legacy cwd-style \`project\` path string was consolidated into it
+    -- by migrateLegacyProjectKeys (see db/migrate-project-keys.ts). Typed
+    -- option<string> because pre-migration rows are backfilled in place,
+    -- but every writer is required to supply it.
     DEFINE TABLE IF NOT EXISTS message_log SCHEMALESS;
-    DEFINE FIELD IF NOT EXISTS project ON message_log TYPE string;
     DEFINE FIELD IF NOT EXISTS project_id ON message_log TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS role ON message_log TYPE string;
     DEFINE FIELD IF NOT EXISTS content ON message_log TYPE string | array;
@@ -263,9 +319,12 @@ export async function initSchema() {
     DEFINE FIELD IF NOT EXISTS last_run ON hygiene_state TYPE option<datetime>;
     DEFINE FIELD IF NOT EXISTS updated_at ON hygiene_state TYPE datetime DEFAULT time::now();
 
-    -- Cartographer tables
+    -- Cartographer tables. project_id is the canonical project ULID —
+    -- indexes over it are defined AFTER migrateLegacyProjectKeys runs
+    -- (below), because the UNIQUE indexes would collide on legacy rows
+    -- that still carry project_id = NONE at DEFINE time.
     DEFINE TABLE IF NOT EXISTS cart_file SCHEMAFULL;
-    DEFINE FIELD IF NOT EXISTS project ON cart_file TYPE string;
+    DEFINE FIELD IF NOT EXISTS project_id ON cart_file TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS file_path ON cart_file TYPE string;
     DEFINE FIELD IF NOT EXISTS language ON cart_file TYPE string;
     DEFINE FIELD IF NOT EXISTS symbols ON cart_file TYPE string;
@@ -275,42 +334,29 @@ export async function initSchema() {
     -- needing filesystem access to the source tree.
     DEFINE FIELD IF NOT EXISTS content_hash ON cart_file TYPE string;
     DEFINE FIELD IF NOT EXISTS indexed_at ON cart_file TYPE datetime DEFAULT time::now();
-    DEFINE INDEX IF NOT EXISTS cart_file_project ON cart_file FIELDS project;
     DEFINE INDEX IF NOT EXISTS cart_file_path ON cart_file FIELDS file_path;
-    -- Sync uses a full DELETE-then-INSERT per project, so one row per
-    -- (project, file_path) pair is the invariant. The UNIQUE index makes
-    -- it a hard constraint rather than a convention waiting to fail.
-    DEFINE INDEX IF NOT EXISTS cart_file_unique ON cart_file
-      FIELDS project, file_path UNIQUE;
     DEFINE INDEX IF NOT EXISTS cart_file_searchable ON cart_file FIELDS searchable
       FULLTEXT ANALYZER memory_analyzer BM25;
 
     DEFINE TABLE IF NOT EXISTS cart_import SCHEMAFULL;
-    DEFINE FIELD IF NOT EXISTS project ON cart_import TYPE string;
+    DEFINE FIELD IF NOT EXISTS project_id ON cart_import TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS source_path ON cart_import TYPE string;
     DEFINE FIELD IF NOT EXISTS target_path ON cart_import TYPE string;
     -- Raw import specifier string as it appears in source ("./util",
     -- "react", "../config"). Distinct from target_path, which is the
     -- resolved absolute path. Authored-side identity matters for
-    -- detecting refactors and for the (project, source, target,
+    -- detecting refactors and for the (project_id, source, target,
     -- specifier) UNIQUE edge.
     DEFINE FIELD IF NOT EXISTS specifier ON cart_import TYPE string;
     DEFINE FIELD IF NOT EXISTS symbols ON cart_import TYPE string;
     DEFINE FIELD IF NOT EXISTS indexed_at ON cart_import TYPE datetime DEFAULT time::now();
-    DEFINE INDEX IF NOT EXISTS cart_import_project ON cart_import FIELDS project;
     DEFINE INDEX IF NOT EXISTS cart_import_source ON cart_import FIELDS source_path;
     DEFINE INDEX IF NOT EXISTS cart_import_target ON cart_import FIELDS target_path;
-    -- One row per distinct edge — same source+target via two different
-    -- specifiers (re-export shims, aliased imports) are still separate
-    -- edges and stay as separate rows.
-    DEFINE INDEX IF NOT EXISTS cart_import_edge ON cart_import
-      FIELDS project, source_path, target_path, specifier UNIQUE;
 
     DEFINE TABLE IF NOT EXISTS cart_git_state SCHEMAFULL;
-    DEFINE FIELD IF NOT EXISTS project ON cart_git_state TYPE string;
+    DEFINE FIELD IF NOT EXISTS project_id ON cart_git_state TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS git_head ON cart_git_state TYPE string;
     DEFINE FIELD IF NOT EXISTS indexed_at ON cart_git_state TYPE datetime DEFAULT time::now();
-    DEFINE INDEX IF NOT EXISTS cart_git_state_project ON cart_git_state FIELDS project;
 
     -- Projects (UUID-keyed; identity anchored to git_remote when available,
     -- falling back to local_path). Other tables reference the record id
@@ -328,6 +374,8 @@ export async function initSchema() {
     DEFINE INDEX IF NOT EXISTS project_local_path ON project FIELDS local_path;
   `);
 
+  // Converge drifted cart schemas BEFORE the migration — its UPDATEs fail
+  // SCHEMAFULL validation on rows still carrying orphaned undeclared values.
   const pruned = await removeDriftedCartFields(db);
   if (pruned.length > 0) {
     log.warn(
@@ -335,6 +383,35 @@ export async function initSchema() {
       "converged cartographer schema — removed drifted fields",
     );
   }
+
+  // Consolidate legacy path-string keys onto project_id BEFORE the
+  // project_id indexes exist — the UNIQUE indexes below are built over
+  // existing rows at DEFINE time and would collide while legacy rows
+  // still carry project_id = NONE.
+  await migrateLegacyProjectKeys(db);
+
+  await db.query(/* surql */ `
+    -- Legacy project-string indexes, superseded by the project_id set.
+    REMOVE INDEX IF EXISTS cart_file_project ON TABLE cart_file;
+    REMOVE INDEX IF EXISTS cart_file_unique ON TABLE cart_file;
+    REMOVE INDEX IF EXISTS cart_import_project ON TABLE cart_import;
+    REMOVE INDEX IF EXISTS cart_import_edge ON TABLE cart_import;
+    REMOVE INDEX IF EXISTS cart_git_state_project ON TABLE cart_git_state;
+
+    DEFINE INDEX IF NOT EXISTS cart_file_project_id ON cart_file FIELDS project_id;
+    -- Sync uses a full DELETE-then-INSERT per project, so one row per
+    -- (project_id, file_path) pair is the invariant. The UNIQUE index
+    -- makes it a hard constraint rather than a convention waiting to fail.
+    DEFINE INDEX IF NOT EXISTS cart_file_project_id_unique ON cart_file
+      FIELDS project_id, file_path UNIQUE;
+    DEFINE INDEX IF NOT EXISTS cart_import_project_id ON cart_import FIELDS project_id;
+    -- One row per distinct edge — same source+target via two different
+    -- specifiers (re-export shims, aliased imports) are still separate
+    -- edges and stay as separate rows.
+    DEFINE INDEX IF NOT EXISTS cart_import_project_id_edge ON cart_import
+      FIELDS project_id, source_path, target_path, specifier UNIQUE;
+    DEFINE INDEX IF NOT EXISTS cart_git_state_project_id ON cart_git_state FIELDS project_id;
+  `);
 
   log.info({ elapsed: `${Date.now() - start}ms` }, "schema initialized");
 }

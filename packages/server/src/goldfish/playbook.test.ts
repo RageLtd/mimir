@@ -43,9 +43,9 @@ describe("cosineDistance", () => {
 
 describe("scopePlaybooks", () => {
   const playbooks = [
-    row({ id: "active", project: "proj-1" }),
-    row({ id: "global", project: undefined }),
-    row({ id: "other", project: "proj-2" }),
+    row({ id: "active", project_id: "proj-1" }),
+    row({ id: "global", project_id: undefined }),
+    row({ id: "other", project_id: "proj-2" }),
   ];
 
   test("keeps global + active project, drops other projects", () => {

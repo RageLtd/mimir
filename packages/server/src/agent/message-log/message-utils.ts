@@ -67,9 +67,8 @@ export function fingerprintMessage(msg: ModelMessage) {
 /** Row shape stored in SurrealDB */
 export interface MessageRow {
   id: string;
-  project: string;
-  /** Optional canonical project UUID. Populated by Slice-2-aware writers; old rows omit it. */
-  project_id?: string | null;
+  /** Canonical project ULID (id portion of the project table record). */
+  project_id: string;
   role: string;
   /** JSON-serialized content — either a JSON string or a JSON array of content parts */
   content: string;
@@ -82,26 +81,22 @@ export interface MessageRow {
  * Serialize a ModelMessage for DB storage.
  * Content is always JSON — either a JSON string or a JSON array of content parts.
  *
- * `projectId` is the optional canonical UUID. When omitted (server-internal
- * writes from appendTrailingTurn / appendAssistantOutput that have no
- * resolver context) the column is left null and reads still see the row.
+ * `projectId` is the canonical project ULID — callers resolve whatever
+ * identifier the client sent (path or id) at the API boundary before it
+ * reaches this layer.
  */
 export function modelMessageToFields(
   msg: ModelMessage,
-  project: string,
+  projectId: string,
   seq?: number,
-  projectId?: string | null,
 ) {
   const fields: Record<string, unknown> = {
-    project,
+    project_id: projectId,
     role: msg.role,
     content: JSON.stringify(msg.content),
   };
   if (seq !== undefined) {
     fields.seq = seq;
-  }
-  if (projectId) {
-    fields.project_id = projectId;
   }
   return fields;
 }

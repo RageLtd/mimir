@@ -13,7 +13,8 @@ export function toRecordId(id: string | RecordId) {
 export interface Memory {
   id?: string;
   content: string;
-  project?: string;
+  /** Canonical project ULID. Unset on global memories (e.g. summaries). */
+  project_id?: string;
   type?: "fact" | "summary" | "playbook" | "skill";
   /** Playbook only — short label shown in the always-injected index. */
   name?: string;
@@ -40,8 +41,8 @@ export async function storeMemory(memory: Memory): Promise<string | null> {
     embedding: memory.embedding,
     type: memory.type ?? "fact",
   };
-  if (memory.project) {
-    fields.project = memory.project;
+  if (memory.project_id) {
+    fields.project_id = memory.project_id;
   }
   if (memory.name) {
     fields.name = memory.name;
@@ -71,7 +72,7 @@ export async function storeMemory(memory: Memory): Promise<string | null> {
         id: created.id,
         content: memory.content.slice(0, 100),
         type: fields.type,
-        project: memory.project,
+        project_id: memory.project_id,
       },
       "stored memory",
     );
@@ -246,11 +247,11 @@ export async function getRelatedMemories(
   const outgoing = await queryOne<{
     id: string;
     content: string;
-    project?: string;
+    project_id?: string;
     weight: number;
   }>(
     /* surql */ `
-    SELECT out.id AS id, out.content AS content, out.project AS project, weight
+    SELECT out.id AS id, out.content AS content, out.project_id AS project_id, weight
     FROM relates_to
     WHERE in IN $ids
     ORDER BY weight DESC
@@ -262,11 +263,11 @@ export async function getRelatedMemories(
   const incoming = await queryOne<{
     id: string;
     content: string;
-    project?: string;
+    project_id?: string;
     weight: number;
   }>(
     /* surql */ `
-    SELECT in.id AS id, in.content AS content, in.project AS project, weight
+    SELECT in.id AS id, in.content AS content, in.project_id AS project_id, weight
     FROM relates_to
     WHERE out IN $ids
     ORDER BY weight DESC
@@ -290,7 +291,7 @@ export async function getRelatedMemories(
     .map((m) => ({
       id: m.id,
       content: m.content,
-      project: m.project,
+      project_id: m.project_id,
       embedding: [],
     }));
 
@@ -331,7 +332,7 @@ export async function listMemories(limit = 20): Promise<
   Array<{
     id: string;
     content: string;
-    project?: string;
+    project_id?: string;
     created_at?: string;
     confidence?: number;
     access_count?: number;
@@ -340,12 +341,12 @@ export async function listMemories(limit = 20): Promise<
   return queryOne<{
     id: string;
     content: string;
-    project?: string;
+    project_id?: string;
     created_at?: string;
     confidence?: number;
     access_count?: number;
   }>(
-    `SELECT id, content, project, created_at, confidence, access_count
+    `SELECT id, content, project_id, created_at, confidence, access_count
      FROM memory
      ORDER BY created_at DESC
      LIMIT $limit`,

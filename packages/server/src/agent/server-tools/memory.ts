@@ -178,7 +178,7 @@ export const storeTypedMemory = async ({
 
   const memoryId = await storeMemory({
     content,
-    project: resolvedProject,
+    project_id: resolvedProject,
     type,
     name,
     trigger,
@@ -259,7 +259,7 @@ export const executeMemoryList = async ({
     memories: memories.map((memory) => ({
       id: memory.id,
       content: memory.content,
-      project: memory.project ?? null,
+      project_id: memory.project_id ?? null,
       created_at: memory.created_at ?? null,
       access_count: memory.access_count ?? 0,
     })),

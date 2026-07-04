@@ -147,7 +147,7 @@ export async function retrieveMemories(
 
       const freshness = computeFreshness(m.last_accessed);
       const projectBonus =
-        projectId && m.project === projectId ? PROJECT_MATCH_BONUS : 0;
+        projectId && m.project_id === projectId ? PROJECT_MATCH_BONUS : 0;
       const finalScore = scoreRetrievalCandidate({
         combinedScore,
         freshness,
@@ -252,11 +252,12 @@ function buildExtractionText(messages: ModelMessage[]) {
 /**
  * Embed, dedup, store, and link a batch of memory strings.
  * Shared by extraction and compaction pipelines.
- * Project is stored as metadata for display, not for filtering.
+ * projectId is the canonical project ULID — a retrieval tiebreaker
+ * (see PROJECT_MATCH_BONUS), not a filter.
  */
 export async function storeMemoryBatch(
   memories: string[],
-  project?: string,
+  projectId?: string,
 ): Promise<{ stored: number; duplicates: number }> {
   const embeddings = await embed(memories);
   if (!embeddings) {
@@ -283,7 +284,7 @@ export async function storeMemoryBatch(
 
     const memoryId = await storeMemory({
       content: memories[i] ?? "",
-      project, // Stored as metadata for display
+      project_id: projectId,
       type: "fact",
       embedding,
     });
@@ -306,7 +307,7 @@ export async function storeMemoryBatch(
 
 export async function extractAndStoreMemories(
   messages: ModelMessage[],
-  project?: string,
+  projectId?: string,
 ): Promise<void> {
   const start = Date.now();
 
@@ -337,7 +338,7 @@ export async function extractAndStoreMemories(
       userTurns: userMessages.length,
       totalMessages: messages.length,
       extractionTextChars: conversationText.length,
-      project,
+      projectId,
     },
     "starting memory extraction",
   );
@@ -349,7 +350,7 @@ export async function extractAndStoreMemories(
   }
 
   log.info({ count: memories.length }, "extracted memories, embedding");
-  const { stored, duplicates } = await storeMemoryBatch(memories, project);
+  const { stored, duplicates } = await storeMemoryBatch(memories, projectId);
 
   log.info(
     {

@@ -14,7 +14,7 @@ function makeCtx(
     clientTools: {} as MimirContext["clientTools"],
     allTools: {} as MimirContext["allTools"],
     request: { model: "test-model" } as MimirContext["request"],
-    project: "test",
+    projectId: "test",
     systemPrompt: "",
     memories: null,
     playbooks: null,

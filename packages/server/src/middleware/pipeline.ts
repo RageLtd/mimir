@@ -8,12 +8,16 @@
  * context field or a middleware stage touches this file only.
  */
 
+import { ensureProjectId } from "../projects/store";
 import { injectMemories } from "./goldfish";
 import { injectProjectRules } from "./project-rules";
 import { injectSystemPrompt } from "./system-prompt";
 import { classifyTools } from "./tool-classification";
 import type { ChatRequest, MimirContext } from "./types";
 import { injectUserProfile } from "./user-profile";
+
+/** Bucket for requests that carry no project metadata. */
+const DEFAULT_PROJECT_IDENTIFIER = "default";
 
 /** Correlation ID for request logging. */
 export function generateRequestId() {
@@ -27,7 +31,7 @@ export function generateRequestId() {
 export function createMimirContext(request: ChatRequest) {
   return {
     request,
-    project: (request.metadata?.project as string | undefined) ?? "default",
+    projectId: null,
     systemPrompt: "",
     memories: null,
     playbooks: null,
@@ -57,10 +61,42 @@ export function createMimirContext(request: ChatRequest) {
  * mid-turn snapshot the log before the in-flight assistant reply lands.
  */
 export async function prepareContext(ctx: MimirContext) {
+  await resolveProjectId(ctx);
   if (!ctx.systemPrompt) await injectSystemPrompt(ctx);
   await injectMemories(ctx);
   injectUserProfile(ctx);
   injectProjectRules(ctx);
   await classifyTools(ctx);
   return ctx;
+}
+
+/**
+ * Stage 0: resolve the client-sent project identifier (path or id) to the
+ * canonical project ULID. Runs first — every downstream stage and the
+ * message log key on ctx.projectId; no raw identifier survives past here.
+ */
+async function resolveProjectId(ctx: MimirContext) {
+  const identifier =
+    ctx.request.metadata?.project ?? DEFAULT_PROJECT_IDENTIFIER;
+  const projectId = await ensureProjectId(identifier);
+  if (!projectId) {
+    throw new Error(
+      `pipeline: failed to resolve project identifier "${identifier}" to a project record`,
+    );
+  }
+  ctx.projectId = projectId;
+}
+
+/**
+ * Assert the resolve stage has run. Downstream consumers (context
+ * assembly, post-processing) call this instead of re-checking null —
+ * a null here is a pipeline-ordering bug, not a data condition.
+ */
+export function requireProjectId(ctx: MimirContext) {
+  if (!ctx.projectId) {
+    throw new Error(
+      "pipeline: ctx.projectId not resolved — resolveProjectId stage did not run",
+    );
+  }
+  return ctx.projectId;
 }

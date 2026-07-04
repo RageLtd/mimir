@@ -10,7 +10,7 @@
  * to the global log with retry idempotency.
  *
  * Body:
- *   { messages: ModelMessage[], project: string }
+ *   { messages: ModelMessage[], projectId?: string, project?: string }
  *
  * Response:
  *   { appended: number, ids: (string | null)[] }
@@ -21,6 +21,7 @@ import { Hono } from "hono";
 import { modelContentToString } from "../agent/message-log/message-utils";
 import { appendTurn } from "../agent/message-log/persistence";
 import { extractMemoriesFromResponse } from "../agent/post-processing";
+import { ensureProjectId } from "../projects/store";
 import { requestLog } from "../util/logger";
 import { attempt } from "../util/result";
 
@@ -28,15 +29,17 @@ export const messages = new Hono();
 
 type PersistRequest = {
   messages: ModelMessage[];
-  /** Legacy cwd-style path. Always required for back-compat. */
-  project: string;
   /**
-   * Canonical project UUID from /v1/projects/resolve. Optional during the
-   * transition window — Slice-1 plugins send only `project`, Slice-2-aware
-   * plugins send both. When present, stored alongside `project` on the
-   * message_log row for future UUID-keyed queries.
+   * Canonical project ULID from /v1/projects/resolve. Preferred; wins
+   * over `project` when both are present.
    */
   projectId?: string;
+  /**
+   * Any project identifier — cwd-style path or id. Resolved (get-or-create
+   * for unknown paths) at this boundary; storage keys exclusively on the
+   * canonical id.
+   */
+  project?: string;
   /** Optional cost report from the CC backend (USD for the turn). */
   totalCostUsd?: number;
 };
@@ -60,21 +63,35 @@ messages.post("/persist", async (c) => {
     return c.json({ error: "Missing or empty messages array" }, 400);
   }
 
-  if (!body.project || typeof body.project !== "string") {
-    return c.json({ error: "Missing required field: project" }, 400);
+  const identifier =
+    (typeof body.projectId === "string" && body.projectId.length > 0
+      ? body.projectId
+      : null) ??
+    (typeof body.project === "string" && body.project.length > 0
+      ? body.project
+      : null);
+  if (!identifier) {
+    return c.json(
+      { error: "Missing required field: projectId (or project)" },
+      400,
+    );
   }
 
-  const projectId =
-    typeof body.projectId === "string" && body.projectId.length > 0
-      ? body.projectId
-      : null;
+  const projectId = await ensureProjectId(identifier);
+  if (!projectId) {
+    log.error({ identifier }, "failed to resolve project identifier");
+    return c.json(
+      { error: `Failed to resolve project identifier "${identifier}"` },
+      500,
+    );
+  }
 
   const [appendErr, ids] = await attempt(() =>
-    appendTurn(body.messages, body.project, projectId),
+    appendTurn(body.messages, projectId),
   );
   if (appendErr) {
     log.error(
-      { error: appendErr.message, project: body.project, projectId },
+      { error: appendErr.message, projectId },
       "conversation persist failed",
     );
     return c.json({ error: appendErr.message }, 500);
@@ -83,7 +100,6 @@ messages.post("/persist", async (c) => {
   if (typeof body.totalCostUsd === "number" && body.totalCostUsd > 0) {
     log.info(
       {
-        project: body.project,
         projectId,
         totalCostUsd: body.totalCostUsd,
       },
@@ -104,14 +120,13 @@ messages.post("/persist", async (c) => {
     if (lastAssistant && lastUser) {
       const assistantText = modelContentToString(lastAssistant.content);
       if (assistantText) {
-        extractMemoriesFromResponse(assistantText, lastUser, body.project);
+        extractMemoriesFromResponse(assistantText, lastUser, projectId);
       }
     }
   }
 
   log.info(
     {
-      project: body.project,
       projectId,
       clientCount: body.messages.length,
       appended: ids.length,

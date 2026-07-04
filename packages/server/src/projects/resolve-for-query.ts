@@ -75,11 +75,13 @@ export async function resolveProjectForQuery(input?: string) {
     return { project: idString(byPath.id), error: null };
   }
 
-  // 4. No match — return input as-is for legacy back-compat. Pre-UUID
-  //    data was keyed by filesystem path; those rows still need to match.
-  log.debug(
+  // 4. No match — return input as-is. Post-migration every table keys on
+  //    canonical project ids, so a raw passthrough should never match rows;
+  //    it fires only for identifiers that simply don't exist. Warn loudly —
+  //    a recurring hit here means a client is sending unresolvable ids.
+  log.warn(
     { input },
-    "project identifier not found in project table, using raw value",
+    "project identifier not found in project table — passing through raw (queries will likely match nothing)",
   );
   return { project: input, error: null };
 }
@@ -90,9 +92,9 @@ export async function resolveProjectForQuery(input?: string) {
  */
 async function autoDetect() {
   const db = await getDb();
-  const [result] = await db.query<[Array<{ project: string; count: number }>]>(
-    `SELECT project, count() AS count FROM cart_file GROUP BY project`,
-  );
+  const [result] = await db.query<
+    [Array<{ project_id: string; count: number }>]
+  >(`SELECT project_id, count() AS count FROM cart_file GROUP BY project_id`);
 
   const projects = result ?? [];
 
@@ -105,11 +107,11 @@ async function autoDetect() {
   }
 
   if (projects.length === 1) {
-    return { project: projects[0]?.project ?? "", error: null };
+    return { project: projects[0]?.project_id ?? "", error: null };
   }
 
   const list = projects
-    .map((p) => `  - ${p.project} (${p.count} files)`)
+    .map((p) => `  - ${p.project_id} (${p.count} files)`)
     .join("\n");
   return { project: "", error: `Multiple projects. Specify one:\n${list}` };
 }
