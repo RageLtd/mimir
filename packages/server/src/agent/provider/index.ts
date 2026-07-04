@@ -3,6 +3,11 @@
  */
 
 export {
+  loadProviderData,
+  startProviderDataRefresh,
+  stopProviderDataRefresh,
+} from "./provider-data";
+export {
   fetchModelId,
   getContextWindow,
   getEmbeddingModelMetadata,
@@ -20,7 +25,6 @@ export {
   resolveEmbeddingModel,
   resolveModel,
 } from "./query";
-
 export {
   initProviderRegistry,
   type ModelEntry,

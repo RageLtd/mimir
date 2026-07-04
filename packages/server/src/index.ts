@@ -1,7 +1,12 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { clearStaleCompaction } from "./agent/message-log";
-import { initProviderRegistry } from "./agent/provider";
+import {
+  initProviderRegistry,
+  loadProviderData,
+  startProviderDataRefresh,
+  stopProviderDataRefresh,
+} from "./agent/provider";
 import { closeMcpClients, initMcpTools } from "./agent/server-tools/mcp";
 import { config, OPENROUTER_API_URL } from "./config";
 import { closeDb, getDb, initSchema } from "./db/surreal";
@@ -150,12 +155,17 @@ async function boot() {
     await clearStaleCompaction();
   }
 
-  // Update provider data
-  await fetch("https://models.dev/api.json")
-    .then((res) => res.json())
-    .then((json) => Bun.write("provider-data.json", JSON.stringify(json)));
+  // Provider metadata (models.dev) — in-memory with TTL refresh (MIM-65).
+  // Non-fatal: a failed fetch means remote providers sit out until the
+  // retry loop lands; local providers register regardless.
+  const providerDataLoaded = await loadProviderData();
+  if (!providerDataLoaded) {
+    log.warn(
+      "provider data unavailable — remote providers disabled until refresh",
+    );
+  }
 
-  // Initialize provider registry (loads models from endpoints and provider-data.json)
+  // Initialize provider registry (models from endpoints + in-memory provider data)
   const [registryErr] = await attempt(initProviderRegistry);
   if (registryErr) {
     log.warn(
@@ -163,6 +173,10 @@ async function boot() {
       "model registry init failed — using vLLM fallback only",
     );
   }
+
+  // Keep provider data warm: 24h TTL, 15min retry while empty. Re-runs the
+  // registry init after each successful load (registration is additive).
+  startProviderDataRefresh(initProviderRegistry);
 
   // Connect to external MCP servers (non-fatal). No name-set refresh
   // needed — tool classification reads ctx.serverTools, which picks up
@@ -208,6 +222,7 @@ async function shutdown(signal: string) {
   log.info({ signal }, "shutdown requested");
 
   stopHygieneScheduler();
+  stopProviderDataRefresh();
 
   if (server) {
     server.stop(true); // graceful — finishes in-flight requests

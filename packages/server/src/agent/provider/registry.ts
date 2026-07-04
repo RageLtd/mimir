@@ -1,7 +1,7 @@
 /**
  * Provider registry — state, SDK creation, and initialization.
  *
- * All behavior is driven by provider-data.json:
+ * All behavior is driven by the in-memory models.dev data (provider-data.ts):
  *   - `npm` field determines which AI SDK factory creates the provider
  *   - `env` field determines which API key env var gates the provider
  *   - `api` field gives the base URL
@@ -22,8 +22,7 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { config } from "../../config";
 import { log } from "../../util/logger";
 import { attempt } from "../../util/result";
-
-const PROVIDER_DATA_PATH = "provider-data.json";
+import { getProviderData } from "./provider-data";
 
 // ---------------------------------------------------------------------------
 // Types from provider-data.json
@@ -209,8 +208,11 @@ function registerModels(
 // ---------------------------------------------------------------------------
 
 export async function initProviderRegistry() {
-  const raw = await Bun.file(PROVIDER_DATA_PATH).text();
-  providerData = JSON.parse(raw) as Record<string, ProviderEntry>;
+  // In-memory provider data (models.dev), loaded/refreshed by
+  // provider-data.ts (MIM-65). Empty when the fetch has never succeeded —
+  // remote providers sit out until the refresh loop lands; locals register
+  // regardless.
+  providerData = getProviderData();
 
   // Build reverse index: env var → provider IDs
   const envVarToProviders = new Map<string, string[]>();

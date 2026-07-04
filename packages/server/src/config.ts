@@ -41,6 +41,12 @@ export const config = {
       "qwen3-embedding:0.6b",
   },
 
+  /** Provider/model metadata source (models.dev shape). Fetched into memory
+   *  at boot and refreshed on a TTL — no disk artifact (MIM-65). */
+  providerData: {
+    url: Bun.env.PROVIDER_DATA_URL ?? "https://models.dev/api.json",
+  },
+
   /** Small model — used for memory extraction, summarization, and utility requests
    *  (title generation, etc.) that shouldn't hit the main inference model. */
   smallModel: {

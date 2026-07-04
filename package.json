@@ -12,7 +12,7 @@
     "test:acp": "bun run tests/run-tests.ts acp",
     "test:cc-plugin": "bun run tests/run-tests.ts cc-plugin",
     "server:dev": "bun run --filter @mimir/server dev",
-    "server:start": "bun run --filter @mimir/server start",
+    "start": "bun run --filter @mimir/server start",
     "acp:start": "bun run --filter @mimir/acp start",
     "acp:build": "bun run --filter @mimir/acp build",
     "cc-plugin:build": "bun run --filter @mimir/cc-plugin build"

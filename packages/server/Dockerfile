@@ -11,7 +11,6 @@ COPY packages/cc-plugin/package.json packages/cc-plugin/
 RUN bun install
 
 COPY packages/server/src packages/server/src
-COPY packages/server/provider-data.json packages/server/provider-data.json
 
 WORKDIR /app/packages/server
 RUN bun build src/index.ts --compile --outfile /app/mimir-server
