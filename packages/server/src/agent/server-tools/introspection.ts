@@ -1,7 +1,22 @@
+/**
+ * Self-introspection — read Mimir's own runtime logs.
+ *
+ * Reads the pino JSON file log (util/logger.ts writes every level to
+ * LOG_FILE_PATH) instead of shelling out to `docker logs` (MIM-68): the
+ * docker.sock mount was a container-escape liability and doesn't exist at
+ * all on Railway. The file path works in any deployment — container,
+ * homelab, bare bun.
+ */
+
 import { tool } from "ai";
 import { z } from "zod";
-import { log } from "../../util/logger";
+import { LOG_FILE_PATH, log } from "../../util/logger";
+import { attempt, attemptSync } from "../../util/result";
 import { CACHE_CONTROL } from "./shared";
+
+/** Bounded tail read — plenty for the 500-line response cap without ever
+ *  pulling a multi-hundred-MB log into memory. */
+const TAIL_READ_BYTES = 512 * 1024;
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -27,6 +42,88 @@ export const ReadLogsSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Pure helpers (exported for tests)
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a `since` argument to an epoch-ms cutoff. Accepts docker-style
+ * durations (`30s`, `10m`, `2h`, `1d`) and anything Date.parse understands.
+ * Returns null for unparseable input.
+ */
+export function parseSince(since: string, now = Date.now()) {
+  const duration = since.match(/^(\d+)([smhd])$/);
+  if (duration?.[1] && duration[2]) {
+    const n = parseInt(duration[1], 10);
+    switch (duration[2]) {
+      case "s":
+        return now - n * 1000;
+      case "m":
+        return now - n * 60_000;
+      case "h":
+        return now - n * 3_600_000;
+      case "d":
+        return now - n * 86_400_000;
+      default:
+        return null;
+    }
+  }
+  const parsed = Date.parse(since);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+/**
+ * Filter raw log lines. `sinceMs` keeps only pino JSON lines whose `time`
+ * field is at or after the cutoff — lines that aren't parseable JSON with a
+ * numeric `time` are dropped under a since filter, because their age is
+ * unknowable. Without `sinceMs`, unparseable lines pass through untouched.
+ */
+export function filterLogLines(
+  lines: readonly string[],
+  opts: { filter?: string; sinceMs?: number | null } = {},
+) {
+  let result = [...lines];
+
+  if (opts.sinceMs != null) {
+    const cutoff = opts.sinceMs;
+    result = result.filter((line) => {
+      const [err, parsed] = attemptSync(
+        () => JSON.parse(line) as { time?: unknown },
+      );
+      if (err || typeof parsed !== "object" || parsed === null) return false;
+      return typeof parsed.time === "number" && parsed.time >= cutoff;
+    });
+  }
+
+  if (opts.filter) {
+    const needle = opts.filter.toLowerCase();
+    result = result.filter((line) => line.toLowerCase().includes(needle));
+  }
+
+  return result;
+}
+
+/**
+ * Read the last `maxBytes` of a file and return its complete lines. When
+ * the read starts mid-file, the first (almost certainly partial) line is
+ * dropped so callers never see a truncated JSON record.
+ */
+export async function readLogTail(path: string, maxBytes = TAIL_READ_BYTES) {
+  const file = Bun.file(path);
+  const exists = await file.exists();
+  if (!exists) return null;
+
+  const size = file.size;
+  const start = Math.max(0, size - maxBytes);
+  const text = await file.slice(start).text();
+
+  const lines = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return start > 0 ? lines.slice(1) : lines;
+}
+
+// ---------------------------------------------------------------------------
 // Execute
 // ---------------------------------------------------------------------------
 
@@ -37,59 +134,33 @@ export const executeReadLogs = async ({
 }: z.infer<typeof ReadLogsSchema>) => {
   const maxLines = Math.min(lines ?? 100, 500);
 
-  // Build docker logs command
-  const args = ["logs"];
-  if (since) {
-    args.push("--since", since);
-  } else {
-    args.push("--tail", String(maxLines));
-  }
-
-  // HOSTNAME inside a Docker container is the container ID by default
-  const containerId = process.env.HOSTNAME;
-  if (!containerId) {
+  const sinceMs = since ? parseSince(since) : null;
+  if (since && sinceMs === null) {
     return {
       success: false,
-      error: "HOSTNAME env var not set — cannot determine container ID",
-      lines: [],
-    };
-  }
-  args.push(containerId);
-
-  const proc = Bun.spawn(["docker", ...args], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-
-  await proc.exited;
-
-  if (proc.exitCode !== 0) {
-    log.warn({ exitCode: proc.exitCode, stderr }, "docker logs failed");
-    return {
-      success: false,
-      error: stderr.trim() || "docker logs command failed",
+      error: `Unparseable 'since' value "${since}" — use '30s', '10m', '2h', '1d', or an ISO date`,
       lines: [],
     };
   }
 
-  // Docker sends log output to stderr when using --timestamps on some versions.
-  // Combine both streams so we catch everything regardless.
-  const raw = (stdout + stderr)
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
+  const [readErr, raw] = await attempt(() => readLogTail(LOG_FILE_PATH));
+  if (readErr) {
+    log.warn({ err: readErr.message, path: LOG_FILE_PATH }, "log read failed");
+    return {
+      success: false,
+      error: `Failed to read log file ${LOG_FILE_PATH}: ${readErr.message}`,
+      lines: [],
+    };
+  }
+  if (raw === null) {
+    return {
+      success: false,
+      error: `Log file ${LOG_FILE_PATH} does not exist — check MIMIR_LOG_FILE`,
+      lines: [],
+    };
+  }
 
-  // Apply optional filter
-  const filtered = filter
-    ? raw.filter((l) => l.toLowerCase().includes(filter.toLowerCase()))
-    : raw;
-
-  // Cap at maxLines from the tail
+  const filtered = filterLogLines(raw, { filter, sinceMs });
   const result = filtered.slice(-maxLines);
 
   log.info(
@@ -113,7 +184,7 @@ export const executeReadLogs = async ({
 export const introspectionTools = {
   read_mimir_logs: tool({
     description:
-      "Read Mimir's own runtime logs from Docker. Use this to self-diagnose issues: check compaction state, token counts, memory retrieval scores, context assembly, errors, or any recent warnings. Call proactively when something seems off — stuck behaviour, missing context, unexpected responses.",
+      "Read Mimir's own runtime logs from its log file. Use this to self-diagnose issues: check compaction state, token counts, memory retrieval scores, context assembly, errors, or any recent warnings. Call proactively when something seems off — stuck behaviour, missing context, unexpected responses.",
     inputSchema: ReadLogsSchema,
     providerOptions: CACHE_CONTROL,
     execute: executeReadLogs,

@@ -43,7 +43,6 @@ services:
     volumes:
       - ./packages/server/system-prompt.md:/app/system-prompt.md:ro
       - ./logs:/data
-      - /var/run/docker.sock:/var/run/docker.sock:ro
     labels:
       caddy: http://mimir.conhost.lan
       caddy.reverse_proxy: "192.168.1.160:8080"

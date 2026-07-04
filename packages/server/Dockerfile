@@ -18,7 +18,6 @@ RUN bun build src/index.ts --compile --outfile /app/mimir-server
 FROM oven/bun:alpine
 WORKDIR /app
 
-RUN apk add --no-cache docker
 COPY --from=build /app/mimir-server .
 
 EXPOSE 8080
