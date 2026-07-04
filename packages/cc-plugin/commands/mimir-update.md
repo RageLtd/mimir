@@ -50,6 +50,8 @@ If you're recovering from existing config (no URL):
 
 Show the binary's output verbatim.
 
+**API key**: on gated servers the binary reuses the key already stored in `~/.mimir/config.json`; setting `MIMIR_API_KEY` in the environment overrides it (that's the rotation path). Never pass `--api-key` on the command line and never accept a key pasted into chat — both persist the key in the conversation transcript. If the update fails with 401/403, tell the user to set `MIMIR_API_KEY` in their shell profile and re-run `/mimir-update`.
+
 ## Step 4 — final instructions
 
 If the binary exited zero, tell the user:

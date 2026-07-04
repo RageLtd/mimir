@@ -50,7 +50,32 @@ If the user picks "Detect via $(which cartographer)", run `which cartographer` a
 
 If the user picks "Other" and provides a path, bind that to `<carto-path>` after expanding leading `~`.
 
-## Step 4 — fetch the mimir-cc binary
+## Step 4 — API key
+
+Call `AskUserQuestion`:
+
+- question: `Does this mimir-server require an API key?`
+- header: `API key`
+- options:
+  - label: `No — ungated server`, description: `Local dev or self-hosted servers without the API gate`
+  - label: `Yes — server is gated`, description: `The installer reads the key from the MIMIR_API_KEY environment variable; you never paste it into chat`
+
+If the user picks "No", continue to Step 5.
+
+If the user picks "Yes", check whether the key is present **without printing its value**:
+
+```bash
+test -n "$MIMIR_API_KEY" && echo set || echo unset
+```
+
+- `set` — continue to Step 5. The installer binary reads `MIMIR_API_KEY` from the environment on its own; do **not** pass `--api-key` and do **not** echo, log, or otherwise output the key.
+- `unset` — stop the install and tell the user:
+
+  > This server needs an API key, and `MIMIR_API_KEY` isn't set in this environment. Set it so that new shells inherit it — add it to your shell profile (`export MIMIR_API_KEY=...` for bash/zsh, `set -Ux MIMIR_API_KEY ...` for fish) — then re-run `/mimir-install`. Don't paste the key into this chat: anything typed here is stored in the conversation transcript.
+
+  Then end the turn. Do not ask for the key via `AskUserQuestion`, do not accept it as "Other" free text, and do not put it on any command line — those all persist the key in the transcript.
+
+## Step 5 — fetch the mimir-cc binary
 
 Run the plugin's binary fetcher. It detects the platform, downloads the matching `mimir-cc` release asset from the (private) `RageLtd/mimir` repo into `~/.local/bin/mimir-cc`, and on macOS re-signs it to clear Gatekeeper:
 
@@ -60,17 +85,18 @@ Run the plugin's binary fetcher. It detects the platform, downloads the matching
 
 This needs the GitHub CLI (`gh`) installed and authenticated as an account with read access to `RageLtd/mimir` — alpha testers are repo collaborators, so they qualify. If `gh` is absent it falls back to `curl` + `$GITHUB_TOKEN`. Surface the script's output verbatim. If it exits non-zero — unsupported platform, no repo access, or no network and no existing binary — stop and let the user resolve the cause before retrying.
 
-> **Developing the plugin locally?** Skip this step and build from source instead: `cd "${CLAUDE_PLUGIN_ROOT}" && ./build.sh`, then in Step 5 run `"${CLAUDE_PLUGIN_ROOT}/dist/<platform>/mimir-cc" install ...` instead of the installed binary. A marketplace clone can't build (it lacks the monorepo's dependency catalogs), which is why the default path downloads a released binary. Once you've installed once, `scripts/dev-install.sh` is the fast iterate loop — it builds, atomically swaps the binary in, and pins dev mode so the updater won't overwrite your build.
+> **Developing the plugin locally?** Skip this step and build from source instead: `cd "${CLAUDE_PLUGIN_ROOT}" && ./build.sh`, then in Step 6 run `"${CLAUDE_PLUGIN_ROOT}/dist/<platform>/mimir-cc" install ...` instead of the installed binary. A marketplace clone can't build (it lacks the monorepo's dependency catalogs), which is why the default path downloads a released binary. Once you've installed once, `scripts/dev-install.sh` is the fast iterate loop — it builds, atomically swaps the binary in, and pins dev mode so the updater won't overwrite your build.
 
-## Step 5 — run the installer binary
+## Step 6 — run the installer binary
 
 Build the argument list:
 
 - positional: `<url>` from Step 1
 - if `<db-path>` is non-empty AND differs from the default: append `--user-memory-db "<db-path>"`
 - if `<carto-path>` is non-empty: append `--cartographer "<carto-path>"`
+- never an `--api-key` flag — on gated servers the binary picks the key up from `MIMIR_API_KEY` in its environment (verified in Step 4)
 
-Run the binary Step 4 just installed:
+Run the binary Step 5 just installed:
 
 ```bash
 "$HOME/.local/bin/mimir-cc" install "<url>" [optional flags]
@@ -78,7 +104,7 @@ Run the binary Step 4 just installed:
 
 Show the binary's stdout and stderr to the user verbatim.
 
-## Step 6 — final instructions
+## Step 7 — final instructions
 
 If the binary exited zero, tell the user:
 

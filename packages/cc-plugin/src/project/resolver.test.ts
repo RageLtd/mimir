@@ -6,6 +6,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { resolveProjectForPath } from "./resolver";
 
@@ -13,14 +16,30 @@ const SERVER_URL = "http://test.invalid";
 
 let originalFetch: typeof fetch;
 let calls: Array<{ url: string; init?: RequestInit }>;
+// The resolver attaches authHeaders(), which reads MIMIR_API_KEY and
+// ~/.mimir/config.json — isolate both so the developer's real key and
+// config never leak into assertions (or test output).
+let savedApiKey: string | undefined;
+let savedMimirHome: string | undefined;
+let mimirHomeDir: string;
 
-beforeEach(() => {
+beforeEach(async () => {
   originalFetch = globalThis.fetch;
   calls = [];
+  savedApiKey = process.env.MIMIR_API_KEY;
+  savedMimirHome = process.env.MIMIR_HOME;
+  delete process.env.MIMIR_API_KEY;
+  mimirHomeDir = await mkdtemp(join(tmpdir(), "mimir-resolver-"));
+  process.env.MIMIR_HOME = mimirHomeDir;
 });
 
-afterEach(() => {
+afterEach(async () => {
   globalThis.fetch = originalFetch;
+  if (savedApiKey === undefined) delete process.env.MIMIR_API_KEY;
+  else process.env.MIMIR_API_KEY = savedApiKey;
+  if (savedMimirHome === undefined) delete process.env.MIMIR_HOME;
+  else process.env.MIMIR_HOME = savedMimirHome;
+  await rm(mimirHomeDir, { recursive: true, force: true });
 });
 
 const stubFetch = (respond: (url: string, init?: RequestInit) => Response) => {
@@ -89,7 +108,7 @@ describe("resolveProjectForPath", () => {
     expect(body.localPath).toBe("/tmp/test");
   });
 
-  test("never sends an Authorization header (plugin is unauthenticated)", async () => {
+  test("sends no Authorization header when no key is configured", async () => {
     stubFetch(
       () =>
         new Response(JSON.stringify({ project: mkProject() }), { status: 200 }),
@@ -99,6 +118,19 @@ describe("resolveProjectForPath", () => {
       | Record<string, string>
       | undefined;
     expect(headers?.Authorization).toBeUndefined();
+  });
+
+  test("sends Bearer auth when MIMIR_API_KEY is set (MIM-77 gate)", async () => {
+    process.env.MIMIR_API_KEY = "test-key";
+    stubFetch(
+      () =>
+        new Response(JSON.stringify({ project: mkProject() }), { status: 200 }),
+    );
+    await resolveProjectForPath(SERVER_URL, "/tmp/test", null);
+    const headers = calls[0]?.init?.headers as
+      | Record<string, string>
+      | undefined;
+    expect(headers?.Authorization).toBe("Bearer test-key");
   });
 
   test("returns null when fetch throws (network error)", async () => {

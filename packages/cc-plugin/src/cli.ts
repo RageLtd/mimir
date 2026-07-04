@@ -21,11 +21,13 @@
  * Anything else prints usage and exits non-zero.
  */
 
-import { join } from "node:path";
-
-import { readConfig } from "./config";
+import {
+  mergeUpdateOptions,
+  parseInstallArgs,
+  parsePartialOptions,
+} from "./cli-args";
 import { runFileContextHook } from "./file-context-hook";
-import { type InstallOptions, runInstallCommand } from "./install";
+import { runInstallCommand } from "./install";
 import { runLogMcp } from "./log-mcp";
 import { flushLogs } from "./logger";
 import { runPersistHook } from "./persist-hook";
@@ -35,7 +37,6 @@ import { runRetrieveHook } from "./retrieve-hook";
 import { runRulesHook } from "./rules-hook";
 import { runSessionStartCommand } from "./session-start-hook";
 import { runUserMemoryMcp } from "./user-memory-mcp";
-import { mimirHome } from "./util";
 import { runVoiceAnchorHook } from "./voice-anchor";
 
 const USAGE = [
@@ -43,7 +44,8 @@ const USAGE = [
   "",
   "Commands:",
   "  install <server-url> [--user-memory-db PATH] [--cartographer PATH] [--api-key KEY]",
-  "                          Install Mimir for Claude Code.",
+  "                          Install Mimir for Claude Code. The API key may",
+  "                          also come from $MIMIR_API_KEY.",
   "  update [server-url]     Re-install (uses existing config if URL omitted).",
   "  voice-anchor            UserPromptSubmit hook (reads stdin).",
   "  retrieve                UserPromptSubmit hook: per-turn brain retrieval.",
@@ -56,161 +58,6 @@ const USAGE = [
   "  user-memory-mcp         Stdio MCP server for user-memory tools.",
   "  log-mcp                 Stdio MCP server for reading plugin logs.",
 ].join("\n");
-
-type McpConfig = {
-  readonly mcpServers?: Record<string, { readonly url?: string }>;
-};
-
-/**
- * Recover the mimir-server base URL from a previously installed mcp.json.
- *
- * The MCP config stores the full endpoint URL (`<base>/mcp`); we strip the
- * `/mcp` suffix so `update` calls fetchSystemPrompt with the same base URL
- * the original install used.
- */
-const readUrlFromExistingMcpConfig = async (): Promise<string | undefined> => {
-  const mcpPath = join(mimirHome(), "mcp.json");
-  const file = Bun.file(mcpPath);
-  if (!(await file.exists())) return undefined;
-
-  let parsed: McpConfig;
-  try {
-    parsed = (await file.json()) as McpConfig;
-  } catch {
-    return undefined;
-  }
-
-  const url = parsed.mcpServers?.mimir?.url;
-  if (typeof url !== "string") return undefined;
-
-  return url.replace(/\/mcp\/?$/, "");
-};
-
-type PartialOptions = {
-  readonly serverUrl?: string;
-  readonly userMemoryDb?: string;
-  readonly cartographerBinary?: string;
-  readonly apiKey?: string;
-};
-
-/**
- * Parse the shared argv shape — optional positional URL plus optional
- * `--user-memory-db` / `--cartographer` flags. Used by both `install`
- * (which then requires serverUrl) and `update` (which layers the
- * partial over existing config.json).
- */
-const parsePartialOptions = (rest: readonly string[]) => {
-  let serverUrl: string | undefined;
-  let userMemoryDb: string | undefined;
-  let cartographerBinary: string | undefined;
-  let apiKey: string | undefined;
-
-  let i = 0;
-  while (i < rest.length) {
-    const arg = rest[i];
-    if (arg === "--api-key") {
-      apiKey = rest[i + 1];
-      if (!apiKey) return { error: "--api-key requires a value" };
-      i += 2;
-      continue;
-    }
-    if (arg === "--user-memory-db") {
-      userMemoryDb = rest[i + 1];
-      if (!userMemoryDb) return { error: "--user-memory-db requires a path" };
-      i += 2;
-      continue;
-    }
-    if (arg === "--cartographer") {
-      cartographerBinary = rest[i + 1];
-      if (!cartographerBinary) {
-        return { error: "--cartographer requires a path" };
-      }
-      i += 2;
-      continue;
-    }
-    if (arg?.startsWith("--")) {
-      return { error: `unknown flag: ${arg}` } as const;
-    }
-    if (!serverUrl) {
-      serverUrl = arg;
-      i += 1;
-      continue;
-    }
-    return { error: `unexpected argument: ${arg}` } as const;
-  }
-
-  // Construct the result explicitly typed so the inferred return type
-  // of this function stays as `PartialOptions | { error: string }` —
-  // without this, TS infers the spread shape too loosely and
-  // downstream `"error" in result` narrowing breaks at call sites.
-  const result: PartialOptions = {
-    ...(serverUrl ? { serverUrl } : {}),
-    ...(userMemoryDb ? { userMemoryDb } : {}),
-    ...(cartographerBinary ? { cartographerBinary } : {}),
-    ...(apiKey ? { apiKey } : {}),
-  };
-  return result;
-};
-
-/**
- * Parse install args — same as the partial parser but with serverUrl
- * required. Install is the fresh-install path so there's nothing to
- * recover; the URL must be on the command line.
- */
-const parseInstallArgs = (rest: readonly string[]) => {
-  const partial = parsePartialOptions(rest);
-  if ("error" in partial) return partial;
-  if (!partial.serverUrl) {
-    return { error: "server URL is required" } as const;
-  }
-  const result: InstallOptions = {
-    serverUrl: partial.serverUrl,
-    ...(partial.userMemoryDb ? { userMemoryDb: partial.userMemoryDb } : {}),
-    ...(partial.cartographerBinary
-      ? { cartographerBinary: partial.cartographerBinary }
-      : {}),
-    ...(partial.apiKey ? { apiKey: partial.apiKey } : {}),
-  };
-  return result;
-};
-
-/**
- * Build the InstallOptions for an `update` invocation by layering the
- * partial CLI args over the existing config.json. The result preserves
- * any field that wasn't explicitly overridden, so `update` with no
- * args is a true no-op refresh — same URL, same cartographer path,
- * same user-memory DB — and `update <url>` keeps the existing
- * cartographer and DB while only changing the URL.
- *
- * URL precedence: CLI flag > config.json > mcp.json (legacy fallback
- * for pre-config.json installs).
- */
-const mergeUpdateOptions = async (partial: PartialOptions) => {
-  const existing = await readConfig();
-  const legacyUrl = existing ? undefined : await readUrlFromExistingMcpConfig();
-
-  const serverUrl = partial.serverUrl ?? existing?.serverUrl ?? legacyUrl;
-  if (!serverUrl) {
-    return {
-      error:
-        "No URL provided and no existing config to recover from.\n" +
-        "Run: mimir-cc update <mimir-server-url>",
-    } as const;
-  }
-
-  const userMemoryDb = partial.userMemoryDb ?? existing?.userMemoryDb;
-  const cartographerBinary =
-    partial.cartographerBinary ?? existing?.cartographerBinary;
-  const apiKey = partial.apiKey ?? existing?.apiKey;
-
-  const merged: InstallOptions = {
-    serverUrl,
-    ...(userMemoryDb ? { userMemoryDb } : {}),
-    ...(cartographerBinary ? { cartographerBinary } : {}),
-    ...(apiKey ? { apiKey } : {}),
-  };
-  return merged;
-};
 
 const dispatch = async (argv: readonly string[]): Promise<number> => {
   const [command, ...rest] = argv;
