@@ -59,6 +59,40 @@ export type ServerClientConfig = {
 const authHeaders = (apiKey: string): Record<string, string> =>
   apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
 
+// ── BYOK (MIM-73) ──
+
+/** BYOK key transport header — mirrors PROVIDER_KEY_HEADER on the server. */
+const PROVIDER_KEY_HEADER = "X-Provider-Api-Key";
+
+/**
+ * modelId → provider API-key env var name, learned from `/v1/models`'
+ * `provider_env` field (e.g. "ANTHROPIC_API_KEY"). Populated by
+ * `fetchServerModels`; exported so tests can seed it. The user's keys live
+ * in STANDARD env vars set via Zed's settings.json `env` block — no
+ * Mimir-specific variable names.
+ */
+export const providerEnvByModel = new Map<string, string>();
+
+/**
+ * Resolve the user's own API key for a model, or undefined when the model's
+ * provider env var is unknown or unset. Undefined → no header → the server
+ * serves the request from its own registered providers as ever.
+ */
+export const providerKeyForModel = (modelId: string) => {
+  const envName = providerEnvByModel.get(modelId);
+  if (!envName) return undefined;
+  return process.env[envName] || undefined;
+};
+
+/** Auth + optional BYOK key headers for a completion-bearing request. */
+const requestHeaders = (apiKey: string, modelId: string) => {
+  const providerKey = providerKeyForModel(modelId);
+  return {
+    ...authHeaders(apiKey),
+    ...(providerKey ? { [PROVIDER_KEY_HEADER]: providerKey } : {}),
+  };
+};
+
 const postJson = async (
   url: string,
   body: unknown,
@@ -93,7 +127,7 @@ export const streamCompletion = async function* (
   request: CompletionRequest,
   signal?: AbortSignal,
 ): AsyncGenerator<SSEEvent, void, undefined> {
-  const headers = authHeaders(config.apiKey);
+  const headers = requestHeaders(config.apiKey, request.model);
   const response = await postJson(
     `${config.baseUrl}/v1/chat/completions`,
     {
@@ -163,6 +197,8 @@ type ServerModelEntry = {
   provider_name?: string;
   /** Whether the model supports extended thinking / reasoning. */
   reasoning?: boolean;
+  /** API-key env var name for the model's provider (BYOK, MIM-73). */
+  provider_env?: string;
 };
 
 /**
@@ -229,6 +265,9 @@ export const fetchServerModels = async (
   const reasoningModels = new Set<string>();
   const models = data.map((m) => {
     if (m.reasoning) reasoningModels.add(m.id);
+    // BYOK (MIM-73): remember which STANDARD env var holds the user's key
+    // for this model's provider, so streamCompletion can forward it.
+    if (m.provider_env) providerEnvByModel.set(m.id, m.provider_env);
     return {
       modelId: m.id,
       name: composeServerModelName(m),

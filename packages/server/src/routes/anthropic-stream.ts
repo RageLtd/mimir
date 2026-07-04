@@ -24,6 +24,7 @@ import {
 import { prepareTurn } from "../agent/run/turn";
 import type { MimirContext } from "../middleware/types";
 import { log } from "../util/logger";
+import { redactSecret } from "../util/redact";
 import {
   type AnthropicEvent,
   buildContentBlockStartText,
@@ -378,7 +379,12 @@ export function anthropicStreamingResponse(model: Model, ctx: MimirContext) {
       })
         .catch((err) => {
           log.error({ err }, "anthropic agent loop error");
-          const message = err instanceof Error ? err.message : String(err);
+          // Scrub the BYOK key before the message leaves on the stream —
+          // provider SDK errors can echo request headers (MIM-73).
+          const message = redactSecret(
+            err instanceof Error ? err.message : String(err),
+            ctx.providerOverride?.apiKey,
+          );
           const errStep = processTextDelta(
             state,
             `\n\n[Error: ${message}]`,

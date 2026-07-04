@@ -61,26 +61,32 @@ export interface ModelEntry {
 
 export function createProviderSDK(
   npm: string,
-  baseUrl: string,
+  // Undefined → the SDK's own default endpoint. Only SDK-native factories
+  // have one; the openai-compatible fallback requires an explicit URL
+  // (callers enforce this — see resolveModelWithOverride).
+  baseUrl: string | undefined,
   apiKey: string,
 ) {
+  // Spread-omit so SDK defaults apply when no URL is known — passing
+  // `baseURL: undefined` explicitly is safe, but "" would break requests.
+  const base = baseUrl ? { baseURL: baseUrl } : {};
   switch (npm) {
     case "@ai-sdk/anthropic":
-      return createAnthropic({ baseURL: baseUrl, apiKey });
+      return createAnthropic({ ...base, apiKey });
 
     case "@ai-sdk/google":
     case "@ai-sdk/google-vertex":
-      return createGoogleGenerativeAI({ baseURL: baseUrl, apiKey });
+      return createGoogleGenerativeAI({ ...base, apiKey });
 
     case "@ai-sdk/moonshotai":
-      return createMoonshotAI({ baseURL: baseUrl, apiKey });
+      return createMoonshotAI({ ...base, apiKey });
 
     case "@ai-sdk/openai":
-      return createOpenAI({ baseURL: baseUrl, apiKey: apiKey || "not-needed" });
+      return createOpenAI({ ...base, apiKey: apiKey || "not-needed" });
 
     case "@openrouter/ai-sdk-provider":
       return createOpenRouter({
-        baseURL: baseUrl,
+        ...base,
         apiKey,
         ...(config.openrouter.zdr
           ? { extraBody: { provider: { zdr: true } } }
@@ -88,6 +94,13 @@ export function createProviderSDK(
       });
 
     default:
+      // Generic OpenAI-compatible has no default endpoint — an explicit
+      // URL is structural, not optional.
+      if (!baseUrl) {
+        throw new Error(
+          `Provider SDK "${npm}" requires a base URL and none is known`,
+        );
+      }
       return createOpenAICompatible({
         baseURL: baseUrl,
         apiKey: apiKey || "not-needed",

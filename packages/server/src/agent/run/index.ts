@@ -11,7 +11,7 @@
  */
 
 import type { MimirContext } from "../../middleware/types";
-import { resolveModel } from "../provider";
+import { resolveModel, resolveModelWithOverride } from "../provider";
 import { streamingResponse } from "./response";
 
 /**
@@ -27,7 +27,11 @@ export function runAgent(
   ctx: MimirContext,
   respond: typeof streamingResponse = streamingResponse,
 ) {
-  const model = resolveModel(ctx.request.model);
+  // BYOK requests build a fresh, uncached SDK from the request's own key;
+  // keyless requests resolve through the boot-registered providers as ever.
+  const model = ctx.providerOverride
+    ? resolveModelWithOverride(ctx.request.model, ctx.providerOverride)
+    : resolveModel(ctx.request.model);
   ctx.resolvedModel = model;
   return respond(model, ctx);
 }

@@ -18,11 +18,14 @@ import { z } from "zod";
 import { runAgent } from "../agent/run";
 import {
   createMimirContext,
+  extractProviderOverride,
   generateRequestId,
+  PROVIDER_KEY_HEADER,
   prepareContext,
 } from "../middleware/pipeline";
 import type { ChatRequest } from "../middleware/types";
 import { requestLog } from "../util/logger";
+import { redactSecret } from "../util/redact";
 import {
   type AnthropicRequest,
   normalizeAnthropicRequest,
@@ -120,8 +123,14 @@ messagesIngress.post("/", async (c) => {
     metadata: (parsed.data.metadata ?? undefined) as ChatRequest["metadata"],
   };
 
+  // BYOK (MIM-73): per-request provider key from the transport header.
+  const providerOverride = extractProviderOverride(
+    c.req.header(PROVIDER_KEY_HEADER),
+    chatRequest.metadata,
+  );
+
   try {
-    const ctx = createMimirContext(chatRequest);
+    const ctx = createMimirContext(chatRequest, { providerOverride });
 
     // System prompt resolution: prefer the client's `system` field (CC
     // launched via wrapper carries the Mimir prompt verbatim through
@@ -152,7 +161,11 @@ messagesIngress.post("/", async (c) => {
         type: "error",
         error: {
           type: "api_error",
-          message: err instanceof Error ? err.message : "Pipeline error",
+          // BYOK key scrub — provider errors can echo request headers.
+          message: redactSecret(
+            err instanceof Error ? err.message : "Pipeline error",
+            providerOverride?.apiKey,
+          ),
         },
       },
       500,

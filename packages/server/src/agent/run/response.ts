@@ -5,6 +5,7 @@
 
 import type { MimirContext } from "../../middleware/types";
 import { log } from "../../util/logger";
+import { redactSecret } from "../../util/redact";
 import { enqueueLlmCall } from "../queue";
 import { agentLoop, type EmitSSE, type EmitUsage, type Model } from "./loop";
 import { prepareTurn } from "./turn";
@@ -66,7 +67,12 @@ export function streamingResponse(model: Model, ctx: MimirContext) {
       })
         .catch((err) => {
           log.error({ err }, "agent loop error");
-          const msg = err instanceof Error ? err.message : "Agent loop error";
+          // Provider SDK errors can echo request headers — scrub the BYOK
+          // key before the message leaves on the stream (MIM-73).
+          const msg = redactSecret(
+            err instanceof Error ? err.message : "Agent loop error",
+            ctx.providerOverride?.apiKey,
+          );
           emitSSE({ content: `\n\n[Error: ${msg}]` });
         })
         .finally(() => {

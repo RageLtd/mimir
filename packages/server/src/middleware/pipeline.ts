@@ -13,11 +13,38 @@ import { injectMemories } from "./goldfish";
 import { injectProjectRules } from "./project-rules";
 import { injectSystemPrompt } from "./system-prompt";
 import { classifyTools } from "./tool-classification";
-import type { ChatRequest, MimirContext } from "./types";
+import type { ChatRequest, MimirContext, ProviderOverride } from "./types";
 import { injectUserProfile } from "./user-profile";
 
 /** Bucket for requests that carry no project metadata. */
 const DEFAULT_PROJECT_IDENTIFIER = "default";
+
+/** BYOK key transport header (MIM-73). Header, never body — request bodies
+ *  get logged on validation failure; headers don't. */
+export const PROVIDER_KEY_HEADER = "x-provider-api-key";
+
+/**
+ * Build the per-request BYOK override from the transport header + body
+ * metadata. Shared by both ingress routes so they cannot drift. Returns
+ * null when no key was sent — the keyless path stays byte-identical to
+ * pre-MIM-73 behavior.
+ */
+export function extractProviderOverride(
+  apiKeyHeader: string | undefined,
+  metadata: ChatRequest["metadata"],
+) {
+  const apiKey = apiKeyHeader?.trim();
+  if (!apiKey) return null;
+
+  const override: ProviderOverride = { apiKey };
+  if (typeof metadata?.provider === "string" && metadata.provider.length > 0) {
+    override.provider = metadata.provider;
+  }
+  if (typeof metadata?.base_url === "string" && metadata.base_url.length > 0) {
+    override.baseUrl = metadata.base_url;
+  }
+  return override;
+}
 
 /** Correlation ID for request logging. */
 export function generateRequestId() {
@@ -28,10 +55,14 @@ export function generateRequestId() {
  * Build the initial context object for the pipeline.
  * Every field the middleware chain fills starts empty here.
  */
-export function createMimirContext(request: ChatRequest) {
+export function createMimirContext(
+  request: ChatRequest,
+  opts: { providerOverride?: ProviderOverride | null } = {},
+) {
   return {
     request,
     projectId: null,
+    providerOverride: opts.providerOverride ?? null,
     systemPrompt: "",
     memories: null,
     playbooks: null,

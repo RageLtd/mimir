@@ -24,6 +24,7 @@ export {
   listProviders,
   resolveEmbeddingModel,
   resolveModel,
+  resolveModelWithOverride,
 } from "./query";
 export {
   initProviderRegistry,

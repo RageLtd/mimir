@@ -10,12 +10,15 @@
 
 import { Hono } from "hono";
 import { listModels } from "../agent/provider";
+import { getProviderData } from "../agent/provider/provider-data";
 import {
   getModelDisplayName,
   getModelMetadata,
   getProviderDisplayName,
+  getProviderEnvVar,
 } from "../agent/provider/query";
 import { config, OPENROUTER_API_URL } from "../config";
+import { PROVIDER_KEY_HEADER } from "../middleware/pipeline";
 import { attempt } from "../util/result";
 
 export const models = new Hono();
@@ -48,6 +51,13 @@ interface ModelEntry {
    * use this to conditionally expose a thought-level config selector.
    */
   reasoning?: boolean;
+  /**
+   * API-key env var name for the model's provider (models.dev `env[0]`,
+   * e.g. "ANTHROPIC_API_KEY"). BYOK (MIM-73): the ACP connector reads this
+   * STANDARD var from its own environment and forwards the value as
+   * X-Provider-Api-Key. Absent for local providers (mimir/vllm/ollama).
+   */
+  provider_env?: string;
 }
 
 /**
@@ -88,11 +98,13 @@ const enrichEntry = (entry: ModelEntry) => {
     getProviderDisplayName(entry.owned_by) ??
     titlecaseProviderId(entry.owned_by);
   const meta = getModelMetadata(lookupId);
+  const provider_env = getProviderEnvVar(entry.owned_by);
   return {
     ...entry,
     ...(display_name ? { display_name } : {}),
     ...(provider_name ? { provider_name } : {}),
     ...(meta?.reasoning ? { reasoning: true } : {}),
+    ...(provider_env ? { provider_env } : {}),
   };
 };
 
@@ -245,11 +257,28 @@ models.get("/v1/models", async (c) => {
     });
   }
 
+  // BYOK catalogue (MIM-73): a client presenting its own provider key may
+  // request an unregistered provider's models so its picker can offer them.
+  // Registered providers dedup below (registry copy wins).
+  const byokProvider = c.req.query("provider");
+  const byokModels: ModelEntry[] = [];
+  if (byokProvider && c.req.header(PROVIDER_KEY_HEADER)) {
+    const entry = getProviderData()[byokProvider];
+    for (const modelId of Object.keys(entry?.models ?? {})) {
+      byokModels.push({
+        id: `${byokProvider}/${modelId}`,
+        object: "model",
+        created: now,
+        owned_by: byokProvider,
+      });
+    }
+  }
+
   // Dedup by id (safety net — the qualified-id namespaces don't overlap) and
   // enrich every entry with `display_name` / `provider_name` so ACP clients can
   // render `"<Friendly Name> (<Provider>)"` without their own provider lookup.
   const seen = new Set<string>();
-  const data = [...localModels, ...orModels, ...registryModels]
+  const data = [...localModels, ...orModels, ...registryModels, ...byokModels]
     .filter((entry) => {
       if (seen.has(entry.id)) return false;
       seen.add(entry.id);

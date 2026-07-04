@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { createMimirContext, requireProjectId } from "./pipeline";
+import {
+  createMimirContext,
+  extractProviderOverride,
+  requireProjectId,
+} from "./pipeline";
 import type { ChatRequest, MimirContext } from "./types";
 
 const baseRequest = (overrides: Partial<ChatRequest> = {}): ChatRequest => ({
@@ -28,6 +32,42 @@ describe("createMimirContext", () => {
     expect(Object.keys(ctx.clientTools)).toHaveLength(0);
     expect(Object.keys(ctx.allTools)).toHaveLength(0);
     expect(ctx.resolvedModel).toBeNull();
+  });
+});
+
+describe("extractProviderOverride", () => {
+  test("no header → null (keyless path unchanged)", () => {
+    expect(extractProviderOverride(undefined, {})).toBeNull();
+    expect(extractProviderOverride("", { provider: "anthropic" })).toBeNull();
+    expect(extractProviderOverride("   ", {})).toBeNull();
+  });
+
+  test("header alone → apiKey-only override", () => {
+    expect(extractProviderOverride("sk-user", {})).toEqual({
+      apiKey: "sk-user",
+    });
+  });
+
+  test("header + metadata → full override", () => {
+    expect(
+      extractProviderOverride("sk-user", {
+        provider: "anthropic",
+        base_url: "http://llm.internal/v1",
+      }),
+    ).toEqual({
+      apiKey: "sk-user",
+      provider: "anthropic",
+      baseUrl: "http://llm.internal/v1",
+    });
+  });
+
+  test("createMimirContext threads the override onto ctx", () => {
+    const override = { apiKey: "sk-user" };
+    const ctx = createMimirContext(baseRequest(), {
+      providerOverride: override,
+    });
+    expect(ctx.providerOverride).toBe(override);
+    expect(createMimirContext(baseRequest()).providerOverride).toBeNull();
   });
 });
 

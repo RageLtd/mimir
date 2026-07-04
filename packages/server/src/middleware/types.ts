@@ -23,10 +23,31 @@ export interface ChatRequest {
   metadata?: {
     session_id?: string;
     project?: string;
+    /** BYOK: provider id (models.dev key) when the model id carries no
+     * provider/ prefix. Pairs with the X-Provider-Api-Key header (MIM-73). */
+    provider?: string;
+    /** BYOK: base URL override for self-hosted OpenAI-compatible endpoints. */
+    base_url?: string;
     [key: string]: unknown;
   };
   /** Client-specified reasoning effort (provider-dependent) */
   reasoning_effort?: string;
+}
+
+/**
+ * Per-request BYOK override, captured at the ingress boundary (MIM-73).
+ * The key arrives via the X-Provider-Api-Key header — never the body, so
+ * validation-failure body logging cannot leak it. Transient: lives on ctx
+ * only; every apiKey-shaped log path is redacted (util/logger.ts) and
+ * response error surfaces are value-scrubbed (redactSecret).
+ */
+export interface ProviderOverride {
+  apiKey: string;
+  /** Provider id (models.dev key). Optional — the provider/model id prefix
+   * convention or the registry lookup resolves it otherwise. */
+  provider?: string;
+  /** Base URL override for self-hosted OpenAI-compatible endpoints. */
+  baseUrl?: string;
 }
 
 /**
@@ -55,6 +76,9 @@ export interface MimirContext {
    * everything downstream may assert it via requireProjectId.
    */
   projectId: string | null;
+  /** BYOK override (MIM-73). Null on keyless requests — the registry's
+   * env-configured providers serve those exactly as before. */
+  providerOverride: ProviderOverride | null;
 
   // -- Set by MW1: system prompt --
   systemPrompt: string;

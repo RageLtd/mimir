@@ -1,5 +1,6 @@
 import pino from "pino";
 import pretty from "pino-pretty";
+import { REDACT_CENSOR, REDACT_PATHS } from "./redact";
 
 const isTest = process.env.NODE_ENV === "test";
 
@@ -21,7 +22,12 @@ const fileStream = pino.destination({
 });
 
 export const log = pino(
-  { level: isTest ? "silent" : (Bun.env.LOG_LEVEL ?? "info") },
+  {
+    level: isTest ? "silent" : (Bun.env.LOG_LEVEL ?? "info"),
+    // BYOK key redaction (MIM-73) — paths defined in util/redact.ts, which
+    // stays unmocked in tests (this module is preload-mocked wholesale).
+    redact: { paths: REDACT_PATHS, censor: REDACT_CENSOR },
+  },
   pino.multistream([
     { stream: prettyStream, level: "debug" },
     { stream: fileStream, level: "debug" },

@@ -147,7 +147,10 @@ export const chunkToEvents = (chunk: ChatCompletionChunk) => {
         id: obs.id,
         name: obs.name,
         input: obs.input ?? {},
-        result: typeof obs.result === "string" ? obs.result : String(obs.result ?? ""),
+        result:
+          typeof obs.result === "string"
+            ? obs.result
+            : String(obs.result ?? ""),
       });
     }
   }

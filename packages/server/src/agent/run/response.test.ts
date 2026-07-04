@@ -44,6 +44,7 @@ function makeCtx(model: string): MimirContext {
       stream: true,
     },
     projectId: "test",
+    providerOverride: null,
     systemPrompt: "system",
     memories: null,
     playbooks: null,

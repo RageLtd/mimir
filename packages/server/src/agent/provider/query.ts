@@ -11,6 +11,7 @@ import type { SharedV3ProviderOptions } from "@ai-sdk/provider";
 import { config } from "../../config";
 import { log } from "../../util/logger";
 import { attempt } from "../../util/result";
+import { getProviderData } from "./provider-data";
 import {
   bareNameToFullId,
   createProviderSDK,
@@ -32,6 +33,21 @@ import {
 function normalizeBareId(modelId: string) {
   if (!modelId.includes("/")) return modelId;
   return modelId.split("/")[1] ?? modelId;
+}
+
+/**
+ * Find the models.dev provider entry that owns a model id. The registry
+ * maps only hold providers registered at boot (env key present) — BYOK
+ * models from unregistered providers (MIM-73) live only in the raw
+ * provider data, so metadata queries fall back to this scan.
+ */
+function lookupProviderDataEntry(modelId: string) {
+  const bareId = normalizeBareId(modelId);
+  for (const [id, entry] of Object.entries(getProviderData())) {
+    const model = entry.models?.[bareId] ?? entry.models?.[modelId];
+    if (model) return { id, entry, model };
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -83,20 +99,26 @@ export function getModelNpm(modelId: string) {
     if (cfg?.npm) return cfg.npm;
   }
 
+  // Unregistered provider (BYOK) — npm lives in the raw provider data.
+  const fromData = lookupProviderDataEntry(modelId)?.entry.npm;
+  if (fromData) return fromData;
+
   return "@ai-sdk/openai-compatible";
 }
 
 export function getContextWindow(modelId: string) {
-  const bareId = normalizeBareId(modelId);
-  return (
-    modelMetadata.get(bareId)?.limit?.context ??
-    modelMetadata.get(modelId)?.limit?.context
-  );
+  return getModelMetadata(modelId)?.limit?.context;
 }
 
 export function getModelMetadata(modelId: string) {
   const bareId = normalizeBareId(modelId);
-  return modelMetadata.get(bareId) ?? modelMetadata.get(modelId);
+  return (
+    modelMetadata.get(bareId) ??
+    modelMetadata.get(modelId) ??
+    // Unregistered provider (BYOK) — reasoning flags, context windows, and
+    // npm shapes still apply; read them from the raw provider data.
+    lookupProviderDataEntry(modelId)?.model
+  );
 }
 
 export function getModelDisplayName(modelId: string) {
@@ -136,9 +158,23 @@ function getProviderDisplayNames() {
   return providerDisplayNames;
 }
 
+/**
+ * API-key env var name for a provider (models.dev `env[0]`, e.g.
+ * "ANTHROPIC_API_KEY"). ACP clients use this to decide which STANDARD env
+ * var on the user's machine holds the BYOK key for a selected model
+ * (MIM-73) — no Mimir-specific var names, no hardcoded provider knowledge.
+ */
+export function getProviderEnvVar(providerId: string) {
+  return getProviderData()[providerId]?.env?.[0];
+}
+
 export function getModelProvider(modelId: string) {
   const bareId = normalizeBareId(modelId);
-  return modelToProvider.get(bareId) ?? modelToProvider.get(modelId);
+  return (
+    modelToProvider.get(bareId) ??
+    modelToProvider.get(modelId) ??
+    lookupProviderDataEntry(modelId)?.id
+  );
 }
 
 /**
@@ -242,6 +278,70 @@ export function resolveModel(modelId: string) {
   if (vllm) return vllm.languageModel(modelId);
 
   throw new Error(`No provider found for model ${modelId}`);
+}
+
+/**
+ * BYOK model resolution (MIM-73): build a FRESH provider SDK from the
+ * request's own API key. Deliberately never touches getOrCreateSDK or the
+ * registry maps — those cache SDKs holding the server's env-configured
+ * keys, and a per-request key must never enter shared state.
+ *
+ * Provider precedence: explicit override.provider → "provider/model" id
+ * prefix (registered OR models.dev-known) → registry model index.
+ */
+export function resolveModelWithOverride(
+  modelId: string,
+  override: { apiKey: string; provider?: string; baseUrl?: string },
+) {
+  const data = getProviderData();
+  const knownProvider = (id: string) => providers.has(id) || id in data;
+
+  let providerId = override.provider;
+  let bareModelId = modelId;
+
+  const slashIndex = modelId.indexOf("/");
+  if (slashIndex !== -1) {
+    const candidate = modelId.slice(0, slashIndex);
+    if (knownProvider(candidate)) {
+      providerId ??= candidate;
+      bareModelId = modelId.slice(slashIndex + 1);
+    }
+  }
+
+  providerId ??=
+    modelToProvider.get(bareModelId) ?? modelToProvider.get(modelId);
+
+  if (!providerId) {
+    throw new Error(
+      `BYOK: cannot determine provider for model "${modelId}" — use a "provider/model" id or metadata.provider`,
+    );
+  }
+
+  const entry = data[providerId];
+  const registered = providerConfig.get(providerId);
+  const npm =
+    entry?.models?.[bareModelId]?.provider?.npm ??
+    entry?.npm ??
+    registered?.npm ??
+    "@ai-sdk/openai-compatible";
+  const baseUrl = override.baseUrl ?? registered?.baseUrl ?? entry?.api;
+  // SDK-native factories (anthropic, google, openai, …) have correct
+  // default endpoints — models.dev omits `api` for exactly those. Only the
+  // generic openai-compatible fallback has no default; demand a URL for it
+  // here with a BYOK-shaped message (createProviderSDK enforces it too).
+  if (!baseUrl && npm === "@ai-sdk/openai-compatible") {
+    throw new Error(
+      `BYOK: no base URL known for provider "${providerId}" — supply metadata.base_url`,
+    );
+  }
+
+  const sdk = createProviderSDK(npm, baseUrl, override.apiKey);
+  const fullModelId = bareNameToFullId.get(bareModelId) ?? bareModelId;
+  log.info(
+    { providerId, model: fullModelId, byok: true },
+    "resolved model with per-request key",
+  );
+  return sdk.languageModel(fullModelId);
 }
 
 export function resolveEmbeddingModel() {

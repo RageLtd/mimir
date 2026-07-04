@@ -14,11 +14,14 @@ import { getSmallModelConfig } from "../agent/provider/query";
 import { runAgent } from "../agent/run";
 import {
   createMimirContext,
+  extractProviderOverride,
   generateRequestId,
+  PROVIDER_KEY_HEADER,
   prepareContext,
 } from "../middleware/pipeline";
 import type { ChatRequest, OpenAIToolDef } from "../middleware/types";
 import { requestLog } from "../util/logger";
+import { redactSecret } from "../util/redact";
 import { normalizeMessages } from "./openai-format";
 
 // Message format translation (OpenAI ↔ AI SDK ModelMessage) lives in
@@ -148,15 +151,27 @@ completions.post("/v1/chat/completions", async (c) => {
 
   logRequest(requestLog(requestId), req);
 
+  // BYOK (MIM-73): per-request provider key from the transport header.
+  const providerOverride = extractProviderOverride(
+    c.req.header(PROVIDER_KEY_HEADER),
+    req.metadata,
+  );
+
   try {
-    const ctx = await prepareContext(createMimirContext(req));
+    const ctx = await prepareContext(
+      createMimirContext(req, { providerOverride }),
+    );
     return runAgent(ctx);
   } catch (err) {
     log.error({ err }, "middleware pipeline failed");
     return c.json(
       {
         error: {
-          message: err instanceof Error ? err.message : "Pipeline error",
+          // BYOK key scrub — provider errors can echo request headers.
+          message: redactSecret(
+            err instanceof Error ? err.message : "Pipeline error",
+            providerOverride?.apiKey,
+          ),
         },
       },
       500,
