@@ -19,6 +19,9 @@ export type MimirConfig = {
   readonly userMemoryDb: string;
   /** Absolute path to the cartographer binary. Unset means reindex is disabled. */
   readonly cartographerBinary?: string;
+  /** Static bearer key for the interim API gate (MIM-77). Unset for
+   *  ungated self-hosted servers. */
+  readonly apiKey?: string;
 };
 
 const configPath = () => join(mimirHome(), "config.json");
@@ -44,8 +47,25 @@ export const readConfig = async (): Promise<MimirConfig | null> => {
       ...(typeof parsed.cartographerBinary === "string"
         ? { cartographerBinary: parsed.cartographerBinary }
         : {}),
+      ...(typeof parsed.apiKey === "string" && parsed.apiKey.length > 0
+        ? { apiKey: parsed.apiKey }
+        : {}),
     };
   } catch {
     return null;
   }
+};
+
+/**
+ * Authorization header for mimir-server calls (MIM-77 gate). Env var wins
+ * over config.json so a key can be rotated per-session without a
+ * reinstall; both unset → empty object, matching ungated servers.
+ */
+export const authHeaders = async () => {
+  const key = process.env.MIMIR_API_KEY ?? (await readConfig())?.apiKey;
+  // Built mutably so the inferred type is a uniform Record<string, string>
+  // — a conditional-spread union trips fetch's HeadersInit overloads.
+  const headers: Record<string, string> = {};
+  if (key) headers.Authorization = `Bearer ${key}`;
+  return headers;
 };

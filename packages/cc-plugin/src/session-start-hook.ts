@@ -212,8 +212,10 @@ const runWorker = async (projectPath: string) => {
       );
   }
 
+  // Env wins over config.json — same precedence as authHeaders (MIM-77).
+  const apiKey = process.env.MIMIR_API_KEY ?? config.apiKey;
   const result = await syncIndex(
-    { serverUrl: config.serverUrl },
+    { serverUrl: config.serverUrl, ...(apiKey ? { apiKey } : {}) },
     projectPath,
     parsed,
     projectId,

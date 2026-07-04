@@ -18,7 +18,7 @@
 
 import type { ModelMessage } from "@ai-sdk/provider-utils";
 
-import { readConfig } from "./config";
+import { authHeaders, readConfig } from "./config";
 import { createLogger } from "./logger";
 import { getOrResolveProjectId } from "./project";
 import { attempt } from "./result";
@@ -94,10 +94,11 @@ const reportTokens = async (
 ) => {
   if (promptTokens <= 0) return;
   const url = `${serverUrl}${TOKEN_REPORT_ROUTE}`;
+  const auth = await authHeaders();
   const [err, response] = await attempt(() =>
     fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...auth },
       body: JSON.stringify({
         promptTokens,
         project,

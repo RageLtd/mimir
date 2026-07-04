@@ -47,6 +47,16 @@ export const config = {
     url: Bun.env.PROVIDER_DATA_URL ?? "https://models.dev/api.json",
   },
 
+  /** Interim static bearer-key gate (MIM-77). Comma-separated keys, one per
+   *  client. Empty → gate stands down (self-hosted default) with a loud
+   *  boot warning. Superseded by MIM-70's real auth. */
+  auth: {
+    keys: (Bun.env.MIMIR_API_KEYS ?? "")
+      .split(",")
+      .map((k) => k.trim())
+      .filter((k) => k.length > 0),
+  },
+
   /** Small model — used for memory extraction, summarization, and utility requests
    *  (title generation, etc.) that shouldn't hit the main inference model. */
   smallModel: {

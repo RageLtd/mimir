@@ -4,8 +4,8 @@
  *
  * Adapted from packages/acp/src/project/resolver.ts. Differences:
  *
- * - **No apiKey field.** The plugin talks to an unauthenticated
- *   mimir-server in alpha (matches retrieve / persist / file-context).
+ * - **API key via authHeaders (MIM-77).** Attached when configured;
+ *   ungated self-hosted servers see no header.
  * - **No SessionState integration.** Caching is the cache module's job.
  * - **Git detection is the caller's responsibility.** The ACP version
  *   shelled out to git inside the resolver. We don't, because doing so
@@ -19,6 +19,7 @@
  * using the raw filesystem path as the cart_file key. Never throws.
  */
 
+import { authHeaders } from "../config";
 import { createLogger } from "../logger";
 import { errMessage } from "../util";
 import type { ProjectMetadata } from "./metadata";
@@ -54,9 +55,10 @@ export const resolveProjectForPath = async (
   });
 
   const url = `${serverUrl}${RESOLVE_ROUTE}`;
+  const auth = await authHeaders();
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...auth },
     body,
   }).catch((err) => {
     log.warn("project resolve request failed", {
@@ -119,9 +121,10 @@ export const patchProjectMetadata = async (
     ...(metadata.description ? { description: metadata.description } : {}),
   });
 
+  const auth = await authHeaders();
   const response = await fetch(url, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...auth },
     body,
   }).catch((err) => {
     log.warn("project metadata patch failed", {

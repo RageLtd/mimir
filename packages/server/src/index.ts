@@ -14,6 +14,7 @@ import {
   startHygieneScheduler,
   stopHygieneScheduler,
 } from "./goldfish/hygiene";
+import { createBearerGate } from "./middleware/auth";
 import { cartographer } from "./routes/cartographer";
 import { completions } from "./routes/completions";
 import { context } from "./routes/context";
@@ -32,6 +33,18 @@ const app = new Hono();
 
 // Middleware
 app.use("*", cors());
+
+// Interim API-key gate (MIM-77) — mounted only when keys are configured.
+// /health stays open for credential-less healthchecks. Empty key set is
+// the self-hosted default and warns loudly rather than failing boot.
+if (config.auth.keys.length > 0) {
+  app.use("*", createBearerGate(config.auth.keys));
+  log.info({ keys: config.auth.keys.length }, "API-key gate active");
+} else {
+  log.warn(
+    "MIMIR_API_KEYS unset — API is UNAUTHENTICATED; set keys before exposing this server publicly",
+  );
+}
 
 // Rich health check — pings all backend services in parallel
 type HealthStatus = { status: string; latency?: string; error?: string };

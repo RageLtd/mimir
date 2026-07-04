@@ -13,7 +13,7 @@
     },
     "mimir": {
       "type": "http",
-      "url": "{{MIMIR_SERVER_URL}}/mcp"
+      "url": "{{MIMIR_SERVER_URL}}/mcp"{{MIMIR_AUTH_BLOCK}}
     }
   }
 }

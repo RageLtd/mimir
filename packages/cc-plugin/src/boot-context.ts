@@ -15,7 +15,7 @@
  * Mimir transport it's running under.
  */
 
-import { readConfig } from "./config";
+import { authHeaders, readConfig } from "./config";
 import { createLogger } from "./logger";
 import { getOrResolveProjectId } from "./project";
 import { createUserMemoryStore } from "./store/user-memories";
@@ -73,9 +73,10 @@ const fetchSessionContext = async (
   projectId: string | null,
 ) => {
   const url = `${serverUrl}/v1/context/assemble`;
+  const auth = await authHeaders();
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...auth },
     body: JSON.stringify({
       query,
       project: projectPath,

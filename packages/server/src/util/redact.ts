@@ -18,6 +18,11 @@ export const REDACT_PATHS = [
   "*.providerOverride.apiKey",
   'headers["x-provider-api-key"]',
   '*.headers["x-provider-api-key"]',
+  // Mimir API keys ride Authorization (MIM-77) — same discipline.
+  "authorization",
+  "*.authorization",
+  "headers.authorization",
+  "*.headers.authorization",
 ];
 
 export const REDACT_CENSOR = "[redacted]";

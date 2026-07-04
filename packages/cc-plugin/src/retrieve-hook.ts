@@ -23,7 +23,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { readConfig } from "./config";
+import { authHeaders, readConfig } from "./config";
 import { createLogger } from "./logger";
 import { getOrResolveProjectId } from "./project";
 import { attempt } from "./result";
@@ -79,10 +79,11 @@ const fetchRetrieval = async (
   projectId: string | null,
 ) => {
   const url = `${serverUrl}${RETRIEVE_ROUTE}`;
+  const auth = await authHeaders();
   const [fetchErr, response] = await attempt(() =>
     fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...auth },
       body: JSON.stringify({
         query,
         project,

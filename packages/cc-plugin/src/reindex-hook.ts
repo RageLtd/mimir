@@ -177,8 +177,10 @@ const runWorker = async (
   // the project's entire cart_file/cart_import index on every Edit and
   // leave only the one file we just parsed. The SessionStart hook owns
   // full-project replace.
+  // Env wins over config.json — same precedence as authHeaders (MIM-77).
+  const apiKey = process.env.MIMIR_API_KEY ?? config.apiKey;
   const result = await syncIndex(
-    { serverUrl: config.serverUrl },
+    { serverUrl: config.serverUrl, ...(apiKey ? { apiKey } : {}) },
     projectPath,
     [parsed],
     projectId,

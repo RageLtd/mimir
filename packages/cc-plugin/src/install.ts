@@ -19,15 +19,14 @@
 import { chmod, copyFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-
-import ensureBinaryScript from "../scripts/ensure-binary.sh" with {
-  type: "text",
-};
 import mcpTemplate from "../artifacts/mcp.json.template" with { type: "text" };
 import settingsTemplate from "../artifacts/settings.json.template" with {
   type: "text",
 };
 import wrapperTemplate from "../artifacts/wrapper.sh.template" with {
+  type: "text",
+};
+import ensureBinaryScript from "../scripts/ensure-binary.sh" with {
   type: "text",
 };
 
@@ -62,6 +61,7 @@ const validateUrl = (raw: string): Result<URL> => {
 
 const fetchSystemPrompt = async (
   baseUrl: URL,
+  apiKey?: string,
 ): Promise<Result<{ content: string; version: string }>> => {
   // Allow base URL with or without a trailing slash; /v1/system-prompt is
   // always relative to the root of mimir-server.
@@ -69,7 +69,9 @@ const fetchSystemPrompt = async (
 
   let response: Response;
   try {
-    response = await fetch(endpoint);
+    response = await fetch(endpoint, {
+      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return err(`Fetch failed for ${endpoint.toString()}: ${msg}`);
@@ -152,6 +154,9 @@ export type InstallOptions = {
   readonly userMemoryDb?: string;
   /** When omitted, the cartographer MCP entry is skipped and reindex is disabled. */
   readonly cartographerBinary?: string;
+  /** Static bearer key for the interim API gate (MIM-77). Omit for
+   *  ungated self-hosted servers. */
+  readonly apiKey?: string;
 };
 
 type RenderedTemplates = {
@@ -170,6 +175,7 @@ const renderMcp = (opts: {
   readonly serverUrl: string;
   readonly userMemoryDb: string;
   readonly cartographerBinary?: string;
+  readonly apiKey?: string;
   readonly selfPath: string;
 }): string => {
   const baseForMcp = opts.serverUrl.replace(/\/+$/, "");
@@ -177,7 +183,15 @@ const renderMcp = (opts: {
   let rendered = mcpTemplate
     .replaceAll("{{MIMIR_SERVER_URL}}", baseForMcp)
     .replaceAll("{{MIMIR_CC_BIN}}", opts.selfPath)
-    .replaceAll("{{USER_MEMORY_DB}}", opts.userMemoryDb);
+    .replaceAll("{{USER_MEMORY_DB}}", opts.userMemoryDb)
+    // The mimir HTTP MCP entry needs the gate key on its connection
+    // (MIM-77) — CC's HTTP MCP config carries it as a headers block.
+    .replace(
+      "{{MIMIR_AUTH_BLOCK}}",
+      opts.apiKey
+        ? `,\n      "headers": { "Authorization": "Bearer ${opts.apiKey}" }`
+        : "",
+    );
 
   if (opts.cartographerBinary) {
     rendered = rendered.replace(
@@ -198,6 +212,7 @@ const buildTemplates = (opts: {
   readonly serverUrl: string;
   readonly userMemoryDb: string;
   readonly cartographerBinary?: string;
+  readonly apiKey?: string;
   readonly selfPath: string;
 }): RenderedTemplates => ({
   mcp: renderMcp(opts),
@@ -210,7 +225,7 @@ export const runInstall = async (
   const urlResult = validateUrl(opts.serverUrl);
   if (!urlResult.ok) return urlResult;
 
-  const promptResult = await fetchSystemPrompt(urlResult.value);
+  const promptResult = await fetchSystemPrompt(urlResult.value, opts.apiKey);
   if (!promptResult.ok) return promptResult;
 
   const xml = toAnthropicXml(promptResult.value.content);
@@ -230,6 +245,7 @@ export const runInstall = async (
     serverUrl: opts.serverUrl,
     userMemoryDb,
     cartographerBinary: opts.cartographerBinary,
+    apiKey: opts.apiKey,
     selfPath,
   });
 
@@ -249,6 +265,7 @@ export const runInstall = async (
     ...(opts.cartographerBinary
       ? { cartographerBinary: opts.cartographerBinary }
       : {}),
+    ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
   });
 
   const selfResult = await installSelfBinary(selfPath);

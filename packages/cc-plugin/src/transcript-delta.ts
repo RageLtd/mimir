@@ -36,6 +36,7 @@ import type {
   ToolContent,
 } from "@ai-sdk/provider-utils";
 
+import { authHeaders } from "./config";
 import { createLogger } from "./logger";
 import { attempt } from "./result";
 import { errMessage, mimirHome } from "./util";
@@ -383,9 +384,10 @@ export const shipDelta = async (
   }
 
   const url = `${serverUrl}${PERSIST_ROUTE}`;
+  const auth = await authHeaders();
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...auth },
     body: JSON.stringify({
       messages,
       project,

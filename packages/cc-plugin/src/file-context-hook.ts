@@ -21,7 +21,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { readConfig } from "./config";
+import { authHeaders, readConfig } from "./config";
 import { createLogger } from "./logger";
 import { getOrResolveProjectId, toProjectRelative } from "./project";
 import { attempt } from "./result";
@@ -106,10 +106,11 @@ const fetchFileInfo = async (
   projectId: string | null,
 ) => {
   const url = `${serverUrl}${FILE_INFO_ROUTE}`;
+  const auth = await authHeaders();
   const [fetchErr, response] = await attempt(() =>
     fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...auth },
       // `project` (= cwd) stays in the body as the legacy key the server
       // currently reads. `projectId` rides alongside it — the server's
       // file-info route ignores unknown fields in Slice 1, then prefers

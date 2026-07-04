@@ -42,7 +42,7 @@ const USAGE = [
   "Usage: mimir-cc <command> [args]",
   "",
   "Commands:",
-  "  install <server-url> [--user-memory-db PATH] [--cartographer PATH]",
+  "  install <server-url> [--user-memory-db PATH] [--cartographer PATH] [--api-key KEY]",
   "                          Install Mimir for Claude Code.",
   "  update [server-url]     Re-install (uses existing config if URL omitted).",
   "  voice-anchor            UserPromptSubmit hook (reads stdin).",
@@ -90,6 +90,7 @@ type PartialOptions = {
   readonly serverUrl?: string;
   readonly userMemoryDb?: string;
   readonly cartographerBinary?: string;
+  readonly apiKey?: string;
 };
 
 /**
@@ -102,10 +103,17 @@ const parsePartialOptions = (rest: readonly string[]) => {
   let serverUrl: string | undefined;
   let userMemoryDb: string | undefined;
   let cartographerBinary: string | undefined;
+  let apiKey: string | undefined;
 
   let i = 0;
   while (i < rest.length) {
     const arg = rest[i];
+    if (arg === "--api-key") {
+      apiKey = rest[i + 1];
+      if (!apiKey) return { error: "--api-key requires a value" };
+      i += 2;
+      continue;
+    }
     if (arg === "--user-memory-db") {
       userMemoryDb = rest[i + 1];
       if (!userMemoryDb) return { error: "--user-memory-db requires a path" };
@@ -139,6 +147,7 @@ const parsePartialOptions = (rest: readonly string[]) => {
     ...(serverUrl ? { serverUrl } : {}),
     ...(userMemoryDb ? { userMemoryDb } : {}),
     ...(cartographerBinary ? { cartographerBinary } : {}),
+    ...(apiKey ? { apiKey } : {}),
   };
   return result;
 };
@@ -160,6 +169,7 @@ const parseInstallArgs = (rest: readonly string[]) => {
     ...(partial.cartographerBinary
       ? { cartographerBinary: partial.cartographerBinary }
       : {}),
+    ...(partial.apiKey ? { apiKey: partial.apiKey } : {}),
   };
   return result;
 };
@@ -191,11 +201,13 @@ const mergeUpdateOptions = async (partial: PartialOptions) => {
   const userMemoryDb = partial.userMemoryDb ?? existing?.userMemoryDb;
   const cartographerBinary =
     partial.cartographerBinary ?? existing?.cartographerBinary;
+  const apiKey = partial.apiKey ?? existing?.apiKey;
 
   const merged: InstallOptions = {
     serverUrl,
     ...(userMemoryDb ? { userMemoryDb } : {}),
     ...(cartographerBinary ? { cartographerBinary } : {}),
+    ...(apiKey ? { apiKey } : {}),
   };
   return merged;
 };
