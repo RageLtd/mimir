@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { buildDriftRemovalSql, buildOrphanValuePurgeSql } from "./surreal";
+import {
+  buildDriftRemovalSql,
+  buildOrphanValuePurgeSql,
+  parseIndexDimension,
+} from "./surreal";
 
 // Mirrors the cart_file DEFINE block in initSchema. content_hash is a LEGIT
 // declared field (drifted once, now part of the source) and must survive.
@@ -68,5 +72,21 @@ describe("buildOrphanValuePurgeSql", () => {
 
   test("no orphans → null (no statement issued)", () => {
     expect(buildOrphanValuePurgeSql("cart_file", [])).toBeNull();
+  });
+});
+
+describe("parseIndexDimension", () => {
+  test("extracts the DIMENSION from an HNSW definition", () => {
+    expect(
+      parseIndexDimension(
+        "DEFINE INDEX memory_vec ON memory FIELDS embedding HNSW DIMENSION 1024 DIST COSINE EFC 150 M 12",
+      ),
+    ).toBe(1024);
+  });
+
+  test("non-vector definitions → null", () => {
+    expect(
+      parseIndexDimension("DEFINE INDEX memory_type ON memory FIELDS type"),
+    ).toBeNull();
   });
 });

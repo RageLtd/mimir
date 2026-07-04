@@ -345,21 +345,18 @@ export function resolveModelWithOverride(
 }
 
 export function resolveEmbeddingModel() {
-  const embedModel =
-    Bun.env.EMBED_MODEL ?? Bun.env.OLLAMA_EMBED_MODEL ?? "qwen3-embedding:0.6b";
-  const embedBaseUrl =
-    Bun.env.EMBED_BASE_URL ??
-    Bun.env.OLLAMA_BASE_URL ??
-    "http://ollama.spark.lan";
-  const embedApiKey = Bun.env.EMBED_API_KEY ?? "";
+  // Single source of truth is config.embedding (EMBED_* env) — this
+  // deliberately does NOT consult the provider registry: embeddings are
+  // infrastructure the operator pins, not a per-request model choice.
+  const { baseUrl, apiKey, model } = config.embedding;
 
   const provider = createProviderSDK(
     "@ai-sdk/openai",
-    `${embedBaseUrl}/v1`,
-    embedApiKey || "not-needed",
+    `${baseUrl}/v1`,
+    apiKey || "not-needed",
   );
 
-  return provider.embeddingModel(embedModel);
+  return provider.embeddingModel(model);
 }
 
 export async function fetchModelId(baseUrl: string) {

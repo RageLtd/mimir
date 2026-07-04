@@ -90,7 +90,9 @@ export async function retrieveMemories(
 
   log.debug({ queryChars: query.length }, "retrieving memories");
 
-  const queryEmbedding = await embedOne(query);
+  // "query" purpose — asymmetric embedders (Cohere) embed retrieval
+  // queries differently from stored documents.
+  const queryEmbedding = await embedOne(query, "query");
   if (!queryEmbedding) {
     log.warn("failed to embed memory query, skipping retrieval");
     return null;

@@ -231,6 +231,61 @@ const removeDriftedCartFields = async (db: Surreal) => {
   return deduped;
 };
 
+/**
+ * Pure: extract the DIMENSION value from an HNSW index definition string
+ * (as returned by INFO FOR TABLE). Null when absent. Exported for tests.
+ */
+export const parseIndexDimension = (definition: string) => {
+  const match = definition.match(/DIMENSION (\d+)/);
+  return match?.[1] ? parseInt(match[1], 10) : null;
+};
+
+/**
+ * Guard the HNSW index dimension against config.embedding.dimensions.
+ * `DEFINE ... IF NOT EXISTS` never updates an existing index, so a config
+ * change (new embedder) silently mismatches otherwise — vector search then
+ * fails or degrades with no obvious cause.
+ *
+ * Empty memory table → redefine automatically (nothing to lose; this is
+ * the blank-instance / fresh-deploy path). Populated table → LOUD error
+ * and leave the index alone: the operator must re-embed the corpus
+ * (scripts/reembed-import.ts) before the new dimension is usable.
+ */
+const ensureEmbeddingIndexDimension = async (db: Surreal) => {
+  const [info] = await db.query<[{ indexes: Record<string, string> } | null]>(
+    `INFO FOR TABLE memory`,
+  );
+  const definition = info?.indexes?.memory_vec;
+  if (!definition) return;
+
+  const live = parseIndexDimension(definition);
+  const wanted = config.embedding.dimensions;
+  if (live === null || live === wanted) return;
+
+  const [countRow] = await db.query<[Array<{ count: number }>]>(
+    `SELECT count() AS count FROM memory WHERE embedding != NONE GROUP ALL`,
+  );
+  const embedded = countRow?.[0]?.count ?? 0;
+
+  if (embedded > 0) {
+    log.error(
+      { live, wanted, embedded },
+      "HNSW dimension mismatch on a populated memory table — re-embed the corpus (scripts/reembed-import.ts) before changing EMBED_DIMENSIONS; index left unchanged",
+    );
+    return;
+  }
+
+  await db.query(`
+    REMOVE INDEX IF EXISTS memory_vec ON TABLE memory;
+    DEFINE INDEX memory_vec ON memory FIELDS embedding
+      HNSW DIMENSION ${wanted} DIST COSINE;
+  `);
+  log.warn(
+    { from: live, to: wanted },
+    "redefined memory_vec HNSW index for new embedding dimensions (table was empty)",
+  );
+};
+
 /** Run once at startup to ensure schema exists */
 export async function initSchema() {
   const start = Date.now();
@@ -256,7 +311,7 @@ export async function initSchema() {
     DEFINE INDEX IF NOT EXISTS memory_ft ON memory FIELDS content
       FULLTEXT ANALYZER memory_analyzer BM25;
     DEFINE INDEX IF NOT EXISTS memory_vec ON memory FIELDS embedding
-      HNSW DIMENSION 1024 DIST COSINE;
+      HNSW DIMENSION ${config.embedding.dimensions} DIST COSINE;
 
     -- Backfill existing memories missing new fields
     UPDATE memory SET
@@ -373,6 +428,9 @@ export async function initSchema() {
     DEFINE INDEX IF NOT EXISTS project_git_remote ON project FIELDS git_remote UNIQUE;
     DEFINE INDEX IF NOT EXISTS project_local_path ON project FIELDS local_path;
   `);
+
+  // Guard the vector index against embedder/dimension config changes.
+  await ensureEmbeddingIndexDimension(db);
 
   // Converge drifted cart schemas BEFORE the migration — its UPDATEs fail
   // SCHEMAFULL validation on rows still carrying orphaned undeclared values.

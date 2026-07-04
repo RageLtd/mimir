@@ -305,7 +305,7 @@ export async function buildPlaybookContext(
   const scoped = scopePlaybooks(all, projectId);
   if (scoped.length === 0) return null;
 
-  const queryEmbedding = await embedOne(query);
+  const queryEmbedding = await embedOne(query, "query");
   const ambient = queryEmbedding ? rankByTrigger(queryEmbedding, scoped) : [];
 
   const block = formatPlaybookBlock(scoped, ambient);

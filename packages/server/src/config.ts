@@ -25,20 +25,32 @@ export const config = {
     baseUrl: Bun.env.LMSTUDIO_BASE_URL ?? "http://localhost:1234",
   },
 
-  /** Embedding — OpenAI-compatible endpoint (defaults to Ollama for local) */
+  /** Embedding client.
+   *  type "openai" (default): any OpenAI-compatible endpoint via baseUrl —
+   *  the self-hosted Ollama path. type "cohere": Cohere's NATIVE /v2/embed
+   *  API (goldfish/embed-cohere.ts) — chosen for cloud because it supports
+   *  output_dimension (the OpenAI-compat shim doesn't), so both paths emit
+   *  1024-dim vectors and the HNSW schema never changes between them. */
   embedding: {
-    /** OpenAI-compatible API endpoint */
+    /** Client type. EMBED_TYPE=cohere → native Cohere v2 API. */
+    type: Bun.env.EMBED_TYPE === "cohere" ? "cohere" : "openai",
+    /** OpenAI-compatible API endpoint (type "openai" only) */
     baseUrl:
       Bun.env.EMBED_BASE_URL ??
       Bun.env.OLLAMA_BASE_URL ??
       "http://ollama.spark.lan",
-    /** API key (empty for local Ollama) */
+    /** API key (empty for local Ollama; required for Cohere) */
     apiKey: Bun.env.EMBED_API_KEY ?? "",
     /** Model identifier */
     model:
       Bun.env.EMBED_MODEL ??
       Bun.env.OLLAMA_EMBED_MODEL ??
       "qwen3-embedding:0.6b",
+    /** Vector dimensions the model emits — MUST match the HNSW index
+     *  (initSchema interpolates this). Changing it on a populated memory
+     *  table requires re-embedding the corpus (scripts/reembed-import.ts);
+     *  the boot-time dimension check refuses to silently mismatch. */
+    dimensions: parseInt(Bun.env.EMBED_DIMENSIONS ?? "1024", 10),
   },
 
   /** Provider/model metadata source (models.dev shape). Fetched into memory
