@@ -1,7 +1,7 @@
 {
   "name": "mimir-cc",
   "description": "Mimir persona and runtime for Claude Code. Installs the Mimir system prompt, MCP configuration, and voice-anchor hook, then exposes a `mimir` wrapper command that launches Claude Code as Mimir.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "RageLtd"
   }
