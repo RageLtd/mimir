@@ -83,7 +83,23 @@ export function buildAuthOptions(database: Database, secret: string) {
           },
         },
       }),
-      apiKey({ enableSessionForAPIKeys: true }),
+      apiKey({
+        enableSessionForAPIKeys: true,
+        /** better-auth's stock default is 10 requests per DAY — sized for
+         *  public SaaS demo keys, lethal for machine clients that hit the
+         *  gate on every hook fetch. A fresh session burns 10 requests in
+         *  seconds, then every verify rejects and surfaces as the gate's
+         *  detail-free 401 (the MIM-70 cutover outage, 2026-07-05).
+         *  100/min keeps a real throttle without strangling the
+         *  cc-plugin/ACP clients. NOTE: values are stamped onto each key
+         *  row at creation — changing them here does not retune existing
+         *  keys; re-mint after changing. */
+        rateLimit: {
+          enabled: true,
+          timeWindow: 60_000,
+          maxRequests: 100,
+        },
+      }),
       passkey(),
     ],
     // satisfies (not an annotation): keeps literal inference — "string"

@@ -58,6 +58,27 @@ describe("better-auth instance (MIM-70 slice 1)", () => {
     expect(typeof auth.api.getSession).toBe("function");
   });
 
+  test("api keys mint with the 100/min rate limit, not better-auth's 10/day stock default", async () => {
+    const { db, options } = await migratedDb();
+    const auth = betterAuth(options);
+    await auth.api.signUpEmail({
+      body: {
+        email: "owner@example.test",
+        password: "test-password-long-enough",
+        name: "Owner",
+      },
+    });
+    const user = db.query('SELECT id FROM "user"').get() as { id: string };
+    // Server-only call (userId, no session headers) — the shape the claim
+    // flow's clients never see, but the stamped row values govern verify.
+    const key = await auth.api.createApiKey({
+      body: { name: "rate-limit-pin", userId: user.id },
+    });
+    expect(key.rateLimitEnabled).toBe(true);
+    expect(key.rateLimitTimeWindow).toBe(60_000);
+    expect(key.rateLimitMax).toBe(100);
+  });
+
   test("migrations are idempotent — second run is a no-op, not an error", async () => {
     const { options } = await migratedDb();
     const { toBeCreated, toBeAdded, runMigrations } =
