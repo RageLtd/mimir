@@ -17,6 +17,7 @@ import {
   createProviderSDK,
   getOrCreateSDK,
   initialized,
+  isSdkNativeNpm,
   modelMetadata,
   modelToProvider,
   providerConfig,
@@ -326,10 +327,11 @@ export function resolveModelWithOverride(
     "@ai-sdk/openai-compatible";
   const baseUrl = override.baseUrl ?? registered?.baseUrl ?? entry?.api;
   // SDK-native factories (anthropic, google, openai, …) have correct
-  // default endpoints — models.dev omits `api` for exactly those. Only the
-  // generic openai-compatible fallback has no default; demand a URL for it
-  // here with a BYOK-shaped message (createProviderSDK enforces it too).
-  if (!baseUrl && npm === "@ai-sdk/openai-compatible") {
+  // default endpoints — models.dev omits `api` for exactly those. Anything
+  // without a native factory falls to the openai-compatible SDK, which has
+  // no default; demand a URL for it here with a BYOK-shaped message
+  // (createProviderSDK enforces it too).
+  if (!baseUrl && !isSdkNativeNpm(npm)) {
     throw new Error(
       `BYOK: no base URL known for provider "${providerId}" — supply metadata.base_url`,
     );
@@ -399,6 +401,17 @@ export function getSmallModelConfig() {
   const providerCfg = getProviderConfigForModel(model);
   if (!providerCfg) {
     log.warn({ model }, "no provider found for small model");
+    return null;
+  }
+
+  // SDK-native providers may register without a base URL (SDK default
+  // endpoint, MIM-78) — but the small-model path builds raw HTTP requests
+  // and needs a concrete URL. Refuse rather than guess.
+  if (!providerCfg.baseUrl) {
+    log.warn(
+      { model },
+      "small model's provider has no base URL — set SMALL_MODEL_* config explicitly",
+    );
     return null;
   }
 

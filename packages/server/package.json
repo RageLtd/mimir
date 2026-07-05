@@ -9,8 +9,8 @@
     "test": "bun run ../../tests/run-tests.ts server"
   },
   "dependencies": {
-    "@ai-sdk/amazon-bedrock": "catalog:ai-sdk",
     "@ai-sdk/anthropic": "catalog:ai-sdk",
+    "@ai-sdk/cohere": "^3",
     "@ai-sdk/google": "catalog:ai-sdk",
     "@ai-sdk/mcp": "catalog:ai-sdk",
     "@ai-sdk/moonshotai": "catalog:ai-sdk",

@@ -14,6 +14,7 @@
  */
 
 import { createAnthropic } from "@ai-sdk/anthropic";
+import { createCohere } from "@ai-sdk/cohere";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createMoonshotAI } from "@ai-sdk/moonshotai";
 import { createOpenAI } from "@ai-sdk/openai";
@@ -59,6 +60,28 @@ export interface ModelEntry {
 // Provider SDK creation — npm field from provider-data.json picks the factory
 // ---------------------------------------------------------------------------
 
+/**
+ * npm ids with an SDK-native factory case in createProviderSDK. These SDKs
+ * carry their own default endpoints, so a models.dev entry with no `api`
+ * URL is valid for them — the SDK default IS the contract (MIM-73/MIM-78).
+ * Registration and BYOK consult this to decide between "register with
+ * undefined baseUrl" and "refuse loudly". Lockstep with the switch below
+ * is enforced by registry.test.ts.
+ */
+export const SDK_NATIVE_NPMS = [
+  "@ai-sdk/anthropic",
+  "@ai-sdk/cohere",
+  "@ai-sdk/google",
+  "@ai-sdk/google-vertex",
+  "@ai-sdk/moonshotai",
+  "@ai-sdk/openai",
+  "@openrouter/ai-sdk-provider",
+] as const;
+
+export function isSdkNativeNpm(npm: string) {
+  return SDK_NATIVE_NPMS.some((native) => native === npm);
+}
+
 export function createProviderSDK(
   npm: string,
   // Undefined → the SDK's own default endpoint. Only SDK-native factories
@@ -73,6 +96,9 @@ export function createProviderSDK(
   switch (npm) {
     case "@ai-sdk/anthropic":
       return createAnthropic({ ...base, apiKey });
+
+    case "@ai-sdk/cohere":
+      return createCohere({ ...base, apiKey });
 
     case "@ai-sdk/google":
     case "@ai-sdk/google-vertex":
@@ -126,10 +152,12 @@ export const providerSdks = new Map<
   ReturnType<typeof createProviderSDK>
 >();
 
-/** Provider config for baseUrl and apiKey */
+/** Provider config for baseUrl and apiKey. baseUrl is undefined for
+ * SDK-native providers whose models.dev entry has no `api` field — the
+ * SDK default endpoint applies (MIM-78). */
 export const providerConfig = new Map<
   string,
-  { baseUrl: string; apiKey: string; npm: string }
+  { baseUrl: string | undefined; apiKey: string; npm: string }
 >();
 
 /** Model → provider mapping */
@@ -188,7 +216,7 @@ export function getOrCreateSDK(providerId: string, npm: string) {
 function registerProvider(
   id: string,
   npm: string,
-  baseUrl: string,
+  baseUrl: string | undefined,
   apiKey: string,
 ) {
   const sdk = createProviderSDK(npm, baseUrl, apiKey);
@@ -311,8 +339,22 @@ export async function initProviderRegistry() {
       const entry = providerData[providerId];
       if (!entry) continue;
 
-      const baseUrl = entry.api ?? `https://${providerId}.example.com/v1`;
+      // models.dev omits `api` for SDK-native providers — their SDK's
+      // default endpoint is the contract, so undefined passes through
+      // (mirrors the BYOK path, MIM-73). Only the generic
+      // openai-compatible fallback structurally needs a URL; without one,
+      // skip loudly instead of registering models that can only fail at
+      // call time (MIM-78: the old fabricated example.com URL turned a
+      // set COHERE_API_KEY into 14 registered-but-broken models).
+      const baseUrl = entry.api;
       const npm = entry.npm ?? "@ai-sdk/openai-compatible";
+      if (!baseUrl && !isSdkNativeNpm(npm)) {
+        log.warn(
+          { providerId, npm },
+          "provider has no API URL and no SDK-native factory — skipping registration",
+        );
+        continue;
+      }
       registerProvider(providerId, npm, baseUrl, apiKey);
       registerModels(providerId, entry.models || {});
 
