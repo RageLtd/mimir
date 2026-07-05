@@ -16,6 +16,7 @@
 
 import { embedOne } from "../goldfish/clients";
 import { getLastSummaries, storeMemory } from "../goldfish/store";
+import type { ProviderOverride } from "../middleware/types";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 import {
@@ -25,6 +26,10 @@ import {
 } from "./message-log/compaction-state";
 import { modelContentToString } from "./message-log/message-utils";
 import { getModelMessagesSince } from "./message-log/persistence";
+import {
+  resolveOverrideModelId,
+  runOverrideCompletion,
+} from "./provider/override-completion";
 import {
   getProviderConfigForModel,
   getSmallModelConfig,
@@ -37,8 +42,14 @@ import {
 /**
  * Run compaction asynchronously.
  * Called after response completes when threshold is reached.
+ *
+ * `override` (MIM-74): the triggering turn's BYOK key — summarization runs
+ * on the user's key when present, the env small model otherwise.
  */
-export async function runCompaction(modelId?: string) {
+export async function runCompaction(
+  modelId?: string,
+  override: ProviderOverride | null = null,
+) {
   const start = Date.now();
 
   // Mark as compacting to prevent concurrent runs
@@ -116,6 +127,7 @@ export async function runCompaction(modelId?: string) {
       conversationText,
       modelId,
       previousSummary,
+      override,
     );
 
     if (!summary) {
@@ -238,12 +250,46 @@ function resolveSummarizationModel(modelId?: string) {
   return null;
 }
 
+const SUMMARIZATION_MAX_TOKENS = 8192;
+const SUMMARIZATION_TIMEOUT_MS = 120_000;
+
 async function summarizeConversation(
   conversationText: string,
   modelId?: string,
   previousSummary?: string | null,
-): Promise<string | null> {
+  override: ProviderOverride | null = null,
+) {
   const start = Date.now();
+
+  // When a previous summary exists, use the delta prompt so the model
+  // focuses on genuinely new content instead of re-summarizing old material
+  const systemPrompt = previousSummary
+    ? DELTA_SUMMARIZATION_PROMPT
+    : SUMMARIZATION_PROMPT;
+
+  const userContent = previousSummary
+    ? `<previous_summary>\n${previousSummary}\n</previous_summary>\n\n<new_conversation>\n${conversationText}\n</new_conversation>`
+    : conversationText;
+
+  // BYOK (MIM-74): summarize on the triggering turn's key. No env fallback
+  // on failure — a keyed job that errors must not silently bill the
+  // operator. Only a key with no resolvable model degrades to the env path.
+  if (override) {
+    const overrideModelId = resolveOverrideModelId(override, modelId);
+    if (overrideModelId) {
+      return runOverrideCompletion({
+        system: systemPrompt,
+        user: userContent,
+        maxOutputTokens: SUMMARIZATION_MAX_TOKENS,
+        timeoutMs: SUMMARIZATION_TIMEOUT_MS,
+        modelId: overrideModelId,
+        override,
+      });
+    }
+    log.warn(
+      "BYOK summarization: key sent without small_model or request model — using env small model",
+    );
+  }
 
   // Resolve a model for summarization. Try the request model first (it may be
   // a server-side provider like vLLM), then fall back to the small model config
@@ -260,26 +306,16 @@ async function summarizeConversation(
     headers.Authorization = `Bearer ${apiKey}`;
   }
 
-  // When a previous summary exists, use the delta prompt so the model
-  // focuses on genuinely new content instead of re-summarizing old material
-  const systemPrompt = previousSummary
-    ? DELTA_SUMMARIZATION_PROMPT
-    : SUMMARIZATION_PROMPT;
-
-  const userContent = previousSummary
-    ? `<previous_summary>\n${previousSummary}\n</previous_summary>\n\n<new_conversation>\n${conversationText}\n</new_conversation>`
-    : conversationText;
-
   const [err, res] = await attempt(() =>
     fetch(`${baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers,
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(SUMMARIZATION_TIMEOUT_MS),
       body: JSON.stringify({
         model,
         stream: false,
         temperature: 0.1,
-        max_tokens: 8192,
+        max_tokens: SUMMARIZATION_MAX_TOKENS,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userContent },

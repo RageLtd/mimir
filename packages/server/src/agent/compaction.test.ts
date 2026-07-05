@@ -83,6 +83,21 @@ mock.module("./provider/query", () => ({
   getProviderConfigForModel: mockGetProviderConfigForModel,
 }));
 
+// BYOK helper (MIM-74) — mocked so keyed-turn tests can assert the user-key
+// path fires INSTEAD of the env raw-fetch path. resolveOverrideModelId is
+// reimplemented inline (one line) because the real module imports the
+// mocked ./provider/query above.
+const mockRunOverrideCompletion = mock<
+  (opts: { modelId: string }) => Promise<string | null>
+>(() => Promise.resolve("BYOK summary"));
+mock.module("./provider/override-completion", () => ({
+  runOverrideCompletion: mockRunOverrideCompletion,
+  resolveOverrideModelId: (
+    override: { smallModel?: string },
+    requestModelId?: string,
+  ) => override.smallModel ?? requestModelId ?? null,
+}));
+
 // Mock fetch globally
 const mockFetch = mock(() =>
   Promise.resolve({
@@ -115,6 +130,7 @@ describe("runCompaction", () => {
     mockEmbedOne.mockClear();
     mockGetSmallModelConfig.mockClear();
     mockGetProviderConfigForModel.mockClear();
+    mockRunOverrideCompletion.mockClear();
   });
 
   test("does nothing if compaction already in progress", async () => {
@@ -344,6 +360,69 @@ describe("runCompaction", () => {
     // Should fall back to the request model's provider
     expect(body.model).toBe("llama3");
     expect(fetchCall[0]).toContain("vllm.test.com");
+  });
+
+  const seedCompactableRun = () => {
+    const messages = Array(15)
+      .fill(null)
+      .flatMap((_, i) => [
+        { role: "user", content: `User message ${i} with enough content` },
+        { role: "assistant", content: `Assistant response ${i} with length` },
+      ]);
+    mockStartCompaction.mockResolvedValueOnce(true);
+    mockGetCompactionState.mockResolvedValueOnce({
+      id: "compaction_state:global",
+      tokens_since_last: 250000,
+      is_compacting: false,
+      last_compaction: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    });
+    mockGetMessagesSince.mockResolvedValueOnce(messages);
+  };
+
+  test("BYOK: keyed turn summarizes on the user's key, never the env path", async () => {
+    seedCompactableRun();
+    mockStoreMemory.mockResolvedValueOnce("memory:summary-byok");
+
+    await runCompaction("anthropic/claude-x", {
+      apiKey: "sk-user",
+      smallModel: "anthropic/haiku",
+    });
+
+    expect(mockRunOverrideCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelId: "anthropic/haiku",
+        override: expect.objectContaining({ apiKey: "sk-user" }),
+      }),
+    );
+    // The env raw-fetch path must not fire on a keyed run
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockStoreMemory).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "BYOK summary", type: "summary" }),
+    );
+  });
+
+  test("BYOK: no small_model → falls back to the turn's request model id", async () => {
+    seedCompactableRun();
+    mockStoreMemory.mockResolvedValueOnce("memory:summary-byok-2");
+
+    await runCompaction("anthropic/claude-x", { apiKey: "sk-user" });
+
+    expect(mockRunOverrideCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ modelId: "anthropic/claude-x" }),
+    );
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  test("BYOK: keyed failure does NOT fall back to operator-funded inference", async () => {
+    seedCompactableRun();
+    mockRunOverrideCompletion.mockResolvedValueOnce(null);
+
+    await runCompaction("anthropic/claude-x", { apiKey: "sk-user" });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockStoreMemory).not.toHaveBeenCalled();
+    expect(mockFinishCompaction).toHaveBeenCalled();
   });
 
   test("handles summarization failure gracefully", async () => {

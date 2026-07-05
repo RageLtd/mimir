@@ -1,5 +1,10 @@
 import { embedMany } from "ai";
 import {
+  type BackgroundByok,
+  resolveOverrideModelId,
+  runOverrideCompletion,
+} from "../agent/provider/override-completion";
+import {
   getSmallModelConfig,
   resolveEmbeddingModel,
 } from "../agent/provider/query";
@@ -142,20 +147,19 @@ interface ChatCompletionResponse {
   };
 }
 
-export async function extractMemories(
-  conversationText: string,
-): Promise<string[]> {
-  const start = Date.now();
-  log.debug(
-    { inputChars: conversationText.length },
-    "memory extraction starting",
-  );
+const EXTRACTION_MAX_TOKENS = 2048;
+const EXTRACTION_TIMEOUT_MS = 60_000;
 
-  // Use the small model config
+/**
+ * Env-configured small-model extraction — the pre-MIM-74 path, unchanged.
+ * Raw Chat Completions fetch on purpose: works against local endpoints
+ * (Ollama, vLLM) that never enter the provider registry.
+ */
+async function extractWithEnvModel(conversationText: string) {
   const smallModel = getSmallModelConfig();
   if (!smallModel) {
     log.warn("no small model configured — skipping memory extraction");
-    return [];
+    return null;
   }
 
   const { baseUrl, apiKey, model: bareModelId } = smallModel;
@@ -173,12 +177,12 @@ export async function extractMemories(
     fetch(`${baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers,
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(EXTRACTION_TIMEOUT_MS),
       body: JSON.stringify({
         model: bareModelId,
         stream: false,
         temperature: 0.1,
-        max_tokens: 2048,
+        max_tokens: EXTRACTION_MAX_TOKENS,
         messages: [
           { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
           { role: "user", content: conversationText },
@@ -192,13 +196,13 @@ export async function extractMemories(
       { err, inputChars: conversationText.length },
       "memory extraction failed",
     );
-    return [];
+    return null;
   }
 
   const content = res.choices?.[0]?.message?.content?.trim();
   if (!content) {
     log.error("memory extraction returned empty content");
-    return [];
+    return null;
   }
 
   log.debug(
@@ -206,10 +210,54 @@ export async function extractMemories(
       rawOutput: content,
       promptTokens: res.usage?.prompt_tokens,
       completionTokens: res.usage?.completion_tokens,
-      elapsed: `${Date.now() - start}ms`,
     },
     "memory extraction raw result",
   );
+  return content;
+}
+
+/**
+ * BYOK extraction (MIM-74) — the keyed turn's background job runs on the
+ * user's key. No env fallback on failure: a keyed job that errors must not
+ * silently bill the operator. Only a key with no resolvable model hint
+ * degrades to the env path (with a warning).
+ */
+async function extractWithOverride(
+  conversationText: string,
+  byok: NonNullable<BackgroundByok>,
+) {
+  const modelId = resolveOverrideModelId(byok.override, byok.requestModelId);
+  if (!modelId) {
+    log.warn(
+      "BYOK extraction: key sent without small_model or request model — using env small model",
+    );
+    return extractWithEnvModel(conversationText);
+  }
+
+  return runOverrideCompletion({
+    system: EXTRACTION_SYSTEM_PROMPT,
+    user: conversationText,
+    maxOutputTokens: EXTRACTION_MAX_TOKENS,
+    timeoutMs: EXTRACTION_TIMEOUT_MS,
+    modelId,
+    override: byok.override,
+  });
+}
+
+export async function extractMemories(
+  conversationText: string,
+  byok: BackgroundByok = null,
+) {
+  const start = Date.now();
+  log.debug(
+    { inputChars: conversationText.length, byok: byok !== null },
+    "memory extraction starting",
+  );
+
+  const content = byok
+    ? await extractWithOverride(conversationText, byok)
+    : await extractWithEnvModel(conversationText);
+  if (!content) return [];
 
   const [parseErr, memories] = await attempt(async () => {
     const cleaned = content.replace(/```json\n?|```/g, "").trim();

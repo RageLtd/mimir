@@ -22,6 +22,9 @@ export type MimirConfig = {
   readonly apiKey: string;
   /** Configured default model, or empty string for "no preference". */
   readonly model: string;
+  /** BYOK small model for server-side background jobs (MIM-74), or empty
+   *  string for "use the turn's request model". */
+  readonly smallModel: string;
   readonly userMemoryDbPath: string;
   readonly sessionDbPath: string;
   readonly logLevel: "debug" | "info" | "warn" | "error";
@@ -52,6 +55,11 @@ export const loadConfig = () => {
     // selector drives it from there. Avoids depending on a hardcoded default
     // that the server may not serve.
     model: process.env.MIMIR_MODEL ?? "",
+    // BYOK (MIM-74): designated small/cheap model for the background jobs
+    // a turn spawns server-side (extraction, compaction). Same var name as
+    // the cc-plugin. Empty = unset → keyed turns run those jobs on the
+    // request model instead.
+    smallModel: process.env.MIMIR_SMALL_MODEL ?? "",
     userMemoryDbPath: expandHome(
       process.env.MIMIR_USER_MEMORY_DB ?? "~/.mimir/user-memories.db",
     ),

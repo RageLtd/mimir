@@ -238,9 +238,28 @@ describe("readDelta coalescing", () => {
 
 describe("shipDelta", () => {
   const originalFetch = globalThis.fetch;
+  const BYOK_ENV_VARS = [
+    "MIMIR_PROVIDER_API_KEY",
+    "MIMIR_PROVIDER",
+    "MIMIR_SMALL_MODEL",
+  ] as const;
+  const savedByokEnv: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    // Isolate from the developer's real BYOK env (MIM-74)
+    for (const name of BYOK_ENV_VARS) {
+      savedByokEnv[name] = process.env[name];
+      delete process.env[name];
+    }
+  });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    for (const name of BYOK_ENV_VARS) {
+      const saved = savedByokEnv[name];
+      if (saved === undefined) delete process.env[name];
+      else process.env[name] = saved;
+    }
   });
 
   test("returns ok with no-op for empty messages", async () => {
@@ -271,6 +290,62 @@ describe("shipDelta", () => {
       messages: [{ role: "user", content: "hi" }],
       project: "/repo",
     });
+  });
+
+  test("sends BYOK key header + body hints when configured (MIM-74)", async () => {
+    process.env.MIMIR_PROVIDER_API_KEY = "sk-prov";
+    process.env.MIMIR_PROVIDER = "anthropic";
+    process.env.MIMIR_SMALL_MODEL = "anthropic/haiku";
+
+    let capturedHeaders: Record<string, string> = {};
+    let capturedBody: Record<string, unknown> = {};
+    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+      capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
+      capturedBody = init?.body
+        ? (JSON.parse(String(init.body)) as Record<string, unknown>)
+        : {};
+      return new Response(JSON.stringify({ appended: 1, ids: ["x"] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof globalThis.fetch;
+
+    const result = await shipDelta(
+      "http://server:3000",
+      [{ role: "user", content: "hi" }],
+      "/repo",
+    );
+    expect(result).toEqual({ ok: true, appended: 1 });
+    // Key rides the header, never the body
+    expect(capturedHeaders["X-Provider-Api-Key"]).toBe("sk-prov");
+    expect(JSON.stringify(capturedBody)).not.toContain("sk-prov");
+    // Non-secret hints ride the body
+    expect(capturedBody.provider).toBe("anthropic");
+    expect(capturedBody.small_model).toBe("anthropic/haiku");
+  });
+
+  test("no BYOK config → no key header, no body hints", async () => {
+    let capturedHeaders: Record<string, string> = {};
+    let capturedBody: Record<string, unknown> = {};
+    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+      capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
+      capturedBody = init?.body
+        ? (JSON.parse(String(init.body)) as Record<string, unknown>)
+        : {};
+      return new Response(JSON.stringify({ appended: 1, ids: ["x"] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof globalThis.fetch;
+
+    await shipDelta(
+      "http://server:3000",
+      [{ role: "user", content: "hi" }],
+      "/repo",
+    );
+    expect(capturedHeaders["X-Provider-Api-Key"]).toBeUndefined();
+    expect(capturedBody.provider).toBeUndefined();
+    expect(capturedBody.small_model).toBeUndefined();
   });
 
   test("returns ok:false when the server returns non-200", async () => {

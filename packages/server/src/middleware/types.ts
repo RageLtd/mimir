@@ -28,6 +28,10 @@ export interface ChatRequest {
     provider?: string;
     /** BYOK: base URL override for self-hosted OpenAI-compatible endpoints. */
     base_url?: string;
+    /** BYOK: designated small/cheap model for turn-spawned background
+     * inference — extraction, compaction summarization (MIM-74). When
+     * absent, background jobs fall back to the turn's request model. */
+    small_model?: string;
     [key: string]: unknown;
   };
   /** Client-specified reasoning effort (provider-dependent) */
@@ -48,6 +52,9 @@ export interface ProviderOverride {
   provider?: string;
   /** Base URL override for self-hosted OpenAI-compatible endpoints. */
   baseUrl?: string;
+  /** Small/cheap model for the background jobs this turn spawns (MIM-74).
+   * Falls back to the turn's request model when unset. */
+  smallModel?: string;
 }
 
 /**

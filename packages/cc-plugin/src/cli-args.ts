@@ -44,6 +44,9 @@ export type PartialOptions = {
   readonly userMemoryDb?: string;
   readonly cartographerBinary?: string;
   readonly apiKey?: string;
+  readonly providerApiKey?: string;
+  readonly provider?: string;
+  readonly smallModel?: string;
 };
 
 /**
@@ -57,6 +60,9 @@ export const parsePartialOptions = (rest: readonly string[]) => {
   let userMemoryDb: string | undefined;
   let cartographerBinary: string | undefined;
   let apiKey: string | undefined;
+  let providerApiKey: string | undefined;
+  let provider: string | undefined;
+  let smallModel: string | undefined;
 
   let i = 0;
   while (i < rest.length) {
@@ -64,6 +70,26 @@ export const parsePartialOptions = (rest: readonly string[]) => {
     if (arg === "--api-key") {
       apiKey = rest[i + 1];
       if (!apiKey) return { error: "--api-key requires a value" };
+      i += 2;
+      continue;
+    }
+    if (arg === "--provider-api-key") {
+      providerApiKey = rest[i + 1];
+      if (!providerApiKey) {
+        return { error: "--provider-api-key requires a value" };
+      }
+      i += 2;
+      continue;
+    }
+    if (arg === "--provider") {
+      provider = rest[i + 1];
+      if (!provider) return { error: "--provider requires a value" };
+      i += 2;
+      continue;
+    }
+    if (arg === "--small-model") {
+      smallModel = rest[i + 1];
+      if (!smallModel) return { error: "--small-model requires a value" };
       i += 2;
       continue;
     }
@@ -101,6 +127,9 @@ export const parsePartialOptions = (rest: readonly string[]) => {
     ...(userMemoryDb ? { userMemoryDb } : {}),
     ...(cartographerBinary ? { cartographerBinary } : {}),
     ...(apiKey ? { apiKey } : {}),
+    ...(providerApiKey ? { providerApiKey } : {}),
+    ...(provider ? { provider } : {}),
+    ...(smallModel ? { smallModel } : {}),
   };
   return result;
 };
@@ -116,6 +145,14 @@ const envApiKey = () => {
   return key ? key : undefined;
 };
 
+/** Same no-paste discipline as MIMIR_API_KEY for the BYOK provider key
+ *  (MIM-74) — the key reaches the binary through the environment without
+ *  entering the chat transcript or the process argv. */
+const envProviderApiKey = () => {
+  const key = process.env.MIMIR_PROVIDER_API_KEY;
+  return key ? key : undefined;
+};
+
 /**
  * Parse install args — same as the partial parser but with serverUrl
  * required. Install is the fresh-install path so there's nothing to
@@ -128,6 +165,7 @@ export const parseInstallArgs = (rest: readonly string[]) => {
     return { error: "server URL is required" } as const;
   }
   const apiKey = partial.apiKey ?? envApiKey();
+  const providerApiKey = partial.providerApiKey ?? envProviderApiKey();
   const result: InstallOptions = {
     serverUrl: partial.serverUrl,
     ...(partial.userMemoryDb ? { userMemoryDb: partial.userMemoryDb } : {}),
@@ -135,6 +173,9 @@ export const parseInstallArgs = (rest: readonly string[]) => {
       ? { cartographerBinary: partial.cartographerBinary }
       : {}),
     ...(apiKey ? { apiKey } : {}),
+    ...(providerApiKey ? { providerApiKey } : {}),
+    ...(partial.provider ? { provider: partial.provider } : {}),
+    ...(partial.smallModel ? { smallModel: partial.smallModel } : {}),
   };
   return result;
 };
@@ -171,12 +212,19 @@ export const mergeUpdateOptions = async (partial: PartialOptions) => {
   const cartographerBinary =
     partial.cartographerBinary ?? existing?.cartographerBinary;
   const apiKey = partial.apiKey ?? envApiKey() ?? existing?.apiKey;
+  const providerApiKey =
+    partial.providerApiKey ?? envProviderApiKey() ?? existing?.providerApiKey;
+  const provider = partial.provider ?? existing?.provider;
+  const smallModel = partial.smallModel ?? existing?.smallModel;
 
   const merged: InstallOptions = {
     serverUrl,
     ...(userMemoryDb ? { userMemoryDb } : {}),
     ...(cartographerBinary ? { cartographerBinary } : {}),
     ...(apiKey ? { apiKey } : {}),
+    ...(providerApiKey ? { providerApiKey } : {}),
+    ...(provider ? { provider } : {}),
+    ...(smallModel ? { smallModel } : {}),
   };
   return merged;
 };

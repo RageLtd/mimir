@@ -21,6 +21,10 @@ import { Hono } from "hono";
 import { modelContentToString } from "../agent/message-log/message-utils";
 import { appendTurn } from "../agent/message-log/persistence";
 import { extractMemoriesFromResponse } from "../agent/post-processing";
+import {
+  extractProviderOverride,
+  PROVIDER_KEY_HEADER,
+} from "../middleware/pipeline";
 import { ensureProjectId } from "../projects/store";
 import { requestLog } from "../util/logger";
 import { attempt } from "../util/result";
@@ -42,6 +46,14 @@ type PersistRequest = {
   project?: string;
   /** Optional cost report from the CC backend (USD for the turn). */
   totalCostUsd?: number;
+  /** BYOK (MIM-74): provider id for the extraction this persist spawns.
+   * Pairs with the X-Provider-Api-Key header — the key itself never
+   * rides the body (bodies get logged on failure; headers don't). */
+  provider?: string;
+  /** BYOK (MIM-74): small/cheap model for the spawned extraction. Persist
+   * POSTs carry no request model, so without this the extraction falls
+   * back to the env-configured small model. */
+  small_model?: string;
 };
 
 messages.post("/persist", async (c) => {
@@ -120,7 +132,19 @@ messages.post("/persist", async (c) => {
     if (lastAssistant && lastUser) {
       const assistantText = modelContentToString(lastAssistant.content);
       if (assistantText) {
-        extractMemoriesFromResponse(assistantText, lastUser, projectId);
+        // BYOK (MIM-74): same key transport as the ingress routes — the
+        // extraction this persist spawns runs on the caller's key when
+        // one was sent, the env small model otherwise.
+        const override = extractProviderOverride(
+          c.req.header(PROVIDER_KEY_HEADER),
+          { provider: body.provider, small_model: body.small_model },
+        );
+        extractMemoriesFromResponse(
+          assistantText,
+          lastUser,
+          projectId,
+          override ? { override } : null,
+        );
       }
     }
   }

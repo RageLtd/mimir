@@ -22,7 +22,18 @@ export type MimirConfig = {
   /** Static bearer key for the interim API gate (MIM-77). Unset for
    *  ungated self-hosted servers. */
   readonly apiKey?: string;
+  /** BYOK provider key for the background inference the persist POST
+   *  spawns server-side (MIM-74). Unset → the server's env small model. */
+  readonly providerApiKey?: string;
+  /** Provider id (models.dev key) paired with providerApiKey. */
+  readonly provider?: string;
+  /** Small/cheap model for the spawned background jobs (e.g.
+   *  "anthropic/claude-haiku-4-5"). */
+  readonly smallModel?: string;
 };
+
+const optionalString = (value: unknown) =>
+  typeof value === "string" && value.length > 0 ? value : undefined;
 
 const configPath = () => join(mimirHome(), "config.json");
 
@@ -41,6 +52,9 @@ export const readConfig = async (): Promise<MimirConfig | null> => {
     ) {
       return null;
     }
+    const providerApiKey = optionalString(parsed.providerApiKey);
+    const provider = optionalString(parsed.provider);
+    const smallModel = optionalString(parsed.smallModel);
     return {
       serverUrl: parsed.serverUrl,
       userMemoryDb: parsed.userMemoryDb,
@@ -50,6 +64,9 @@ export const readConfig = async (): Promise<MimirConfig | null> => {
       ...(typeof parsed.apiKey === "string" && parsed.apiKey.length > 0
         ? { apiKey: parsed.apiKey }
         : {}),
+      ...(providerApiKey ? { providerApiKey } : {}),
+      ...(provider ? { provider } : {}),
+      ...(smallModel ? { smallModel } : {}),
     };
   } catch {
     return null;
@@ -68,4 +85,23 @@ export const authHeaders = async () => {
   const headers: Record<string, string> = {};
   if (key) headers.Authorization = `Bearer ${key}`;
   return headers;
+};
+
+/**
+ * BYOK provider credentials for the background inference a persist POST
+ * spawns server-side (MIM-74). Env wins over config.json — the same
+ * rotation-without-reinstall discipline as authHeaders(). Null when no
+ * provider key is configured: the server uses its env small model.
+ */
+export const providerByok = async () => {
+  const config = await readConfig();
+  const apiKey = process.env.MIMIR_PROVIDER_API_KEY ?? config?.providerApiKey;
+  if (!apiKey) return null;
+  const provider = process.env.MIMIR_PROVIDER ?? config?.provider;
+  const smallModel = process.env.MIMIR_SMALL_MODEL ?? config?.smallModel;
+  return {
+    apiKey,
+    ...(provider ? { provider } : {}),
+    ...(smallModel ? { smallModel } : {}),
+  };
 };

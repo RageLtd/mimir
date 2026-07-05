@@ -61,6 +61,23 @@ describe("extractProviderOverride", () => {
     });
   });
 
+  test("metadata.small_model rides the override for background jobs (MIM-74)", () => {
+    expect(
+      extractProviderOverride("sk-user", {
+        provider: "anthropic",
+        small_model: "anthropic/claude-haiku",
+      }),
+    ).toEqual({
+      apiKey: "sk-user",
+      provider: "anthropic",
+      smallModel: "anthropic/claude-haiku",
+    });
+    // Empty string is unset, not an override
+    expect(
+      extractProviderOverride("sk-user", { small_model: "" }),
+    ).toEqual({ apiKey: "sk-user" });
+  });
+
   test("createMimirContext threads the override onto ctx", () => {
     const override = { apiKey: "sk-user" };
     const ctx = createMimirContext(baseRequest(), {

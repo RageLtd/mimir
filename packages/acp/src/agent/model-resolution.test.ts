@@ -40,6 +40,7 @@ const mkConfig = (model: string) =>
     serverUrl: "http://test.invalid",
     apiKey: "",
     model,
+    smallModel: "",
     userMemoryDbPath: "/tmp/test.db",
     sessionDbPath: "/tmp/test-sessions.db",
     logLevel: "warn",

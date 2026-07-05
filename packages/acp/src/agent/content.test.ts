@@ -1,6 +1,7 @@
 import { test, expect, describe } from "bun:test";
 import {
   acpBlocksToAnthropicContent,
+  buildMetadata,
   formatContentBlocks,
 } from "./content";
 import type * as acp from "@agentclientprotocol/sdk";
@@ -327,3 +328,27 @@ describe("formatContentBlocks", () => {
   });
 });
 
+
+describe("buildMetadata", () => {
+  test("canonical project id wins over the path", () => {
+    expect(buildMetadata("/repo", "proj-uuid")).toEqual({
+      project: "proj-uuid",
+    });
+    expect(buildMetadata("/repo", null)).toEqual({ project: "/repo" });
+  });
+
+  test("small_model rides the metadata when configured (MIM-74)", () => {
+    expect(
+      buildMetadata("/repo", "proj-uuid", null, null, "anthropic/haiku"),
+    ).toEqual({
+      project: "proj-uuid",
+      small_model: "anthropic/haiku",
+    });
+  });
+
+  test("empty small model stays absent — server uses the request model", () => {
+    expect(buildMetadata("/repo", "proj-uuid", null, null, "")).toEqual({
+      project: "proj-uuid",
+    });
+  });
+});

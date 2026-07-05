@@ -1,9 +1,11 @@
 import type { AssistantContent, ModelMessage, ToolSet } from "ai";
 
 import { extractAndStoreMemories } from "../goldfish/memory";
+import type { ProviderOverride } from "../middleware/types";
 import { log } from "../util/logger";
 import { runCompaction } from "./compaction";
 import { appendAssistantOutput, updateTokenCount } from "./message-log/index";
+import type { BackgroundByok } from "./provider/override-completion";
 
 /**
  * Post-processing shared between streaming and non-streaming agent runs.
@@ -65,6 +67,7 @@ export function finalizeTurn(
   reasoning: string | undefined,
   ctx: {
     projectId: string | null;
+    providerOverride: ProviderOverride | null;
     request: { messages: ModelMessage[]; model: string };
   },
   lastStepInputTokens: number,
@@ -84,12 +87,28 @@ export function finalizeTurn(
     log.error({ err }, "persistAssistantTurn failed"),
   );
 
-  triggerCompactionIfNeeded(lastStepInputTokens, projectId, ctx.request.model);
+  // BYOK (MIM-74): the background jobs this turn spawns run on the turn's
+  // own key when one was sent; keyless turns use the env small model.
+  const byok: BackgroundByok = ctx.providerOverride
+    ? { override: ctx.providerOverride, requestModelId: ctx.request.model }
+    : null;
+
+  triggerCompactionIfNeeded(
+    lastStepInputTokens,
+    projectId,
+    ctx.request.model,
+    byok?.override ?? null,
+  );
 
   const lastUserMessage = [...ctx.request.messages]
     .reverse()
     .find((m) => m.role === "user");
-  extractMemoriesFromResponse(text || null, lastUserMessage ?? null, projectId);
+  extractMemoriesFromResponse(
+    text || null,
+    lastUserMessage ?? null,
+    projectId,
+    byok,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -107,12 +126,13 @@ export function triggerCompactionIfNeeded(
   promptTokens: number,
   projectId: string,
   modelId?: string,
+  override: ProviderOverride | null = null,
 ) {
   updateTokenCount(promptTokens, modelId)
     .then(({ needsCompaction }) => {
       if (needsCompaction) {
         log.info({ projectId }, "triggering async compaction");
-        runCompaction(modelId).catch((err) =>
+        runCompaction(modelId, override).catch((err) =>
           log.error({ err }, "compaction failed"),
         );
       }
@@ -186,6 +206,7 @@ export function extractMemoriesFromResponse(
   assistantContent: string | null | undefined,
   lastUserMessage: ModelMessage | null,
   projectId: string,
+  byok: BackgroundByok = null,
 ) {
   if (!assistantContent || !lastUserMessage) return;
 
@@ -193,7 +214,7 @@ export function extractMemoriesFromResponse(
     lastUserMessage,
     { role: "assistant", content: assistantContent },
   ];
-  extractAndStoreMemories(messages, projectId).catch((err) =>
+  extractAndStoreMemories(messages, projectId, byok).catch((err) =>
     log.error({ err }, "extraction error"),
   );
 }

@@ -1,5 +1,6 @@
 import type { ModelMessage } from "@ai-sdk/provider-utils";
 import { modelContentToString } from "../agent/message-log/message-utils";
+import type { BackgroundByok } from "../agent/provider/override-completion";
 import { log } from "../util/logger";
 import { embed, embedOne, extractMemories } from "./clients";
 import {
@@ -310,7 +311,8 @@ export async function storeMemoryBatch(
 export async function extractAndStoreMemories(
   messages: ModelMessage[],
   projectId?: string,
-): Promise<void> {
+  byok: BackgroundByok = null,
+) {
   const start = Date.now();
 
   // Need at least 2 user messages for a meaningful exchange —
@@ -345,7 +347,7 @@ export async function extractAndStoreMemories(
     "starting memory extraction",
   );
 
-  const memories = await extractMemories(conversationText);
+  const memories = await extractMemories(conversationText, byok);
   if (memories.length === 0) {
     log.debug("no memories extracted from conversation");
     return;

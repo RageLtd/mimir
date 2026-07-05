@@ -12,20 +12,34 @@ const ENV_KEY = "key-from-env";
 const CONFIG_KEY = "key-from-config";
 
 let mimirHomeDir: string;
-let savedApiKey: string | undefined;
 let savedMimirHome: string | undefined;
 
+// Every env var these parsers read gets saved/cleared per test so the
+// developer's real environment can't leak into toEqual assertions.
+const PARSED_ENV_VARS = [
+  "MIMIR_API_KEY",
+  "MIMIR_PROVIDER_API_KEY",
+  "MIMIR_PROVIDER",
+  "MIMIR_SMALL_MODEL",
+] as const;
+const savedEnv: Record<string, string | undefined> = {};
+
 beforeEach(async () => {
-  savedApiKey = process.env.MIMIR_API_KEY;
+  for (const name of PARSED_ENV_VARS) {
+    savedEnv[name] = process.env[name];
+    delete process.env[name];
+  }
   savedMimirHome = process.env.MIMIR_HOME;
-  delete process.env.MIMIR_API_KEY;
   mimirHomeDir = await mkdtemp(join(tmpdir(), "mimir-cli-args-"));
   process.env.MIMIR_HOME = mimirHomeDir;
 });
 
 afterEach(async () => {
-  if (savedApiKey === undefined) delete process.env.MIMIR_API_KEY;
-  else process.env.MIMIR_API_KEY = savedApiKey;
+  for (const name of PARSED_ENV_VARS) {
+    const saved = savedEnv[name];
+    if (saved === undefined) delete process.env[name];
+    else process.env[name] = saved;
+  }
   if (savedMimirHome === undefined) delete process.env.MIMIR_HOME;
   else process.env.MIMIR_HOME = savedMimirHome;
   await rm(mimirHomeDir, { recursive: true, force: true });
@@ -53,6 +67,65 @@ describe("parseInstallArgs api key resolution", () => {
     process.env.MIMIR_API_KEY = "";
     const parsed = parseInstallArgs([SERVER_URL]);
     expect(parsed).toEqual({ serverUrl: SERVER_URL });
+  });
+});
+
+describe("BYOK provider flags (MIM-74)", () => {
+  test("parses --provider-api-key / --provider / --small-model", () => {
+    const parsed = parseInstallArgs([
+      SERVER_URL,
+      "--provider-api-key",
+      "sk-prov",
+      "--provider",
+      "anthropic",
+      "--small-model",
+      "anthropic/haiku",
+    ]);
+    expect(parsed).toEqual({
+      serverUrl: SERVER_URL,
+      providerApiKey: "sk-prov",
+      provider: "anthropic",
+      smallModel: "anthropic/haiku",
+    });
+  });
+
+  test("MIMIR_PROVIDER_API_KEY env fills in when the flag is absent", () => {
+    process.env.MIMIR_PROVIDER_API_KEY = "sk-prov-env";
+    const parsed = parseInstallArgs([SERVER_URL]);
+    expect(parsed).toEqual({
+      serverUrl: SERVER_URL,
+      providerApiKey: "sk-prov-env",
+    });
+  });
+
+  test("flags missing values error", () => {
+    expect(parseInstallArgs([SERVER_URL, "--provider-api-key"])).toEqual({
+      error: "--provider-api-key requires a value",
+    });
+    expect(parseInstallArgs([SERVER_URL, "--provider"])).toEqual({
+      error: "--provider requires a value",
+    });
+    expect(parseInstallArgs([SERVER_URL, "--small-model"])).toEqual({
+      error: "--small-model requires a value",
+    });
+  });
+
+  test("mergeUpdateOptions preserves BYOK fields from config.json", async () => {
+    await writeConfig({
+      serverUrl: SERVER_URL,
+      userMemoryDb: join(mimirHomeDir, "user-memories.db"),
+      providerApiKey: "sk-prov-config",
+      provider: "anthropic",
+      smallModel: "anthropic/haiku",
+    });
+    const merged = await mergeUpdateOptions({});
+    expect(merged).toEqual({
+      serverUrl: SERVER_URL,
+      userMemoryDb: join(mimirHomeDir, "user-memories.db"),
+      providerApiKey: "sk-prov-config",
+      provider: "anthropic",
+      smallModel: "anthropic/haiku",
+    });
   });
 });
 

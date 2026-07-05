@@ -43,6 +43,12 @@ export function extractProviderOverride(
   if (typeof metadata?.base_url === "string" && metadata.base_url.length > 0) {
     override.baseUrl = metadata.base_url;
   }
+  if (
+    typeof metadata?.small_model === "string" &&
+    metadata.small_model.length > 0
+  ) {
+    override.smallModel = metadata.small_model;
+  }
   return override;
 }
 

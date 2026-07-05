@@ -124,6 +124,7 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
     session.projectId,
     userContext,
     session.projectRules,
+    appConfig.smallModel,
   );
 
   let turnCount = 0;

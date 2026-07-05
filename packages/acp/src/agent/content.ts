@@ -196,14 +196,20 @@ export const hasImageContent = (blocks: readonly acp.ContentBlock[]) =>
  * `projectRules` carries the formatted project rules (from .claude/rules,
  * CLAUDE.md, AGENTS.md) so server-side models honour the project's coding
  * conventions.
+ *
+ * `smallModel` (MIM-74) designates the small/cheap model for the background
+ * jobs a keyed turn spawns server-side (extraction, compaction). Empty or
+ * absent → the server falls back to the turn's request model.
  */
 export const buildMetadata = (
   projectPath: string,
   projectId: string | null,
   userContext?: string | null,
   projectRules?: string | null,
+  smallModel?: string | null,
 ) => ({
   project: projectId ?? projectPath,
   ...(userContext ? { user_context: userContext } : {}),
   ...(projectRules ? { project_rules: projectRules } : {}),
+  ...(smallModel ? { small_model: smallModel } : {}),
 });

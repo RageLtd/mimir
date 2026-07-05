@@ -1,6 +1,24 @@
-import { describe, expect, test } from "bun:test";
-import { jsonSchema, tool, type ToolSet } from "ai";
-import { classifyToolCalls } from "./post-processing";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { jsonSchema, type ModelMessage, tool, type ToolSet } from "ai";
+
+// -- Mocks for the finalizeTurn threading tests (MIM-74) — must precede the
+// module-under-test import so the fire-and-forget trio hits spies, not the DB.
+const extractSpy = mock(async () => {});
+mock.module("../goldfish/memory", () => ({
+  extractAndStoreMemories: extractSpy,
+}));
+
+const updateTokenSpy = mock(async () => ({ needsCompaction: true }));
+const appendAssistantSpy = mock(async () => "id-1");
+mock.module("./message-log/index", () => ({
+  updateTokenCount: updateTokenSpy,
+  appendAssistantOutput: appendAssistantSpy,
+}));
+
+const runCompactionSpy = mock(async () => {});
+mock.module("./compaction", () => ({ runCompaction: runCompactionSpy }));
+
+import { classifyToolCalls, finalizeTurn } from "./post-processing";
 
 const call = (toolName: string) => ({ toolCallId: `id-${toolName}`, toolName });
 
@@ -52,5 +70,51 @@ describe("classifyToolCalls", () => {
   test("empty ToolSet classifies everything client-side", () => {
     const { clientCalls } = classifyToolCalls([call("anything")], {});
     expect(clientCalls).toHaveLength(1);
+  });
+});
+
+describe("finalizeTurn BYOK threading (MIM-74)", () => {
+  beforeEach(() => {
+    extractSpy.mockClear();
+    updateTokenSpy.mockClear();
+    runCompactionSpy.mockClear();
+    appendAssistantSpy.mockClear();
+  });
+
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  const messages: ModelMessage[] = [{ role: "user", content: "tell me things" }];
+  const makeCtx = (
+    providerOverride: { apiKey: string; smallModel?: string } | null,
+  ) => ({
+    projectId: "proj-1",
+    providerOverride,
+    request: { messages, model: "anthropic/claude-test" },
+  });
+
+  test("keyed turn forwards the override to extraction and compaction", async () => {
+    const override = { apiKey: "sk-user", smallModel: "anthropic/haiku" };
+    finalizeTurn("plenty of assistant text", [], undefined, makeCtx(override), 42);
+    await flush();
+
+    expect(extractSpy).toHaveBeenCalledWith(expect.any(Array), "proj-1", {
+      override,
+      requestModelId: "anthropic/claude-test",
+    });
+    expect(runCompactionSpy).toHaveBeenCalledWith(
+      "anthropic/claude-test",
+      override,
+    );
+  });
+
+  test("keyless turn passes null — env small model path unchanged", async () => {
+    finalizeTurn("plenty of assistant text", [], undefined, makeCtx(null), 42);
+    await flush();
+
+    expect(extractSpy).toHaveBeenCalledWith(expect.any(Array), "proj-1", null);
+    expect(runCompactionSpy).toHaveBeenCalledWith(
+      "anthropic/claude-test",
+      null,
+    );
   });
 });

@@ -157,6 +157,12 @@ export type InstallOptions = {
   /** Static bearer key for the interim API gate (MIM-77). Omit for
    *  ungated self-hosted servers. */
   readonly apiKey?: string;
+  /** BYOK provider key for persist-spawned background inference (MIM-74). */
+  readonly providerApiKey?: string;
+  /** Provider id (models.dev key) paired with providerApiKey. */
+  readonly provider?: string;
+  /** Small/cheap model for the spawned background jobs. */
+  readonly smallModel?: string;
 };
 
 type RenderedTemplates = {
@@ -266,6 +272,9 @@ export const runInstall = async (
       ? { cartographerBinary: opts.cartographerBinary }
       : {}),
     ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
+    ...(opts.providerApiKey ? { providerApiKey: opts.providerApiKey } : {}),
+    ...(opts.provider ? { provider: opts.provider } : {}),
+    ...(opts.smallModel ? { smallModel: opts.smallModel } : {}),
   });
 
   const selfResult = await installSelfBinary(selfPath);

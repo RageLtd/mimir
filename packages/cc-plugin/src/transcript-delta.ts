@@ -36,7 +36,7 @@ import type {
   ToolContent,
 } from "@ai-sdk/provider-utils";
 
-import { authHeaders } from "./config";
+import { authHeaders, providerByok } from "./config";
 import { createLogger } from "./logger";
 import { attempt } from "./result";
 import { errMessage, mimirHome } from "./util";
@@ -44,6 +44,10 @@ import { errMessage, mimirHome } from "./util";
 const log = createLogger("transcript-delta");
 
 const PERSIST_ROUTE = "/v1/messages/persist";
+
+/** BYOK key transport (MIM-74) — header, never body: request bodies get
+ *  logged on validation failure server-side; headers don't. */
+const PROVIDER_KEY_HEADER = "X-Provider-Api-Key";
 
 const stateDir = () => join(mimirHome(), "persist-state");
 const statePath = (sessionId: string) => join(stateDir(), `${sessionId}.json`);
@@ -385,13 +389,24 @@ export const shipDelta = async (
 
   const url = `${serverUrl}${PERSIST_ROUTE}`;
   const auth = await authHeaders();
+  // BYOK (MIM-74): the extraction this persist spawns runs on the user's
+  // provider key when configured. Key in the header; the non-secret
+  // provider/small-model hints ride the body.
+  const byok = await providerByok();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...auth,
+  };
+  if (byok) headers[PROVIDER_KEY_HEADER] = byok.apiKey;
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...auth },
+    headers,
     body: JSON.stringify({
       messages,
       project,
       ...(projectId ? { projectId } : {}),
+      ...(byok?.provider ? { provider: byok.provider } : {}),
+      ...(byok?.smallModel ? { small_model: byok.smallModel } : {}),
     }),
   }).catch((err) => {
     log.error("persist fetch failed", { url, error: errMessage(err) });
