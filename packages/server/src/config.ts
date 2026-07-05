@@ -207,6 +207,15 @@ export const config = {
     timeoutMs: parseInt(Bun.env.SURREAL_TIMEOUT_MS ?? "10000", 10),
   },
 
+  /** Bundled server-side integrations — the Context7/Time stdio MCP
+   * children spawned at boot and the Tavily-backed web_search tool. On by
+   * default so self-hosted keeps today's behaviour; cloud deployments set
+   * BUNDLED_TOOLS_ENABLED=false so these don't burn the operator's tokens
+   * for every user — clients bring their own MCP servers instead (MIM-76). */
+  bundledTools: {
+    enabled: Bun.env.BUNDLED_TOOLS_ENABLED !== "false",
+  },
+
   /** Context7 — API key optional (free tier works without) */
   context7: {
     apiKey: Bun.env.CONTEXT7_API_KEY ?? "",

@@ -25,6 +25,16 @@ let mcpTools: ToolSet = {};
  * Call once during server boot. Failures are non-fatal.
  */
 export async function initMcpTools() {
+  // Cloud mode (MIM-76): no bundled children — every spawned stdio MCP
+  // here would run on the operator's dime for all users. Clients provide
+  // their own MCP servers through the existing client-tool path.
+  if (!config.bundledTools.enabled) {
+    log.info(
+      "bundled MCP tools disabled (BUNDLED_TOOLS_ENABLED=false) — clients provide their own",
+    );
+    return;
+  }
+
   const tools: ToolSet = {};
 
   // --- Context7 ---

@@ -1,4 +1,4 @@
-import { tool } from "ai";
+import { type ToolSet, tool } from "ai";
 import { z } from "zod";
 import { config } from "../../config";
 import { log } from "../../util/logger";
@@ -82,12 +82,27 @@ export const executeWebSearch = async ({
 // Tool definitions
 // ---------------------------------------------------------------------------
 
-export const externalTools = {
-  web_search: tool({
-    description:
-      "Search the web for current information. Use for up-to-date data, news, or recent docs.",
-    inputSchema: WebSearchSchema,
-    providerOptions: CACHE_CONTROL,
-    execute: executeWebSearch,
-  }),
+/**
+ * web_search registers only when it can actually work: bundled tools
+ * enabled AND a Tavily key present (MIM-76). Registering it keyless just
+ * burned a model turn on a stub error; absent is honest — classification
+ * already tolerates a variable tool set per request.
+ */
+export const buildExternalTools = (enabled: boolean) => {
+  const tools: ToolSet = enabled
+    ? {
+        web_search: tool({
+          description:
+            "Search the web for current information. Use for up-to-date data, news, or recent docs.",
+          inputSchema: WebSearchSchema,
+          providerOptions: CACHE_CONTROL,
+          execute: executeWebSearch,
+        }),
+      }
+    : {};
+  return tools;
 };
+
+export const externalTools = buildExternalTools(
+  config.bundledTools.enabled && config.tavily.apiKey.length > 0,
+);
