@@ -29,7 +29,7 @@ import { projects } from "./routes/projects";
 import { systemPrompt } from "./routes/system-prompt";
 import { tools } from "./routes/tools";
 import { log } from "./util/logger";
-import { attempt } from "./util/result";
+import { attempt, attemptSync } from "./util/result";
 
 const app = new Hono();
 
@@ -250,14 +250,29 @@ async function boot() {
     );
   }
 
-  server = Bun.serve({
-    fetch: app.fetch,
-    port: config.port,
-    hostname: config.host,
-    idleTimeout: 0, // disabled — long-running requests (Ollama cold starts,
-    // vLLM long generations, multi-merge hygiene sweeps) own their own
-    // duration; a fixed idle ceiling here is our limit to impose, not Bun's.
-  });
+  // Fatal by the same zombie logic as the DB above — a server that boots
+  // but never listens is the quietest zombie of all (MIM-80). Without this
+  // guard the bind failure fell into the unhandledRejection net below and
+  // the process lingered, healthy-looking, serving nothing. Crashing makes
+  // Railway keep the previous deployment live instead.
+  const [serveErr, bound] = attemptSync(() =>
+    Bun.serve({
+      fetch: app.fetch,
+      port: config.port,
+      hostname: config.host,
+      idleTimeout: 0, // disabled — long-running requests (Ollama cold starts,
+      // vLLM long generations, multi-merge hygiene sweeps) own their own
+      // duration; a fixed idle ceiling here is our limit to impose, not Bun's.
+    }),
+  );
+  if (serveErr) {
+    log.fatal(
+      { err: serveErr, host: config.host, port: config.port },
+      "failed to bind — aborting boot (is the port already in use?)",
+    );
+    process.exit(1);
+  }
+  server = bound;
 
   log.info(
     {
@@ -324,4 +339,10 @@ process.on("unhandledRejection", (reason) => {
   );
 });
 
-boot();
+// boot() is a floating promise — without this catch, ANY throw during the
+// boot sequence would land in the unhandledRejection net above and be
+// demoted from fatal to a suppressed log line (the MIM-80 failure class).
+boot().catch((err) => {
+  log.fatal({ err }, "boot failed — aborting");
+  process.exit(1);
+});
