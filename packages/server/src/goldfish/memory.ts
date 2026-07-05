@@ -75,7 +75,7 @@ export function scoreRetrievalCandidate(opts: {
   );
 }
 
-export async function retrieveMemories(
+export async function retrieveMemoryList(
   messages: ModelMessage[],
   opts: RetrieveOpts = {},
 ) {
@@ -191,8 +191,6 @@ export async function retrieveMemories(
     ...related.map((m) => `[related] ${m.content}`),
   ];
 
-  const result = allMemories.map((m) => `- ${m}`).join("\n");
-
   log.info(
     {
       topMemories: topMemories.length,
@@ -207,7 +205,26 @@ export async function retrieveMemories(
     "memory retrieval complete",
   );
 
-  return result;
+  return allMemories;
+}
+
+/** Render a retrieved memory list as the bullet block callers inject into prompts. */
+export function formatMemoryList(memories: string[]) {
+  return memories.map((m) => `- ${m}`).join("\n");
+}
+
+/**
+ * String-rendered variant of retrieveMemoryList — the shape every prompt
+ * injection call site consumes. Callers that need the true memory count
+ * (e.g. /file-info's memoryCount) use retrieveMemoryList directly; memory
+ * contents are multi-line, so counting lines of this string lies.
+ */
+export async function retrieveMemories(
+  messages: ModelMessage[],
+  opts: RetrieveOpts = {},
+) {
+  const memories = await retrieveMemoryList(messages, opts);
+  return memories ? formatMemoryList(memories) : null;
 }
 
 /**

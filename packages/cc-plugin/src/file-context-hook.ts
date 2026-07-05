@@ -54,6 +54,21 @@ type FileInfoResponse = {
   readonly imports?: readonly ImportEntry[];
   readonly dependents?: readonly DependentEntry[];
   readonly memories?: string | null;
+  /** True memory count from the server. Older servers omit it. */
+  readonly memoryCount?: number;
+};
+
+/**
+ * Memory count for the summary line. Prefers the server's memoryCount;
+ * against older servers that omit it, counts top-level bullets in the
+ * formatted string. Memories are multi-line, so a bare line count would
+ * report one memory as dozens (nested bullets can still inflate the
+ * fallback — the field is the fix, this is the degraded mode).
+ */
+export const countMemories = (info: FileInfoResponse) => {
+  if (typeof info.memoryCount === "number") return info.memoryCount;
+  if (!info.memories) return 0;
+  return info.memories.split("\n").filter((l) => l.startsWith("- ")).length;
 };
 
 type DedupCache = Record<string, string>;
@@ -273,9 +288,7 @@ export const runFileContextHook = async () => {
   }
 
   const dependentCount = info.dependents?.length ?? 0;
-  const memoryCount = info.memories
-    ? info.memories.split("\n").filter((l) => l.trim().length > 0).length
-    : 0;
+  const memoryCount = countMemories(info);
   const summary = `↻ File context: ${dependentCount} dependents, ${memoryCount} memories`;
 
   emitInjection(block, summary);

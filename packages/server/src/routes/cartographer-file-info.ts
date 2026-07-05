@@ -20,7 +20,7 @@
 
 import type { Context } from "hono";
 import { queryFirst, queryOne } from "../db/surreal";
-import { retrieveMemories } from "../goldfish/memory";
+import { formatMemoryList, retrieveMemoryList } from "../goldfish/memory";
 import { resolveProjectForQuery } from "../projects/resolve-for-query";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
@@ -119,6 +119,7 @@ export const fileInfoHandler = async (c: Context) => {
       imports: [],
       dependents: [],
       memories: null,
+      memoryCount: 0,
     });
   }
 
@@ -181,8 +182,8 @@ export const fileInfoHandler = async (c: Context) => {
       .filter((n) => typeof n === "string" && n.length > 0),
   ].join(" ");
 
-  const [memErr, memories] = await attempt(() =>
-    retrieveMemories([{ role: "user", content: memoryQuery }], {
+  const [memErr, memoryList] = await attempt(() =>
+    retrieveMemoryList([{ role: "user", content: memoryQuery }], {
       topK: FILE_INFO_MEMORY_TOP_K,
       includeRelated: false,
     }),
@@ -193,6 +194,7 @@ export const fileInfoHandler = async (c: Context) => {
       "file-info memory retrieval failed — returning without memories",
     );
   }
+  const memories = memErr || !memoryList ? null : memoryList;
 
   const imports = importRows
     .map((r) => ({ target: r.target_path ?? "", specifier: r.specifier ?? "" }))
@@ -210,7 +212,7 @@ export const fileInfoHandler = async (c: Context) => {
       symbols: safeSymbols.length,
       imports: imports.length,
       dependents: dependents.length,
-      hasMemories: !!memories,
+      memories: memories?.length ?? 0,
       contentHash: fileRow.content_hash || "(empty)",
     },
     "file-info served",
@@ -221,6 +223,9 @@ export const fileInfoHandler = async (c: Context) => {
     symbols: safeSymbols,
     imports,
     dependents,
-    memories: memErr ? null : memories,
+    memories: memories ? formatMemoryList(memories) : null,
+    // True memory count — the formatted string is multi-line per memory,
+    // so the plugin cannot derive this by counting lines.
+    memoryCount: memories?.length ?? 0,
   });
 };

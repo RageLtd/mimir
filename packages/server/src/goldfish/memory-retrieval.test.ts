@@ -51,7 +51,11 @@ mock.module("./clients", () => ({
 }));
 
 // Import AFTER mocking
-import { retrieveMemories } from "./memory";
+import {
+  formatMemoryList,
+  retrieveMemories,
+  retrieveMemoryList,
+} from "./memory";
 
 describe("retrieveMemories playbook exclusion", () => {
   beforeEach(() => {
@@ -88,5 +92,43 @@ describe("retrieveMemories playbook exclusion", () => {
     ]);
 
     expect(result).toBeNull();
+  });
+});
+
+describe("retrieveMemoryList counting contract", () => {
+  beforeEach(() => {
+    mockSearchByVector.mockClear();
+    mockSearchByText.mockClear();
+    mockGetRelated.mockClear();
+    mockTouch.mockClear();
+    mockEmbedOne.mockClear();
+  });
+
+  test("returns one element per memory even when contents are multi-line", async () => {
+    // Multi-line contents with embedded bullets — the shape that made the
+    // plugin's line-count summary report 3 memories as dozens.
+    mockSearchByVector.mockResolvedValueOnce([
+      { id: "memory:a", content: "fact one\n- nested bullet\n- another", distance: 0.1, confidence: 1 },
+      { id: "memory:b", content: "fact two\nsecond line", distance: 0.2, confidence: 1 },
+    ]);
+
+    const result = await retrieveMemoryList([
+      { role: "user", content: "count things" },
+    ]);
+
+    expect(result).toHaveLength(2);
+  });
+
+  test("formatMemoryList renders the bullet block retrieveMemories returns", async () => {
+    mockSearchByVector.mockResolvedValueOnce([
+      { id: "memory:a", content: "alpha", distance: 0.1, confidence: 1 },
+      { id: "memory:b", content: "beta", distance: 0.2, confidence: 1 },
+    ]);
+
+    const result = await retrieveMemories([
+      { role: "user", content: "format things" },
+    ]);
+
+    expect(result).toBe(formatMemoryList(["alpha", "beta"]));
   });
 });
