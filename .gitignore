@@ -48,3 +48,6 @@ compose.override.yml
 *.db-shm
 *.db-wal
 .mcp.json
+
+# Docs
+docs/

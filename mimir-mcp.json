@@ -1,9 +1,5 @@
 {
   "mcpServers": {
-    "mimir": {
-      "type": "http",
-      "url": "http://mimir.conhost.lan/mcp"
-    },
     "context7": {
       "type": "stdio",
       "command": "bunx",
