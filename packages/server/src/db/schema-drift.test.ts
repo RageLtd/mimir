@@ -3,7 +3,7 @@ import {
   buildDriftRemovalSql,
   buildOrphanValuePurgeSql,
   parseIndexDimension,
-} from "./surreal";
+} from "./schema-drift";
 
 // Mirrors the cart_file DEFINE block in initSchema. content_hash is a LEGIT
 // declared field (drifted once, now part of the source) and must survive.

@@ -181,6 +181,11 @@ export const config = {
     database: Bun.env.SURREAL_DB ?? "mimir",
     user: Bun.env.SURREAL_USER ?? "root",
     pass: Bun.env.SURREAL_PASS ?? "root",
+    /** Deadline for the connect handshake and the liveness probe, in ms.
+     *  The SDK's ConnectOptions has no timeout of its own (v2.0.3), so a
+     *  refused/hanging upstream otherwise stalls requests for 60s+ at the
+     *  transport layer (observed on Railway, MIM-79). */
+    timeoutMs: parseInt(Bun.env.SURREAL_TIMEOUT_MS ?? "10000", 10),
   },
 
   /** Context7 — API key optional (free tier works without) */

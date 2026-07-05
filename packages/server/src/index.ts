@@ -157,16 +157,21 @@ let server: ReturnType<typeof Bun.serve> | null = null;
 async function boot() {
   log.info("starting server");
 
+  // Fatal by design: a server without its database is a zombie — every
+  // DB-backed route fails while the process looks healthy. Crashing the
+  // boot instead makes the deploy fail loudly (Railway keeps the previous
+  // deployment serving) rather than shipping a brainless instance. Runtime
+  // blips are NOT affected — getDb reconnects per request and fails fast
+  // via the SURREAL_TIMEOUT_MS deadline (MIM-79).
   const [dbErr] = await attempt(initSchema);
   if (dbErr) {
-    log.error({ err: dbErr }, "failed to connect to SurrealDB");
-    log.warn("continuing without database — some features will be unavailable");
-  } else {
-    log.info("SurrealDB connected");
-    // Recover from crashes mid-compaction — a stuck is_compacting lock
-    // permanently blocks all future compactions
-    await clearStaleCompaction();
+    log.fatal({ err: dbErr }, "failed to connect to SurrealDB — aborting boot");
+    process.exit(1);
   }
+  log.info("SurrealDB connected");
+  // Recover from crashes mid-compaction — a stuck is_compacting lock
+  // permanently blocks all future compactions
+  await clearStaleCompaction();
 
   // Provider metadata (models.dev) — in-memory with TTL refresh (MIM-65).
   // Non-fatal: a failed fetch means remote providers sit out until the
