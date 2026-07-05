@@ -8,13 +8,15 @@ import {
   stopProviderDataRefresh,
 } from "./agent/provider";
 import { closeMcpClients, initMcpTools } from "./agent/server-tools/mcp";
+import { countUsers, createClaimGuard, SIGNUP_PATH } from "./auth/claim";
+import { getAuth, getAuthDb, runAuthMigrations } from "./auth/instance";
 import { config, OPENROUTER_API_URL } from "./config";
 import { closeDb, getDb, initSchema } from "./db/surreal";
 import {
   startHygieneScheduler,
   stopHygieneScheduler,
 } from "./goldfish/hygiene";
-import { createBearerGate } from "./middleware/auth";
+import { createIdentityGate } from "./middleware/identity";
 import { cartographer } from "./routes/cartographer";
 import { completions } from "./routes/completions";
 import { context } from "./routes/context";
@@ -34,15 +36,19 @@ const app = new Hono();
 // Middleware
 app.use("*", cors());
 
-// Interim API-key gate (MIM-77) — mounted only when keys are configured.
-// /health stays open for credential-less healthchecks. Empty key set is
-// the self-hosted default and warns loudly rather than failing boot.
-if (config.auth.keys.length > 0) {
-  app.use("*", createBearerGate(config.auth.keys));
-  log.info({ keys: config.auth.keys.length }, "API-key gate active");
+// Better Auth (MIM-70) — the ONLY gating mechanism. Mount order matters:
+// the claim guard wraps the signup endpoint, the auth handler self-gates
+// its own routes, and the identity gate covers everything else (with
+// /health exempt). Lazy getAuth(): an auth-disabled boot never constructs
+// the instance or touches the SQLite file.
+if (config.auth.enabled) {
+  app.use(SIGNUP_PATH, createClaimGuard());
+  app.on(["POST", "GET"], "/api/auth/*", (c) => getAuth().handler(c.req.raw));
+  app.use("*", createIdentityGate());
+  log.info("better-auth identity gate active");
 } else {
   log.warn(
-    "MIMIR_API_KEYS unset — API is UNAUTHENTICATED; set keys before exposing this server publicly",
+    "AUTH_ENABLED=false — API is UNAUTHENTICATED; enable auth before exposing this server publicly",
   );
 }
 
@@ -172,6 +178,43 @@ async function boot() {
   // Recover from crashes mid-compaction — a stuck is_compacting lock
   // permanently blocks all future compactions
   await clearStaleCompaction();
+
+  // Better Auth (MIM-70) — fatal by the same zombie logic as the DB above:
+  // an auth-enabled server whose auth layer can't initialise would 401
+  // every request while looking healthy. AUTH_SECRET has no default; a
+  // defaulted secret would be a backdoor, so its absence aborts here.
+  if (config.auth.enabled) {
+    if (!config.auth.secret) {
+      log.fatal(
+        "AUTH_ENABLED is set but AUTH_SECRET is missing — aborting boot",
+      );
+      process.exit(1);
+    }
+    const [authErr] = await attempt(runAuthMigrations);
+    if (authErr) {
+      log.fatal(
+        { err: authErr },
+        "better-auth migrations failed — aborting boot",
+      );
+      process.exit(1);
+    }
+    log.info({ db: config.auth.dbPath }, "auth layer enabled (better-auth)");
+
+    // First-boot claim state (MIM-70 slice 2): announce loudly so the
+    // operator knows whether the instance is claimable — and whether the
+    // claim is even possible without a setup token.
+    if (countUsers(getAuthDb()) === 0) {
+      if (config.auth.setupToken) {
+        log.warn(
+          "instance is UNCLAIMED — first sign-up with a valid X-Setup-Token claims it",
+        );
+      } else {
+        log.warn(
+          "instance is UNCLAIMED and AUTH_SETUP_TOKEN is unset — sign-up is impossible until a setup token is configured",
+        );
+      }
+    }
+  }
 
   // Provider metadata (models.dev) — in-memory with TTL refresh (MIM-65).
   // Non-fatal: a failed fetch means remote providers sit out until the

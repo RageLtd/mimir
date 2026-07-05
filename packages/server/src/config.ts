@@ -59,14 +59,33 @@ export const config = {
     url: Bun.env.PROVIDER_DATA_URL ?? "https://models.dev/api.json",
   },
 
-  /** Interim static bearer-key gate (MIM-77). Comma-separated keys, one per
-   *  client. Empty → gate stands down (self-hosted default) with a loud
-   *  boot warning. Superseded by MIM-70's real auth. */
+  /** MIM-70 Better Auth layer — the only gating mechanism (the MIM-77
+   *  static MIMIR_API_KEYS gate is retired). */
   auth: {
-    keys: (Bun.env.MIMIR_API_KEYS ?? "")
-      .split(",")
-      .map((k) => k.trim())
-      .filter((k) => k.length > 0),
+    /** Disabled by default — the self-hosted path runs ungated with a loud
+     *  boot warning. Enabling requires AUTH_SECRET; boot fails loudly
+     *  without. */
+    enabled: (Bun.env.AUTH_ENABLED ?? "false") === "true",
+    /** SQLite store path. Railway sets this onto the mounted volume
+     *  (e.g. /data/auth.sqlite); local default stays cwd-relative so a
+     *  dev boot never needs a /data mount. */
+    dbPath: Bun.env.AUTH_DB_PATH ?? "./auth.sqlite",
+    /** better-auth signing/encryption secret — required when enabled,
+     *  no default on purpose (a defaulted secret is a backdoor). */
+    secret: Bun.env.AUTH_SECRET ?? "",
+    /** Public base URL of this server — feeds better-auth's baseURL and
+     *  the passkey plugin's rpID derivation. */
+    baseUrl:
+      Bun.env.AUTH_BASE_URL ??
+      `http://localhost:${Bun.env.MIMIR_PORT ?? "8080"}`,
+    /** One-time first-boot claim token (MIM-70 slice 2): while zero users
+     *  exist, sign-up succeeds only when X-Setup-Token matches this. */
+    setupToken: Bun.env.AUTH_SETUP_TOKEN ?? "",
+    /** Shared HS256 secret for the Surreal record-access bridge (MIM-70
+     *  slice 4). When set, initSchema defines the mimir_user JWT access
+     *  method and scoped sessions become mintable; unset → bridge dormant.
+     *  No default on purpose, same backdoor logic as AUTH_SECRET. */
+    surrealAccessSecret: Bun.env.SURREAL_ACCESS_SECRET ?? "",
   },
 
   /** Small model — used for memory extraction, summarization, and utility requests

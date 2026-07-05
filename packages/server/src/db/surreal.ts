@@ -1,4 +1,5 @@
 import { Surreal } from "surrealdb";
+import { buildDefineAccessSql } from "../auth/surreal-bridge";
 import { config } from "../config";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
@@ -84,6 +85,44 @@ async function _getDb(): Promise<Surreal> {
 /** Get the database connection (mockable for tests) */
 export const getDb = _getDb;
 
+/**
+ * Open a SCOPED connection authenticated with a bridge-minted JWT (MIM-70
+ * slice 4). Runs under the mimir_user access method — once MIM-69 lands
+ * PERMISSIONS, this session can only see rows its $token.org_id owns. The
+ * root connection above stays untouched for boot migrations and background
+ * work. Caller owns the connection and MUST close() it; per-request pooling
+ * is MIM-69's design territory.
+ */
+export async function connectScoped(token: string) {
+  const instance = new Surreal();
+  const [err] = await attempt(() =>
+    withTimeout(
+      (async () => {
+        await instance.connect(config.surreal.url);
+        await instance.use({
+          namespace: config.surreal.namespace,
+          database: config.surreal.database,
+        });
+        await instance.authenticate(token);
+      })(),
+      config.surreal.timeoutMs,
+      "SurrealDB scoped connect",
+    ),
+  );
+  if (err) {
+    instance
+      .close()
+      .catch((closeErr: unknown) =>
+        log.debug(
+          { err: String(closeErr) },
+          "close of failed scoped SurrealDB connection",
+        ),
+      );
+    throw err;
+  }
+  return instance;
+}
+
 /** Close the DB connection cleanly (for graceful shutdown) */
 export async function closeDb(): Promise<void> {
   if (db) {
@@ -130,6 +169,14 @@ export async function queryFirst<T>(
 export async function initSchema() {
   const start = Date.now();
   const db = await getDb();
+
+  // Surreal record-access bridge (MIM-70 slice 4) — OVERWRITE so secret
+  // rotation takes effect at boot. Dormant until MIM-69 binds PERMISSIONS
+  // to $token claims; unset secret means no access method at all.
+  if (config.auth.surrealAccessSecret) {
+    await db.query(buildDefineAccessSql(config.auth.surrealAccessSecret));
+    log.info("Surreal JWT access method defined (mimir_user)");
+  }
 
   await db.query(/* surql */ `
     -- Analyzer for full-text search
