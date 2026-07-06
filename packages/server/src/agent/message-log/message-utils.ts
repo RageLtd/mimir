@@ -67,6 +67,8 @@ export function fingerprintMessage(msg: ModelMessage) {
 /** Row shape stored in SurrealDB */
 export interface MessageRow {
   id: string;
+  /** Owning org id — the tenant boundary (MIM-69). */
+  org_id: string;
   /** Canonical project ULID (id portion of the project table record). */
   project_id: string;
   role: string;
@@ -81,16 +83,18 @@ export interface MessageRow {
  * Serialize a ModelMessage for DB storage.
  * Content is always JSON — either a JSON string or a JSON array of content parts.
  *
- * `projectId` is the canonical project ULID — callers resolve whatever
- * identifier the client sent (path or id) at the API boundary before it
- * reaches this layer.
+ * `orgId` is the tenant boundary; `projectId` is the canonical project ULID —
+ * callers resolve whatever identifier the client sent (path or id) at the API
+ * boundary before it reaches this layer.
  */
 export function modelMessageToFields(
   msg: ModelMessage,
+  orgId: string,
   projectId: string,
   seq?: number,
 ) {
   const fields: Record<string, unknown> = {
+    org_id: orgId,
     project_id: projectId,
     role: msg.role,
     content: JSON.stringify(msg.content),

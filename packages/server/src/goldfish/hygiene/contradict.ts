@@ -23,6 +23,7 @@
  * gives contradiction the disjointness consolidation gets free from clustering.
  */
 
+import type { OrgScope } from "../../db/scope";
 import { assertNever } from "../../util/assert";
 import { log } from "../../util/logger";
 import { attempt } from "../../util/result";
@@ -85,6 +86,7 @@ export interface ContradictionReport {
  *  out to contradictionDistance become edges. The pure selector filters these
  *  down to the contradiction band and drops already-superseded pairs. */
 async function buildContradictionEdges(
+  scope: OrgScope,
   facts: Memory[],
   contradictionDistance: number,
 ) {
@@ -98,6 +100,7 @@ async function buildContradictionEdges(
     if (!m.id || m.embedding.length === 0) continue;
     const sourceId = String(m.id);
     const neighbors = await findNeighbors(
+      scope,
       m.embedding,
       m.id,
       NEIGHBORS_PER_FACT,
@@ -114,6 +117,7 @@ async function buildContradictionEdges(
 }
 
 export async function runContradiction(
+  scope: OrgScope,
   memories: Memory[],
   opts: ContradictionOpts,
 ) {
@@ -124,7 +128,7 @@ export async function runContradiction(
     (m) => (m.type ?? "fact") === "fact" && m.id && m.embedding.length > 0,
   );
 
-  const existing = await listSupersedesEdges();
+  const existing = await listSupersedesEdges(scope);
   const alreadySuperseded = new Set(existing.map((e) => pairKey(e.from, e.to)));
   // A memory already superseded (the loser end of a supersedes edge) is stale
   // and awaiting prune — exclude it from candidacy entirely. Otherwise a later
@@ -137,6 +141,7 @@ export async function runContradiction(
   const facts = allFacts.filter((m) => !supersededLosers.has(String(m.id)));
 
   const edges = await buildContradictionEdges(
+    scope,
     facts,
     opts.contradictionDistance,
   );
@@ -193,6 +198,7 @@ export async function runContradiction(
         }
 
         const result = await applyDemotion(
+          scope,
           routing.winnerId,
           routing.loserId,
           opts.demotionFactor,
@@ -210,7 +216,7 @@ export async function runContradiction(
       case "merge": {
         consumed.add(pair.a);
         consumed.add(pair.b);
-        merges.push(await proposePairMerge(a, b, opts.dryRun));
+        merges.push(await proposePairMerge(scope, a, b, opts.dryRun));
         break;
       }
 
@@ -247,13 +253,20 @@ export async function runContradiction(
  * Never throws; each step is isolated so one DB hiccup can't abort the pass.
  */
 async function applyDemotion(
+  scope: OrgScope,
   winnerId: string,
   loserId: string,
   factor: number,
   distance: number,
 ) {
   const [edgeErr] = await attempt(() =>
-    createRelation(winnerId, loserId, Math.max(0, 1 - distance), "supersedes"),
+    createRelation(
+      scope,
+      winnerId,
+      loserId,
+      Math.max(0, 1 - distance),
+      "supersedes",
+    ),
   );
   if (edgeErr) {
     return {
@@ -263,7 +276,7 @@ async function applyDemotion(
   }
 
   const [demoteErr, demotedTo] = await attempt(() =>
-    demoteConfidence(loserId, factor),
+    demoteConfidence(scope, loserId, factor),
   );
   if (demoteErr) {
     return {
@@ -285,7 +298,12 @@ async function applyDemotion(
  * the canonical text; nothing mutates). Never throws — a model decline or DB
  * hiccup becomes an unapplied proposal with an error, so the sweep continues.
  */
-async function proposePairMerge(a: Memory, b: Memory, dryRun: boolean) {
+async function proposePairMerge(
+  scope: OrgScope,
+  a: Memory,
+  b: Memory,
+  dryRun: boolean,
+) {
   const members = [a, b];
   const memberIds = members.map((m) => String(m.id));
   const memberContents = members.map((m) => m.content);
@@ -310,7 +328,9 @@ async function proposePairMerge(a: Memory, b: Memory, dryRun: boolean) {
     } satisfies MergeProposal;
   }
 
-  const [err, result] = await attempt(() => applyMerge(members, canonicalText));
+  const [err, result] = await attempt(() =>
+    applyMerge(scope, members, canonicalText),
+  );
   if (err || !result) {
     return {
       memberIds,

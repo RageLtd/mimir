@@ -7,6 +7,7 @@
  * report shows exactly what a live run would prune — not a pre-decay snapshot.
  */
 
+import type { OrgScope } from "../../db/scope";
 import { deleteMemory, type Memory } from "../store";
 import { decayUntouchedConfidence } from "../store-hygiene";
 import { type PruneCandidate, selectForPruning } from "./score";
@@ -45,9 +46,10 @@ function msOf(iso: string | undefined, fallback: number) {
 }
 
 export async function runForgetting(
+  scope: OrgScope,
   memories: Memory[],
   opts: ForgettingOpts,
-): Promise<ForgettingReport> {
+) {
   const cutoffMs = opts.now - opts.decayOlderThanSeconds * 1000;
 
   // Project the decay into scoring inputs so selection reflects post-decay
@@ -78,6 +80,7 @@ export async function runForgetting(
   let decayedCount = 0;
   if (!opts.dryRun) {
     decayedCount = await decayUntouchedConfidence(
+      scope,
       opts.confidenceDecay,
       opts.decayOlderThanSeconds,
     );
@@ -87,7 +90,7 @@ export async function runForgetting(
   for (const s of selected) {
     let applied = false;
     if (!opts.dryRun && s.id) {
-      applied = await deleteMemory(s.id);
+      applied = await deleteMemory(scope, s.id);
     }
     prunes.push({ ...s, applied });
   }

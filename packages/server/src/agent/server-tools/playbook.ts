@@ -13,6 +13,7 @@
 
 import { tool } from "ai";
 import { z } from "zod";
+import type { OrgScope } from "../../db/scope";
 import {
   getPlaybook,
   listPlaybooks,
@@ -95,18 +96,23 @@ const PlaybookUpdateSchema = z.object({
 // Execute functions
 // ---------------------------------------------------------------------------
 
-export const executePlaybookStore = ({
-  name,
-  trigger,
-  content,
-  project,
-}: z.infer<typeof PlaybookStoreSchema>) =>
-  storeTypedMemory({ content, project, type: "playbook", name, trigger });
+export const executePlaybookStore = (
+  scope: OrgScope,
+  { name, trigger, content, project }: z.infer<typeof PlaybookStoreSchema>,
+) =>
+  storeTypedMemory(scope, {
+    content,
+    project,
+    type: "playbook",
+    name,
+    trigger,
+  });
 
-export const executePlaybookList = async ({
-  project,
-}: z.infer<typeof PlaybookListSchema>) => {
-  const playbooks = await listPlaybooks(project);
+export const executePlaybookList = async (
+  scope: OrgScope,
+  { project }: z.infer<typeof PlaybookListSchema>,
+) => {
+  const playbooks = await listPlaybooks(scope, project);
   log.info(
     { count: playbooks.length, project: project ?? "all" },
     "project_playbook_list",
@@ -122,14 +128,14 @@ export const executePlaybookList = async ({
   };
 };
 
-export const executePlaybookLoad = async ({
-  name,
-  id,
-}: z.infer<typeof PlaybookSelectorSchema>) => {
+export const executePlaybookLoad = async (
+  scope: OrgScope,
+  { name, id }: z.infer<typeof PlaybookSelectorSchema>,
+) => {
   if (!name && !id) {
     return { found: false, error: "Provide a playbook name or id" };
   }
-  const playbook = await getPlaybook({ id, name });
+  const playbook = await getPlaybook(scope, { id, name });
   if (!playbook) {
     return { found: false, error: `Playbook not found: ${name ?? id}` };
   }
@@ -145,13 +151,10 @@ export const executePlaybookLoad = async ({
   };
 };
 
-export const executePlaybookUpdate = async ({
-  name,
-  id,
-  newName,
-  trigger,
-  content,
-}: z.infer<typeof PlaybookUpdateSchema>) => {
+export const executePlaybookUpdate = async (
+  scope: OrgScope,
+  { name, id, newName, trigger, content }: z.infer<typeof PlaybookUpdateSchema>,
+) => {
   if (!name && !id) {
     return { updated: false, error: "Provide a playbook name or id to update" };
   }
@@ -161,11 +164,11 @@ export const executePlaybookUpdate = async ({
       error: "Nothing to update — provide newName, trigger, or content",
     };
   }
-  const target = await getPlaybook({ id, name });
+  const target = await getPlaybook(scope, { id, name });
   if (!target) {
     return { updated: false, error: `Playbook not found: ${name ?? id}` };
   }
-  const result = await updatePlaybook(target.id, {
+  const result = await updatePlaybook(scope, target.id, {
     name: newName,
     trigger,
     content,
@@ -182,18 +185,18 @@ export const executePlaybookUpdate = async ({
   };
 };
 
-export const executePlaybookDelete = async ({
-  name,
-  id,
-}: z.infer<typeof PlaybookSelectorSchema>) => {
+export const executePlaybookDelete = async (
+  scope: OrgScope,
+  { name, id }: z.infer<typeof PlaybookSelectorSchema>,
+) => {
   if (!name && !id) {
     return { deleted: false, error: "Provide a playbook name or id to delete" };
   }
-  const target = await getPlaybook({ id, name });
+  const target = await getPlaybook(scope, { id, name });
   if (!target) {
     return { deleted: false, error: `Playbook not found: ${name ?? id}` };
   }
-  const deleted = await deleteMemory(target.id);
+  const deleted = await deleteMemory(scope, target.id);
   log.info(
     { id: target.id, name: target.name, deleted },
     "project_playbook_delete",
@@ -210,44 +213,53 @@ export const executePlaybookDelete = async ({
 // Tool definitions
 // ---------------------------------------------------------------------------
 
-export const playbookTools = {
-  project_playbook_store: tool({
-    description:
-      "Persist a learned, reusable playbook — the procedure for a recurring KIND of task — so future sessions follow it instead of rediscovering it. Authoring a playbook is like writing a skill file: give it a name, a 'use this when…' trigger describing when it applies, and the step-by-step body. The trigger is the key — it decides when the body auto-loads, so describe the situation, not the steps. Use for a multi-step workflow, debugging routine, setup/release sequence, or the gotchas-and-order of a class of change. For one-off facts ABOUT this codebase use project_memory_store; for facts about the developer use user_memory_store.",
-    inputSchema: PlaybookStoreSchema,
-    providerOptions: CACHE_CONTROL,
-    execute: executePlaybookStore,
-  }),
+/** Build the playbook tool group bound to an org scope (rebuilt per request —
+ *  see buildMemoryTools). */
+export function buildPlaybookTools(scope: OrgScope) {
+  return {
+    project_playbook_store: tool({
+      description:
+        "Persist a learned, reusable playbook — the procedure for a recurring KIND of task — so future sessions follow it instead of rediscovering it. Authoring a playbook is like writing a skill file: give it a name, a 'use this when…' trigger describing when it applies, and the step-by-step body. The trigger is the key — it decides when the body auto-loads, so describe the situation, not the steps. Use for a multi-step workflow, debugging routine, setup/release sequence, or the gotchas-and-order of a class of change. For one-off facts ABOUT this codebase use project_memory_store; for facts about the developer use user_memory_store.",
+      inputSchema: PlaybookStoreSchema,
+      providerOptions: CACHE_CONTROL,
+      execute: (args: z.infer<typeof PlaybookStoreSchema>) =>
+        executePlaybookStore(scope, args),
+    }),
 
-  project_playbook_list: tool({
-    description:
-      "List stored playbooks with their names, triggers, and ids. Use to see the full library (the always-injected index shows in-scope playbooks; this surfaces all of them) or to find a playbook's id for update/delete.",
-    inputSchema: PlaybookListSchema,
-    providerOptions: CACHE_CONTROL,
-    execute: executePlaybookList,
-  }),
+    project_playbook_list: tool({
+      description:
+        "List stored playbooks with their names, triggers, and ids. Use to see the full library (the always-injected index shows in-scope playbooks; this surfaces all of them) or to find a playbook's id for update/delete.",
+      inputSchema: PlaybookListSchema,
+      providerOptions: CACHE_CONTROL,
+      execute: (args: z.infer<typeof PlaybookListSchema>) =>
+        executePlaybookList(scope, args),
+    }),
 
-  project_playbook_load: tool({
-    description:
-      "Load a playbook's full body by name (as shown in the index) or id. Use to deliberately pull the steps for a playbook the index named but that wasn't auto-loaded for this task.",
-    inputSchema: PlaybookSelectorSchema,
-    providerOptions: CACHE_CONTROL,
-    execute: executePlaybookLoad,
-  }),
+    project_playbook_load: tool({
+      description:
+        "Load a playbook's full body by name (as shown in the index) or id. Use to deliberately pull the steps for a playbook the index named but that wasn't auto-loaded for this task.",
+      inputSchema: PlaybookSelectorSchema,
+      providerOptions: CACHE_CONTROL,
+      execute: (args: z.infer<typeof PlaybookSelectorSchema>) =>
+        executePlaybookLoad(scope, args),
+    }),
 
-  project_playbook_update: tool({
-    description:
-      "Edit an existing playbook by name or id — rename it (newName), refine its trigger, or revise its body (content). Changing the name or trigger re-embeds it so ambient matching tracks the edit. Prefer updating over storing a near-duplicate.",
-    inputSchema: PlaybookUpdateSchema,
-    providerOptions: CACHE_CONTROL,
-    execute: executePlaybookUpdate,
-  }),
+    project_playbook_update: tool({
+      description:
+        "Edit an existing playbook by name or id — rename it (newName), refine its trigger, or revise its body (content). Changing the name or trigger re-embeds it so ambient matching tracks the edit. Prefer updating over storing a near-duplicate.",
+      inputSchema: PlaybookUpdateSchema,
+      providerOptions: CACHE_CONTROL,
+      execute: (args: z.infer<typeof PlaybookUpdateSchema>) =>
+        executePlaybookUpdate(scope, args),
+    }),
 
-  project_playbook_delete: tool({
-    description:
-      "Delete a playbook by name or id. Confirm with the developer before calling — playbooks are deliberately authored procedures and removal should be intentional.",
-    inputSchema: PlaybookSelectorSchema,
-    providerOptions: CACHE_CONTROL,
-    execute: executePlaybookDelete,
-  }),
-};
+    project_playbook_delete: tool({
+      description:
+        "Delete a playbook by name or id. Confirm with the developer before calling — playbooks are deliberately authored procedures and removal should be intentional.",
+      inputSchema: PlaybookSelectorSchema,
+      providerOptions: CACHE_CONTROL,
+      execute: (args: z.infer<typeof PlaybookSelectorSchema>) =>
+        executePlaybookDelete(scope, args),
+    }),
+  };
+}

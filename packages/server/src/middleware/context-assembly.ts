@@ -110,6 +110,7 @@ export async function assembleContext(ctx: MimirContext) {
     // appendModelMessage logs-and-returns-null per message, so a null id
     // is the failure signal here.
     const appendedIds = await appendTrailingTurn(
+      ctx.scope,
       nonSystemMessages,
       requireProjectId(ctx),
     );
@@ -124,8 +125,8 @@ export async function assembleContext(ctx: MimirContext) {
     );
   }
 
-  // 2. Get last N summaries (global, newest first from DESC order)
-  const summaries = await getLastSummaries(3);
+  // 2. Get last N summaries for the org (newest first from DESC order)
+  const summaries = await getLastSummaries(ctx.scope, 3);
 
   // 3. Get the last N raw messages from the global log.
   //
@@ -136,6 +137,7 @@ export async function assembleContext(ctx: MimirContext) {
   //    covers the longer tail, while the most recent exchanges remain
   //    verbatim.
   const recentMessages: ModelMessage[] = await getLastModelMessages(
+    ctx.scope,
     config.context.keepRecentMessages,
   );
 

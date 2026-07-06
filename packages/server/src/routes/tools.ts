@@ -15,9 +15,17 @@
 
 import { asSchema } from "ai";
 import { Hono } from "hono";
-import { getMcpPublicTools } from "../agent/server-tools";
+import { buildMcpPublicTools } from "../agent/server-tools";
+import { rootScope } from "../db/scope";
+import { getDb } from "../db/surreal";
 
 export const tools = new Hono();
+
+/** A scope for enumeration only — this route lists tool schemas and never
+ *  invokes execute, so the connection is never used for a scoped query. */
+async function listingScope() {
+  return rootScope(await getDb());
+}
 
 /**
  * OpenAI-compatible tool definition.
@@ -39,7 +47,7 @@ type ToolDef = {
  * and loop-prone tool groups (approval, MCP).
  */
 function toolSetToOpenAI(
-  toolSet: ReturnType<typeof getMcpPublicTools>,
+  toolSet: ReturnType<typeof buildMcpPublicTools>,
 ): ToolDef[] {
   return Object.entries(toolSet).map(([name, toolDef]) => {
     const schema = asSchema(toolDef.inputSchema);
@@ -66,8 +74,8 @@ function toolSetToOpenAI(
  *
  * Returns the server tool manifest.
  */
-tools.get("/", (c) => {
-  const publicTools = getMcpPublicTools();
+tools.get("/", async (c) => {
+  const publicTools = buildMcpPublicTools(await listingScope());
   return c.json(toolSetToOpenAI(publicTools));
 });
 
@@ -76,9 +84,9 @@ tools.get("/", (c) => {
  *
  * Returns a specific tool definition by name.
  */
-tools.get("/:name", (c) => {
+tools.get("/:name", async (c) => {
   const name = c.req.param("name");
-  const publicTools = getMcpPublicTools();
+  const publicTools = buildMcpPublicTools(await listingScope());
   const manifest = toolSetToOpenAI(publicTools);
   const tool = manifest.find((t) => t.function.name === name);
 

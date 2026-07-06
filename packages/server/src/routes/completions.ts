@@ -12,6 +12,9 @@ import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { getSmallModelConfig } from "../agent/provider/query";
 import { runAgent } from "../agent/run";
+import { requestScope } from "../db/build-scope";
+import { closeScope, type OrgScope } from "../db/scope";
+import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
 import {
   createMimirContext,
   extractProviderOverride,
@@ -82,7 +85,7 @@ const chatRequestSchema = z.object({
 // Route Handler
 // ---------------------------------------------------------------------------
 
-export const completions = new Hono();
+export const completions = new Hono<IdentityEnv>();
 
 completions.post("/v1/chat/completions", async (c) => {
   // Correlation ID for request logging
@@ -157,12 +160,19 @@ completions.post("/v1/chat/completions", async (c) => {
     req.metadata,
   );
 
+  // MIM-69 slice 5: a scoped, PERMISSIONS-bound JWT connection when auth is on
+  // (owner-sentinel root connection when off). The agent stream takes ownership
+  // and closes it in its finalizer; if the handoff never happens (pipeline
+  // throws below), the catch closes it so the connection can't leak.
+  let scope: OrgScope | null = null;
   try {
+    scope = await requestScope(c.get("identity"), scopeOrgId(c));
     const ctx = await prepareContext(
-      createMimirContext(req, { providerOverride }),
+      createMimirContext(req, { scope, providerOverride }),
     );
     return runAgent(ctx);
   } catch (err) {
+    if (scope) await closeScope(scope);
     log.error({ err }, "middleware pipeline failed");
     return c.json(
       {

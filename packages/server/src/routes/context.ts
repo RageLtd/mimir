@@ -25,6 +25,8 @@ import { retrieveContextBundle } from "../goldfish/context-bundle";
 import { retrieveMemories } from "../goldfish/memory";
 import { getLastSummaries } from "../goldfish/store";
 import { buildContextInjection } from "../middleware/context-assembly";
+import { scopeOrgId } from "../middleware/identity";
+import { type ScopedEnv, scopeMiddleware } from "../middleware/scope";
 import { requestLog } from "../util/logger";
 import { attempt } from "../util/result";
 import { loadPrompt } from "./system-prompt";
@@ -35,7 +37,7 @@ import { loadPrompt } from "./system-prompt";
 const RETRIEVE_SUMMARY_COUNT = 3;
 const RETRIEVE_MEMORY_TOP_K = 3;
 
-export const context = new Hono();
+export const context = new Hono<ScopedEnv>();
 
 // ── Types ──
 
@@ -54,7 +56,7 @@ type TokenReportRequest = {
 
 // ── POST /v1/context/memories ──
 
-context.post("/memories", async (c) => {
+context.post("/memories", scopeMiddleware, async (c) => {
   const rid = c.req.header("x-request-id") ?? "mem";
   const log = requestLog(rid);
 
@@ -77,7 +79,7 @@ context.post("/memories", async (c) => {
     // retrieveMemories takes ModelMessage[] and reads the last 3 user
     // messages to build its query. Synthesize a single user message from
     // the caller's query string so we share one code path.
-    const memories = await retrieveMemories([
+    const memories = await retrieveMemories(c.get("scope"), [
       { role: "user", content: body.query },
     ]);
 
@@ -96,7 +98,7 @@ context.post("/memories", async (c) => {
 
 // ── GET /v1/context/summaries ──
 
-context.get("/summaries", async (c) => {
+context.get("/summaries", scopeMiddleware, async (c) => {
   const rid = c.req.header("x-request-id") ?? "summaries";
   const log = requestLog(rid);
 
@@ -104,7 +106,7 @@ context.get("/summaries", async (c) => {
   const count = Math.max(1, Math.min(50, parseInt(countParam, 10) || 3));
 
   try {
-    const summaries = await getLastSummaries(count);
+    const summaries = await getLastSummaries(c.get("scope"), count);
     log.debug({ count: summaries.length }, "summaries retrieved");
     return c.json({ summaries });
   } catch (err) {
@@ -140,6 +142,7 @@ context.post("/token-report", async (c) => {
 
   try {
     const { needsCompaction } = await updateTokenCount(
+      scopeOrgId(c),
       body.promptTokens,
       body.modelId,
     );
@@ -155,7 +158,7 @@ context.post("/token-report", async (c) => {
         },
         "token-report triggered async compaction",
       );
-      runCompaction(body.modelId).catch((err) =>
+      runCompaction(scopeOrgId(c), body.modelId).catch((err) =>
         log.error({ err }, "compaction failed"),
       );
     }
@@ -224,7 +227,7 @@ export function trimByTokenBudget(
   };
 }
 
-context.post("/assemble", async (c) => {
+context.post("/assemble", scopeMiddleware, async (c) => {
   const rid = c.req.header("x-request-id") ?? "assemble";
   const log = requestLog(rid);
 
@@ -243,11 +246,12 @@ context.post("/assemble", async (c) => {
     return c.json({ error: "Missing required field: query" }, 400);
   }
 
+  const scope = c.get("scope");
   try {
     const [{ content: rawPrompt }, { memories, summaries, playbooks }] =
       await Promise.all([
         loadPrompt(),
-        retrieveContextBundle(body.query, {
+        retrieveContextBundle(scope, body.query, {
           projectIdentifier: body.projectId ?? body.project,
         }),
       ]);
@@ -258,6 +262,7 @@ context.post("/assemble", async (c) => {
     // Mirror context-assembly middleware: last N raw messages, always.
     // Summaries are additive — they never replace raw recent history.
     const recentMessages = await getLastModelMessages(
+      scope,
       config.context.keepRecentMessages,
     );
 
@@ -340,7 +345,7 @@ type RetrieveRequest = {
   projectId?: string;
 };
 
-context.post("/retrieve", async (c) => {
+context.post("/retrieve", scopeMiddleware, async (c) => {
   const rid = c.req.header("x-request-id") ?? "retrieve";
   const log = requestLog(rid);
 
@@ -354,8 +359,9 @@ context.post("/retrieve", async (c) => {
     return c.json({ error: "Missing required field: query" }, 400);
   }
 
+  const scope = c.get("scope");
   const [retrievalErr, retrieval] = await attempt(() =>
-    retrieveContextBundle(body.query, {
+    retrieveContextBundle(scope, body.query, {
       projectIdentifier: body.projectId ?? body.project,
       topK: RETRIEVE_MEMORY_TOP_K,
       includeRelated: false,

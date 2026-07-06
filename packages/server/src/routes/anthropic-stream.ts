@@ -22,6 +22,7 @@ import {
   type Model,
 } from "../agent/run/loop";
 import { prepareTurn } from "../agent/run/turn";
+import { closeScope } from "../db/scope";
 import type { MimirContext } from "../middleware/types";
 import { log } from "../util/logger";
 import { redactSecret } from "../util/redact";
@@ -402,8 +403,11 @@ export function anthropicStreamingResponse(model: Model, ctx: MimirContext) {
           state = closeStep.state;
           writeEvents(closeStep.events);
         })
-        .finally(() => {
+        .finally(async () => {
           controller.close();
+          // Slice 5: close the request's scoped connection once the stream
+          // has drained. No-op on the root connection.
+          await closeScope(ctx.scope);
         });
     },
   });

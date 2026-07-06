@@ -19,8 +19,9 @@
  */
 
 import type { Context } from "hono";
-import { queryFirst, queryOne } from "../db/surreal";
+import { scopedQueryFirst, scopedQueryOne } from "../db/scope";
 import { formatMemoryList, retrieveMemoryList } from "../goldfish/memory";
+import type { ScopedEnv } from "../middleware/scope";
 import { resolveProjectForQuery } from "../projects/resolve-for-query";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
@@ -65,7 +66,7 @@ type CartImportRow = {
 
 type SymbolRow = { kind: string; name: string; line: number; column: number };
 
-export const fileInfoHandler = async (c: Context) => {
+export const fileInfoHandler = async (c: Context<ScopedEnv>) => {
   const [bodyErr, body] = await attempt(() => c.req.json<FileInfoRequest>());
   if (bodyErr) {
     log.debug({ err: bodyErr.message }, "invalid file-info JSON body");
@@ -79,10 +80,14 @@ export const fileInfoHandler = async (c: Context) => {
     return c.json({ error: "Missing required field: filePath" }, 400);
   }
 
+  // The cart_* lookups and memory retrieval all run on the caller's scoped
+  // connection (MIM-69), supplied and closed by scopeMiddleware.
+  const scope = c.get("scope");
   // Resolve to the canonical project id — prefers the client-sent id,
   // falls back to resolving the legacy path field. Read path: no
   // get-or-create; an unknown identifier just matches nothing.
   const resolved = await resolveProjectForQuery(
+    scope,
     typeof body.projectId === "string" && body.projectId.length > 0
       ? body.projectId
       : body.project,
@@ -90,11 +95,16 @@ export const fileInfoHandler = async (c: Context) => {
   const projectKey = resolved.project;
 
   const [fileErr, fileRow] = await attempt(() =>
-    queryFirst<CartFileRow>(
+    scopedQueryFirst<CartFileRow>(
+      scope,
       `SELECT symbols, content_hash FROM cart_file
-        WHERE project_id = $project_id AND file_path = $file_path
+        WHERE project_id = $project_id AND org_id = $scope_org AND file_path = $file_path
         LIMIT 1`,
-      { project_id: projectKey, file_path: body.filePath },
+      {
+        project_id: projectKey,
+        file_path: body.filePath,
+        scope_org: scope.orgId,
+      },
     ),
   );
 
@@ -135,10 +145,15 @@ export const fileInfoHandler = async (c: Context) => {
   }
 
   const [importErr, importRows] = await attempt(() =>
-    queryOne<CartImportRow>(
+    scopedQueryOne<CartImportRow>(
+      scope,
       `SELECT target_path, specifier FROM cart_import
-        WHERE project_id = $project_id AND source_path = $file_path`,
-      { project_id: projectKey, file_path: body.filePath },
+        WHERE project_id = $project_id AND org_id = $scope_org AND source_path = $file_path`,
+      {
+        project_id: projectKey,
+        file_path: body.filePath,
+        scope_org: scope.orgId,
+      },
     ),
   );
   if (importErr) {
@@ -150,13 +165,15 @@ export const fileInfoHandler = async (c: Context) => {
   }
 
   const [depErr, dependentRows] = await attempt(() =>
-    queryOne<CartImportRow>(
+    scopedQueryOne<CartImportRow>(
+      scope,
       `SELECT source_path, specifier FROM cart_import
-        WHERE project_id = $project_id AND target_path = $file_path
+        WHERE project_id = $project_id AND org_id = $scope_org AND target_path = $file_path
         LIMIT $limit`,
       {
         project_id: projectKey,
         file_path: body.filePath,
+        scope_org: scope.orgId,
         limit: FILE_INFO_DEPENDENT_LIMIT,
       },
     ),
@@ -182,8 +199,8 @@ export const fileInfoHandler = async (c: Context) => {
       .filter((n) => typeof n === "string" && n.length > 0),
   ].join(" ");
 
-  const [memErr, memoryList] = await attempt(() =>
-    retrieveMemoryList([{ role: "user", content: memoryQuery }], {
+  const [memErr, memoryList] = await attempt(async () =>
+    retrieveMemoryList(scope, [{ role: "user", content: memoryQuery }], {
       topK: FILE_INFO_MEMORY_TOP_K,
       includeRelated: false,
     }),
@@ -197,10 +214,16 @@ export const fileInfoHandler = async (c: Context) => {
   const memories = memErr || !memoryList ? null : memoryList;
 
   const imports = importRows
-    .map((r) => ({ target: r.target_path ?? "", specifier: r.specifier ?? "" }))
+    .map((r) => ({
+      target: r.target_path ?? "",
+      specifier: r.specifier ?? "",
+    }))
     .filter((i) => i.target.length > 0);
   const dependents = dependentRows
-    .map((r) => ({ source: r.source_path ?? "", specifier: r.specifier ?? "" }))
+    .map((r) => ({
+      source: r.source_path ?? "",
+      specifier: r.specifier ?? "",
+    }))
     .filter((d) => d.source.length > 0);
 
   log.info(

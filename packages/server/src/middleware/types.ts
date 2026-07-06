@@ -7,6 +7,7 @@
  */
 
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
+import type { OrgScope } from "../db/scope";
 
 /**
  * Validated input from the OpenAI-compatible request.
@@ -77,6 +78,13 @@ export interface OpenAIToolDef {
 export interface MimirContext {
   // -- Set at input boundary --
   request: ChatRequest;
+  /**
+   * Org scope for every store access this request makes (MIM-69). Built at
+   * the ingress boundary and threaded through memory retrieval, context
+   * assembly, and the server tools. Until the identity gate plumbs a real
+   * org (slice 3) this is a RootScope on the owner sentinel.
+   */
+  scope: OrgScope;
   /**
    * Canonical project ULID, resolved from metadata.project (path or id)
    * by the pipeline's resolve stage. Null only before that stage runs —

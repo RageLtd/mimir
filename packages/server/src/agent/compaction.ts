@@ -14,6 +14,8 @@
  *   optional field stays unset rather than holding a fake sentinel
  */
 
+import { rootScope } from "../db/scope";
+import { getDb } from "../db/surreal";
 import { embedOne } from "../goldfish/clients";
 import { getLastSummaries, storeMemory } from "../goldfish/store";
 import type { ProviderOverride } from "../middleware/types";
@@ -47,13 +49,19 @@ import {
  * on the user's key when present, the env small model otherwise.
  */
 export async function runCompaction(
+  orgId: string,
   modelId?: string,
   override: ProviderOverride | null = null,
 ) {
   const start = Date.now();
 
+  // Background job — runs on the root connection after the request's scoped
+  // session has closed, but stamps the triggering org so the summary belongs
+  // to it (app-layer filter; PERMISSIONS bypassed on root by design).
+  const scope = rootScope(await getDb(), orgId);
+
   // Mark as compacting to prevent concurrent runs
-  const started = await startCompaction();
+  const started = await startCompaction(orgId);
   if (!started) {
     log.warn("compaction already in progress, skipping");
     return;
@@ -61,19 +69,19 @@ export async function runCompaction(
 
   try {
     // Get messages since last summary
-    const state = await getCompactionState();
+    const state = await getCompactionState(orgId);
     const lastCompaction = state?.last_compaction
       ? new Date(state.last_compaction)
       : new Date(0);
 
-    const messages = await getModelMessagesSince(lastCompaction);
+    const messages = await getModelMessagesSince(scope, lastCompaction);
 
     if (messages.length < 10) {
       log.info(
         { messageCount: messages.length },
         "not enough messages for compaction, skipping",
       );
-      await finishCompaction();
+      await finishCompaction(orgId);
       return;
     }
 
@@ -113,13 +121,13 @@ export async function runCompaction(
         { charCount: conversationText.length },
         "conversation too short for compaction, skipping",
       );
-      await finishCompaction();
+      await finishCompaction(orgId);
       return;
     }
 
     // Fetch the most recent summary so the summarizer knows what's
     // already been captured and can focus on genuinely new content
-    const previousSummaries = await getLastSummaries(1);
+    const previousSummaries = await getLastSummaries(scope, 1);
     const previousSummary = previousSummaries[0]?.content ?? null;
 
     // Call memgen API for summarization
@@ -132,7 +140,7 @@ export async function runCompaction(
 
     if (!summary) {
       log.error("summarization failed, skipping compaction");
-      await finishCompaction();
+      await finishCompaction(orgId);
       return;
     }
 
@@ -141,11 +149,11 @@ export async function runCompaction(
     const embedding = await embedOne(summary);
     if (!embedding) {
       log.error("failed to embed summary");
-      await finishCompaction();
+      await finishCompaction(orgId);
       return;
     }
 
-    const summaryId = await storeMemory({
+    const summaryId = await storeMemory(scope, {
       content: summary,
       type: "summary",
       message_count: messages.length,
@@ -154,7 +162,7 @@ export async function runCompaction(
 
     if (!summaryId) {
       log.error("failed to store summary");
-      await finishCompaction();
+      await finishCompaction(orgId);
       return;
     }
 
@@ -168,10 +176,10 @@ export async function runCompaction(
       "compaction complete",
     );
 
-    await finishCompaction();
+    await finishCompaction(orgId);
   } catch (err) {
     log.error({ err }, "compaction failed");
-    await finishCompaction();
+    await finishCompaction(orgId);
   }
 }
 

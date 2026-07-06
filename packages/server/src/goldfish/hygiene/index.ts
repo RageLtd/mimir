@@ -11,6 +11,8 @@
  */
 
 import { config } from "../../config";
+import { rootScope } from "../../db/scope";
+import { getDb, queryOne } from "../../db/surreal";
 import { log } from "../../util/logger";
 import { attempt } from "../../util/result";
 import { listAllMemories } from "../store-hygiene";
@@ -36,9 +38,7 @@ export interface SweepOpts {
   readonly dryRun?: boolean;
 }
 
-export async function runHygieneSweep(
-  opts: SweepOpts = {},
-): Promise<SweepReport> {
+export async function runHygieneSweep(orgId: string, opts: SweepOpts = {}) {
   const dryRun = opts.dryRun ?? config.hygiene.dryRun;
 
   const modelCfg = getHygieneModelConfig();
@@ -47,18 +47,22 @@ export async function runHygieneSweep(
     return { dryRun, skipped: "HYGIENE_MODEL unset" };
   }
 
-  const acquired = await startHygiene();
+  const acquired = await startHygiene(orgId);
   if (!acquired) {
     return { dryRun, skipped: "another sweep is already running" };
   }
 
   const start = Date.now();
-  log.info({ dryRun, model: modelCfg.model }, "hygiene sweep starting");
+  log.info({ dryRun, orgId, model: modelCfg.model }, "hygiene sweep starting");
+
+  // Sweep runs on the root connection (bypasses PERMISSIONS) but scoped to the
+  // one org whose lock we hold, so it only ever touches that tenant's memories.
+  const scope = rootScope(await getDb(), orgId);
 
   const [err, report] = await attempt(async () => {
-    const memories = await listAllMemories();
+    const memories = await listAllMemories(scope);
 
-    const consolidation = await runConsolidation(memories, {
+    const consolidation = await runConsolidation(scope, memories, {
       dryRun,
       mergeDistance: config.hygiene.consolidation.mergeDistance,
       maxClusterSize: config.hygiene.consolidation.maxClusterSize,
@@ -67,12 +71,12 @@ export async function runHygieneSweep(
 
     // After a live consolidation the store has changed — re-read so the next
     // pass works on the post-merge set. In dry-run nothing moved.
-    const afterConsolidation = dryRun ? memories : await listAllMemories();
+    const afterConsolidation = dryRun ? memories : await listAllMemories(scope);
 
     // Contradiction runs in the band ABOVE consolidation's merge distance, so
     // it never touches what consolidation just merged. Disabled → undefined.
     const contradiction = config.hygiene.contradiction.enabled
-      ? await runContradiction(afterConsolidation, {
+      ? await runContradiction(scope, afterConsolidation, {
           dryRun,
           mergeDistance: config.hygiene.consolidation.mergeDistance,
           contradictionDistance:
@@ -84,9 +88,9 @@ export async function runHygieneSweep(
 
     // Re-read again after live demotions so the forgetting pass scores
     // post-demotion confidence — a freshly-superseded fact may now be prunable.
-    const forgetMemories = dryRun ? memories : await listAllMemories();
+    const forgetMemories = dryRun ? memories : await listAllMemories(scope);
 
-    const forgetting = await runForgetting(forgetMemories, {
+    const forgetting = await runForgetting(scope, forgetMemories, {
       dryRun,
       scoreFloor: config.hygiene.forget.scoreFloor,
       minAgeDays: config.hygiene.forget.minAgeDays,
@@ -108,7 +112,7 @@ export async function runHygieneSweep(
   });
 
   // Release the lock whether the sweep succeeded or failed.
-  await finishHygiene();
+  await finishHygiene(orgId);
 
   if (err || !report) {
     log.error({ err, dryRun }, "hygiene sweep failed");
@@ -132,6 +136,28 @@ export async function runHygieneSweep(
     "hygiene sweep complete",
   );
   return report;
+}
+
+/** Distinct org ids that actually own memories — the set worth sweeping. */
+async function listOrgIdsWithMemories() {
+  const rows = await queryOne<{ org_id: string }>(
+    `SELECT org_id FROM memory WHERE org_id != NONE GROUP BY org_id`,
+  );
+  return rows.map((r) => r.org_id).filter(Boolean);
+}
+
+/**
+ * Sweep every org that has memories — the scheduler's entry point (MIM-66).
+ * Each org sweeps under its own lock, so a long sweep in one tenant never
+ * stalls another; a failure in one org is isolated and logged, the rest run.
+ */
+export async function runHygieneAllOrgs(opts: SweepOpts = {}) {
+  const orgIds = await listOrgIdsWithMemories();
+  log.info({ orgs: orgIds.length }, "hygiene: sweeping all orgs");
+  for (const orgId of orgIds) {
+    const [err] = await attempt(() => runHygieneSweep(orgId, opts));
+    if (err) log.error({ err, orgId }, "hygiene sweep threw for org");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +186,7 @@ export async function startHygieneScheduler(): Promise<void> {
   }
 
   timer = setInterval(() => {
-    runHygieneSweep().catch((err) =>
+    runHygieneAllOrgs().catch((err) =>
       log.error({ err }, "scheduled hygiene sweep threw"),
     );
   }, config.hygiene.intervalMs);

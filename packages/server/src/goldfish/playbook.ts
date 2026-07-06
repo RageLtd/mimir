@@ -18,7 +18,7 @@
  * so the two budgets never crowd each other.
  */
 
-import { getDb, queryFirst, queryOne } from "../db/surreal";
+import { type OrgScope, scopedQueryFirst, scopedQueryOne } from "../db/scope";
 import { resolveProjectForQuery } from "../projects/resolve-for-query";
 import { log } from "../util/logger";
 import { embedOne } from "./clients";
@@ -174,13 +174,14 @@ export function formatPlaybookBlock(
 
 /** Fetch every playbook row. Embeddings are pulled only when needed for the
  *  ambient match — the index path doesn't touch them. */
-async function fetchPlaybooks(withEmbeddings: boolean) {
+async function fetchPlaybooks(scope: OrgScope, withEmbeddings: boolean) {
   const cols = withEmbeddings
     ? "id, name, trigger, content, project_id, embedding"
     : "id, name, trigger, content, project_id";
-  const rows = await queryOne<Memory>(
-    `SELECT ${cols} FROM memory WHERE type = $type`,
-    { type: PLAYBOOK_TYPE },
+  const rows = await scopedQueryOne<Memory>(
+    scope,
+    `SELECT ${cols} FROM memory WHERE type = $type AND org_id = $scope_org`,
+    { type: PLAYBOOK_TYPE, scope_org: scope.orgId },
   );
   return rows;
 }
@@ -189,37 +190,46 @@ async function fetchPlaybooks(withEmbeddings: boolean) {
  *  With a project identifier, scopes to global + that project; without one,
  *  returns every structured playbook so management isn't blind to other
  *  scopes. (The always-injected index uses buildPlaybookContext, not this.) */
-export async function listPlaybooks(projectIdentifier?: string) {
-  const rows = await fetchPlaybooks(false);
+export async function listPlaybooks(
+  scope: OrgScope,
+  projectIdentifier?: string,
+) {
+  const rows = await fetchPlaybooks(scope, false);
   const structured = rows.flatMap((m) => {
     const row = toRow(m);
     return row && isStructured(row) ? [row] : [];
   });
   if (!projectIdentifier) return structured;
   const projectId =
-    (await resolveProjectForQuery(projectIdentifier)).project ||
+    (await resolveProjectForQuery(scope, projectIdentifier)).project ||
     projectIdentifier;
   return scopePlaybooks(structured, projectId);
 }
 
 /** Resolve a single playbook by id or name. Name lookup returns the newest
  *  match when names collide (names aren't enforced unique). */
-export async function getPlaybook(selector: { id?: string; name?: string }) {
+export async function getPlaybook(
+  scope: OrgScope,
+  selector: { id?: string; name?: string },
+) {
   if (selector.id) {
     // Direct record fetch (the codebase's proven pattern for id lookups),
     // then guard the type in TS so non-playbook ids resolve to null.
-    const row = await queryFirst<Memory>(
-      `SELECT id, name, trigger, content, project_id, type FROM $id`,
-      { id: toRecordId(selector.id) },
+    const row = await scopedQueryFirst<Memory>(
+      scope,
+      `SELECT id, name, trigger, content, project_id, type FROM $id
+       WHERE org_id = $scope_org`,
+      { id: toRecordId(selector.id), scope_org: scope.orgId },
     );
     return row && row.type === PLAYBOOK_TYPE ? toRow(row) : null;
   }
   if (selector.name) {
-    const rows = await queryOne<Memory>(
+    const rows = await scopedQueryOne<Memory>(
+      scope,
       `SELECT id, name, trigger, content, project_id FROM memory
-       WHERE type = $type AND name = $name
+       WHERE type = $type AND name = $name AND org_id = $scope_org
        ORDER BY created_at DESC LIMIT 1`,
-      { type: PLAYBOOK_TYPE, name: selector.name },
+      { type: PLAYBOOK_TYPE, name: selector.name, scope_org: scope.orgId },
     );
     const first = rows[0];
     return first ? toRow(first) : null;
@@ -233,10 +243,11 @@ export async function getPlaybook(selector: { id?: string; name?: string }) {
  * ambient matching tracks edits. Returns the updated row or null if not found.
  */
 export async function updatePlaybook(
+  scope: OrgScope,
   id: string,
   patch: { name?: string; trigger?: string; content?: string },
 ) {
-  const existing = await getPlaybook({ id });
+  const existing = await getPlaybook(scope, { id });
   if (!existing) return null;
 
   const name = patch.name ?? existing.name;
@@ -246,7 +257,6 @@ export async function updatePlaybook(
   const triggerChanged =
     patch.name !== undefined || patch.trigger !== undefined;
 
-  const db = await getDb();
   const rid = toRecordId(id);
 
   if (triggerChanged) {
@@ -255,15 +265,17 @@ export async function updatePlaybook(
       log.error({ id }, "failed to re-embed playbook trigger on update");
       return null;
     }
-    await db.query(
+    await scope.db.query(
       `UPDATE $id SET name = $name, trigger = $trigger, content = $content,
-        embedding = $embedding, last_accessed = time::now()`,
-      { id: rid, name, trigger, content, embedding },
+        embedding = $embedding, last_accessed = time::now()
+       WHERE org_id = $scope_org`,
+      { id: rid, name, trigger, content, embedding, scope_org: scope.orgId },
     );
   } else {
-    await db.query(
-      `UPDATE $id SET content = $content, last_accessed = time::now()`,
-      { id: rid, content },
+    await scope.db.query(
+      `UPDATE $id SET content = $content, last_accessed = time::now()
+       WHERE org_id = $scope_org`,
+      { id: rid, content, scope_org: scope.orgId },
     );
   }
 
@@ -284,12 +296,13 @@ export async function updatePlaybook(
  * whether the caller passed a UUID, path, or git remote.
  */
 export async function buildPlaybookContext(
+  scope: OrgScope,
   query: string,
   opts: { projectIdentifier?: string } = {},
 ) {
   const start = Date.now();
 
-  const rows = await fetchPlaybooks(true);
+  const rows = await fetchPlaybooks(scope, true);
   const all = rows.flatMap((m) => {
     const row = toRow(m);
     if (!row || !isStructured(row)) return [];
@@ -298,7 +311,7 @@ export async function buildPlaybookContext(
   if (all.length === 0) return null;
 
   const projectId = opts.projectIdentifier
-    ? (await resolveProjectForQuery(opts.projectIdentifier)).project ||
+    ? (await resolveProjectForQuery(scope, opts.projectIdentifier)).project ||
       opts.projectIdentifier
     : undefined;
 

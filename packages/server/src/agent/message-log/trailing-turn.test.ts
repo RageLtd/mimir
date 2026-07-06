@@ -17,7 +17,8 @@ import {
   test,
 } from "bun:test";
 import type { ModelMessage } from "@ai-sdk/provider-utils";
-import * as surreal from "../../db/surreal";
+import type { Surreal } from "surrealdb";
+import type { OrgScope } from "../../db/scope";
 import {
   appendTrailingTurn,
   appendTurn,
@@ -25,24 +26,26 @@ import {
   getLastModelMessages,
 } from "./index";
 
+const ORG = "test-org";
+
 describe("trailing-turn helpers", () => {
   let queryMock: ReturnType<typeof mock>;
-  let queryOneMock: ReturnType<typeof mock>;
-  let queryFirstMock: ReturnType<typeof mock>;
 
   beforeEach(() => {
     queryMock = mock(() => Promise.resolve([[]]));
-    queryOneMock = mock(() => Promise.resolve([]));
-    queryFirstMock = mock(() => Promise.resolve(null));
-    spyOn(surreal, "getDb").mockImplementation(
-      async () => ({ query: queryMock }) as any,
-    );
-    spyOn(surreal, "queryOne").mockImplementation(queryOneMock as any);
-    spyOn(surreal, "queryFirst").mockImplementation(queryFirstMock as any);
   });
 
   afterEach(() => {
     mock.restore();
+  });
+
+  // Everything (tail reads AND inserts) now runs on scope.db.query (MIM-69),
+  // so a scope whose db.query is the shared mock is the single query spy.
+  // SurrealDB returns Array<ResultSet>, so a read of N rows mocks as [[...N]].
+  const mkScope = (): OrgScope => ({
+    orgId: ORG,
+    db: { query: queryMock } as unknown as Surreal,
+    isRoot: true,
   });
 
   // ---------------------------------------------------------------------
@@ -124,6 +127,7 @@ describe("trailing-turn helpers", () => {
   describe("appendTrailingTurn", () => {
     test("no-ops when no trailing user/tool messages", async () => {
       const ids = await appendTrailingTurn(
+        mkScope(),
         [
           { role: "user", content: "q" },
           { role: "assistant", content: "a" },
@@ -136,31 +140,33 @@ describe("trailing-turn helpers", () => {
     });
 
     test("appends a new trailing user message when DB tail does not match", async () => {
-      // DB tail returns some different message (simulates another client or
-      // previous state)
-      queryOneMock.mockResolvedValueOnce([
-        {
-          id: "id-1",
-          project_id: "p",
-          role: "user",
-          content: '"something else"',
-          created_at: "2024-01-01",
-        },
-      ]);
-      // CREATE insert returns an id
-      queryMock.mockResolvedValueOnce([
-        [
-          {
-            id: "message_log:[p,1]",
-            project_id: "p",
-            role: "user",
-            content: '"new"',
-            created_at: "2024-01-02",
-          },
-        ],
-      ]);
+      // #1 tail read returns a different message; #2 CREATE returns an id.
+      queryMock
+        .mockResolvedValueOnce([
+          [
+            {
+              id: "id-1",
+              project_id: "p",
+              role: "user",
+              content: '"something else"',
+              created_at: "2024-01-01",
+            },
+          ],
+        ])
+        .mockResolvedValueOnce([
+          [
+            {
+              id: "message_log:[p,1]",
+              project_id: "p",
+              role: "user",
+              content: '"new"',
+              created_at: "2024-01-02",
+            },
+          ],
+        ]);
 
       const ids = await appendTrailingTurn(
+        mkScope(),
         [
           { role: "user", content: "old" },
           { role: "assistant", content: "x" },
@@ -174,18 +180,21 @@ describe("trailing-turn helpers", () => {
     });
 
     test("skips when DB tail matches trailing block (retry idempotency)", async () => {
-      // DB tail returns the same single user message we're about to append
-      queryOneMock.mockResolvedValueOnce([
-        {
-          id: "id-1",
-          project_id: "p",
-          role: "user",
-          content: '"retry me"',
-          created_at: "2024-01-01",
-        },
+      // Tail read returns the same single user message we're about to append.
+      queryMock.mockResolvedValueOnce([
+        [
+          {
+            id: "id-1",
+            project_id: "p",
+            role: "user",
+            content: '"retry me"',
+            created_at: "2024-01-01",
+          },
+        ],
       ]);
 
       const ids = await appendTrailingTurn(
+        mkScope(),
         [
           { role: "user", content: "prior" },
           { role: "assistant", content: "x" },
@@ -195,15 +204,13 @@ describe("trailing-turn helpers", () => {
       );
 
       expect(ids).toEqual([]);
-      // queryOne was called once for the tail lookup; queryMock
-      // (the CREATE path) was never called.
-      expect(queryOneMock).toHaveBeenCalledTimes(1);
-      expect(queryMock).not.toHaveBeenCalled();
+      // Exactly one query — the tail lookup; the CREATE path never ran.
+      expect(queryMock).toHaveBeenCalledTimes(1);
     });
 
     test("appends all trailing tool results in order", async () => {
-      queryOneMock.mockResolvedValueOnce([]); // empty DB tail
       queryMock
+        .mockResolvedValueOnce([[]]) // empty DB tail
         .mockResolvedValueOnce([
           [
             {
@@ -228,6 +235,7 @@ describe("trailing-turn helpers", () => {
         ]);
 
       const ids = await appendTrailingTurn(
+        mkScope(),
         [
           { role: "user", content: "q" },
           { role: "assistant", content: "a" },
@@ -267,8 +275,8 @@ describe("trailing-turn helpers", () => {
 
   describe("appendTurn", () => {
     test("appends a user+assistant pair in order", async () => {
-      queryOneMock.mockResolvedValueOnce([]); // empty DB tail
       queryMock
+        .mockResolvedValueOnce([[]]) // empty DB tail
         .mockResolvedValueOnce([
           [
             {
@@ -293,6 +301,7 @@ describe("trailing-turn helpers", () => {
         ]);
 
       const ids = await appendTurn(
+        mkScope(),
         [
           { role: "user", content: "q" },
           { role: "assistant", content: "a" },
@@ -306,24 +315,27 @@ describe("trailing-turn helpers", () => {
     test("skips when DB tail matches the delta (retry idempotency)", async () => {
       // Query returns DESC order (newest first); helper reverses to
       // chronological [user, assistant] for fingerprint comparison.
-      queryOneMock.mockResolvedValueOnce([
-        {
-          id: "m2",
-          project_id: "p",
-          role: "assistant",
-          content: '"a"',
-          created_at: "2024-01-02",
-        },
-        {
-          id: "m1",
-          project_id: "p",
-          role: "user",
-          content: '"q"',
-          created_at: "2024-01-01",
-        },
+      queryMock.mockResolvedValueOnce([
+        [
+          {
+            id: "m2",
+            project_id: "p",
+            role: "assistant",
+            content: '"a"',
+            created_at: "2024-01-02",
+          },
+          {
+            id: "m1",
+            project_id: "p",
+            role: "user",
+            content: '"q"',
+            created_at: "2024-01-01",
+          },
+        ],
       ]);
 
       const ids = await appendTurn(
+        mkScope(),
         [
           { role: "user", content: "q" },
           { role: "assistant", content: "a" },
@@ -332,13 +344,13 @@ describe("trailing-turn helpers", () => {
       );
 
       expect(ids).toEqual([]);
-      expect(queryMock).not.toHaveBeenCalled();
+      // Exactly one query — the tail lookup; nothing was inserted.
+      expect(queryMock).toHaveBeenCalledTimes(1);
     });
 
     test("no-op for empty input", async () => {
-      const ids = await appendTurn([], "p");
+      const ids = await appendTurn(mkScope(), [], "p");
       expect(ids).toEqual([]);
-      expect(queryOneMock).not.toHaveBeenCalled();
       expect(queryMock).not.toHaveBeenCalled();
     });
   });
@@ -350,31 +362,33 @@ describe("trailing-turn helpers", () => {
   describe("getLastModelMessages", () => {
     test("returns the last N in chronological order", async () => {
       // Query returns DESC order; helper reverses to chronological.
-      queryOneMock.mockResolvedValueOnce([
-        {
-          id: "m3",
-          project_id: "p",
-          role: "user",
-          content: '"third"',
-          created_at: "2024-01-03",
-        },
-        {
-          id: "m2",
-          project_id: "p",
-          role: "user",
-          content: '"second"',
-          created_at: "2024-01-02",
-        },
-        {
-          id: "m1",
-          project_id: "p",
-          role: "user",
-          content: '"first"',
-          created_at: "2024-01-01",
-        },
+      queryMock.mockResolvedValueOnce([
+        [
+          {
+            id: "m3",
+            project_id: "p",
+            role: "user",
+            content: '"third"',
+            created_at: "2024-01-03",
+          },
+          {
+            id: "m2",
+            project_id: "p",
+            role: "user",
+            content: '"second"',
+            created_at: "2024-01-02",
+          },
+          {
+            id: "m1",
+            project_id: "p",
+            role: "user",
+            content: '"first"',
+            created_at: "2024-01-01",
+          },
+        ],
       ]);
 
-      const result = await getLastModelMessages(3);
+      const result = await getLastModelMessages(mkScope(), 3);
 
       expect(result).toHaveLength(3);
       expect((result[0] as ModelMessage & { content: string }).content).toBe(
@@ -389,8 +403,8 @@ describe("trailing-turn helpers", () => {
     });
 
     test("returns empty array when log is empty", async () => {
-      queryOneMock.mockResolvedValueOnce([]);
-      const result = await getLastModelMessages(50);
+      queryMock.mockResolvedValueOnce([[]]);
+      const result = await getLastModelMessages(mkScope(), 50);
       expect(result).toEqual([]);
     });
   });

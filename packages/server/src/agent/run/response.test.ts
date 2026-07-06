@@ -14,6 +14,7 @@
 
 import { describe, expect, mock, test } from "bun:test";
 import type { MimirContext } from "../../middleware/types";
+import { testScope } from "../../testing/scope";
 
 const events: string[] = [];
 
@@ -43,6 +44,7 @@ function makeCtx(model: string): MimirContext {
       messages: [{ role: "user", content: "hi" }],
       stream: true,
     },
+    scope: testScope(),
     projectId: "test",
     providerOverride: null,
     systemPrompt: "system",

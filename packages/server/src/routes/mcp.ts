@@ -16,15 +16,19 @@
 
 import { asSchema } from "ai";
 import { Hono } from "hono";
-import { getMcpPublicTools } from "../agent/server-tools";
+import { buildMcpPublicTools } from "../agent/server-tools";
+import { type ScopedEnv, scopeMiddleware } from "../middleware/scope";
 import { log } from "../util/logger";
 
-export const mcp = new Hono();
+export const mcp = new Hono<ScopedEnv>();
 
 // ── Tool registry ──────────────────────────────────────────────────────────
-// Derived automatically from getMcpPublicTools() — add new tools there, not here.
+// Built per request via buildMcpPublicTools(scope) — add new tools there, not
+// here. Scope-bound so tool execute closes over the caller's org (MIM-69). In
+// slice 2 the scope is a RootScope on the owner sentinel; slice 3 derives it
+// from the gate-stashed identity.
 
-const TOOLS = getMcpPublicTools();
+type Tools = ReturnType<typeof buildMcpPublicTools>;
 
 // ── JSON-RPC types ─────────────────────────────────────────────────────────
 
@@ -37,7 +41,7 @@ type JsonRpcRequest = {
 
 // ── JSON-RPC dispatch ──────────────────────────────────────────────────────
 
-async function dispatch(req: JsonRpcRequest) {
+async function dispatch(req: JsonRpcRequest, TOOLS: Tools) {
   // Notifications (no id) require no response
   if (req.id === undefined) return null;
 
@@ -128,11 +132,14 @@ async function dispatch(req: JsonRpcRequest) {
  * - Notifications (no id): 202 Accepted, no body.
  * - Requests: 200 with application/json response.
  */
-mcp.post("/", async (c) => {
+mcp.post("/", scopeMiddleware, async (c) => {
   const body = (await c.req.json()) as JsonRpcRequest;
   log.info({ method: body.method }, "mcp request");
 
-  const response = await dispatch(body);
+  // Tool set is bound to the caller's scoped connection (supplied + closed by
+  // scopeMiddleware); dispatch awaits every tool result before returning.
+  const tools = buildMcpPublicTools(c.get("scope"));
+  const response = await dispatch(body, tools);
 
   if (response === null) {
     return new Response(null, { status: 202 });

@@ -1,9 +1,13 @@
 import { Surreal } from "surrealdb";
-import { buildDefineAccessSql } from "../auth/surreal-bridge";
+import {
+  buildDefineAccessSql,
+  buildTablePermissionsSql,
+} from "../auth/surreal-bridge";
 import { config } from "../config";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 import { withTimeout } from "../util/timeout";
+import { migrateOrgScope, ORG_SCOPED_TABLES } from "./migrate-org-scope";
 import { migrateLegacyProjectKeys } from "./migrate-project-keys";
 import {
   ensureEmbeddingIndexDimension,
@@ -314,6 +318,20 @@ export async function initSchema() {
     DEFINE FIELD IF NOT EXISTS updated_at ON project TYPE datetime DEFAULT time::now();
     DEFINE INDEX IF NOT EXISTS project_git_remote ON project FIELDS git_remote UNIQUE;
     DEFINE INDEX IF NOT EXISTS project_local_path ON project FIELDS local_path;
+
+    -- MIM-69 org scoping: every tenant table carries its owning org id.
+    -- option<string> so pre-backfill rows validate on the SCHEMAFULL tables;
+    -- migrateOrgScope (below) backfills it. project_id stays the intra-org
+    -- key; org_id is the tenant boundary the row-level PERMISSIONS bind to.
+    DEFINE FIELD IF NOT EXISTS org_id ON memory TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS org_id ON relates_to TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS org_id ON message_log TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS org_id ON compaction_state TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS org_id ON hygiene_state TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS org_id ON cart_file TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS org_id ON cart_import TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS org_id ON cart_git_state TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS org_id ON project TYPE option<string>;
   `);
 
   // Guard the vector index against embedder/dimension config changes.
@@ -334,6 +352,13 @@ export async function initSchema() {
   // existing rows at DEFINE time and would collide while legacy rows
   // still carry project_id = NONE.
   await migrateLegacyProjectKeys(db);
+
+  // Backfill org_id onto every tenant row, remap sentinel rows onto the real
+  // owner org post-claim, and merge duplicate project records by git_remote.
+  // Runs after the legacy-key migration so project_id is populated before the
+  // dedupe reassigns it, and before the index block below (non-unique org
+  // indexes build over populated org_id).
+  await migrateOrgScope(db);
 
   await db.query(/* surql */ `
     -- Legacy project-string indexes, superseded by the project_id set.
@@ -356,7 +381,36 @@ export async function initSchema() {
     DEFINE INDEX IF NOT EXISTS cart_import_project_id_edge ON cart_import
       FIELDS project_id, source_path, target_path, specifier UNIQUE;
     DEFINE INDEX IF NOT EXISTS cart_git_state_project_id ON cart_git_state FIELDS project_id;
+
+    -- MIM-69 org-scoped read paths. Composite (org_id, project_id) so an
+    -- org-only filter uses the leftmost prefix and an (org, project) filter
+    -- uses the whole key. relates_to and project have no project_id, so they
+    -- index org_id alone. compaction_state/hygiene_state indexes land in the
+    -- slice that re-keys them per (org, project) (MIM-66 fold-in).
+    DEFINE INDEX IF NOT EXISTS memory_org_project ON memory FIELDS org_id, project_id;
+    DEFINE INDEX IF NOT EXISTS message_log_org_project ON message_log FIELDS org_id, project_id;
+    DEFINE INDEX IF NOT EXISTS cart_file_org_project ON cart_file FIELDS org_id, project_id;
+    DEFINE INDEX IF NOT EXISTS cart_import_org_project ON cart_import FIELDS org_id, project_id;
+    DEFINE INDEX IF NOT EXISTS cart_git_state_org_project ON cart_git_state FIELDS org_id, project_id;
+    DEFINE INDEX IF NOT EXISTS relates_to_org ON relates_to FIELDS org_id;
+    DEFINE INDEX IF NOT EXISTS project_org ON project FIELDS org_id;
   `);
+
+  // MIM-69 slice 5: row-level org PERMISSIONS. ALTER (not DEFINE TABLE
+  // OVERWRITE) so the existing DEFINE FIELD + index definitions survive
+  // untouched — verified against the SurrealDB docs. Only the scoped
+  // mimir_user JWT sessions are subject to these; the root connection (boot,
+  // background sweeps, fire-and-forget jobs) bypasses table permissions by
+  // Surreal design. Guarded by the same secret that defines the access method:
+  // no secret means no scoped sessions exist, so the tables keep their default
+  // permissions and the root-only path is byte-identical to before.
+  if (config.auth.surrealAccessSecret) {
+    await db.query(buildTablePermissionsSql(ORG_SCOPED_TABLES));
+    log.info(
+      { tables: ORG_SCOPED_TABLES.length },
+      "Surreal row-level org PERMISSIONS applied",
+    );
+  }
 
   log.info({ elapsed: `${Date.now() - start}ms` }, "schema initialized");
 }

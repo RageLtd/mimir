@@ -11,11 +11,16 @@
  */
 
 import { Hono } from "hono";
+import { type ScopedEnv, scopeMiddleware } from "../middleware/scope";
 import { getProject, resolveProject, updateProject } from "../projects/store";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 
-export const projects = new Hono();
+export const projects = new Hono<ScopedEnv>();
+
+// Sub-app-wide so the `:id` path param keeps its inferred `string` type
+// through the handler chain (per-route middleware widens it to string|undefined).
+projects.use("*", scopeMiddleware);
 
 type ResolveBody = {
   gitRemote?: unknown;
@@ -52,7 +57,7 @@ projects.post("/resolve", async (c) => {
   }
 
   const [resolveErr, project] = await attempt(() =>
-    resolveProject({
+    resolveProject(c.get("scope"), {
       gitRemote,
       localPath,
       title: asString(body.title),
@@ -73,7 +78,7 @@ projects.post("/resolve", async (c) => {
 
 projects.get("/:id", async (c) => {
   const id = c.req.param("id");
-  const [err, project] = await attempt(() => getProject(id));
+  const [err, project] = await attempt(() => getProject(c.get("scope"), id));
   if (err) {
     log.error({ error: err.message, id }, "project fetch failed");
     return c.json({ error: err.message }, 500);
@@ -92,7 +97,7 @@ projects.patch("/:id", async (c) => {
   }
 
   const [updateErr, project] = await attempt(() =>
-    updateProject(id, {
+    updateProject(c.get("scope"), id, {
       title: asString(body.title),
       description:
         body.description === null ? null : asString(body.description),

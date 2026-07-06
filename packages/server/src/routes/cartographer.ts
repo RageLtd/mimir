@@ -13,14 +13,19 @@
  */
 
 import { Hono } from "hono";
-import { getDb, queryOne } from "../db/surreal";
+import { type ScopedEnv, scopeMiddleware } from "../middleware/scope";
 import { resolveProjectForQuery } from "../projects/resolve-for-query";
 import { ensureProjectId } from "../projects/store";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 import { fileInfoHandler } from "./cartographer-file-info";
 
-export const cartographer = new Hono();
+export const cartographer = new Hono<ScopedEnv>();
+
+// Every cartographer route runs its cart_* access on a per-request scoped
+// connection. Mounted sub-app-wide (not per-route) so the `:project` path
+// param keeps its inferred `string` type through the handler chain.
+cartographer.use("*", scopeMiddleware);
 
 cartographer.post("/file-info", fileInfoHandler);
 
@@ -108,9 +113,11 @@ cartographer.post("/sync", async (c) => {
     return c.json({ error: "Missing rootPath or files" }, 400);
   }
 
+  const scope = c.get("scope");
   // Resolve to the canonical project id at the boundary — prefer the
   // client-resolved id, get-or-create from rootPath otherwise.
   const projectId = await ensureProjectId(
+    scope,
     payload.projectId ?? payload.rootPath,
   );
   if (!projectId) {
@@ -123,17 +130,19 @@ cartographer.post("/sync", async (c) => {
   const mode = payload.mode ?? "replace";
 
   const [syncErr] = await attempt(async () => {
-    const db = await getDb();
+    const db = scope.db;
 
     if (mode === "replace") {
       // Wipe the whole project's index — used for full scans (initial
       // import, periodic re-sync, deletion-aware refresh from SessionStart).
-      await db.query(`DELETE cart_file WHERE project_id = $project_id`, {
-        project_id: projectId,
-      });
-      await db.query(`DELETE cart_import WHERE project_id = $project_id`, {
-        project_id: projectId,
-      });
+      await db.query(
+        `DELETE cart_file WHERE project_id = $project_id AND org_id = $scope_org`,
+        { project_id: projectId, scope_org: scope.orgId },
+      );
+      await db.query(
+        `DELETE cart_import WHERE project_id = $project_id AND org_id = $scope_org`,
+        { project_id: projectId, scope_org: scope.orgId },
+      );
     } else {
       // Upsert mode: delete only the rows for the files in this payload.
       // Leaves every other indexed file in the project intact — this is
@@ -142,12 +151,12 @@ cartographer.post("/sync", async (c) => {
       const filePaths = payload.files.map((f) => f.path);
       if (filePaths.length > 0) {
         await db.query(
-          `DELETE cart_file WHERE project_id = $project_id AND file_path IN $paths`,
-          { project_id: projectId, paths: filePaths },
+          `DELETE cart_file WHERE project_id = $project_id AND org_id = $scope_org AND file_path IN $paths`,
+          { project_id: projectId, paths: filePaths, scope_org: scope.orgId },
         );
         await db.query(
-          `DELETE cart_import WHERE project_id = $project_id AND source_path IN $paths`,
-          { project_id: projectId, paths: filePaths },
+          `DELETE cart_import WHERE project_id = $project_id AND org_id = $scope_org AND source_path IN $paths`,
+          { project_id: projectId, paths: filePaths, scope_org: scope.orgId },
         );
       }
     }
@@ -172,6 +181,7 @@ cartographer.post("/sync", async (c) => {
         // <datetime> prefix turns that into a real datetime value.
         `CREATE cart_file CONTENT {
           project_id: $project_id,
+          org_id: $scope_org,
           file_path: $file_path,
           language: $language,
           symbols: $symbols,
@@ -181,6 +191,7 @@ cartographer.post("/sync", async (c) => {
         }`,
         {
           project_id: projectId,
+          scope_org: scope.orgId,
           file_path: file.path,
           language: file.language,
           symbols: JSON.stringify(file.symbols),
@@ -209,6 +220,7 @@ cartographer.post("/sync", async (c) => {
           // clients send ISO 8601 strings.
           `CREATE cart_import CONTENT {
             project_id: $project_id,
+            org_id: $scope_org,
             source_path: $source_path,
             target_path: $target_path,
             specifier: $specifier,
@@ -217,6 +229,7 @@ cartographer.post("/sync", async (c) => {
           }`,
           {
             project_id: projectId,
+            scope_org: scope.orgId,
             source_path: file.path,
             target_path: imp.target,
             specifier: imp.specifier,
@@ -271,23 +284,23 @@ cartographer.post("/sync", async (c) => {
  * Returns file paths and metadata, not the full index.
  */
 cartographer.get("/:project", async (c) => {
+  const scope = c.get("scope");
   const rawProject = decodeURIComponent(c.req.param("project"));
-  const resolved = await resolveProjectForQuery(rawProject);
+  const resolved = await resolveProjectForQuery(scope, rawProject);
   if (resolved.error) {
     return c.json({ error: resolved.error }, 400);
   }
   const project = resolved.project;
 
-  const [fetchErr, files] = await attempt(() =>
-    queryOne<{
-      file_path: string;
-      language: string;
-      indexed_at: string;
-    }>(
-      `SELECT file_path, language, indexed_at FROM cart_file WHERE project_id = $project_id ORDER BY file_path`,
-      { project_id: project },
-    ),
-  );
+  const [fetchErr, files] = await attempt(async () => {
+    const [rows] = await scope.db.query<
+      [Array<{ file_path: string; language: string; indexed_at: string }>]
+    >(
+      `SELECT file_path, language, indexed_at FROM cart_file WHERE project_id = $project_id AND org_id = $scope_org ORDER BY file_path`,
+      { project_id: project, scope_org: scope.orgId },
+    );
+    return rows ?? [];
+  });
 
   if (fetchErr) {
     log.error(
@@ -317,13 +330,13 @@ cartographer.get("/:project", async (c) => {
  * List all indexed projects with file counts.
  */
 cartographer.get("/", async (c) => {
+  const scope = c.get("scope");
   try {
-    const projects = await queryOne<{
-      project_id: string;
-      count: number;
-      indexed_at: string;
-    }>(
-      `SELECT project_id, count() AS count, math::max(indexed_at) AS indexed_at FROM cart_file GROUP BY project_id`,
+    const [projects = []] = await scope.db.query<
+      [Array<{ project_id: string; count: number; indexed_at: string }>]
+    >(
+      `SELECT project_id, count() AS count, math::max(indexed_at) AS indexed_at FROM cart_file WHERE org_id = $scope_org GROUP BY project_id`,
+      { scope_org: scope.orgId },
     );
 
     return c.json({

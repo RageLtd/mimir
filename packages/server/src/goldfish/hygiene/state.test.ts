@@ -34,20 +34,20 @@ describe("hygiene lock", () => {
       { id: "hygiene_state:global", is_running: true },
     ]);
 
-    expect(await startHygiene()).toBe(true);
+    expect(await startHygiene("test-org")).toBe(true);
   });
 
   test("fails to acquire when a sweep is already running", async () => {
     // UPDATE matched nothing because is_running was already true
     queryOneMock.mockResolvedValueOnce([]);
 
-    expect(await startHygiene()).toBe(false);
+    expect(await startHygiene("test-org")).toBe(false);
   });
 
   test("acquisition query gates on is_running = false", async () => {
     queryOneMock.mockResolvedValueOnce([{ id: "hygiene_state:global" }]);
 
-    await startHygiene();
+    await startHygiene("test-org");
 
     const updateCall = queryOneMock.mock.calls.find((c) =>
       String(c[0]).includes("UPDATE"),

@@ -45,8 +45,8 @@ export async function injectMemories(ctx: MimirContext) {
   // budget, keyed on the active project) are retrieved together but kept on
   // independent budgets — see goldfish/playbook.ts.
   const [memories, playbooks] = await Promise.all([
-    retrieveMemories(messages),
-    buildPlaybookContext(query, {
+    retrieveMemories(ctx.scope, messages),
+    buildPlaybookContext(ctx.scope, query, {
       projectIdentifier: ctx.projectId ?? undefined,
     }),
   ]);

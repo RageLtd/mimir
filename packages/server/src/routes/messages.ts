@@ -25,11 +25,12 @@ import {
   extractProviderOverride,
   PROVIDER_KEY_HEADER,
 } from "../middleware/pipeline";
+import { type ScopedEnv, scopeMiddleware } from "../middleware/scope";
 import { ensureProjectId } from "../projects/store";
 import { requestLog } from "../util/logger";
 import { attempt } from "../util/result";
 
-export const messages = new Hono();
+export const messages = new Hono<ScopedEnv>();
 
 type PersistRequest = {
   messages: ModelMessage[];
@@ -56,7 +57,7 @@ type PersistRequest = {
   small_model?: string;
 };
 
-messages.post("/persist", async (c) => {
+messages.post("/persist", scopeMiddleware, async (c) => {
   const rid = c.req.header("x-request-id") ?? "persist";
   const log = requestLog(rid);
 
@@ -89,7 +90,11 @@ messages.post("/persist", async (c) => {
     );
   }
 
-  const projectId = await ensureProjectId(identifier);
+  // Scoped connection supplied + closed by scopeMiddleware. appendTurn is the
+  // only synchronous user of it; the extraction below is fire-and-forget on its
+  // own root connection, so the middleware close never severs it.
+  const scope = c.get("scope");
+  const projectId = await ensureProjectId(scope, identifier);
   if (!projectId) {
     log.error({ identifier }, "failed to resolve project identifier");
     return c.json(
@@ -99,7 +104,7 @@ messages.post("/persist", async (c) => {
   }
 
   const [appendErr, ids] = await attempt(() =>
-    appendTurn(body.messages, projectId),
+    appendTurn(scope, body.messages, projectId),
   );
   if (appendErr) {
     log.error(
@@ -143,6 +148,7 @@ messages.post("/persist", async (c) => {
           assistantText,
           lastUser,
           projectId,
+          scope.orgId,
           override ? { override } : null,
         );
       }

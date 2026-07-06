@@ -13,10 +13,11 @@
 
 import { Hono } from "hono";
 import { runHygieneSweep } from "../goldfish/hygiene";
+import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
 import { requestLog } from "../util/logger";
 import { attempt } from "../util/result";
 
-export const hygiene = new Hono();
+export const hygiene = new Hono<IdentityEnv>();
 
 type SweepRequest = {
   /** Omitted → dry run. Only an explicit false arms the destructive pass. */
@@ -44,7 +45,10 @@ hygiene.post("/sweep", async (c) => {
 
   const dryRun = body.dryRun !== false;
 
-  const [err, report] = await attempt(() => runHygieneSweep({ dryRun }));
+  // Manual sweep scopes to the caller's org (owner sentinel when auth is off).
+  const [err, report] = await attempt(() =>
+    runHygieneSweep(scopeOrgId(c), { dryRun }),
+  );
   if (err) {
     log.error({ error: err.message }, "hygiene sweep failed");
     return c.json({ error: err.message }, 500);

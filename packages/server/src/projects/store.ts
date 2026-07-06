@@ -14,7 +14,7 @@
  */
 
 import { RecordId } from "surrealdb";
-import { queryFirst } from "../db/surreal";
+import { type OrgScope, scopedQueryFirst } from "../db/scope";
 import { log } from "../util/logger";
 
 export interface Project {
@@ -105,19 +105,25 @@ const deriveTitle = (input: ResolveInput) => {
  * should validate at the boundary (route layer) — this function trusts
  * its inputs.
  */
-export async function resolveProject(input: ResolveInput) {
+export async function resolveProject(scope: OrgScope, input: ResolveInput) {
   if (!input.gitRemote && !input.localPath) return null;
 
   if (input.gitRemote) {
-    const existing = await queryFirst<ProjectRow>(
-      `SELECT * FROM project WHERE git_remote = $remote LIMIT 1`,
-      { remote: input.gitRemote },
+    const existing = await scopedQueryFirst<ProjectRow>(
+      scope,
+      `SELECT * FROM project WHERE git_remote = $remote AND org_id = $scope_org LIMIT 1`,
+      { remote: input.gitRemote, scope_org: scope.orgId },
     );
     if (existing) {
       if (input.localPath && existing.local_path !== input.localPath) {
-        const updated = await queryFirst<ProjectRow>(
-          `UPDATE $id SET local_path = $path, updated_at = time::now() RETURN AFTER`,
-          { id: toRid(existing), path: input.localPath },
+        const updated = await scopedQueryFirst<ProjectRow>(
+          scope,
+          `UPDATE $id SET local_path = $path, updated_at = time::now() WHERE org_id = $scope_org RETURN AFTER`,
+          {
+            id: toRid(existing),
+            path: input.localPath,
+            scope_org: scope.orgId,
+          },
         );
         if (updated) return rowToProject(updated);
       }
@@ -126,15 +132,21 @@ export async function resolveProject(input: ResolveInput) {
   }
 
   if (input.localPath) {
-    const existing = await queryFirst<ProjectRow>(
-      `SELECT * FROM project WHERE local_path = $path LIMIT 1`,
-      { path: input.localPath },
+    const existing = await scopedQueryFirst<ProjectRow>(
+      scope,
+      `SELECT * FROM project WHERE local_path = $path AND org_id = $scope_org LIMIT 1`,
+      { path: input.localPath, scope_org: scope.orgId },
     );
     if (existing) {
       if (input.gitRemote && !existing.git_remote) {
-        const updated = await queryFirst<ProjectRow>(
-          `UPDATE $id SET git_remote = $remote, updated_at = time::now() RETURN AFTER`,
-          { id: toRid(existing), remote: input.gitRemote },
+        const updated = await scopedQueryFirst<ProjectRow>(
+          scope,
+          `UPDATE $id SET git_remote = $remote, updated_at = time::now() WHERE org_id = $scope_org RETURN AFTER`,
+          {
+            id: toRid(existing),
+            remote: input.gitRemote,
+            scope_org: scope.orgId,
+          },
         );
         if (updated) return rowToProject(updated);
       }
@@ -152,13 +164,15 @@ export async function resolveProject(input: ResolveInput) {
   const fields: Record<string, unknown> = {
     title: deriveTitle(input),
     technologies: input.technologies ?? [],
+    org_id: scope.orgId,
   };
   if (input.description) fields.description = input.description;
   if (input.gitRemote) fields.git_remote = input.gitRemote;
   if (input.localPath) fields.local_path = input.localPath;
   if (input.purpose) fields.purpose = input.purpose;
 
-  const created = await queryFirst<ProjectRow>(
+  const created = await scopedQueryFirst<ProjectRow>(
+    scope,
     `CREATE project CONTENT $fields RETURN AFTER`,
     { fields },
   );
@@ -189,20 +203,22 @@ export async function resolveProject(input: ResolveInput) {
  *      A stale id from another machine lands here too: it becomes its
  *      own bucket rather than failing the request.
  */
-export async function ensureProjectId(identifier: string) {
+export async function ensureProjectId(scope: OrgScope, identifier: string) {
   if (!identifier.includes("/")) {
-    const existing = await getProject(identifier);
+    const existing = await getProject(scope, identifier);
     if (existing) return existing.id;
   }
-  const project = await resolveProject({ localPath: identifier });
+  const project = await resolveProject(scope, { localPath: identifier });
   return project?.id ?? null;
 }
 
 /** Fetch a project by its id portion (no "project:" prefix). */
-export async function getProject(id: string) {
-  const row = await queryFirst<ProjectRow>(`SELECT * FROM $id`, {
-    id: new RecordId("project", id),
-  });
+export async function getProject(scope: OrgScope, id: string) {
+  const row = await scopedQueryFirst<ProjectRow>(
+    scope,
+    `SELECT * FROM $id WHERE org_id = $scope_org`,
+    { id: new RecordId("project", id), scope_org: scope.orgId },
+  );
   return row ? rowToProject(row) : null;
 }
 
@@ -214,7 +230,11 @@ export interface UpdateInput {
   readonly purpose?: string | null;
 }
 
-export async function updateProject(id: string, patch: UpdateInput) {
+export async function updateProject(
+  scope: OrgScope,
+  id: string,
+  patch: UpdateInput,
+) {
   // Build SET clauses dynamically so nullable option<string> fields can be
   // CLEARED via `field = NONE` rather than `field = NULL`. The previous
   // MERGE-with-fields-object approach passed literal `null` through to
@@ -228,7 +248,10 @@ export async function updateProject(id: string, patch: UpdateInput) {
   //               UpdateInput, i.e. description and purpose today)
   //   T         → set to T
   const setParts: string[] = ["updated_at = time::now()"];
-  const params: Record<string, unknown> = { id: new RecordId("project", id) };
+  const params: Record<string, unknown> = {
+    id: new RecordId("project", id),
+    scope_org: scope.orgId,
+  };
 
   if (patch.title !== undefined) {
     setParts.push("title = $title");
@@ -255,8 +278,9 @@ export async function updateProject(id: string, patch: UpdateInput) {
     }
   }
 
-  const row = await queryFirst<ProjectRow>(
-    `UPDATE $id SET ${setParts.join(", ")} RETURN AFTER`,
+  const row = await scopedQueryFirst<ProjectRow>(
+    scope,
+    `UPDATE $id SET ${setParts.join(", ")} WHERE org_id = $scope_org RETURN AFTER`,
     params,
   );
   return row ? rowToProject(row) : null;

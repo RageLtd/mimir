@@ -31,7 +31,7 @@
  */
 
 import type { ModelMessage } from "@ai-sdk/provider-utils";
-import { getDb, queryOne } from "../../db/surreal";
+import { type OrgScope, scopedQueryOne } from "../../db/scope";
 import { log } from "../../util/logger";
 import { attempt } from "../../util/result";
 import {
@@ -53,22 +53,22 @@ import {
  * when multiple messages arrive within the same millisecond.
  */
 export async function appendModelMessage(
+  scope: OrgScope,
   message: ModelMessage,
   projectId: string,
 ) {
   const start = Date.now();
-  const db = await getDb();
 
   // Use nanoseconds to prevent collisions when multiple messages
   // arrive within the same millisecond (e.g., user message + tool result)
   const timestamp = Bun.nanoseconds();
   const recordId = `[${JSON.stringify(projectId)}, ${timestamp}]`;
 
-  const fields = modelMessageToFields(message, projectId);
+  const fields = modelMessageToFields(message, scope.orgId, projectId);
   fields.id = recordId;
 
   const [err, result] = await attempt(() =>
-    db.query<[MessageRow[]]>(
+    scope.db.query<[MessageRow[]]>(
       `CREATE type::record('message_log', $id) CONTENT $fields`,
       { id: recordId, fields },
     ),
@@ -149,6 +149,7 @@ export function extractTrailingTurn(clientMessages: readonly ModelMessage[]) {
  * saw.
  */
 export async function appendTrailingTurn(
+  scope: OrgScope,
   clientMessages: readonly ModelMessage[],
   projectId: string,
 ) {
@@ -164,7 +165,7 @@ export async function appendTrailingTurn(
   // Idempotency: check if the DB tail already matches the trailing block.
   // Fetch the last N messages (same length as the trailing block) and
   // compare fingerprints in order. If identical, skip — this is a retry.
-  const dbTail = await getLastModelMessages(trailing.length);
+  const dbTail = await getLastModelMessages(scope, trailing.length);
   if (dbTail.length === trailing.length) {
     const dbFps = dbTail.map(fingerprintMessage);
     const trailingFps = trailing.map(fingerprintMessage);
@@ -180,7 +181,7 @@ export async function appendTrailingTurn(
 
   const appendedIds: (string | null)[] = [];
   for (const message of trailing) {
-    const id = await appendModelMessage(message, projectId);
+    const id = await appendModelMessage(scope, message, projectId);
     appendedIds.push(id ?? null);
   }
 
@@ -205,6 +206,7 @@ export async function appendTrailingTurn(
  * and the next request will append cleanly after it.
  */
 export async function appendAssistantOutput(
+  scope: OrgScope,
   message: ModelMessage,
   projectId: string,
 ) {
@@ -215,7 +217,7 @@ export async function appendAssistantOutput(
     );
     return null;
   }
-  const id = await appendModelMessage(message, projectId);
+  const id = await appendModelMessage(scope, message, projectId);
   log.info(
     { projectId, id },
     "appendAssistantOutput: assistant turn persisted",
@@ -240,13 +242,14 @@ export async function appendAssistantOutput(
  * delta and must be persisted (mimir-server never saw them emitted).
  */
 export async function appendTurn(
+  scope: OrgScope,
   messages: readonly ModelMessage[],
   projectId: string,
 ) {
   if (messages.length === 0) return [];
 
   // Retry idempotency — compare the incoming delta against the DB tail.
-  const dbTail = await getLastModelMessages(messages.length);
+  const dbTail = await getLastModelMessages(scope, messages.length);
   if (dbTail.length === messages.length) {
     const dbFps = dbTail.map(fingerprintMessage);
     const msgFps = messages.map(fingerprintMessage);
@@ -262,7 +265,7 @@ export async function appendTurn(
 
   const appendedIds: (string | null)[] = [];
   for (const message of messages) {
-    const id = await appendModelMessage(message, projectId);
+    const id = await appendModelMessage(scope, message, projectId);
     appendedIds.push(id ?? null);
   }
 
@@ -283,15 +286,18 @@ export async function appendTurn(
  * summary for summarization. Not used on the read path — context
  * assembly uses `getLastModelMessages`.
  */
-export async function getModelMessagesSince(since: Date) {
+export async function getModelMessagesSince(scope: OrgScope, since: Date) {
   const start = Date.now();
 
   // Use > not >= to exclude messages created at the same instant as the summary
   // Those messages were already compacted into that summary
   const [err, entries] = await attempt(() =>
-    queryOne<MessageRow>(
-      `SELECT * FROM message_log WHERE created_at > $since ORDER BY created_at ASC`,
-      { since: since.toISOString() },
+    scopedQueryOne<MessageRow>(
+      scope,
+      `SELECT * FROM message_log
+       WHERE org_id = $scope_org AND created_at > $since
+       ORDER BY created_at ASC`,
+      { since: since.toISOString(), scope_org: scope.orgId },
     ),
   );
 
@@ -326,11 +332,14 @@ export async function getModelMessagesSince(since: Date) {
  * place of them. Also used for retry-idempotency tail matching in the
  * append paths.
  */
-export async function getLastModelMessages(count: number) {
+export async function getLastModelMessages(scope: OrgScope, count: number) {
   const [err, entries] = await attempt(() =>
-    queryOne<MessageRow>(
-      `SELECT * FROM message_log ORDER BY created_at DESC LIMIT $count`,
-      { count },
+    scopedQueryOne<MessageRow>(
+      scope,
+      `SELECT * FROM message_log
+       WHERE org_id = $scope_org
+       ORDER BY created_at DESC LIMIT $count`,
+      { count, scope_org: scope.orgId },
     ),
   );
 

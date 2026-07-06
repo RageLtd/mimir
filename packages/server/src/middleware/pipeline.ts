@@ -8,6 +8,7 @@
  * context field or a middleware stage touches this file only.
  */
 
+import type { OrgScope } from "../db/scope";
 import { ensureProjectId } from "../projects/store";
 import { injectMemories } from "./goldfish";
 import { injectProjectRules } from "./project-rules";
@@ -63,10 +64,11 @@ export function generateRequestId() {
  */
 export function createMimirContext(
   request: ChatRequest,
-  opts: { providerOverride?: ProviderOverride | null } = {},
+  opts: { scope: OrgScope; providerOverride?: ProviderOverride | null },
 ) {
   return {
     request,
+    scope: opts.scope,
     projectId: null,
     providerOverride: opts.providerOverride ?? null,
     systemPrompt: "",
@@ -115,7 +117,7 @@ export async function prepareContext(ctx: MimirContext) {
 async function resolveProjectId(ctx: MimirContext) {
   const identifier =
     ctx.request.metadata?.project ?? DEFAULT_PROJECT_IDENTIFIER;
-  const projectId = await ensureProjectId(identifier);
+  const projectId = await ensureProjectId(ctx.scope, identifier);
   if (!projectId) {
     throw new Error(
       `pipeline: failed to resolve project identifier "${identifier}" to a project record`,

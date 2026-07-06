@@ -51,11 +51,14 @@ mock.module("./clients", () => ({
 }));
 
 // Import AFTER mocking
+import { testScope } from "../testing/scope";
 import {
   formatMemoryList,
   retrieveMemories,
   retrieveMemoryList,
 } from "./memory";
+
+const scope = testScope();
 
 describe("retrieveMemories playbook exclusion", () => {
   beforeEach(() => {
@@ -74,7 +77,7 @@ describe("retrieveMemories playbook exclusion", () => {
       { id: "memory:fact", content: "a relevant fact", type: "fact", distance: 0.2, confidence: 1 },
     ]);
 
-    const result = await retrieveMemories([
+    const result = await retrieveMemories(scope, [
       { role: "user", content: "audit the env vars" },
     ]);
 
@@ -87,7 +90,7 @@ describe("retrieveMemories playbook exclusion", () => {
       { id: "memory:pb", content: "only a playbook", type: "playbook", distance: 0.02, confidence: 1 },
     ]);
 
-    const result = await retrieveMemories([
+    const result = await retrieveMemories(scope, [
       { role: "user", content: "some task" },
     ]);
 
@@ -112,7 +115,7 @@ describe("retrieveMemoryList counting contract", () => {
       { id: "memory:b", content: "fact two\nsecond line", distance: 0.2, confidence: 1 },
     ]);
 
-    const result = await retrieveMemoryList([
+    const result = await retrieveMemoryList(scope, [
       { role: "user", content: "count things" },
     ]);
 
@@ -125,7 +128,7 @@ describe("retrieveMemoryList counting contract", () => {
       { id: "memory:b", content: "beta", distance: 0.2, confidence: 1 },
     ]);
 
-    const result = await retrieveMemories([
+    const result = await retrieveMemories(scope, [
       { role: "user", content: "format things" },
     ]);
 

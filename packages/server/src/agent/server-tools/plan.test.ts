@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { getServerTools } from "./index";
+import { testScope } from "../../testing/scope";
+import { buildServerTools } from "./index";
 import { executeTodoWrite, planTools } from "./plan";
 
 describe("TodoWrite plan tool", () => {
@@ -26,9 +27,9 @@ describe("TodoWrite plan tool", () => {
   });
 
   test("is offered to the model as a server tool, so the loop executes it server-side", () => {
-    // Membership in getServerTools() IS the classification — the loop
+    // Membership in buildServerTools(scope) IS the classification — the loop
     // classifies tool calls against ctx.serverTools directly.
-    expect("TodoWrite" in getServerTools()).toBe(true);
+    expect("TodoWrite" in buildServerTools(testScope())).toBe(true);
     expect("TodoWrite" in planTools).toBe(true);
   });
 });

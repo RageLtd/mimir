@@ -16,7 +16,7 @@ import {
   startHygieneScheduler,
   stopHygieneScheduler,
 } from "./goldfish/hygiene";
-import { createIdentityGate } from "./middleware/identity";
+import { createIdentityGate, type IdentityEnv } from "./middleware/identity";
 import { cartographer } from "./routes/cartographer";
 import { completions } from "./routes/completions";
 import { context } from "./routes/context";
@@ -31,7 +31,7 @@ import { tools } from "./routes/tools";
 import { log } from "./util/logger";
 import { attempt, attemptSync } from "./util/result";
 
-const app = new Hono();
+const app = new Hono<IdentityEnv>();
 
 // Middleware
 app.use("*", cors());
