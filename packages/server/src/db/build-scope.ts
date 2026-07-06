@@ -14,8 +14,9 @@
  */
 
 import { mintSurrealToken } from "../auth/surreal-bridge";
-import type { OrgScope, ResolvedIdentity } from "./scope";
-import { connectScoped } from "./surreal";
+import { config } from "../config";
+import { type OrgScope, type ResolvedIdentity, rootScope } from "./scope";
+import { connectScoped, getDb } from "./surreal";
 
 /**
  * Build a request scope: mint a short-lived JWT carrying the identity's
@@ -31,4 +32,24 @@ export async function buildScope(identity: ResolvedIdentity) {
   });
   const db = await connectScoped(token);
   return { orgId: identity.orgId, db, isRoot: false } satisfies OrgScope;
+}
+
+/**
+ * The scope a request runs its store access on (MIM-69 slice 5).
+ *
+ * When the Surreal access secret is configured AND the identity gate resolved
+ * an identity, mint a per-request JWT session so the DB enforces row-level org
+ * PERMISSIONS — the caller MUST close it (`closeScope`) once the request or its
+ * SSE stream ends. Otherwise (auth off, or no gate ran) fall back to the shared
+ * root connection scoped to `fallbackOrgId` (the owner sentinel) — byte-
+ * identical to the pre-slice-5 path, and `closeScope` is a no-op on it.
+ */
+export async function requestScope(
+  identity: ResolvedIdentity | undefined,
+  fallbackOrgId: string,
+) {
+  if (config.auth.surrealAccessSecret && identity) {
+    return buildScope(identity);
+  }
+  return rootScope(await getDb(), fallbackOrgId);
 }

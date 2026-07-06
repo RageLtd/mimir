@@ -1,10 +1,13 @@
 import { Surreal } from "surrealdb";
-import { buildDefineAccessSql } from "../auth/surreal-bridge";
+import {
+  buildDefineAccessSql,
+  buildTablePermissionsSql,
+} from "../auth/surreal-bridge";
 import { config } from "../config";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 import { withTimeout } from "../util/timeout";
-import { migrateOrgScope } from "./migrate-org-scope";
+import { migrateOrgScope, ORG_SCOPED_TABLES } from "./migrate-org-scope";
 import { migrateLegacyProjectKeys } from "./migrate-project-keys";
 import {
   ensureEmbeddingIndexDimension,
@@ -392,6 +395,22 @@ export async function initSchema() {
     DEFINE INDEX IF NOT EXISTS relates_to_org ON relates_to FIELDS org_id;
     DEFINE INDEX IF NOT EXISTS project_org ON project FIELDS org_id;
   `);
+
+  // MIM-69 slice 5: row-level org PERMISSIONS. ALTER (not DEFINE TABLE
+  // OVERWRITE) so the existing DEFINE FIELD + index definitions survive
+  // untouched — verified against the SurrealDB docs. Only the scoped
+  // mimir_user JWT sessions are subject to these; the root connection (boot,
+  // background sweeps, fire-and-forget jobs) bypasses table permissions by
+  // Surreal design. Guarded by the same secret that defines the access method:
+  // no secret means no scoped sessions exist, so the tables keep their default
+  // permissions and the root-only path is byte-identical to before.
+  if (config.auth.surrealAccessSecret) {
+    await db.query(buildTablePermissionsSql(ORG_SCOPED_TABLES));
+    log.info(
+      { tables: ORG_SCOPED_TABLES.length },
+      "Surreal row-level org PERMISSIONS applied",
+    );
+  }
 
   log.info({ elapsed: `${Date.now() - start}ms` }, "schema initialized");
 }

@@ -19,6 +19,7 @@
  */
 
 import type { Surreal } from "surrealdb";
+import { log } from "../util/logger";
 
 /**
  * The org id that pre-auth / self-hosted data belongs to. Two roles:
@@ -90,4 +91,21 @@ export async function scopedQueryFirst<T>(
 ) {
   const rows = await scopedQueryOne<T>(scope, sql, vars);
   return rows[0] ?? null;
+}
+
+/**
+ * Close a request-scoped connection (MIM-69 slice 5). Root scopes wrap the
+ * shared singleton and must NEVER be closed — only a per-request scoped
+ * session (buildScope) owns its connection and closes it when the request or
+ * SSE stream ends. Best-effort: a close failure on an already-finished request
+ * is benign, so it's debug-logged rather than propagated (mirrors surreal.ts's
+ * best-effort close on a failed handshake).
+ */
+export async function closeScope(scope: OrgScope) {
+  if (scope.isRoot) return;
+  await scope.db
+    .close()
+    .catch((err: unknown) =>
+      log.debug({ err: String(err) }, "close of scoped SurrealDB connection"),
+    );
 }

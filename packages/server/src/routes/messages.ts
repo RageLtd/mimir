@@ -21,8 +21,8 @@ import { Hono } from "hono";
 import { modelContentToString } from "../agent/message-log/message-utils";
 import { appendTurn } from "../agent/message-log/persistence";
 import { extractMemoriesFromResponse } from "../agent/post-processing";
-import { rootScope } from "../db/scope";
-import { getDb } from "../db/surreal";
+import { requestScope } from "../db/build-scope";
+import { closeScope } from "../db/scope";
 import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
 import {
   extractProviderOverride,
@@ -92,76 +92,82 @@ messages.post("/persist", async (c) => {
     );
   }
 
-  const scope = rootScope(await getDb(), scopeOrgId(c));
+  // Slice 5: scoped JWT connection (auth-on) or root (auth-off). appendTurn is
+  // the only synchronous user of scope.db; the extraction below is fire-and-
+  // forget on its own root connection, so closing in the finally is safe.
+  const scope = await requestScope(c.get("identity"), scopeOrgId(c));
+  try {
+    const projectId = await ensureProjectId(scope, identifier);
+    if (!projectId) {
+      log.error({ identifier }, "failed to resolve project identifier");
+      return c.json(
+        { error: `Failed to resolve project identifier "${identifier}"` },
+        500,
+      );
+    }
 
-  const projectId = await ensureProjectId(scope, identifier);
-  if (!projectId) {
-    log.error({ identifier }, "failed to resolve project identifier");
-    return c.json(
-      { error: `Failed to resolve project identifier "${identifier}"` },
-      500,
+    const [appendErr, ids] = await attempt(() =>
+      appendTurn(scope, body.messages, projectId),
     );
-  }
+    if (appendErr) {
+      log.error(
+        { error: appendErr.message, projectId },
+        "conversation persist failed",
+      );
+      return c.json({ error: appendErr.message }, 500);
+    }
 
-  const [appendErr, ids] = await attempt(() =>
-    appendTurn(scope, body.messages, projectId),
-  );
-  if (appendErr) {
-    log.error(
-      { error: appendErr.message, projectId },
-      "conversation persist failed",
-    );
-    return c.json({ error: appendErr.message }, 500);
-  }
+    if (typeof body.totalCostUsd === "number" && body.totalCostUsd > 0) {
+      log.info(
+        {
+          projectId,
+          totalCostUsd: body.totalCostUsd,
+        },
+        "cc turn cost",
+      );
+    }
 
-  if (typeof body.totalCostUsd === "number" && body.totalCostUsd > 0) {
+    // Mirror server-backend post-processing: kick off async memory
+    // extraction from the latest user/assistant exchange. Fire-and-forget;
+    // never blocks the response.
+    if (ids.length > 0) {
+      const lastAssistant = [...body.messages]
+        .reverse()
+        .find((m) => m.role === "assistant");
+      const lastUser = [...body.messages]
+        .reverse()
+        .find((m) => m.role === "user");
+      if (lastAssistant && lastUser) {
+        const assistantText = modelContentToString(lastAssistant.content);
+        if (assistantText) {
+          // BYOK (MIM-74): same key transport as the ingress routes — the
+          // extraction this persist spawns runs on the caller's key when
+          // one was sent, the env small model otherwise.
+          const override = extractProviderOverride(
+            c.req.header(PROVIDER_KEY_HEADER),
+            { provider: body.provider, small_model: body.small_model },
+          );
+          extractMemoriesFromResponse(
+            assistantText,
+            lastUser,
+            projectId,
+            scopeOrgId(c),
+            override ? { override } : null,
+          );
+        }
+      }
+    }
+
     log.info(
       {
         projectId,
-        totalCostUsd: body.totalCostUsd,
+        clientCount: body.messages.length,
+        appended: ids.length,
       },
-      "cc turn cost",
+      "conversation persisted",
     );
+    return c.json({ appended: ids.length, ids });
+  } finally {
+    await closeScope(scope);
   }
-
-  // Mirror server-backend post-processing: kick off async memory
-  // extraction from the latest user/assistant exchange. Fire-and-forget;
-  // never blocks the response.
-  if (ids.length > 0) {
-    const lastAssistant = [...body.messages]
-      .reverse()
-      .find((m) => m.role === "assistant");
-    const lastUser = [...body.messages]
-      .reverse()
-      .find((m) => m.role === "user");
-    if (lastAssistant && lastUser) {
-      const assistantText = modelContentToString(lastAssistant.content);
-      if (assistantText) {
-        // BYOK (MIM-74): same key transport as the ingress routes — the
-        // extraction this persist spawns runs on the caller's key when
-        // one was sent, the env small model otherwise.
-        const override = extractProviderOverride(
-          c.req.header(PROVIDER_KEY_HEADER),
-          { provider: body.provider, small_model: body.small_model },
-        );
-        extractMemoriesFromResponse(
-          assistantText,
-          lastUser,
-          projectId,
-          scopeOrgId(c),
-          override ? { override } : null,
-        );
-      }
-    }
-  }
-
-  log.info(
-    {
-      projectId,
-      clientCount: body.messages.length,
-      appended: ids.length,
-    },
-    "conversation persisted",
-  );
-  return c.json({ appended: ids.length, ids });
 });

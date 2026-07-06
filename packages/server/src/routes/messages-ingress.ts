@@ -16,8 +16,8 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { runAgent } from "../agent/run";
-import { rootScope } from "../db/scope";
-import { getDb } from "../db/surreal";
+import { requestScope } from "../db/build-scope";
+import { closeScope, type OrgScope } from "../db/scope";
 import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
 import {
   createMimirContext,
@@ -132,8 +132,12 @@ messagesIngress.post("/", async (c) => {
     chatRequest.metadata,
   );
 
+  // Slice 5: scoped JWT connection (auth-on) or root (auth-off). The agent
+  // stream owns it and closes it in its finalizer; the catch closes it if the
+  // pipeline throws before the handoff.
+  let scope: OrgScope | null = null;
   try {
-    const scope = rootScope(await getDb(), scopeOrgId(c));
+    scope = await requestScope(c.get("identity"), scopeOrgId(c));
     const ctx = createMimirContext(chatRequest, { scope, providerOverride });
 
     // System prompt resolution: prefer the client's `system` field (CC
@@ -159,6 +163,7 @@ messagesIngress.post("/", async (c) => {
 
     return runAgent(ctx, anthropicStreamingResponse);
   } catch (err) {
+    if (scope) await closeScope(scope);
     log.error({ err }, "anthropic ingress pipeline failed");
     return c.json(
       {

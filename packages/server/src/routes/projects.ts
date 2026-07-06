@@ -11,8 +11,8 @@
  */
 
 import { Hono } from "hono";
-import { rootScope } from "../db/scope";
-import { getDb } from "../db/surreal";
+import { requestScope } from "../db/build-scope";
+import { closeScope } from "../db/scope";
 import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
 import { getProject, resolveProject, updateProject } from "../projects/store";
 import { log } from "../util/logger";
@@ -54,37 +54,45 @@ projects.post("/resolve", async (c) => {
     );
   }
 
-  const scope = rootScope(await getDb(), scopeOrgId(c));
-  const [resolveErr, project] = await attempt(() =>
-    resolveProject(scope, {
-      gitRemote,
-      localPath,
-      title: asString(body.title),
-      description: asString(body.description),
-      technologies: asStringArray(body.technologies),
-      purpose: asString(body.purpose),
-    }),
-  );
-  if (resolveErr) {
-    log.error({ error: resolveErr.message, body }, "project resolve failed");
-    return c.json({ error: resolveErr.message }, 500);
+  const scope = await requestScope(c.get("identity"), scopeOrgId(c));
+  try {
+    const [resolveErr, project] = await attempt(() =>
+      resolveProject(scope, {
+        gitRemote,
+        localPath,
+        title: asString(body.title),
+        description: asString(body.description),
+        technologies: asStringArray(body.technologies),
+        purpose: asString(body.purpose),
+      }),
+    );
+    if (resolveErr) {
+      log.error({ error: resolveErr.message, body }, "project resolve failed");
+      return c.json({ error: resolveErr.message }, 500);
+    }
+    if (!project) {
+      return c.json({ error: "resolveProject returned no record" }, 500);
+    }
+    return c.json({ project });
+  } finally {
+    await closeScope(scope);
   }
-  if (!project) {
-    return c.json({ error: "resolveProject returned no record" }, 500);
-  }
-  return c.json({ project });
 });
 
 projects.get("/:id", async (c) => {
   const id = c.req.param("id");
-  const scope = rootScope(await getDb(), scopeOrgId(c));
-  const [err, project] = await attempt(() => getProject(scope, id));
-  if (err) {
-    log.error({ error: err.message, id }, "project fetch failed");
-    return c.json({ error: err.message }, 500);
+  const scope = await requestScope(c.get("identity"), scopeOrgId(c));
+  try {
+    const [err, project] = await attempt(() => getProject(scope, id));
+    if (err) {
+      log.error({ error: err.message, id }, "project fetch failed");
+      return c.json({ error: err.message }, 500);
+    }
+    if (!project) return c.json({ error: "Project not found" }, 404);
+    return c.json({ project });
+  } finally {
+    await closeScope(scope);
   }
-  if (!project) return c.json({ error: "Project not found" }, 404);
-  return c.json({ project });
 });
 
 projects.patch("/:id", async (c) => {
@@ -96,20 +104,24 @@ projects.patch("/:id", async (c) => {
     return c.json({ error: `Invalid JSON: ${parseErr.message}` }, 400);
   }
 
-  const scope = rootScope(await getDb(), scopeOrgId(c));
-  const [updateErr, project] = await attempt(() =>
-    updateProject(scope, id, {
-      title: asString(body.title),
-      description:
-        body.description === null ? null : asString(body.description),
-      technologies: asStringArray(body.technologies),
-      purpose: body.purpose === null ? null : asString(body.purpose),
-    }),
-  );
-  if (updateErr) {
-    log.error({ error: updateErr.message, id }, "project update failed");
-    return c.json({ error: updateErr.message }, 500);
+  const scope = await requestScope(c.get("identity"), scopeOrgId(c));
+  try {
+    const [updateErr, project] = await attempt(() =>
+      updateProject(scope, id, {
+        title: asString(body.title),
+        description:
+          body.description === null ? null : asString(body.description),
+        technologies: asStringArray(body.technologies),
+        purpose: body.purpose === null ? null : asString(body.purpose),
+      }),
+    );
+    if (updateErr) {
+      log.error({ error: updateErr.message, id }, "project update failed");
+      return c.json({ error: updateErr.message }, 500);
+    }
+    if (!project) return c.json({ error: "Project not found" }, 404);
+    return c.json({ project });
+  } finally {
+    await closeScope(scope);
   }
-  if (!project) return c.json({ error: "Project not found" }, 404);
-  return c.json({ project });
 });

@@ -13,8 +13,8 @@
  */
 
 import { Hono } from "hono";
-import { rootScope } from "../db/scope";
-import { getDb } from "../db/surreal";
+import { requestScope } from "../db/build-scope";
+import { closeScope } from "../db/scope";
 import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
 import { resolveProjectForQuery } from "../projects/resolve-for-query";
 import { ensureProjectId } from "../projects/store";
@@ -110,74 +110,74 @@ cartographer.post("/sync", async (c) => {
     return c.json({ error: "Missing rootPath or files" }, 400);
   }
 
-  const scope = rootScope(await getDb(), scopeOrgId(c));
-
-  // Resolve to the canonical project id at the boundary — prefer the
-  // client-resolved id, get-or-create from rootPath otherwise.
-  const projectId = await ensureProjectId(
-    scope,
-    payload.projectId ?? payload.rootPath,
-  );
-  if (!projectId) {
-    log.error(
-      { rootPath: payload.rootPath, projectId: payload.projectId },
-      "cartographer sync: failed to resolve project identifier",
+  const scope = await requestScope(c.get("identity"), scopeOrgId(c));
+  try {
+    // Resolve to the canonical project id at the boundary — prefer the
+    // client-resolved id, get-or-create from rootPath otherwise.
+    const projectId = await ensureProjectId(
+      scope,
+      payload.projectId ?? payload.rootPath,
     );
-    return c.json({ error: "Failed to resolve project identifier" }, 500);
-  }
-  const mode = payload.mode ?? "replace";
-
-  const [syncErr] = await attempt(async () => {
-    const db = scope.db;
-
-    if (mode === "replace") {
-      // Wipe the whole project's index — used for full scans (initial
-      // import, periodic re-sync, deletion-aware refresh from SessionStart).
-      await db.query(
-        `DELETE cart_file WHERE project_id = $project_id AND org_id = $scope_org`,
-        { project_id: projectId, scope_org: scope.orgId },
+    if (!projectId) {
+      log.error(
+        { rootPath: payload.rootPath, projectId: payload.projectId },
+        "cartographer sync: failed to resolve project identifier",
       );
-      await db.query(
-        `DELETE cart_import WHERE project_id = $project_id AND org_id = $scope_org`,
-        { project_id: projectId, scope_org: scope.orgId },
-      );
-    } else {
-      // Upsert mode: delete only the rows for the files in this payload.
-      // Leaves every other indexed file in the project intact — this is
-      // what single-file Edit/Write reindexes should use, so a per-keystroke
-      // reindex doesn't evict the rest of the project.
-      const filePaths = payload.files.map((f) => f.path);
-      if (filePaths.length > 0) {
-        await db.query(
-          `DELETE cart_file WHERE project_id = $project_id AND org_id = $scope_org AND file_path IN $paths`,
-          { project_id: projectId, paths: filePaths, scope_org: scope.orgId },
-        );
-        await db.query(
-          `DELETE cart_import WHERE project_id = $project_id AND org_id = $scope_org AND source_path IN $paths`,
-          { project_id: projectId, paths: filePaths, scope_org: scope.orgId },
-        );
-      }
+      return c.json({ error: "Failed to resolve project identifier" }, 500);
     }
+    const mode = payload.mode ?? "replace";
 
-    // Insert new file records
-    for (const file of payload.files) {
-      const searchable = [
-        file.path,
-        // Imports are now {target, specifier} pairs — flatten both into
-        // the search index so a search for "react" or "./util" matches
-        // alongside resolved paths.
-        ...file.imports.map((imp: { target: string }) => imp.target),
-        ...file.imports.map((imp: { specifier: string }) => imp.specifier),
-        ...file.exports,
-        ...file.symbols.map((s: { name: string }) => s.name),
-      ].join(" ");
+    const [syncErr] = await attempt(async () => {
+      const db = scope.db;
 
-      await db.query(
-        // `indexed_at` is typed `datetime` in the schema — SurrealDB
-        // does not auto-coerce ISO strings, so cast explicitly. Clients
-        // send ISO 8601 (e.g. "2026-05-18T03:52:20.164Z") and the
-        // <datetime> prefix turns that into a real datetime value.
-        `CREATE cart_file CONTENT {
+      if (mode === "replace") {
+        // Wipe the whole project's index — used for full scans (initial
+        // import, periodic re-sync, deletion-aware refresh from SessionStart).
+        await db.query(
+          `DELETE cart_file WHERE project_id = $project_id AND org_id = $scope_org`,
+          { project_id: projectId, scope_org: scope.orgId },
+        );
+        await db.query(
+          `DELETE cart_import WHERE project_id = $project_id AND org_id = $scope_org`,
+          { project_id: projectId, scope_org: scope.orgId },
+        );
+      } else {
+        // Upsert mode: delete only the rows for the files in this payload.
+        // Leaves every other indexed file in the project intact — this is
+        // what single-file Edit/Write reindexes should use, so a per-keystroke
+        // reindex doesn't evict the rest of the project.
+        const filePaths = payload.files.map((f) => f.path);
+        if (filePaths.length > 0) {
+          await db.query(
+            `DELETE cart_file WHERE project_id = $project_id AND org_id = $scope_org AND file_path IN $paths`,
+            { project_id: projectId, paths: filePaths, scope_org: scope.orgId },
+          );
+          await db.query(
+            `DELETE cart_import WHERE project_id = $project_id AND org_id = $scope_org AND source_path IN $paths`,
+            { project_id: projectId, paths: filePaths, scope_org: scope.orgId },
+          );
+        }
+      }
+
+      // Insert new file records
+      for (const file of payload.files) {
+        const searchable = [
+          file.path,
+          // Imports are now {target, specifier} pairs — flatten both into
+          // the search index so a search for "react" or "./util" matches
+          // alongside resolved paths.
+          ...file.imports.map((imp: { target: string }) => imp.target),
+          ...file.imports.map((imp: { specifier: string }) => imp.specifier),
+          ...file.exports,
+          ...file.symbols.map((s: { name: string }) => s.name),
+        ].join(" ");
+
+        await db.query(
+          // `indexed_at` is typed `datetime` in the schema — SurrealDB
+          // does not auto-coerce ISO strings, so cast explicitly. Clients
+          // send ISO 8601 (e.g. "2026-05-18T03:52:20.164Z") and the
+          // <datetime> prefix turns that into a real datetime value.
+          `CREATE cart_file CONTENT {
           project_id: $project_id,
           org_id: $scope_org,
           file_path: $file_path,
@@ -187,36 +187,36 @@ cartographer.post("/sync", async (c) => {
           content_hash: $content_hash,
           indexed_at: <datetime>$indexed_at
         }`,
-        {
-          project_id: projectId,
-          scope_org: scope.orgId,
-          file_path: file.path,
-          language: file.language,
-          symbols: JSON.stringify(file.symbols),
-          searchable,
-          // Defensive: clients that haven't been updated to compute the
-          // hash will be missing this field — accept it as empty string
-          // so the SCHEMAFULL constraint is met without rejecting the sync.
-          content_hash: file.content_hash ?? "",
-          indexed_at: payload.indexedAt,
-        },
-      );
+          {
+            project_id: projectId,
+            scope_org: scope.orgId,
+            file_path: file.path,
+            language: file.language,
+            symbols: JSON.stringify(file.symbols),
+            searchable,
+            // Defensive: clients that haven't been updated to compute the
+            // hash will be missing this field — accept it as empty string
+            // so the SCHEMAFULL constraint is met without rejecting the sync.
+            content_hash: file.content_hash ?? "",
+            indexed_at: payload.indexedAt,
+          },
+        );
 
-      // Insert import records — deduplicate by (target, specifier) within
-      // a single file. Multiple import statements pulling different names
-      // from the same module (e.g. `import { a } from "./x"` and
-      // `import { b } from "./x"`) produce duplicate edges that would
-      // violate the cart_import_edge UNIQUE index.
-      const seenEdges = new Set<string>();
-      for (const imp of file.imports) {
-        const edgeKey = `${imp.target}\0${imp.specifier}`;
-        if (seenEdges.has(edgeKey)) continue;
-        seenEdges.add(edgeKey);
+        // Insert import records — deduplicate by (target, specifier) within
+        // a single file. Multiple import statements pulling different names
+        // from the same module (e.g. `import { a } from "./x"` and
+        // `import { b } from "./x"`) produce duplicate edges that would
+        // violate the cart_import_edge UNIQUE index.
+        const seenEdges = new Set<string>();
+        for (const imp of file.imports) {
+          const edgeKey = `${imp.target}\0${imp.specifier}`;
+          if (seenEdges.has(edgeKey)) continue;
+          seenEdges.add(edgeKey);
 
-        await db.query(
-          // Same datetime cast as cart_file — schema enforces datetime,
-          // clients send ISO 8601 strings.
-          `CREATE cart_import CONTENT {
+          await db.query(
+            // Same datetime cast as cart_file — schema enforces datetime,
+            // clients send ISO 8601 strings.
+            `CREATE cart_import CONTENT {
             project_id: $project_id,
             org_id: $scope_org,
             source_path: $source_path,
@@ -225,54 +225,57 @@ cartographer.post("/sync", async (c) => {
             symbols: $symbols,
             indexed_at: <datetime>$indexed_at
           }`,
-          {
-            project_id: projectId,
-            scope_org: scope.orgId,
-            source_path: file.path,
-            target_path: imp.target,
-            specifier: imp.specifier,
-            symbols: JSON.stringify(
-              file.symbols
-                .filter(
-                  (s: { kind: string; name: string }) => s.kind === "export",
-                )
-                .map((s: { kind: string; name: string }) => s.name),
-            ),
-            indexed_at: payload.indexedAt,
-          },
-        );
+            {
+              project_id: projectId,
+              scope_org: scope.orgId,
+              source_path: file.path,
+              target_path: imp.target,
+              specifier: imp.specifier,
+              symbols: JSON.stringify(
+                file.symbols
+                  .filter(
+                    (s: { kind: string; name: string }) => s.kind === "export",
+                  )
+                  .map((s: { kind: string; name: string }) => s.name),
+              ),
+              indexed_at: payload.indexedAt,
+            },
+          );
+        }
       }
+    });
+
+    if (syncErr) {
+      log.error(
+        { error: syncErr.message, projectId },
+        "cartographer sync failed",
+      );
+      return c.json({ error: syncErr.message }, 500);
     }
-  });
 
-  if (syncErr) {
-    log.error(
-      { error: syncErr.message, projectId },
-      "cartographer sync failed",
+    const elapsed = Date.now() - start;
+    log.info(
+      {
+        projectId,
+        rootPath: payload.rootPath,
+        mode,
+        files: payload.stats.totalFiles,
+        symbols: payload.stats.totalSymbols,
+        elapsed: `${elapsed}ms`,
+      },
+      "cartographer index synced",
     );
-    return c.json({ error: syncErr.message }, 500);
-  }
 
-  const elapsed = Date.now() - start;
-  log.info(
-    {
-      projectId,
-      rootPath: payload.rootPath,
+    return c.json({
+      ok: true,
+      project: projectId,
       mode,
       files: payload.stats.totalFiles,
       symbols: payload.stats.totalSymbols,
-      elapsed: `${elapsed}ms`,
-    },
-    "cartographer index synced",
-  );
-
-  return c.json({
-    ok: true,
-    project: projectId,
-    mode,
-    files: payload.stats.totalFiles,
-    symbols: payload.stats.totalSymbols,
-  });
+    });
+  } finally {
+    await closeScope(scope);
+  }
 });
 
 /**
@@ -282,44 +285,48 @@ cartographer.post("/sync", async (c) => {
  * Returns file paths and metadata, not the full index.
  */
 cartographer.get("/:project", async (c) => {
-  const scope = rootScope(await getDb(), scopeOrgId(c));
-  const rawProject = decodeURIComponent(c.req.param("project"));
-  const resolved = await resolveProjectForQuery(scope, rawProject);
-  if (resolved.error) {
-    return c.json({ error: resolved.error }, 400);
+  const scope = await requestScope(c.get("identity"), scopeOrgId(c));
+  try {
+    const rawProject = decodeURIComponent(c.req.param("project"));
+    const resolved = await resolveProjectForQuery(scope, rawProject);
+    if (resolved.error) {
+      return c.json({ error: resolved.error }, 400);
+    }
+    const project = resolved.project;
+
+    const [fetchErr, files] = await attempt(async () => {
+      const [rows] = await scope.db.query<
+        [Array<{ file_path: string; language: string; indexed_at: string }>]
+      >(
+        `SELECT file_path, language, indexed_at FROM cart_file WHERE project_id = $project_id AND org_id = $scope_org ORDER BY file_path`,
+        { project_id: project, scope_org: scope.orgId },
+      );
+      return rows ?? [];
+    });
+
+    if (fetchErr) {
+      log.error(
+        { error: fetchErr.message, project },
+        "cartographer fetch failed",
+      );
+      return c.json({ error: fetchErr.message }, 500);
+    }
+
+    if (files.length === 0) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    return c.json({
+      project,
+      files: files.map((f) => ({
+        path: f.file_path,
+        language: f.language,
+        indexedAt: f.indexed_at,
+      })),
+    });
+  } finally {
+    await closeScope(scope);
   }
-  const project = resolved.project;
-
-  const [fetchErr, files] = await attempt(async () => {
-    const [rows] = await scope.db.query<
-      [Array<{ file_path: string; language: string; indexed_at: string }>]
-    >(
-      `SELECT file_path, language, indexed_at FROM cart_file WHERE project_id = $project_id AND org_id = $scope_org ORDER BY file_path`,
-      { project_id: project, scope_org: scope.orgId },
-    );
-    return rows ?? [];
-  });
-
-  if (fetchErr) {
-    log.error(
-      { error: fetchErr.message, project },
-      "cartographer fetch failed",
-    );
-    return c.json({ error: fetchErr.message }, 500);
-  }
-
-  if (files.length === 0) {
-    return c.json({ error: "Project not found" }, 404);
-  }
-
-  return c.json({
-    project,
-    files: files.map((f) => ({
-      path: f.file_path,
-      language: f.language,
-      indexedAt: f.indexed_at,
-    })),
-  });
 });
 
 /**
@@ -328,8 +335,8 @@ cartographer.get("/:project", async (c) => {
  * List all indexed projects with file counts.
  */
 cartographer.get("/", async (c) => {
+  const scope = await requestScope(c.get("identity"), scopeOrgId(c));
   try {
-    const scope = rootScope(await getDb(), scopeOrgId(c));
     const [projects = []] = await scope.db.query<
       [Array<{ project_id: string; count: number; indexed_at: string }>]
     >(
@@ -348,5 +355,7 @@ cartographer.get("/", async (c) => {
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ error: msg }, "cartographer list failed");
     return c.json({ error: msg }, 500);
+  } finally {
+    await closeScope(scope);
   }
 });

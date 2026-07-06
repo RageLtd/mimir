@@ -21,8 +21,8 @@ import { getLastModelMessages } from "../agent/message-log";
 import { updateTokenCount } from "../agent/message-log/compaction-state";
 import { modelContentToString } from "../agent/message-log/message-utils";
 import { config } from "../config";
-import { rootScope } from "../db/scope";
-import { getDb } from "../db/surreal";
+import { requestScope } from "../db/build-scope";
+import { closeScope } from "../db/scope";
 import { retrieveContextBundle } from "../goldfish/context-bundle";
 import { retrieveMemories } from "../goldfish/memory";
 import { getLastSummaries } from "../goldfish/store";
@@ -76,12 +76,13 @@ context.post("/memories", async (c) => {
     return c.json({ error: "Missing required field: query" }, 400);
   }
 
+  // Scope to the gate-resolved org (owner sentinel when auth is off); a scoped
+  // JWT connection under auth, closed in the finally.
+  const scope = await requestScope(c.get("identity"), scopeOrgId(c));
   try {
     // retrieveMemories takes ModelMessage[] and reads the last 3 user
     // messages to build its query. Synthesize a single user message from
     // the caller's query string so we share one code path.
-    // Scope to the gate-resolved org (owner sentinel when auth is off).
-    const scope = rootScope(await getDb(), scopeOrgId(c));
     const memories = await retrieveMemories(scope, [
       { role: "user", content: body.query },
     ]);
@@ -96,6 +97,8 @@ context.post("/memories", async (c) => {
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ error: msg }, "memory retrieval failed");
     return c.json({ error: msg }, 500);
+  } finally {
+    await closeScope(scope);
   }
 });
 
@@ -108,17 +111,17 @@ context.get("/summaries", async (c) => {
   const countParam = c.req.query("count") ?? "3";
   const count = Math.max(1, Math.min(50, parseInt(countParam, 10) || 3));
 
+  const scope = await requestScope(c.get("identity"), scopeOrgId(c));
   try {
-    const summaries = await getLastSummaries(
-      rootScope(await getDb(), scopeOrgId(c)),
-      count,
-    );
+    const summaries = await getLastSummaries(scope, count);
     log.debug({ count: summaries.length }, "summaries retrieved");
     return c.json({ summaries });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ error: msg }, "summaries retrieval failed");
     return c.json({ error: msg }, 500);
+  } finally {
+    await closeScope(scope);
   }
 });
 
@@ -252,17 +255,14 @@ context.post("/assemble", async (c) => {
     return c.json({ error: "Missing required field: query" }, 400);
   }
 
+  const scope = await requestScope(c.get("identity"), scopeOrgId(c));
   try {
     const [{ content: rawPrompt }, { memories, summaries, playbooks }] =
       await Promise.all([
         loadPrompt(),
-        retrieveContextBundle(
-          rootScope(await getDb(), scopeOrgId(c)),
-          body.query,
-          {
-            projectIdentifier: body.projectId ?? body.project,
-          },
-        ),
+        retrieveContextBundle(scope, body.query, {
+          projectIdentifier: body.projectId ?? body.project,
+        }),
       ]);
 
     const today = new Date().toISOString().split("T")[0] ?? "";
@@ -271,7 +271,7 @@ context.post("/assemble", async (c) => {
     // Mirror context-assembly middleware: last N raw messages, always.
     // Summaries are additive — they never replace raw recent history.
     const recentMessages = await getLastModelMessages(
-      rootScope(await getDb(), scopeOrgId(c)),
+      scope,
       config.context.keepRecentMessages,
     );
 
@@ -332,6 +332,8 @@ context.post("/assemble", async (c) => {
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ error: msg }, "context assembly failed");
     return c.json({ error: msg }, 500);
+  } finally {
+    await closeScope(scope);
   }
 });
 
@@ -368,57 +370,67 @@ context.post("/retrieve", async (c) => {
     return c.json({ error: "Missing required field: query" }, 400);
   }
 
-  const [retrievalErr, retrieval] = await attempt(async () =>
-    retrieveContextBundle(rootScope(await getDb(), scopeOrgId(c)), body.query, {
-      projectIdentifier: body.projectId ?? body.project,
-      topK: RETRIEVE_MEMORY_TOP_K,
-      includeRelated: false,
-      summaryCount: RETRIEVE_SUMMARY_COUNT,
-    }),
-  );
-  if (retrievalErr) {
-    log.error({ err: retrievalErr.message }, "retrieve failed");
-    return c.json({ error: retrievalErr.message }, 500);
-  }
-
-  const { memories, summaries, playbooks } = retrieval;
-  const injection = buildContextInjection(summaries, memories, null, playbooks);
-  // Count actual `- ` items, not raw newlines — memory bodies can span
-  // multiple lines and would otherwise inflate the displayed count.
-  const memoryCount = memories
-    ? memories.split("\n").filter((l) => l.startsWith("- ")).length
-    : 0;
-  const summaryCount = summaries.length;
-
-  // Empty injection → empty contextBlock; caller skips injection entirely.
-  if (injection.length === 0) {
-    log.debug(
-      { project: body.project, projectId: body.projectId },
-      "retrieve: no memories or summaries to inject",
+  const scope = await requestScope(c.get("identity"), scopeOrgId(c));
+  try {
+    const [retrievalErr, retrieval] = await attempt(() =>
+      retrieveContextBundle(scope, body.query, {
+        projectIdentifier: body.projectId ?? body.project,
+        topK: RETRIEVE_MEMORY_TOP_K,
+        includeRelated: false,
+        summaryCount: RETRIEVE_SUMMARY_COUNT,
+      }),
     );
-    return c.json({ contextBlock: "", memoryCount: 0, summaryCount: 0 });
+    if (retrievalErr) {
+      log.error({ err: retrievalErr.message }, "retrieve failed");
+      return c.json({ error: retrievalErr.message }, 500);
+    }
+
+    const { memories, summaries, playbooks } = retrieval;
+    const injection = buildContextInjection(
+      summaries,
+      memories,
+      null,
+      playbooks,
+    );
+    // Count actual `- ` items, not raw newlines — memory bodies can span
+    // multiple lines and would otherwise inflate the displayed count.
+    const memoryCount = memories
+      ? memories.split("\n").filter((l) => l.startsWith("- ")).length
+      : 0;
+    const summaryCount = summaries.length;
+
+    // Empty injection → empty contextBlock; caller skips injection entirely.
+    if (injection.length === 0) {
+      log.debug(
+        { project: body.project, projectId: body.projectId },
+        "retrieve: no memories or summaries to inject",
+      );
+      return c.json({ contextBlock: "", memoryCount: 0, summaryCount: 0 });
+    }
+
+    // First entry is the synthetic user message — its content is the
+    // already-formatted "Session context:\n<summaries>...<memories>..."
+    // payload. Strip the "Session context:\n" preamble (it's redundant
+    // inside our wrapper) and wrap in <retrieved_context>.
+    const userMsg = injection[0];
+    const rawContent =
+      userMsg && typeof userMsg.content === "string" ? userMsg.content : "";
+    const stripped = rawContent.replace(/^Session context:\s*/, "");
+    const contextBlock = `<retrieved_context>\n${stripped}\n</retrieved_context>`;
+
+    log.info(
+      {
+        project: body.project,
+        projectId: body.projectId,
+        summaryCount,
+        memoryCount,
+        blockChars: contextBlock.length,
+      },
+      "retrieve: returning context block",
+    );
+
+    return c.json({ contextBlock, memoryCount, summaryCount });
+  } finally {
+    await closeScope(scope);
   }
-
-  // First entry is the synthetic user message — its content is the
-  // already-formatted "Session context:\n<summaries>...<memories>..."
-  // payload. Strip the "Session context:\n" preamble (it's redundant
-  // inside our wrapper) and wrap in <retrieved_context>.
-  const userMsg = injection[0];
-  const rawContent =
-    userMsg && typeof userMsg.content === "string" ? userMsg.content : "";
-  const stripped = rawContent.replace(/^Session context:\s*/, "");
-  const contextBlock = `<retrieved_context>\n${stripped}\n</retrieved_context>`;
-
-  log.info(
-    {
-      project: body.project,
-      projectId: body.projectId,
-      summaryCount,
-      memoryCount,
-      blockChars: contextBlock.length,
-    },
-    "retrieve: returning context block",
-  );
-
-  return c.json({ contextBlock, memoryCount, summaryCount });
 });

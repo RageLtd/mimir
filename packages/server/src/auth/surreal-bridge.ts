@@ -84,3 +84,21 @@ export function mintSurrealToken(
 export function buildDefineAccessSql(secret: string) {
   return `DEFINE ACCESS OVERWRITE ${SURREAL_ACCESS_NAME} ON DATABASE TYPE JWT ALGORITHM HS256 KEY ${JSON.stringify(secret)};`;
 }
+
+/**
+ * Row-level org PERMISSIONS applied to every tenant table when the bridge
+ * secret is configured (MIM-69 slice 5). ALTER TABLE — not DEFINE TABLE
+ * OVERWRITE — so the existing DEFINE FIELD and index definitions survive
+ * untouched. The predicate binds to `$token.org_id`, the custom claim
+ * buildSurrealClaims mints (JWT record access exposes claims under `$token`,
+ * not `$auth`). Only the scoped mimir_user sessions are subject to these; the
+ * root connection bypasses table permissions by Surreal design.
+ */
+export function buildTablePermissionsSql(tables: readonly string[]) {
+  return tables
+    .map(
+      (table) =>
+        `ALTER TABLE ${table} PERMISSIONS FOR select, create, update, delete WHERE org_id = $token.org_id;`,
+    )
+    .join("\n");
+}

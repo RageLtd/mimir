@@ -3,6 +3,7 @@
  * OpenAI-compatible SSE output.
  */
 
+import { closeScope } from "../../db/scope";
 import type { MimirContext } from "../../middleware/types";
 import { log } from "../../util/logger";
 import { redactSecret } from "../../util/redact";
@@ -75,9 +76,13 @@ export function streamingResponse(model: Model, ctx: MimirContext) {
           );
           emitSSE({ content: `\n\n[Error: ${msg}]` });
         })
-        .finally(() => {
+        .finally(async () => {
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
+          // Slice 5: the request's scoped connection outlived the route
+          // handler until the stream drained — close it now. No-op on the
+          // root connection (auth-off / keyless path).
+          await closeScope(ctx.scope);
         });
     },
   });

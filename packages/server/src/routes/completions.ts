@@ -12,8 +12,8 @@ import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { getSmallModelConfig } from "../agent/provider/query";
 import { runAgent } from "../agent/run";
-import { rootScope } from "../db/scope";
-import { getDb } from "../db/surreal";
+import { requestScope } from "../db/build-scope";
+import { closeScope, type OrgScope } from "../db/scope";
 import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
 import {
   createMimirContext,
@@ -160,16 +160,19 @@ completions.post("/v1/chat/completions", async (c) => {
     req.metadata,
   );
 
+  // MIM-69 slice 5: a scoped, PERMISSIONS-bound JWT connection when auth is on
+  // (owner-sentinel root connection when off). The agent stream takes ownership
+  // and closes it in its finalizer; if the handoff never happens (pipeline
+  // throws below), the catch closes it so the connection can't leak.
+  let scope: OrgScope | null = null;
   try {
-    // MIM-69: scope every store access this request makes to the gate-resolved
-    // org (owner sentinel when auth is off). Still the root connection — the
-    // scoped connection + PERMISSIONS land in slice 4.
-    const scope = rootScope(await getDb(), scopeOrgId(c));
+    scope = await requestScope(c.get("identity"), scopeOrgId(c));
     const ctx = await prepareContext(
       createMimirContext(req, { scope, providerOverride }),
     );
     return runAgent(ctx);
   } catch (err) {
+    if (scope) await closeScope(scope);
     log.error({ err }, "middleware pipeline failed");
     return c.json(
       {

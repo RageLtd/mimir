@@ -9,6 +9,7 @@ import { describe, expect, test } from "bun:test";
 import {
   buildDefineAccessSql,
   buildSurrealClaims,
+  buildTablePermissionsSql,
   mintSurrealToken,
   SURREAL_ACCESS_NAME,
   signJwtHs256,
@@ -98,5 +99,36 @@ describe("buildDefineAccessSql", () => {
   test("quotes and escapes hostile secret characters", () => {
     const sql = buildDefineAccessSql('we"ird\\secret');
     expect(sql).toContain('"we\\"ird\\\\secret"');
+  });
+});
+
+describe("buildTablePermissionsSql", () => {
+  const TABLES = ["memory", "message_log", "project"];
+
+  test("emits one non-destructive ALTER per table bound to $token.org_id", () => {
+    const sql = buildTablePermissionsSql(TABLES);
+    const lines = sql.split("\n").filter((l) => l.length > 0);
+    expect(lines).toHaveLength(TABLES.length);
+    for (const table of TABLES) {
+      expect(sql).toContain(
+        `ALTER TABLE ${table} PERMISSIONS FOR select, create, update, delete WHERE org_id = $token.org_id;`,
+      );
+    }
+  });
+
+  test("uses ALTER, never DEFINE TABLE OVERWRITE (fields must survive)", () => {
+    const sql = buildTablePermissionsSql(TABLES);
+    expect(sql).not.toContain("DEFINE TABLE");
+    expect(sql).not.toContain("OVERWRITE");
+  });
+
+  test("binds to the JWT $token claim, not $auth", () => {
+    const sql = buildTablePermissionsSql(TABLES);
+    expect(sql).toContain("$token.org_id");
+    expect(sql).not.toContain("$auth");
+  });
+
+  test("empty table list yields empty SQL", () => {
+    expect(buildTablePermissionsSql([])).toBe("");
   });
 });
