@@ -8,6 +8,7 @@
  * context field or a middleware stage touches this file only.
  */
 
+import type { OrgScope } from "../db/scope";
 import { ensureProjectId } from "../projects/store";
 import { injectMemories } from "./goldfish";
 import { injectProjectRules } from "./project-rules";
@@ -63,10 +64,11 @@ export function generateRequestId() {
  */
 export function createMimirContext(
   request: ChatRequest,
-  opts: { providerOverride?: ProviderOverride | null } = {},
+  opts: { scope: OrgScope; providerOverride?: ProviderOverride | null },
 ) {
   return {
     request,
+    scope: opts.scope,
     projectId: null,
     providerOverride: opts.providerOverride ?? null,
     systemPrompt: "",

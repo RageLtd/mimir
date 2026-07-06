@@ -11,9 +11,9 @@ const mockEmbedOne = mock<(text: string) => Promise<number[] | null>>(() =>
   Promise.resolve(new Array(1024).fill(0.1)),
 );
 
-const mockStoreMemory = mock<(m: { type?: string }) => Promise<string | null>>(
-  () => Promise.resolve("memory:abc123"),
-);
+const mockStoreMemory = mock<
+  (scope: unknown, m: { type?: string }) => Promise<string | null>
+>(() => Promise.resolve("memory:abc123"));
 const mockFindDuplicate = mock<() => Promise<unknown>>(() =>
   Promise.resolve(null),
 );
@@ -40,7 +40,10 @@ mock.module("../../projects/resolve-for-query", () => ({
 }));
 
 // Import AFTER mocking
+import { testScope } from "../../testing/scope";
 import { executeMemoryStore, storeTypedMemory } from "./memory";
+
+const scope = testScope();
 
 describe("project memory store", () => {
   beforeEach(() => {
@@ -52,16 +55,16 @@ describe("project memory store", () => {
   });
 
   test("executeMemoryStore stamps type 'fact'", async () => {
-    const result = await executeMemoryStore({
+    const result = await executeMemoryStore(scope, {
       content: "The inference server lives in packages/server.",
     });
 
     expect(result).toMatchObject({ stored: true });
-    expect(mockStoreMemory.mock.calls[0]?.[0]).toMatchObject({ type: "fact" });
+    expect(mockStoreMemory.mock.calls[0]?.[1]).toMatchObject({ type: "fact" });
   });
 
   test("storeTypedMemory embeds a playbook's trigger, not its body", async () => {
-    await storeTypedMemory({
+    await storeTypedMemory(scope, {
       content: "Step 1: do X. Step 2: do Y.",
       type: "playbook",
       name: "do the thing",
@@ -74,7 +77,7 @@ describe("project memory store", () => {
     expect(mockEmbedOne.mock.calls[0]?.[0]).toBe(
       "do the thing\nuse when the thing needs doing",
     );
-    expect(mockStoreMemory.mock.calls[0]?.[0]).toMatchObject({
+    expect(mockStoreMemory.mock.calls[0]?.[1]).toMatchObject({
       type: "playbook",
       name: "do the thing",
       trigger: "use when the thing needs doing",
@@ -84,7 +87,7 @@ describe("project memory store", () => {
   test("a duplicate short-circuits before storing", async () => {
     mockFindDuplicate.mockResolvedValueOnce({ content: "an existing memory" });
 
-    const result = await executeMemoryStore({ content: "near-identical" });
+    const result = await executeMemoryStore(scope, { content: "near-identical" });
 
     expect(result).toMatchObject({
       stored: false,

@@ -3,10 +3,11 @@
  * hygiene model to fuse each into one canonical statement, and (unless dry-run)
  * replace the cluster with that canonical memory.
  *
- * Clustering reuses the existing HNSW index via findNeighbors, so we don't
- * recompute pairwise distances ourselves.
+ * Clustering reuses findNeighbors (exact per-org cosine KNN, MIM-69) so we
+ * don't recompute pairwise distances ourselves.
  */
 
+import type { OrgScope } from "../../db/scope";
 import { log } from "../../util/logger";
 import { embedOne } from "../clients";
 import {
@@ -54,6 +55,7 @@ export interface ConsolidationReport {
 /** Build the near-neighbour edge list among fact memories: each fact's
  *  neighbours within mergeDistance become clustering edges. */
 async function buildEdges(
+  scope: OrgScope,
   facts: Memory[],
   mergeDistance: number,
   maxClusterSize: number,
@@ -69,6 +71,7 @@ async function buildEdges(
     if (!m.id || m.embedding.length === 0) continue;
     const sourceId = String(m.id);
     const neighbors = await findNeighbors(
+      scope,
       m.embedding,
       m.id,
       maxClusterSize,
@@ -87,9 +90,10 @@ async function buildEdges(
 }
 
 export async function runConsolidation(
+  scope: OrgScope,
   memories: Memory[],
   opts: ConsolidationOpts,
-): Promise<ConsolidationReport> {
+) {
   // Key by the stringified id — cluster member ids arrive as strings from the
   // edge list, while m.id is a RecordId object straight from the DB.
   const byId = new Map<string, Memory>();
@@ -100,6 +104,7 @@ export async function runConsolidation(
   );
 
   const edges = await buildEdges(
+    scope,
     facts,
     opts.mergeDistance,
     opts.maxClusterSize,
@@ -148,7 +153,7 @@ export async function runConsolidation(
       continue;
     }
 
-    const applied = await applyMerge(members, canonicalText);
+    const applied = await applyMerge(scope, members, canonicalText);
     proposals.push({
       memberIds,
       memberContents,
@@ -186,7 +191,11 @@ export async function runConsolidation(
 /** Replace a cluster (or a judge-routed pair) with a single canonical memory.
  *  Exported so the contradiction pass can reuse this proven merge path when its
  *  judge rules a pair "merge" rather than "demote". */
-export async function applyMerge(members: Memory[], canonicalText: string) {
+export async function applyMerge(
+  scope: OrgScope,
+  members: Memory[],
+  canonicalText: string,
+) {
   const embedding = await embedOne(canonicalText);
   if (!embedding) {
     return { ok: false as const, error: "failed to embed canonical text" };
@@ -199,7 +208,7 @@ export async function applyMerge(members: Memory[], canonicalText: string) {
   );
   const projectId = members.find((m) => m.project_id)?.project_id;
 
-  const canonicalId = await createCanonicalMemory({
+  const canonicalId = await createCanonicalMemory(scope, {
     content: canonicalText,
     embedding,
     project_id: projectId,
@@ -211,14 +220,19 @@ export async function applyMerge(members: Memory[], canonicalText: string) {
   }
 
   for (const m of members) {
-    if (m.id) await deleteMemory(m.id);
+    if (m.id) await deleteMemory(scope, m.id);
   }
 
   // Relink the canonical memory into the neighbour graph.
-  const neighbors = await findNeighbors(embedding, canonicalId, 5, 0.3);
+  const neighbors = await findNeighbors(scope, embedding, canonicalId, 5, 0.3);
   for (const n of neighbors) {
     if (n.id)
-      await createRelation(canonicalId, n.id, Math.max(0, 1 - n.distance));
+      await createRelation(
+        scope,
+        canonicalId,
+        n.id,
+        Math.max(0, 1 - n.distance),
+      );
   }
 
   return { ok: true as const, canonicalId };

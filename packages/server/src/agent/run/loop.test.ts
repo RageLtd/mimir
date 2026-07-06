@@ -1,6 +1,7 @@
 import type { LanguageModelV3Message } from "@ai-sdk/provider";
 import { describe, expect, test } from "bun:test";
 import type { MimirContext } from "../../middleware/types";
+import { testScope } from "../../testing/scope";
 import { executeServerTools, type EmitSSE } from "./loop";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -14,6 +15,7 @@ function makeCtx(
     clientTools: {} as MimirContext["clientTools"],
     allTools: {} as MimirContext["allTools"],
     request: { model: "test-model" } as MimirContext["request"],
+    scope: testScope(),
     projectId: "test",
     providerOverride: null,
     systemPrompt: "",

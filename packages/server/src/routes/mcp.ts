@@ -16,15 +16,20 @@
 
 import { asSchema } from "ai";
 import { Hono } from "hono";
-import { getMcpPublicTools } from "../agent/server-tools";
+import { buildMcpPublicTools } from "../agent/server-tools";
+import { rootScope } from "../db/scope";
+import { getDb } from "../db/surreal";
 import { log } from "../util/logger";
 
 export const mcp = new Hono();
 
 // ── Tool registry ──────────────────────────────────────────────────────────
-// Derived automatically from getMcpPublicTools() — add new tools there, not here.
+// Built per request via buildMcpPublicTools(scope) — add new tools there, not
+// here. Scope-bound so tool execute closes over the caller's org (MIM-69). In
+// slice 2 the scope is a RootScope on the owner sentinel; slice 3 derives it
+// from the gate-stashed identity.
 
-const TOOLS = getMcpPublicTools();
+type Tools = ReturnType<typeof buildMcpPublicTools>;
 
 // ── JSON-RPC types ─────────────────────────────────────────────────────────
 
@@ -37,7 +42,7 @@ type JsonRpcRequest = {
 
 // ── JSON-RPC dispatch ──────────────────────────────────────────────────────
 
-async function dispatch(req: JsonRpcRequest) {
+async function dispatch(req: JsonRpcRequest, TOOLS: Tools) {
   // Notifications (no id) require no response
   if (req.id === undefined) return null;
 
@@ -132,7 +137,10 @@ mcp.post("/", async (c) => {
   const body = (await c.req.json()) as JsonRpcRequest;
   log.info({ method: body.method }, "mcp request");
 
-  const response = await dispatch(body);
+  // Scope the tool set per request. Slice 2: RootScope on the owner sentinel;
+  // slice 3 reads the gate-stashed identity to scope to the caller's org.
+  const tools = buildMcpPublicTools(rootScope(await getDb()));
+  const response = await dispatch(body, tools);
 
   if (response === null) {
     return new Response(null, { status: 202 });

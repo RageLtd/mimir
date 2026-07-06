@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { jsonSchema, type ModelMessage, tool, type ToolSet } from "ai";
+import { Surreal } from "surrealdb";
 
 // -- Mocks for the finalizeTurn threading tests (MIM-74) — must precede the
 // module-under-test import so the fire-and-forget trio hits spies, not the DB.
@@ -7,6 +8,11 @@ const extractSpy = mock(async () => {});
 mock.module("../goldfish/memory", () => ({
   extractAndStoreMemories: extractSpy,
 }));
+
+// Background extraction now builds a rootScope(await getDb(), orgId) (MIM-69).
+// Hand back an inert (unconnected) Surreal so no real socket opens — the store
+// call it wraps is the mocked extractSpy, which never touches the connection.
+mock.module("../db/surreal", () => ({ getDb: async () => new Surreal() }));
 
 const updateTokenSpy = mock(async () => ({ needsCompaction: true }));
 const appendAssistantSpy = mock(async () => "id-1");
@@ -90,6 +96,7 @@ describe("finalizeTurn BYOK threading (MIM-74)", () => {
     projectId: "proj-1",
     providerOverride,
     request: { messages, model: "anthropic/claude-test" },
+    scope: { orgId: "test-org" },
   });
 
   test("keyed turn forwards the override to extraction and compaction", async () => {
@@ -97,11 +104,16 @@ describe("finalizeTurn BYOK threading (MIM-74)", () => {
     finalizeTurn("plenty of assistant text", [], undefined, makeCtx(override), 42);
     await flush();
 
-    expect(extractSpy).toHaveBeenCalledWith(expect.any(Array), "proj-1", {
-      override,
-      requestModelId: "anthropic/claude-test",
-    });
+    // extractAndStoreMemories now takes (scope, messages, projectId, byok).
+    expect(extractSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Array),
+      "proj-1",
+      { override, requestModelId: "anthropic/claude-test" },
+    );
+    // runCompaction now takes (orgId, modelId, override).
     expect(runCompactionSpy).toHaveBeenCalledWith(
+      "test-org",
       "anthropic/claude-test",
       override,
     );
@@ -111,8 +123,14 @@ describe("finalizeTurn BYOK threading (MIM-74)", () => {
     finalizeTurn("plenty of assistant text", [], undefined, makeCtx(null), 42);
     await flush();
 
-    expect(extractSpy).toHaveBeenCalledWith(expect.any(Array), "proj-1", null);
+    expect(extractSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Array),
+      "proj-1",
+      null,
+    );
     expect(runCompactionSpy).toHaveBeenCalledWith(
+      "test-org",
       "anthropic/claude-test",
       null,
     );

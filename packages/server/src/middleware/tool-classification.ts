@@ -11,7 +11,7 @@
 
 import type { ToolSet } from "ai";
 import { jsonSchema, tool } from "ai";
-import { getServerTools } from "../agent/server-tools";
+import { buildServerTools } from "../agent/server-tools";
 import { log } from "../util/logger";
 import type { MimirContext, OpenAIToolDef } from "./types";
 
@@ -69,8 +69,9 @@ function convertClientTools(openaiTools: OpenAIToolDef[]) {
 export async function classifyTools(ctx: MimirContext) {
   const start = Date.now();
 
-  // Server tools — defined in our codebase with execute()
-  ctx.serverTools = getServerTools();
+  // Server tools — defined in our codebase with execute(), each closing over
+  // the request's org scope (MIM-69).
+  ctx.serverTools = buildServerTools(ctx.scope);
 
   // Client tools — from the request, no execute()
   ctx.clientTools = ctx.request.tools

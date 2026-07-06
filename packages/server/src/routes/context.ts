@@ -21,6 +21,8 @@ import { getLastModelMessages } from "../agent/message-log";
 import { updateTokenCount } from "../agent/message-log/compaction-state";
 import { modelContentToString } from "../agent/message-log/message-utils";
 import { config } from "../config";
+import { OWNER_ORG_SENTINEL, rootScope } from "../db/scope";
+import { getDb } from "../db/surreal";
 import { retrieveContextBundle } from "../goldfish/context-bundle";
 import { retrieveMemories } from "../goldfish/memory";
 import { getLastSummaries } from "../goldfish/store";
@@ -77,7 +79,10 @@ context.post("/memories", async (c) => {
     // retrieveMemories takes ModelMessage[] and reads the last 3 user
     // messages to build its query. Synthesize a single user message from
     // the caller's query string so we share one code path.
-    const memories = await retrieveMemories([
+    // CC context routes aren't identity-plumbed yet (slice 3) — scope to the
+    // owner org on the root connection.
+    const scope = rootScope(await getDb());
+    const memories = await retrieveMemories(scope, [
       { role: "user", content: body.query },
     ]);
 
@@ -104,7 +109,7 @@ context.get("/summaries", async (c) => {
   const count = Math.max(1, Math.min(50, parseInt(countParam, 10) || 3));
 
   try {
-    const summaries = await getLastSummaries(count);
+    const summaries = await getLastSummaries(rootScope(await getDb()), count);
     log.debug({ count: summaries.length }, "summaries retrieved");
     return c.json({ summaries });
   } catch (err) {
@@ -155,7 +160,7 @@ context.post("/token-report", async (c) => {
         },
         "token-report triggered async compaction",
       );
-      runCompaction(body.modelId).catch((err) =>
+      runCompaction(OWNER_ORG_SENTINEL, body.modelId).catch((err) =>
         log.error({ err }, "compaction failed"),
       );
     }
@@ -247,7 +252,7 @@ context.post("/assemble", async (c) => {
     const [{ content: rawPrompt }, { memories, summaries, playbooks }] =
       await Promise.all([
         loadPrompt(),
-        retrieveContextBundle(body.query, {
+        retrieveContextBundle(rootScope(await getDb()), body.query, {
           projectIdentifier: body.projectId ?? body.project,
         }),
       ]);
@@ -354,8 +359,8 @@ context.post("/retrieve", async (c) => {
     return c.json({ error: "Missing required field: query" }, 400);
   }
 
-  const [retrievalErr, retrieval] = await attempt(() =>
-    retrieveContextBundle(body.query, {
+  const [retrievalErr, retrieval] = await attempt(async () =>
+    retrieveContextBundle(rootScope(await getDb()), body.query, {
       projectIdentifier: body.projectId ?? body.project,
       topK: RETRIEVE_MEMORY_TOP_K,
       includeRelated: false,

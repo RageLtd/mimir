@@ -1,6 +1,7 @@
 import type { ModelMessage } from "@ai-sdk/provider-utils";
 import { modelContentToString } from "../agent/message-log/message-utils";
 import type { BackgroundByok } from "../agent/provider/override-completion";
+import type { OrgScope } from "../db/scope";
 import { log } from "../util/logger";
 import { embed, embedOne, extractMemories } from "./clients";
 import {
@@ -76,6 +77,7 @@ export function scoreRetrievalCandidate(opts: {
 }
 
 export async function retrieveMemoryList(
+  scope: OrgScope,
   messages: ModelMessage[],
   opts: RetrieveOpts = {},
 ) {
@@ -100,8 +102,8 @@ export async function retrieveMemoryList(
   }
 
   const [vectorResults, textResults] = await Promise.all([
-    searchByVector(queryEmbedding, 30),
-    searchByText(query, 20),
+    searchByVector(scope, queryEmbedding, 30),
+    searchByText(scope, query, 20),
   ]);
 
   const seen = new Set<string>();
@@ -176,13 +178,15 @@ export async function retrieveMemoryList(
   }
 
   const topIds = topMemories.map((m) => m.id);
-  const related = includeRelated ? await getRelatedMemories(topIds, 5) : [];
+  const related = includeRelated
+    ? await getRelatedMemories(scope, topIds, 5)
+    : [];
 
   const allAccessedIds = [
     ...topIds,
     ...(related.map((m) => m.id).filter(Boolean) as string[]),
   ];
-  touchMemories(allAccessedIds).catch((e) =>
+  touchMemories(scope, allAccessedIds).catch((e) =>
     log.error({ err: e }, "failed to touch memories"),
   );
 
@@ -220,10 +224,11 @@ export function formatMemoryList(memories: string[]) {
  * contents are multi-line, so counting lines of this string lies.
  */
 export async function retrieveMemories(
+  scope: OrgScope,
   messages: ModelMessage[],
   opts: RetrieveOpts = {},
 ) {
-  const memories = await retrieveMemoryList(messages, opts);
+  const memories = await retrieveMemoryList(scope, messages, opts);
   return memories ? formatMemoryList(memories) : null;
 }
 
@@ -276,9 +281,10 @@ function buildExtractionText(messages: ModelMessage[]) {
  * (see PROJECT_MATCH_BONUS), not a filter.
  */
 export async function storeMemoryBatch(
+  scope: OrgScope,
   memories: string[],
   projectId?: string,
-): Promise<{ stored: number; duplicates: number }> {
+) {
   const embeddings = await embed(memories);
   if (!embeddings) {
     log.error("failed to embed memory batch");
@@ -292,7 +298,7 @@ export async function storeMemoryBatch(
     const embedding = embeddings[i];
     if (!embedding) continue;
 
-    const dup = await findDuplicate(embedding);
+    const dup = await findDuplicate(scope, embedding);
     if (dup) {
       duplicates++;
       log.debug(
@@ -302,7 +308,7 @@ export async function storeMemoryBatch(
       continue;
     }
 
-    const memoryId = await storeMemory({
+    const memoryId = await storeMemory(scope, {
       content: memories[i] ?? "",
       project_id: projectId,
       type: "fact",
@@ -311,10 +317,11 @@ export async function storeMemoryBatch(
     if (!memoryId) continue;
     stored++;
 
-    const neighbors = await findNeighbors(embedding, memoryId, 5, 0.3);
+    const neighbors = await findNeighbors(scope, embedding, memoryId, 5, 0.3);
     for (const neighbor of neighbors) {
       if (!neighbor.id) continue;
       await createRelation(
+        scope,
         memoryId,
         neighbor.id,
         Math.max(0, 1 - neighbor.distance),
@@ -326,6 +333,7 @@ export async function storeMemoryBatch(
 }
 
 export async function extractAndStoreMemories(
+  scope: OrgScope,
   messages: ModelMessage[],
   projectId?: string,
   byok: BackgroundByok = null,
@@ -371,7 +379,11 @@ export async function extractAndStoreMemories(
   }
 
   log.info({ count: memories.length }, "extracted memories, embedding");
-  const { stored, duplicates } = await storeMemoryBatch(memories, projectId);
+  const { stored, duplicates } = await storeMemoryBatch(
+    scope,
+    memories,
+    projectId,
+  );
 
   log.info(
     {

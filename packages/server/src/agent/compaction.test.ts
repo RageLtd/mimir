@@ -1,8 +1,14 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { Surreal } from "surrealdb";
 
 // ---------------------------------------------------------------------------
 // Mocks - MUST be at top level before imports
 // ---------------------------------------------------------------------------
+
+// runCompaction builds rootScope(await getDb(), orgId) (MIM-69). Hand back an
+// inert Surreal — the store calls it wraps (storeMemory/getLastSummaries) are
+// mocked below and never touch the connection.
+mock.module("../db/surreal", () => ({ getDb: async () => new Surreal() }));
 
 const mockGetCompactionState = mock<() => Promise<unknown>>(() =>
   Promise.resolve(null),
@@ -136,7 +142,7 @@ describe("runCompaction", () => {
   test("does nothing if compaction already in progress", async () => {
     mockStartCompaction.mockResolvedValueOnce(false);
 
-    await runCompaction();
+    await runCompaction("test-org");
 
     expect(mockGetMessagesSince).not.toHaveBeenCalled();
     expect(mockStoreMemory).not.toHaveBeenCalled();
@@ -156,7 +162,7 @@ describe("runCompaction", () => {
       { role: "assistant", content: "hello" },
     ]);
 
-    await runCompaction();
+    await runCompaction("test-org");
 
     expect(mockFetch).not.toHaveBeenCalled();
     expect(mockStoreMemory).not.toHaveBeenCalled();
@@ -186,16 +192,18 @@ describe("runCompaction", () => {
     });
     mockStoreMemory.mockResolvedValueOnce("memory:summary-1");
 
-    await runCompaction();
+    await runCompaction("test-org");
 
     expect(mockStoreMemory).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({
         content: "Compacted summary of conversation",
         type: "summary",
       }),
     );
-    // Summaries are global — no project_id sentinel on the stored row.
+    // Summaries carry no project_id sentinel on the stored row.
     expect(mockStoreMemory).not.toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({ project_id: expect.anything() }),
     );
   });
@@ -227,7 +235,7 @@ describe("runCompaction", () => {
     });
     mockStoreMemory.mockResolvedValueOnce("memory:summary-2");
 
-    await runCompaction();
+    await runCompaction("test-org");
 
     // Verify fetch was called with the delta prompt and previous summary in user content
     expect(mockFetch.mock.calls.length).toBeGreaterThan(0);
@@ -272,7 +280,7 @@ describe("runCompaction", () => {
     });
     mockStoreMemory.mockResolvedValueOnce("memory:summary-3");
 
-    await runCompaction();
+    await runCompaction("test-org");
 
     // Verify the context injection pair was NOT included in the conversation text
     expect(mockFetch.mock.calls.length).toBeGreaterThan(0);
@@ -310,7 +318,7 @@ describe("runCompaction", () => {
     mockStoreMemory.mockResolvedValueOnce("memory:summary-small");
 
     // Pass a request model — should still use the small model
-    await runCompaction("claude-code/opus");
+    await runCompaction("test-org", "claude-code/opus");
 
     const fetchCall = mockFetch.mock.calls[0] as unknown as [string, RequestInit];
     const body = JSON.parse(fetchCall[1].body as string);
@@ -352,7 +360,7 @@ describe("runCompaction", () => {
     });
     mockStoreMemory.mockResolvedValueOnce("memory:summary-fallback");
 
-    await runCompaction("vllm/llama3");
+    await runCompaction("test-org", "vllm/llama3");
 
     const fetchCall = mockFetch.mock.calls[0] as unknown as [string, RequestInit];
     const body = JSON.parse(fetchCall[1].body as string);
@@ -384,7 +392,7 @@ describe("runCompaction", () => {
     seedCompactableRun();
     mockStoreMemory.mockResolvedValueOnce("memory:summary-byok");
 
-    await runCompaction("anthropic/claude-x", {
+    await runCompaction("test-org", "anthropic/claude-x", {
       apiKey: "sk-user",
       smallModel: "anthropic/haiku",
     });
@@ -398,6 +406,7 @@ describe("runCompaction", () => {
     // The env raw-fetch path must not fire on a keyed run
     expect(mockFetch).not.toHaveBeenCalled();
     expect(mockStoreMemory).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({ content: "BYOK summary", type: "summary" }),
     );
   });
@@ -406,7 +415,7 @@ describe("runCompaction", () => {
     seedCompactableRun();
     mockStoreMemory.mockResolvedValueOnce("memory:summary-byok-2");
 
-    await runCompaction("anthropic/claude-x", { apiKey: "sk-user" });
+    await runCompaction("test-org", "anthropic/claude-x", { apiKey: "sk-user" });
 
     expect(mockRunOverrideCompletion).toHaveBeenCalledWith(
       expect.objectContaining({ modelId: "anthropic/claude-x" }),
@@ -418,7 +427,7 @@ describe("runCompaction", () => {
     seedCompactableRun();
     mockRunOverrideCompletion.mockResolvedValueOnce(null);
 
-    await runCompaction("anthropic/claude-x", { apiKey: "sk-user" });
+    await runCompaction("test-org", "anthropic/claude-x", { apiKey: "sk-user" });
 
     expect(mockFetch).not.toHaveBeenCalled();
     expect(mockStoreMemory).not.toHaveBeenCalled();
@@ -442,7 +451,7 @@ describe("runCompaction", () => {
     mockGetMessagesSince.mockResolvedValueOnce(messages);
     mockFetch.mockRejectedValueOnce(new Error("API unavailable"));
 
-    await runCompaction();
+    await runCompaction("test-org");
 
     expect(mockStoreMemory).not.toHaveBeenCalled();
     expect(mockFinishCompaction).toHaveBeenCalled();

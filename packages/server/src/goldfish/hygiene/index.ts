@@ -11,6 +11,8 @@
  */
 
 import { config } from "../../config";
+import { rootScope } from "../../db/scope";
+import { getDb } from "../../db/surreal";
 import { log } from "../../util/logger";
 import { attempt } from "../../util/result";
 import { listAllMemories } from "../store-hygiene";
@@ -55,10 +57,15 @@ export async function runHygieneSweep(
   const start = Date.now();
   log.info({ dryRun, model: modelCfg.model }, "hygiene sweep starting");
 
-  const [err, report] = await attempt(async () => {
-    const memories = await listAllMemories();
+  // Background sweep runs on the root connection (bypasses PERMISSIONS). In
+  // slice 2 it scopes to the owner org (sentinel); per-org iteration for a
+  // multi-tenant cloud is the MIM-66 fold-in (slice 4).
+  const scope = rootScope(await getDb());
 
-    const consolidation = await runConsolidation(memories, {
+  const [err, report] = await attempt(async () => {
+    const memories = await listAllMemories(scope);
+
+    const consolidation = await runConsolidation(scope, memories, {
       dryRun,
       mergeDistance: config.hygiene.consolidation.mergeDistance,
       maxClusterSize: config.hygiene.consolidation.maxClusterSize,
@@ -67,12 +74,12 @@ export async function runHygieneSweep(
 
     // After a live consolidation the store has changed — re-read so the next
     // pass works on the post-merge set. In dry-run nothing moved.
-    const afterConsolidation = dryRun ? memories : await listAllMemories();
+    const afterConsolidation = dryRun ? memories : await listAllMemories(scope);
 
     // Contradiction runs in the band ABOVE consolidation's merge distance, so
     // it never touches what consolidation just merged. Disabled → undefined.
     const contradiction = config.hygiene.contradiction.enabled
-      ? await runContradiction(afterConsolidation, {
+      ? await runContradiction(scope, afterConsolidation, {
           dryRun,
           mergeDistance: config.hygiene.consolidation.mergeDistance,
           contradictionDistance:
@@ -84,9 +91,9 @@ export async function runHygieneSweep(
 
     // Re-read again after live demotions so the forgetting pass scores
     // post-demotion confidence — a freshly-superseded fact may now be prunable.
-    const forgetMemories = dryRun ? memories : await listAllMemories();
+    const forgetMemories = dryRun ? memories : await listAllMemories(scope);
 
-    const forgetting = await runForgetting(forgetMemories, {
+    const forgetting = await runForgetting(scope, forgetMemories, {
       dryRun,
       scoreFloor: config.hygiene.forget.scoreFloor,
       minAgeDays: config.hygiene.forget.minAgeDays,

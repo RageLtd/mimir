@@ -6,28 +6,31 @@
  * are easy to find and reason about in isolation.
  */
 
-import { queryFirst, queryOne } from "../db/surreal";
+import { type OrgScope, scopedQueryFirst, scopedQueryOne } from "../db/scope";
 import { log } from "../util/logger";
 import { type Memory, toRecordId } from "./store";
 
 /**
- * Stream every memory in pages. The sweep needs the whole set (embeddings
- * included, for neighbour clustering), but loading it in one query risks a
- * huge response — page through in fixed chunks instead.
+ * Stream every memory in the org in pages. The sweep needs the whole set
+ * (embeddings included, for neighbour clustering), but loading it in one query
+ * risks a huge response — page through in fixed chunks instead.
  */
-export async function listAllMemories(pageSize = 500): Promise<Memory[]> {
+export async function listAllMemories(scope: OrgScope, pageSize = 500) {
   const all: Memory[] = [];
   let start = 0;
 
   for (;;) {
-    const page = await queryOne<Memory>(
+    const page = await scopedQueryOne<Memory>(
+      scope,
       /* surql */ `
       SELECT id, content, project_id, type, confidence, access_count,
              last_accessed, created_at, embedding
       FROM memory
+      WHERE org_id = $scope_org
       ORDER BY created_at
       LIMIT ${pageSize} START ${start}
       `,
+      { scope_org: scope.orgId },
     );
     all.push(...page);
     if (page.length < pageSize) break;
@@ -55,17 +58,22 @@ export interface CanonicalInput {
  * time::now() via the schema (see db/surreal.ts), so the merge counts as a
  * fresh access — SurrealQL forbids combining CONTENT with a trailing SET.
  */
-export async function createCanonicalMemory(input: CanonicalInput) {
+export async function createCanonicalMemory(
+  scope: OrgScope,
+  input: CanonicalInput,
+) {
   const fields: Record<string, unknown> = {
     content: input.content,
     embedding: input.embedding,
     type: "fact",
     access_count: input.accessCount,
     confidence: input.confidence,
+    org_id: scope.orgId,
   };
   if (input.project_id) fields.project_id = input.project_id;
 
-  const created = await queryFirst<Memory>(
+  const created = await scopedQueryFirst<Memory>(
+    scope,
     /* surql */ `
     CREATE memory CONTENT $fields
     `,
@@ -88,26 +96,31 @@ export async function createCanonicalMemory(input: CanonicalInput) {
  * forever. Returns the number of memories decayed.
  */
 export async function decayUntouchedConfidence(
+  scope: OrgScope,
   factor: number,
   olderThanSeconds: number,
-): Promise<number> {
+) {
   const seconds = Math.max(0, Math.round(olderThanSeconds));
-  const decayed = await queryOne<{ id: string }>(
+  const decayed = await scopedQueryOne<{ id: string }>(
+    scope,
     /* surql */ `
     UPDATE memory SET confidence = confidence * $factor
-    WHERE type = 'fact' AND last_accessed < time::now() - ${seconds}s
+    WHERE type = 'fact' AND org_id = $scope_org
+      AND last_accessed < time::now() - ${seconds}s
     RETURN id
     `,
-    { factor },
+    { factor, scope_org: scope.orgId },
   );
   log.info({ count: decayed.length, factor }, "decayed untouched confidence");
   return decayed.length;
 }
 
-/** Count of memories currently stored — for sweep reporting. */
-export async function countMemories() {
-  const row = await queryFirst<{ count: number }>(
-    `SELECT count() AS count FROM memory GROUP ALL`,
+/** Count of memories currently stored in the org — for sweep reporting. */
+export async function countMemories(scope: OrgScope) {
+  const row = await scopedQueryFirst<{ count: number }>(
+    scope,
+    `SELECT count() AS count FROM memory WHERE org_id = $scope_org GROUP ALL`,
+    { scope_org: scope.orgId },
   );
   return row?.count ?? 0;
 }
@@ -119,12 +132,18 @@ export async function countMemories() {
  * superseded fact fades over subsequent sweeps rather than vanishing now.
  * Returns the post-demotion confidence, or null if the memory was not found.
  */
-export async function demoteConfidence(id: string, factor: number) {
-  const updated = await queryFirst<{ confidence: number }>(
+export async function demoteConfidence(
+  scope: OrgScope,
+  id: string,
+  factor: number,
+) {
+  const updated = await scopedQueryFirst<{ confidence: number }>(
+    scope,
     /* surql */ `
-    UPDATE $id SET confidence = confidence * $factor RETURN AFTER
+    UPDATE $id SET confidence = confidence * $factor
+    WHERE org_id = $scope_org RETURN AFTER
     `,
-    { id: toRecordId(id), factor },
+    { id: toRecordId(id), factor, scope_org: scope.orgId },
   );
   if (!updated) {
     log.warn({ id }, "demoteConfidence — memory not found");
@@ -142,11 +161,14 @@ export async function demoteConfidence(id: string, factor: number) {
  * The contradiction pass consults these to skip pairs it has already ruled on,
  * so a confirmed contradiction is demoted exactly once instead of every sweep.
  */
-export async function listSupersedesEdges() {
-  const rows = await queryOne<{ in: unknown; out: unknown }>(
+export async function listSupersedesEdges(scope: OrgScope) {
+  const rows = await scopedQueryOne<{ in: unknown; out: unknown }>(
+    scope,
     /* surql */ `
-    SELECT in, out FROM relates_to WHERE relation_type = 'supersedes'
+    SELECT in, out FROM relates_to
+    WHERE relation_type = 'supersedes' AND org_id = $scope_org
     `,
+    { scope_org: scope.orgId },
   );
   return rows.map((r) => ({ from: String(r.in), to: String(r.out) }));
 }

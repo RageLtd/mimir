@@ -14,6 +14,8 @@
  *   optional field stays unset rather than holding a fake sentinel
  */
 
+import { rootScope } from "../db/scope";
+import { getDb } from "../db/surreal";
 import { embedOne } from "../goldfish/clients";
 import { getLastSummaries, storeMemory } from "../goldfish/store";
 import type { ProviderOverride } from "../middleware/types";
@@ -47,10 +49,16 @@ import {
  * on the user's key when present, the env small model otherwise.
  */
 export async function runCompaction(
+  orgId: string,
   modelId?: string,
   override: ProviderOverride | null = null,
 ) {
   const start = Date.now();
+
+  // Background job — runs on the root connection after the request's scoped
+  // session has closed, but stamps the triggering org so the summary belongs
+  // to it (app-layer filter; PERMISSIONS bypassed on root by design).
+  const scope = rootScope(await getDb(), orgId);
 
   // Mark as compacting to prevent concurrent runs
   const started = await startCompaction();
@@ -119,7 +127,7 @@ export async function runCompaction(
 
     // Fetch the most recent summary so the summarizer knows what's
     // already been captured and can focus on genuinely new content
-    const previousSummaries = await getLastSummaries(1);
+    const previousSummaries = await getLastSummaries(scope, 1);
     const previousSummary = previousSummaries[0]?.content ?? null;
 
     // Call memgen API for summarization
@@ -145,7 +153,7 @@ export async function runCompaction(
       return;
     }
 
-    const summaryId = await storeMemory({
+    const summaryId = await storeMemory(scope, {
       content: summary,
       type: "summary",
       message_count: messages.length,

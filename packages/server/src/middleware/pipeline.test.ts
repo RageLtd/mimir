@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { testScope } from "../testing/scope";
 import {
   createMimirContext,
   extractProviderOverride,
   requireProjectId,
 } from "./pipeline";
 import type { ChatRequest, MimirContext } from "./types";
+
+const scope = testScope();
 
 const baseRequest = (overrides: Partial<ChatRequest> = {}): ChatRequest => ({
   model: "test-model",
@@ -15,12 +18,12 @@ const baseRequest = (overrides: Partial<ChatRequest> = {}): ChatRequest => ({
 
 describe("createMimirContext", () => {
   test("starts with projectId unresolved — resolution is a pipeline stage", () => {
-    const ctx = createMimirContext(baseRequest());
+    const ctx = createMimirContext(baseRequest(), { scope });
     expect(ctx.projectId).toBeNull();
   });
 
   test("starts with an empty pipeline state", () => {
-    const ctx = createMimirContext(baseRequest());
+    const ctx = createMimirContext(baseRequest(), { scope });
     expect(ctx.systemPrompt).toBe("");
     expect(ctx.memories).toBeNull();
     expect(ctx.playbooks).toBeNull();
@@ -81,21 +84,22 @@ describe("extractProviderOverride", () => {
   test("createMimirContext threads the override onto ctx", () => {
     const override = { apiKey: "sk-user" };
     const ctx = createMimirContext(baseRequest(), {
+      scope,
       providerOverride: override,
     });
     expect(ctx.providerOverride).toBe(override);
-    expect(createMimirContext(baseRequest()).providerOverride).toBeNull();
+    expect(createMimirContext(baseRequest(), { scope }).providerOverride).toBeNull();
   });
 });
 
 describe("requireProjectId", () => {
   test("throws before the resolve stage has run", () => {
-    const ctx: MimirContext = createMimirContext(baseRequest());
+    const ctx: MimirContext = createMimirContext(baseRequest(), { scope });
     expect(() => requireProjectId(ctx)).toThrow(/not resolved/);
   });
 
   test("returns the resolved id once set", () => {
-    const ctx: MimirContext = createMimirContext(baseRequest());
+    const ctx: MimirContext = createMimirContext(baseRequest(), { scope });
     ctx.projectId = "01TESTULID";
     expect(requireProjectId(ctx)).toBe("01TESTULID");
   });

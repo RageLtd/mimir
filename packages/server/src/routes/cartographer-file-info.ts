@@ -19,7 +19,8 @@
  */
 
 import type { Context } from "hono";
-import { queryFirst, queryOne } from "../db/surreal";
+import { rootScope } from "../db/scope";
+import { getDb, queryFirst, queryOne } from "../db/surreal";
 import { formatMemoryList, retrieveMemoryList } from "../goldfish/memory";
 import { resolveProjectForQuery } from "../projects/resolve-for-query";
 import { log } from "../util/logger";
@@ -182,11 +183,15 @@ export const fileInfoHandler = async (c: Context) => {
       .filter((n) => typeof n === "string" && n.length > 0),
   ].join(" ");
 
-  const [memErr, memoryList] = await attempt(() =>
-    retrieveMemoryList([{ role: "user", content: memoryQuery }], {
-      topK: FILE_INFO_MEMORY_TOP_K,
-      includeRelated: false,
-    }),
+  const [memErr, memoryList] = await attempt(async () =>
+    retrieveMemoryList(
+      rootScope(await getDb()),
+      [{ role: "user", content: memoryQuery }],
+      {
+        topK: FILE_INFO_MEMORY_TOP_K,
+        includeRelated: false,
+      },
+    ),
   );
   if (memErr) {
     log.warn(

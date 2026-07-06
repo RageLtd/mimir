@@ -1,5 +1,7 @@
 import type { AssistantContent, ModelMessage, ToolSet } from "ai";
 
+import { rootScope } from "../db/scope";
+import { getDb } from "../db/surreal";
 import { extractAndStoreMemories } from "../goldfish/memory";
 import type { ProviderOverride } from "../middleware/types";
 import { log } from "../util/logger";
@@ -69,10 +71,12 @@ export function finalizeTurn(
     projectId: string | null;
     providerOverride: ProviderOverride | null;
     request: { messages: ModelMessage[]; model: string };
+    scope: { orgId: string };
   },
   lastStepInputTokens: number,
 ) {
   const projectId = ctx.projectId;
+  const orgId = ctx.scope.orgId;
   if (!projectId) {
     // The pipeline's resolve stage runs before any turn — a null here is
     // an ordering bug, and persisting under a fake key would corrupt the
@@ -96,6 +100,7 @@ export function finalizeTurn(
   triggerCompactionIfNeeded(
     lastStepInputTokens,
     projectId,
+    orgId,
     ctx.request.model,
     byok?.override ?? null,
   );
@@ -107,6 +112,7 @@ export function finalizeTurn(
     text || null,
     lastUserMessage ?? null,
     projectId,
+    orgId,
     byok,
   );
 }
@@ -125,14 +131,15 @@ export function finalizeTurn(
 export function triggerCompactionIfNeeded(
   promptTokens: number,
   projectId: string,
+  orgId: string,
   modelId?: string,
   override: ProviderOverride | null = null,
 ) {
   updateTokenCount(promptTokens, modelId)
     .then(({ needsCompaction }) => {
       if (needsCompaction) {
-        log.info({ projectId }, "triggering async compaction");
-        runCompaction(modelId, override).catch((err) =>
+        log.info({ projectId, orgId }, "triggering async compaction");
+        runCompaction(orgId, modelId, override).catch((err) =>
           log.error({ err }, "compaction failed"),
         );
       }
@@ -206,6 +213,7 @@ export function extractMemoriesFromResponse(
   assistantContent: string | null | undefined,
   lastUserMessage: ModelMessage | null,
   projectId: string,
+  orgId: string,
   byok: BackgroundByok = null,
 ) {
   if (!assistantContent || !lastUserMessage) return;
@@ -214,7 +222,10 @@ export function extractMemoriesFromResponse(
     lastUserMessage,
     { role: "assistant", content: assistantContent },
   ];
-  extractAndStoreMemories(messages, projectId, byok).catch((err) =>
-    log.error({ err }, "extraction error"),
-  );
+  // Fire-and-forget after the request scope closed — extraction runs on the
+  // root connection stamped with the triggering org.
+  (async () => {
+    const scope = rootScope(await getDb(), orgId);
+    await extractAndStoreMemories(scope, messages, projectId, byok);
+  })().catch((err) => log.error({ err }, "extraction error"));
 }

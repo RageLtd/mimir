@@ -124,8 +124,8 @@ export async function assembleContext(ctx: MimirContext) {
     );
   }
 
-  // 2. Get last N summaries (global, newest first from DESC order)
-  const summaries = await getLastSummaries(3);
+  // 2. Get last N summaries for the org (newest first from DESC order)
+  const summaries = await getLastSummaries(ctx.scope, 3);
 
   // 3. Get the last N raw messages from the global log.
   //

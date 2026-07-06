@@ -12,6 +12,8 @@ import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { getSmallModelConfig } from "../agent/provider/query";
 import { runAgent } from "../agent/run";
+import { rootScope } from "../db/scope";
+import { getDb } from "../db/surreal";
 import {
   createMimirContext,
   extractProviderOverride,
@@ -158,8 +160,12 @@ completions.post("/v1/chat/completions", async (c) => {
   );
 
   try {
+    // MIM-69: scope every store access this request makes. Slice 2 uses a
+    // RootScope on the owner sentinel; slice 3 swaps in the gate-resolved
+    // identity (buildScope + connect-per-request, closed in a finally).
+    const scope = rootScope(await getDb());
     const ctx = await prepareContext(
-      createMimirContext(req, { providerOverride }),
+      createMimirContext(req, { scope, providerOverride }),
     );
     return runAgent(ctx);
   } catch (err) {

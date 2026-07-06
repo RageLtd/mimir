@@ -15,20 +15,25 @@ type FakePlaybook = {
 };
 
 const mockStoreTypedMemory = mock<
-  (args: { type: string; name?: string; trigger?: string }) => Promise<unknown>
+  (
+    scope: unknown,
+    args: { type: string; name?: string; trigger?: string },
+  ) => Promise<unknown>
 >(() => Promise.resolve({ stored: true, id: "memory:new" }));
 
 const mockGetPlaybook = mock<
-  (sel: { id?: string; name?: string }) => Promise<FakePlaybook | null>
+  (scope: unknown, sel: { id?: string; name?: string }) => Promise<
+    FakePlaybook | null
+  >
 >(() => Promise.resolve(null));
 const mockListPlaybooks = mock<() => Promise<FakePlaybook[]>>(() =>
   Promise.resolve([]),
 );
 const mockUpdatePlaybook = mock<
-  (id: string, patch: unknown) => Promise<FakePlaybook | null>
+  (scope: unknown, id: string, patch: unknown) => Promise<FakePlaybook | null>
 >(() => Promise.resolve(null));
-const mockDeleteMemory = mock<(id: string) => Promise<boolean>>(() =>
-  Promise.resolve(true),
+const mockDeleteMemory = mock<(scope: unknown, id: string) => Promise<boolean>>(
+  () => Promise.resolve(true),
 );
 
 mock.module("./memory", () => ({ storeTypedMemory: mockStoreTypedMemory }));
@@ -40,14 +45,17 @@ mock.module("../../goldfish/playbook", () => ({
 mock.module("../../goldfish/store", () => ({ deleteMemory: mockDeleteMemory }));
 
 // Import AFTER mocking
-import { getMcpPublicTools, getServerTools } from "./index";
+import { testScope } from "../../testing/scope";
+import { buildMcpPublicTools, buildServerTools } from "./index";
 import {
+  buildPlaybookTools,
   executePlaybookDelete,
   executePlaybookLoad,
   executePlaybookStore,
   executePlaybookUpdate,
-  playbookTools,
 } from "./playbook";
+
+const scope = testScope();
 
 const PLAYBOOK_TOOL_NAMES = [
   "project_playbook_store",
@@ -67,12 +75,12 @@ beforeEach(() => {
 
 describe("playbook store", () => {
   test("stamps type 'playbook' and forwards name + trigger", async () => {
-    await executePlaybookStore({
+    await executePlaybookStore(scope, {
       name: "Audit env",
       trigger: "use when auditing env vars",
       content: "Step 1...",
     });
-    expect(mockStoreTypedMemory.mock.calls[0]?.[0]).toMatchObject({
+    expect(mockStoreTypedMemory.mock.calls[0]?.[1]).toMatchObject({
       type: "playbook",
       name: "Audit env",
       trigger: "use when auditing env vars",
@@ -82,7 +90,7 @@ describe("playbook store", () => {
 
 describe("playbook load", () => {
   test("requires a selector", async () => {
-    const result = await executePlaybookLoad({});
+    const result = await executePlaybookLoad(scope, {});
     expect(result).toMatchObject({ found: false });
     expect(mockGetPlaybook).not.toHaveBeenCalled();
   });
@@ -95,19 +103,19 @@ describe("playbook load", () => {
       content: "the steps",
       project: undefined,
     });
-    const result = await executePlaybookLoad({ name: "Audit env" });
+    const result = await executePlaybookLoad(scope, { name: "Audit env" });
     expect(result).toMatchObject({ found: true, content: "the steps" });
   });
 
   test("reports not found", async () => {
-    const result = await executePlaybookLoad({ name: "ghost" });
+    const result = await executePlaybookLoad(scope, { name: "ghost" });
     expect(result).toMatchObject({ found: false });
   });
 });
 
 describe("playbook update", () => {
   test("rejects when nothing to change", async () => {
-    const result = await executePlaybookUpdate({ name: "Audit env" });
+    const result = await executePlaybookUpdate(scope, { name: "Audit env" });
     expect(result).toMatchObject({ updated: false });
     expect(mockUpdatePlaybook).not.toHaveBeenCalled();
   });
@@ -125,19 +133,19 @@ describe("playbook update", () => {
       trigger: "t",
       content: "c",
     });
-    const result = await executePlaybookUpdate({
+    const result = await executePlaybookUpdate(scope, {
       name: "old",
       newName: "new",
     });
     expect(result).toMatchObject({ updated: true, name: "new" });
-    expect(mockUpdatePlaybook.mock.calls[0]?.[0]).toBe("memory:x");
-    expect(mockUpdatePlaybook.mock.calls[0]?.[1]).toMatchObject({
+    expect(mockUpdatePlaybook.mock.calls[0]?.[1]).toBe("memory:x");
+    expect(mockUpdatePlaybook.mock.calls[0]?.[2]).toMatchObject({
       name: "new",
     });
   });
 
   test("reports not found without touching the store", async () => {
-    const result = await executePlaybookUpdate({
+    const result = await executePlaybookUpdate(scope, {
       name: "ghost",
       content: "x",
     });
@@ -154,13 +162,13 @@ describe("playbook delete", () => {
       trigger: "t",
       content: "c",
     });
-    const result = await executePlaybookDelete({ name: "Audit env" });
+    const result = await executePlaybookDelete(scope, { name: "Audit env" });
     expect(result).toMatchObject({ deleted: true, id: "memory:x" });
-    expect(mockDeleteMemory.mock.calls[0]?.[0]).toBe("memory:x");
+    expect(mockDeleteMemory.mock.calls[0]?.[1]).toBe("memory:x");
   });
 
   test("requires a selector", async () => {
-    const result = await executePlaybookDelete({});
+    const result = await executePlaybookDelete(scope, {});
     expect(result).toMatchObject({ deleted: false });
     expect(mockDeleteMemory).not.toHaveBeenCalled();
   });
@@ -168,9 +176,10 @@ describe("playbook delete", () => {
 
 describe("registration", () => {
   test("all playbook tools are offered as server tools, so the loop runs them server-side", () => {
-    // Membership in getServerTools() IS the classification — the loop
+    // Membership in buildServerTools(scope) IS the classification — the loop
     // classifies tool calls against ctx.serverTools directly.
-    const tools = getServerTools();
+    const tools = buildServerTools(scope);
+    const playbookTools = buildPlaybookTools(scope);
     for (const name of PLAYBOOK_TOOL_NAMES) {
       expect(name in tools).toBe(true);
       expect(name in playbookTools).toBe(true);
@@ -178,7 +187,7 @@ describe("registration", () => {
   });
 
   test("all playbook tools are exposed via /mcp for Claude Code parity", () => {
-    const tools = getMcpPublicTools();
+    const tools = buildMcpPublicTools(scope);
     for (const name of PLAYBOOK_TOOL_NAMES) {
       expect(name in tools).toBe(true);
     }

@@ -8,11 +8,13 @@
  * newest-first.
  */
 
+import type { OrgScope } from "../db/scope";
 import { retrieveMemories } from "./memory";
 import { buildPlaybookContext } from "./playbook";
 import { getLastSummaries } from "./store";
 
 export async function retrieveContextBundle(
+  scope: OrgScope,
   query: string,
   opts: {
     projectIdentifier?: string;
@@ -22,12 +24,14 @@ export async function retrieveContextBundle(
   } = {},
 ) {
   const [memories, summaries, playbooks] = await Promise.all([
-    retrieveMemories([{ role: "user", content: query }], {
+    retrieveMemories(scope, [{ role: "user", content: query }], {
       topK: opts.topK,
       includeRelated: opts.includeRelated,
     }),
-    getLastSummaries(opts.summaryCount ?? 3),
-    buildPlaybookContext(query, { projectIdentifier: opts.projectIdentifier }),
+    getLastSummaries(scope, opts.summaryCount ?? 3),
+    buildPlaybookContext(scope, query, {
+      projectIdentifier: opts.projectIdentifier,
+    }),
   ]);
   return { memories, summaries, playbooks };
 }

@@ -55,6 +55,7 @@ describe("POST /persist BYOK transport (MIM-74)", () => {
       "a real answer with substance",
       expect.objectContaining({ role: "user" }),
       "proj-uuid",
+      "owner",
       {
         override: {
           apiKey: "sk-cc-user",
@@ -73,6 +74,7 @@ describe("POST /persist BYOK transport (MIM-74)", () => {
       "a real answer with substance",
       expect.objectContaining({ role: "user" }),
       "proj-uuid",
+      "owner",
       null,
     );
   });
@@ -85,6 +87,7 @@ describe("POST /persist BYOK transport (MIM-74)", () => {
       expect.any(String),
       expect.anything(),
       "proj-uuid",
+      "owner",
       null,
     );
   });

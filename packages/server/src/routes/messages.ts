@@ -21,6 +21,7 @@ import { Hono } from "hono";
 import { modelContentToString } from "../agent/message-log/message-utils";
 import { appendTurn } from "../agent/message-log/persistence";
 import { extractMemoriesFromResponse } from "../agent/post-processing";
+import { OWNER_ORG_SENTINEL } from "../db/scope";
 import {
   extractProviderOverride,
   PROVIDER_KEY_HEADER,
@@ -143,6 +144,7 @@ messages.post("/persist", async (c) => {
           assistantText,
           lastUser,
           projectId,
+          OWNER_ORG_SENTINEL,
           override ? { override } : null,
         );
       }

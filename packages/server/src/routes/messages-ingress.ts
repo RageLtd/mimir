@@ -16,6 +16,8 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { runAgent } from "../agent/run";
+import { rootScope } from "../db/scope";
+import { getDb } from "../db/surreal";
 import {
   createMimirContext,
   extractProviderOverride,
@@ -130,7 +132,8 @@ messagesIngress.post("/", async (c) => {
   );
 
   try {
-    const ctx = createMimirContext(chatRequest, { providerOverride });
+    const scope = rootScope(await getDb());
+    const ctx = createMimirContext(chatRequest, { scope, providerOverride });
 
     // System prompt resolution: prefer the client's `system` field (CC
     // launched via wrapper carries the Mimir prompt verbatim through
