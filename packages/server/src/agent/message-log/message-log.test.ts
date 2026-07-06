@@ -7,8 +7,10 @@ import {
   spyOn,
   test,
 } from "bun:test";
-import * as surreal from "../../db/surreal";
 import type { ModelMessage } from "@ai-sdk/provider-utils";
+import type { Surreal } from "surrealdb";
+import type { OrgScope } from "../../db/scope";
+import * as surreal from "../../db/surreal";
 
 import {
   appendModelMessage,
@@ -18,6 +20,8 @@ import {
   startCompaction,
   updateTokenCount,
 } from "./index";
+
+const ORG = "test-org";
 
 // ---------------------------------------------------------------------------
 // Shared setup
@@ -44,6 +48,14 @@ describe("message-log", () => {
     mock.restore();
   });
 
+  // Persistence now runs on scope.db (MIM-69) — a scope whose db.query is the
+  // shared mock lets these tests keep asserting on the same query spy.
+  const mkScope = (): OrgScope => ({
+    orgId: ORG,
+    db: { query: queryMock } as unknown as Surreal,
+    isRoot: true,
+  });
+
   // -----------------------------------------------------------------------
   // appendModelMessage
   // -----------------------------------------------------------------------
@@ -54,7 +66,7 @@ describe("message-log", () => {
         [{ id: "message_log:[test,999]", role: "user", content: '"Hello"' }],
       ]);
 
-      const id = await appendModelMessage(
+      const id = await appendModelMessage(mkScope(), 
         { role: "user", content: "Hello" },
         "my-project",
       );
@@ -65,7 +77,7 @@ describe("message-log", () => {
     test("returns null on database error", async () => {
       queryMock.mockRejectedValueOnce(new Error("Connection refused"));
 
-      const id = await appendModelMessage(
+      const id = await appendModelMessage(mkScope(), 
         { role: "user", content: "test" },
         "my-project",
       );
@@ -76,7 +88,7 @@ describe("message-log", () => {
     test("returns null when query returns empty result", async () => {
       queryMock.mockResolvedValueOnce([[]]);
 
-      const id = await appendModelMessage(
+      const id = await appendModelMessage(mkScope(), 
         { role: "user", content: "test" },
         "my-project",
       );
@@ -89,7 +101,7 @@ describe("message-log", () => {
         [{ id: "message_log:[p,1]", role: "user", content: '"hi"' }],
       ]);
 
-      await appendModelMessage({ role: "user", content: "hi" }, "p");
+      await appendModelMessage(mkScope(), { role: "user", content: "hi" }, "p");
 
       const [, params] = queryMock.mock.calls[0] as [
         string,
@@ -116,7 +128,7 @@ describe("message-log", () => {
         [{ id: "message_log:[p,1]", role: "tool", content: "..." }],
       ]);
 
-      await appendModelMessage(toolMessage, "p");
+      await appendModelMessage(mkScope(), toolMessage, "p");
 
       const [, params] = queryMock.mock.calls[0] as [
         string,
@@ -151,7 +163,7 @@ describe("message-log", () => {
         [{ id: "message_log:[p,1]", role: "assistant", content: "..." }],
       ]);
 
-      await appendModelMessage(assistantMessage, "p");
+      await appendModelMessage(mkScope(), assistantMessage, "p");
 
       const [, params] = queryMock.mock.calls[0] as [
         string,
@@ -174,7 +186,7 @@ describe("message-log", () => {
         [{ id: "message_log:[proj,1]", role: "user", content: '"x"' }],
       ]);
 
-      await appendModelMessage({ role: "user", content: "x" }, "my-project");
+      await appendModelMessage(mkScope(), { role: "user", content: "x" }, "my-project");
 
       const [, params] = queryMock.mock.calls[0] as [
         string,
@@ -188,7 +200,7 @@ describe("message-log", () => {
         [{ id: "message_log:[p,1]", role: "user", content: '"x"' }],
       ]);
 
-      await appendModelMessage({ role: "user", content: "x" }, "p");
+      await appendModelMessage(mkScope(), { role: "user", content: "x" }, "p");
 
       const [, params] = queryMock.mock.calls[0] as [
         string,
@@ -203,45 +215,54 @@ describe("message-log", () => {
   // -----------------------------------------------------------------------
 
   describe("getModelMessagesSince", () => {
+    // Reads now run on scope.db.query (queryMock), which returns SurrealDB's
+    // Array<ResultSet> shape [[...rows]] — one extra wrap vs the old queryOne.
     test("returns messages after the given timestamp", async () => {
-      queryOneMock.mockResolvedValueOnce([
-        {
-          id: "m1",
-          project_id: "p",
-          role: "user",
-          content: '"after cutoff"',
-          created_at: "2024-01-16",
-        },
-        {
-          id: "m2",
-          project_id: "p",
-          role: "assistant",
-          content: '"response"',
-          created_at: "2024-01-17",
-        },
+      queryMock.mockResolvedValueOnce([
+        [
+          {
+            id: "m1",
+            project_id: "p",
+            role: "user",
+            content: '"after cutoff"',
+            created_at: "2024-01-16",
+          },
+          {
+            id: "m2",
+            project_id: "p",
+            role: "assistant",
+            content: '"response"',
+            created_at: "2024-01-17",
+          },
+        ],
       ]);
 
-      const result = await getModelMessagesSince(new Date("2024-01-15T00:00:00Z"));
+      const result = await getModelMessagesSince(
+        mkScope(),
+        new Date("2024-01-15T00:00:00Z"),
+      );
 
       expect(result).toHaveLength(2);
-      expect((result[0]! as ModelMessage & { content: string }).content).toBe("after cutoff");
+      expect((result[0]! as ModelMessage & { content: string }).content).toBe(
+        "after cutoff",
+      );
     });
 
     test("returns empty array on error", async () => {
-      queryOneMock.mockRejectedValueOnce(new Error("timeout"));
+      queryMock.mockRejectedValueOnce(new Error("timeout"));
 
-      const result = await getModelMessagesSince(new Date());
+      const result = await getModelMessagesSince(mkScope(), new Date());
 
       expect(result).toEqual([]);
     });
 
     test("passes ISO string to query", async () => {
-      queryOneMock.mockResolvedValueOnce([]);
+      queryMock.mockResolvedValueOnce([[]]);
 
       const since = new Date("2024-06-15T12:30:00Z");
-      await getModelMessagesSince(since);
+      await getModelMessagesSince(mkScope(), since);
 
-      const [, params] = queryOneMock.mock.calls[0] as [
+      const [, params] = queryMock.mock.calls[0] as [
         string,
         { since: string },
       ];
@@ -263,7 +284,7 @@ describe("message-log", () => {
           updated_at: "2024-01-01T00:00:00Z",
         });
 
-        const state = await getCompactionState();
+        const state = await getCompactionState(ORG);
 
         expect(state?.tokens_since_last).toBe(50000);
         expect(state?.is_compacting).toBe(false);
@@ -272,7 +293,7 @@ describe("message-log", () => {
       test("returns null when no state exists", async () => {
         queryFirstMock.mockResolvedValueOnce(null);
 
-        const state = await getCompactionState();
+        const state = await getCompactionState(ORG);
 
         expect(state).toBeNull();
       });
@@ -296,7 +317,7 @@ describe("message-log", () => {
           updated_at: "2024-01-01",
         });
 
-        const { state, needsCompaction } = await updateTokenCount(5000);
+        const { state, needsCompaction } = await updateTokenCount(ORG, 5000);
 
         expect(state.tokens_since_last).toBe(5000);
         expect(state.last_prompt_tokens).toBe(5000);
@@ -321,7 +342,7 @@ describe("message-log", () => {
           updated_at: "2024-01-01",
         });
 
-        const { needsCompaction } = await updateTokenCount(61000);
+        const { needsCompaction } = await updateTokenCount(ORG, 61000);
 
         expect(needsCompaction).toBe(true);
       });
@@ -337,7 +358,7 @@ describe("message-log", () => {
           updated_at: "2024-01-01",
         });
 
-        const { needsCompaction } = await updateTokenCount(61000);
+        const { needsCompaction } = await updateTokenCount(ORG, 61000);
 
         expect(needsCompaction).toBe(false);
       });
@@ -346,10 +367,10 @@ describe("message-log", () => {
         queryMock.mockResolvedValueOnce([[]]); // INSERT IGNORE
         queryFirstMock.mockResolvedValueOnce(null); // UPDATE returns nothing
 
-        const { state, needsCompaction } = await updateTokenCount(100);
+        const { state, needsCompaction } = await updateTokenCount(ORG, 100);
 
         expect(needsCompaction).toBe(false);
-        expect(state.id).toBe("compaction_state:global");
+        expect(state.id).toBe(`compaction_state:${ORG}`);
         expect(state.tokens_since_last).toBe(0);
       });
 
@@ -371,7 +392,7 @@ describe("message-log", () => {
           updated_at: "2024-01-01",
         });
 
-        const { state } = await updateTokenCount(65000);
+        const { state } = await updateTokenCount(ORG, 65000);
 
         // Delta = 65000 - 60000 = 5000 (calculated inside SQL)
         expect(state.tokens_since_last).toBe(105000);
@@ -396,7 +417,7 @@ describe("message-log", () => {
           updated_at: "2024-01-01",
         });
 
-        const { state } = await updateTokenCount(15000);
+        const { state } = await updateTokenCount(ORG, 15000);
 
         // When prompt shrank, we use the full prompt as delta
         expect(state.tokens_since_last).toBe(15000);
@@ -411,7 +432,7 @@ describe("message-log", () => {
           { id: "compaction_state:global", is_compacting: true },
         ]);
 
-        const acquired = await startCompaction();
+        const acquired = await startCompaction(ORG);
 
         expect(acquired).toBe(true);
       });
@@ -420,7 +441,7 @@ describe("message-log", () => {
         queryMock.mockResolvedValueOnce([[]]); // INSERT IGNORE
         queryOneMock.mockResolvedValueOnce([]); // WHERE is_compacting = false matched nothing
 
-        const acquired = await startCompaction();
+        const acquired = await startCompaction(ORG);
 
         expect(acquired).toBe(false);
       });
@@ -430,7 +451,7 @@ describe("message-log", () => {
       test("issues reset query", async () => {
         queryMock.mockResolvedValueOnce([[]]);
 
-        await finishCompaction();
+        await finishCompaction(ORG);
 
         expect(queryMock).toHaveBeenCalledTimes(1);
         const [query] = queryMock.mock.calls[0] as [string];

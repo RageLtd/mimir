@@ -87,8 +87,8 @@ export function finalizeTurn(
     return;
   }
 
-  persistAssistantTurn(text, toolCalls, projectId, reasoning).catch((err) =>
-    log.error({ err }, "persistAssistantTurn failed"),
+  persistAssistantTurn(text, toolCalls, projectId, orgId, reasoning).catch(
+    (err) => log.error({ err }, "persistAssistantTurn failed"),
   );
 
   // BYOK (MIM-74): the background jobs this turn spawns run on the turn's
@@ -135,7 +135,7 @@ export function triggerCompactionIfNeeded(
   modelId?: string,
   override: ProviderOverride | null = null,
 ) {
-  updateTokenCount(promptTokens, modelId)
+  updateTokenCount(orgId, promptTokens, modelId)
     .then(({ needsCompaction }) => {
       if (needsCompaction) {
         log.info({ projectId, orgId }, "triggering async compaction");
@@ -171,6 +171,7 @@ export async function persistAssistantTurn(
   text: string,
   clientToolCalls: Array<Record<string, unknown>>,
   projectId: string,
+  orgId: string,
   reasoning?: string,
 ) {
   const hasText = text.trim().length > 0;
@@ -196,7 +197,10 @@ export async function persistAssistantTurn(
     role: "assistant",
     content: parts,
   };
-  await appendAssistantOutput(message, projectId).catch((err) =>
+  // Runs at turn end on the root connection stamped with the org (the request
+  // scope may be closing under slice 5's connect-per-request).
+  const scope = rootScope(await getDb(), orgId);
+  await appendAssistantOutput(scope, message, projectId).catch((err) =>
     log.error({ err }, "failed to persist assistant turn"),
   );
 }

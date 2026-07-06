@@ -19,11 +19,17 @@ export interface CompactionState {
   updated_at: string;
 }
 
+/** SQL reference to an org's compaction-state record — per-org so one tenant's
+ *  stream and lock never interfere with another's (MIM-66). Bind `$org`. */
+const STATE_REF = "type::thing('compaction_state', $org)";
+
 /**
- * Get the global compaction state.
+ * Get an org's compaction state.
  */
-export async function getCompactionState() {
-  return queryFirst<CompactionState>(`SELECT * FROM compaction_state:global`);
+export async function getCompactionState(orgId: string) {
+  return queryFirst<CompactionState>(`SELECT * FROM ${STATE_REF}`, {
+    org: orgId,
+  });
 }
 
 /**
@@ -31,7 +37,11 @@ export async function getCompactionState() {
  * Uses atomic compare-and-set to prevent race conditions between concurrent requests.
  * Returns true if compaction threshold is reached.
  */
-export async function updateTokenCount(promptTokens: number, modelId?: string) {
+export async function updateTokenCount(
+  orgId: string,
+  promptTokens: number,
+  modelId?: string,
+) {
   const modelContextWindow = modelId ? getContextWindow(modelId) : undefined;
   // Cap at config.context.maxTokens regardless of what the model advertises.
   // Opus advertises 1M on some tiers, but pricing jumps 4x past 256k — we
@@ -44,17 +54,19 @@ export async function updateTokenCount(promptTokens: number, modelId?: string) {
   const threshold = maxTokens * config.context.compactionThreshold;
 
   // Get current state
-  const currentState = await getCompactionState();
+  const currentState = await getCompactionState(orgId);
 
   // Initialize state if it doesn't exist
   if (!currentState) {
     const db = await getDb();
     await db.query(
-      `CREATE compaction_state:global SET
+      `CREATE ${STATE_REF} SET
+        org_id = $org,
         tokens_since_last = 0,
         is_compacting = false,
         last_prompt_tokens = 0,
         updated_at = time::now()`,
+      { org: orgId },
     );
   }
 
@@ -82,7 +94,7 @@ export async function updateTokenCount(promptTokens: number, modelId?: string) {
   // Atomic update: only apply if last_prompt_tokens hasn't changed since we read it.
   // This prevents concurrent requests from double-counting the same tokens.
   const state = await queryFirst<CompactionState>(
-    `UPDATE compaction_state:global
+    `UPDATE ${STATE_REF}
      SET
        tokens_since_last = $newSince,
        last_prompt_tokens = $promptTokens,
@@ -90,6 +102,7 @@ export async function updateTokenCount(promptTokens: number, modelId?: string) {
      WHERE last_prompt_tokens = $lastPromptTokens
      RETURN AFTER`,
     {
+      org: orgId,
       promptTokens,
       lastPromptTokens,
       newSince: lastSinceCompaction + delta,
@@ -99,13 +112,13 @@ export async function updateTokenCount(promptTokens: number, modelId?: string) {
   // If the update didn't apply (last_prompt_tokens changed), retry once
   if (!state) {
     // Another request updated it concurrently. Read the fresh state.
-    const freshState = await getCompactionState();
+    const freshState = await getCompactionState(orgId);
     if (!freshState) {
       log.error("failed to get compaction state after retry");
       return {
         needsCompaction: false,
         state: {
-          id: "compaction_state:global",
+          id: `compaction_state:${orgId}`,
           tokens_since_last: 0,
           is_compacting: false,
           last_prompt_tokens: 0,
@@ -154,17 +167,19 @@ export async function updateTokenCount(promptTokens: number, modelId?: string) {
  * Mark compaction as started (prevents concurrent compactions).
  * Returns true if successfully acquired the lock, false if already compacting.
  */
-export async function startCompaction() {
+export async function startCompaction(orgId: string) {
   const db = await getDb();
 
   // Try to create state if it doesn't exist
   await db.query(
-    `INSERT IGNORE INTO compaction_state { id: compaction_state:global, tokens_since_last: 0, is_compacting: false, last_prompt_tokens: 0 }`,
+    `INSERT IGNORE INTO compaction_state { id: ${STATE_REF}, org_id: $org, tokens_since_last: 0, is_compacting: false, last_prompt_tokens: 0 }`,
+    { org: orgId },
   );
 
   // Only set is_compacting = true if it's currently false (atomic lock acquisition)
   const result = await queryOne<CompactionState>(
-    `UPDATE compaction_state:global SET is_compacting = true, updated_at = time::now() WHERE is_compacting = false`,
+    `UPDATE ${STATE_REF} SET is_compacting = true, updated_at = time::now() WHERE is_compacting = false`,
+    { org: orgId },
   );
 
   // If we updated a record, we acquired the lock
@@ -181,9 +196,11 @@ export async function startCompaction() {
  * Call this at server startup to recover from crashes mid-compaction.
  */
 export async function clearStaleCompaction(staleMinutes: number = 5) {
-  // Clear is_compacting if it's been true for more than staleMinutes
+  // Boot-time recovery across EVERY org's state — no id filter, so a crash
+  // mid-compaction in any tenant is cleared. Per-org records (MIM-66) mean
+  // this now sweeps the whole table rather than a single global row.
   const result = await queryOne<CompactionState>(
-    `UPDATE compaction_state:global
+    `UPDATE compaction_state
      SET is_compacting = false, updated_at = time::now()
      WHERE is_compacting = true AND updated_at < time::now() - ${staleMinutes}m
      RETURN AFTER`,
@@ -199,16 +216,17 @@ export async function clearStaleCompaction(staleMinutes: number = 5) {
 /**
  * Reset compaction state after completion.
  */
-export async function finishCompaction() {
+export async function finishCompaction(orgId: string) {
   const db = await getDb();
 
   await db.query(
-    `UPDATE compaction_state:global SET
+    `UPDATE ${STATE_REF} SET
       tokens_since_last = 0,
       is_compacting = false,
       last_prompt_tokens = 0,
       last_compaction = time::now(),
       updated_at = time::now()`,
+    { org: orgId },
   );
 
   log.debug("compaction state reset");

@@ -57,6 +57,7 @@ describe("compaction-state cap", () => {
     });
 
     const { needsCompaction } = await updateTokenCount(
+      "test-org",
       61000,
       "claude-opus-4-5",
     );
@@ -87,6 +88,7 @@ describe("compaction-state cap", () => {
     });
 
     const { needsCompaction } = await updateTokenCount(
+      "test-org",
       61000,
       "qwen3-coder:30b",
     );

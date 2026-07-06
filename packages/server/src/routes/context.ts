@@ -148,6 +148,7 @@ context.post("/token-report", async (c) => {
 
   try {
     const { needsCompaction } = await updateTokenCount(
+      scopeOrgId(c),
       body.promptTokens,
       body.modelId,
     );
@@ -270,6 +271,7 @@ context.post("/assemble", async (c) => {
     // Mirror context-assembly middleware: last N raw messages, always.
     // Summaries are additive — they never replace raw recent history.
     const recentMessages = await getLastModelMessages(
+      rootScope(await getDb(), scopeOrgId(c)),
       config.context.keepRecentMessages,
     );
 

@@ -21,6 +21,8 @@ import { Hono } from "hono";
 import { modelContentToString } from "../agent/message-log/message-utils";
 import { appendTurn } from "../agent/message-log/persistence";
 import { extractMemoriesFromResponse } from "../agent/post-processing";
+import { rootScope } from "../db/scope";
+import { getDb } from "../db/surreal";
 import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
 import {
   extractProviderOverride,
@@ -99,8 +101,9 @@ messages.post("/persist", async (c) => {
     );
   }
 
+  const scope = rootScope(await getDb(), scopeOrgId(c));
   const [appendErr, ids] = await attempt(() =>
-    appendTurn(body.messages, projectId),
+    appendTurn(scope, body.messages, projectId),
   );
   if (appendErr) {
     log.error(

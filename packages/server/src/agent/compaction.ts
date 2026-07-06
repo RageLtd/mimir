@@ -61,7 +61,7 @@ export async function runCompaction(
   const scope = rootScope(await getDb(), orgId);
 
   // Mark as compacting to prevent concurrent runs
-  const started = await startCompaction();
+  const started = await startCompaction(orgId);
   if (!started) {
     log.warn("compaction already in progress, skipping");
     return;
@@ -69,19 +69,19 @@ export async function runCompaction(
 
   try {
     // Get messages since last summary
-    const state = await getCompactionState();
+    const state = await getCompactionState(orgId);
     const lastCompaction = state?.last_compaction
       ? new Date(state.last_compaction)
       : new Date(0);
 
-    const messages = await getModelMessagesSince(lastCompaction);
+    const messages = await getModelMessagesSince(scope, lastCompaction);
 
     if (messages.length < 10) {
       log.info(
         { messageCount: messages.length },
         "not enough messages for compaction, skipping",
       );
-      await finishCompaction();
+      await finishCompaction(orgId);
       return;
     }
 
@@ -121,7 +121,7 @@ export async function runCompaction(
         { charCount: conversationText.length },
         "conversation too short for compaction, skipping",
       );
-      await finishCompaction();
+      await finishCompaction(orgId);
       return;
     }
 
@@ -140,7 +140,7 @@ export async function runCompaction(
 
     if (!summary) {
       log.error("summarization failed, skipping compaction");
-      await finishCompaction();
+      await finishCompaction(orgId);
       return;
     }
 
@@ -149,7 +149,7 @@ export async function runCompaction(
     const embedding = await embedOne(summary);
     if (!embedding) {
       log.error("failed to embed summary");
-      await finishCompaction();
+      await finishCompaction(orgId);
       return;
     }
 
@@ -162,7 +162,7 @@ export async function runCompaction(
 
     if (!summaryId) {
       log.error("failed to store summary");
-      await finishCompaction();
+      await finishCompaction(orgId);
       return;
     }
 
@@ -176,10 +176,10 @@ export async function runCompaction(
       "compaction complete",
     );
 
-    await finishCompaction();
+    await finishCompaction(orgId);
   } catch (err) {
     log.error({ err }, "compaction failed");
-    await finishCompaction();
+    await finishCompaction(orgId);
   }
 }
 

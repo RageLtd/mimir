@@ -7,6 +7,7 @@
  */
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { Surreal } from "surrealdb";
 
 const extractSpy = mock(() => {});
 mock.module("../agent/post-processing", () => ({
@@ -16,6 +17,11 @@ mock.module("../agent/post-processing", () => ({
 mock.module("../agent/message-log/persistence", () => ({
   appendTurn: mock(async () => ["id-1", "id-2"]),
 }));
+
+// The persist route builds rootScope(await getDb()) (MIM-69) — hand back an
+// inert Surreal so no real socket opens (appendTurn is mocked above, so the
+// connection is never used).
+mock.module("../db/surreal", () => ({ getDb: async () => new Surreal() }));
 
 mock.module("../projects/store", () => ({
   ensureProjectId: mock(async () => "proj-uuid"),
