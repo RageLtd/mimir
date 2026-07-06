@@ -12,7 +12,7 @@
 
 import { config } from "../../config";
 import { rootScope } from "../../db/scope";
-import { getDb } from "../../db/surreal";
+import { getDb, queryOne } from "../../db/surreal";
 import { log } from "../../util/logger";
 import { attempt } from "../../util/result";
 import { listAllMemories } from "../store-hygiene";
@@ -38,9 +38,7 @@ export interface SweepOpts {
   readonly dryRun?: boolean;
 }
 
-export async function runHygieneSweep(
-  opts: SweepOpts = {},
-): Promise<SweepReport> {
+export async function runHygieneSweep(orgId: string, opts: SweepOpts = {}) {
   const dryRun = opts.dryRun ?? config.hygiene.dryRun;
 
   const modelCfg = getHygieneModelConfig();
@@ -49,18 +47,17 @@ export async function runHygieneSweep(
     return { dryRun, skipped: "HYGIENE_MODEL unset" };
   }
 
-  const acquired = await startHygiene();
+  const acquired = await startHygiene(orgId);
   if (!acquired) {
     return { dryRun, skipped: "another sweep is already running" };
   }
 
   const start = Date.now();
-  log.info({ dryRun, model: modelCfg.model }, "hygiene sweep starting");
+  log.info({ dryRun, orgId, model: modelCfg.model }, "hygiene sweep starting");
 
-  // Background sweep runs on the root connection (bypasses PERMISSIONS). In
-  // slice 2 it scopes to the owner org (sentinel); per-org iteration for a
-  // multi-tenant cloud is the MIM-66 fold-in (slice 4).
-  const scope = rootScope(await getDb());
+  // Sweep runs on the root connection (bypasses PERMISSIONS) but scoped to the
+  // one org whose lock we hold, so it only ever touches that tenant's memories.
+  const scope = rootScope(await getDb(), orgId);
 
   const [err, report] = await attempt(async () => {
     const memories = await listAllMemories(scope);
@@ -115,7 +112,7 @@ export async function runHygieneSweep(
   });
 
   // Release the lock whether the sweep succeeded or failed.
-  await finishHygiene();
+  await finishHygiene(orgId);
 
   if (err || !report) {
     log.error({ err, dryRun }, "hygiene sweep failed");
@@ -139,6 +136,28 @@ export async function runHygieneSweep(
     "hygiene sweep complete",
   );
   return report;
+}
+
+/** Distinct org ids that actually own memories — the set worth sweeping. */
+async function listOrgIdsWithMemories() {
+  const rows = await queryOne<{ org_id: string }>(
+    `SELECT org_id FROM memory WHERE org_id != NONE GROUP BY org_id`,
+  );
+  return rows.map((r) => r.org_id).filter(Boolean);
+}
+
+/**
+ * Sweep every org that has memories — the scheduler's entry point (MIM-66).
+ * Each org sweeps under its own lock, so a long sweep in one tenant never
+ * stalls another; a failure in one org is isolated and logged, the rest run.
+ */
+export async function runHygieneAllOrgs(opts: SweepOpts = {}) {
+  const orgIds = await listOrgIdsWithMemories();
+  log.info({ orgs: orgIds.length }, "hygiene: sweeping all orgs");
+  for (const orgId of orgIds) {
+    const [err] = await attempt(() => runHygieneSweep(orgId, opts));
+    if (err) log.error({ err, orgId }, "hygiene sweep threw for org");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +186,7 @@ export async function startHygieneScheduler(): Promise<void> {
   }
 
   timer = setInterval(() => {
-    runHygieneSweep().catch((err) =>
+    runHygieneAllOrgs().catch((err) =>
       log.error({ err }, "scheduled hygiene sweep threw"),
     );
   }, config.hygiene.intervalMs);
