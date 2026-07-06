@@ -14,13 +14,8 @@
  */
 
 import { mintSurrealToken } from "../auth/surreal-bridge";
-import type { OrgScope } from "./scope";
+import type { OrgScope, ResolvedIdentity } from "./scope";
 import { connectScoped } from "./surreal";
-
-export interface ResolvedIdentity {
-  userId: string;
-  orgId: string;
-}
 
 /**
  * Build a request scope: mint a short-lived JWT carrying the identity's

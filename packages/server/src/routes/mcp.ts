@@ -19,9 +19,10 @@ import { Hono } from "hono";
 import { buildMcpPublicTools } from "../agent/server-tools";
 import { rootScope } from "../db/scope";
 import { getDb } from "../db/surreal";
+import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
 import { log } from "../util/logger";
 
-export const mcp = new Hono();
+export const mcp = new Hono<IdentityEnv>();
 
 // ── Tool registry ──────────────────────────────────────────────────────────
 // Built per request via buildMcpPublicTools(scope) — add new tools there, not
@@ -137,9 +138,9 @@ mcp.post("/", async (c) => {
   const body = (await c.req.json()) as JsonRpcRequest;
   log.info({ method: body.method }, "mcp request");
 
-  // Scope the tool set per request. Slice 2: RootScope on the owner sentinel;
-  // slice 3 reads the gate-stashed identity to scope to the caller's org.
-  const tools = buildMcpPublicTools(rootScope(await getDb()));
+  // Scope the tool set per request to the gate-resolved org (owner sentinel
+  // when auth is off). Slice 4 swaps the root connection for a scoped one.
+  const tools = buildMcpPublicTools(rootScope(await getDb(), scopeOrgId(c)));
   const response = await dispatch(body, tools);
 
   if (response === null) {

@@ -14,13 +14,14 @@
 
 import { Hono } from "hono";
 import { getDb, queryOne } from "../db/surreal";
+import type { IdentityEnv } from "../middleware/identity";
 import { resolveProjectForQuery } from "../projects/resolve-for-query";
 import { ensureProjectId } from "../projects/store";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 import { fileInfoHandler } from "./cartographer-file-info";
 
-export const cartographer = new Hono();
+export const cartographer = new Hono<IdentityEnv>();
 
 cartographer.post("/file-info", fileInfoHandler);
 

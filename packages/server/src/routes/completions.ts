@@ -14,6 +14,7 @@ import { getSmallModelConfig } from "../agent/provider/query";
 import { runAgent } from "../agent/run";
 import { rootScope } from "../db/scope";
 import { getDb } from "../db/surreal";
+import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
 import {
   createMimirContext,
   extractProviderOverride,
@@ -84,7 +85,7 @@ const chatRequestSchema = z.object({
 // Route Handler
 // ---------------------------------------------------------------------------
 
-export const completions = new Hono();
+export const completions = new Hono<IdentityEnv>();
 
 completions.post("/v1/chat/completions", async (c) => {
   // Correlation ID for request logging
@@ -160,10 +161,10 @@ completions.post("/v1/chat/completions", async (c) => {
   );
 
   try {
-    // MIM-69: scope every store access this request makes. Slice 2 uses a
-    // RootScope on the owner sentinel; slice 3 swaps in the gate-resolved
-    // identity (buildScope + connect-per-request, closed in a finally).
-    const scope = rootScope(await getDb());
+    // MIM-69: scope every store access this request makes to the gate-resolved
+    // org (owner sentinel when auth is off). Still the root connection — the
+    // scoped connection + PERMISSIONS land in slice 4.
+    const scope = rootScope(await getDb(), scopeOrgId(c));
     const ctx = await prepareContext(
       createMimirContext(req, { scope, providerOverride }),
     );

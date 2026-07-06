@@ -18,6 +18,7 @@ import { z } from "zod";
 import { runAgent } from "../agent/run";
 import { rootScope } from "../db/scope";
 import { getDb } from "../db/surreal";
+import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
 import {
   createMimirContext,
   extractProviderOverride,
@@ -69,7 +70,7 @@ const anthropicRequestSchema = z.object({
 // Router
 // ---------------------------------------------------------------------------
 
-export const messagesIngress = new Hono();
+export const messagesIngress = new Hono<IdentityEnv>();
 
 messagesIngress.post("/", async (c) => {
   const requestId = generateRequestId();
@@ -132,7 +133,7 @@ messagesIngress.post("/", async (c) => {
   );
 
   try {
-    const scope = rootScope(await getDb());
+    const scope = rootScope(await getDb(), scopeOrgId(c));
     const ctx = createMimirContext(chatRequest, { scope, providerOverride });
 
     // System prompt resolution: prefer the client's `system` field (CC

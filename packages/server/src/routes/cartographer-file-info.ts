@@ -22,6 +22,7 @@ import type { Context } from "hono";
 import { rootScope } from "../db/scope";
 import { getDb, queryFirst, queryOne } from "../db/surreal";
 import { formatMemoryList, retrieveMemoryList } from "../goldfish/memory";
+import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
 import { resolveProjectForQuery } from "../projects/resolve-for-query";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
@@ -66,7 +67,7 @@ type CartImportRow = {
 
 type SymbolRow = { kind: string; name: string; line: number; column: number };
 
-export const fileInfoHandler = async (c: Context) => {
+export const fileInfoHandler = async (c: Context<IdentityEnv>) => {
   const [bodyErr, body] = await attempt(() => c.req.json<FileInfoRequest>());
   if (bodyErr) {
     log.debug({ err: bodyErr.message }, "invalid file-info JSON body");
@@ -185,7 +186,7 @@ export const fileInfoHandler = async (c: Context) => {
 
   const [memErr, memoryList] = await attempt(async () =>
     retrieveMemoryList(
-      rootScope(await getDb()),
+      rootScope(await getDb(), scopeOrgId(c)),
       [{ role: "user", content: memoryQuery }],
       {
         topK: FILE_INFO_MEMORY_TOP_K,

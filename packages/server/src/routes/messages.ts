@@ -21,7 +21,7 @@ import { Hono } from "hono";
 import { modelContentToString } from "../agent/message-log/message-utils";
 import { appendTurn } from "../agent/message-log/persistence";
 import { extractMemoriesFromResponse } from "../agent/post-processing";
-import { OWNER_ORG_SENTINEL } from "../db/scope";
+import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
 import {
   extractProviderOverride,
   PROVIDER_KEY_HEADER,
@@ -30,7 +30,7 @@ import { ensureProjectId } from "../projects/store";
 import { requestLog } from "../util/logger";
 import { attempt } from "../util/result";
 
-export const messages = new Hono();
+export const messages = new Hono<IdentityEnv>();
 
 type PersistRequest = {
   messages: ModelMessage[];
@@ -144,7 +144,7 @@ messages.post("/persist", async (c) => {
           assistantText,
           lastUser,
           projectId,
-          OWNER_ORG_SENTINEL,
+          scopeOrgId(c),
           override ? { override } : null,
         );
       }

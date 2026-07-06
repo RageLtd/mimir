@@ -21,12 +21,13 @@ import { getLastModelMessages } from "../agent/message-log";
 import { updateTokenCount } from "../agent/message-log/compaction-state";
 import { modelContentToString } from "../agent/message-log/message-utils";
 import { config } from "../config";
-import { OWNER_ORG_SENTINEL, rootScope } from "../db/scope";
+import { rootScope } from "../db/scope";
 import { getDb } from "../db/surreal";
 import { retrieveContextBundle } from "../goldfish/context-bundle";
 import { retrieveMemories } from "../goldfish/memory";
 import { getLastSummaries } from "../goldfish/store";
 import { buildContextInjection } from "../middleware/context-assembly";
+import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
 import { requestLog } from "../util/logger";
 import { attempt } from "../util/result";
 import { loadPrompt } from "./system-prompt";
@@ -37,7 +38,7 @@ import { loadPrompt } from "./system-prompt";
 const RETRIEVE_SUMMARY_COUNT = 3;
 const RETRIEVE_MEMORY_TOP_K = 3;
 
-export const context = new Hono();
+export const context = new Hono<IdentityEnv>();
 
 // ── Types ──
 
@@ -79,9 +80,8 @@ context.post("/memories", async (c) => {
     // retrieveMemories takes ModelMessage[] and reads the last 3 user
     // messages to build its query. Synthesize a single user message from
     // the caller's query string so we share one code path.
-    // CC context routes aren't identity-plumbed yet (slice 3) — scope to the
-    // owner org on the root connection.
-    const scope = rootScope(await getDb());
+    // Scope to the gate-resolved org (owner sentinel when auth is off).
+    const scope = rootScope(await getDb(), scopeOrgId(c));
     const memories = await retrieveMemories(scope, [
       { role: "user", content: body.query },
     ]);
@@ -109,7 +109,10 @@ context.get("/summaries", async (c) => {
   const count = Math.max(1, Math.min(50, parseInt(countParam, 10) || 3));
 
   try {
-    const summaries = await getLastSummaries(rootScope(await getDb()), count);
+    const summaries = await getLastSummaries(
+      rootScope(await getDb(), scopeOrgId(c)),
+      count,
+    );
     log.debug({ count: summaries.length }, "summaries retrieved");
     return c.json({ summaries });
   } catch (err) {
@@ -160,7 +163,7 @@ context.post("/token-report", async (c) => {
         },
         "token-report triggered async compaction",
       );
-      runCompaction(OWNER_ORG_SENTINEL, body.modelId).catch((err) =>
+      runCompaction(scopeOrgId(c), body.modelId).catch((err) =>
         log.error({ err }, "compaction failed"),
       );
     }
@@ -252,9 +255,13 @@ context.post("/assemble", async (c) => {
     const [{ content: rawPrompt }, { memories, summaries, playbooks }] =
       await Promise.all([
         loadPrompt(),
-        retrieveContextBundle(rootScope(await getDb()), body.query, {
-          projectIdentifier: body.projectId ?? body.project,
-        }),
+        retrieveContextBundle(
+          rootScope(await getDb(), scopeOrgId(c)),
+          body.query,
+          {
+            projectIdentifier: body.projectId ?? body.project,
+          },
+        ),
       ]);
 
     const today = new Date().toISOString().split("T")[0] ?? "";
@@ -360,7 +367,7 @@ context.post("/retrieve", async (c) => {
   }
 
   const [retrievalErr, retrieval] = await attempt(async () =>
-    retrieveContextBundle(rootScope(await getDb()), body.query, {
+    retrieveContextBundle(rootScope(await getDb(), scopeOrgId(c)), body.query, {
       projectIdentifier: body.projectId ?? body.project,
       topK: RETRIEVE_MEMORY_TOP_K,
       includeRelated: false,

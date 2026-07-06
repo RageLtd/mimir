@@ -49,6 +49,16 @@ export interface OrgScope {
 }
 
 /**
+ * A resolved request identity — the user and the org their request is scoped
+ * to. The identity gate (middleware/identity.ts) produces one from the auth
+ * session; build-scope.ts turns it into a scoped connection (slice 4).
+ */
+export interface ResolvedIdentity {
+  readonly userId: string;
+  readonly orgId: string;
+}
+
+/**
  * Wrap the root connection as a scope. Defaults to the owner-org sentinel
  * (boot migrations, the auth-off homelab, single-org self-host); slice-4
  * per-org background work passes an explicit orgId to sweep one tenant at a
