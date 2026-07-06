@@ -117,7 +117,7 @@ export async function prepareContext(ctx: MimirContext) {
 async function resolveProjectId(ctx: MimirContext) {
   const identifier =
     ctx.request.metadata?.project ?? DEFAULT_PROJECT_IDENTIFIER;
-  const projectId = await ensureProjectId(identifier);
+  const projectId = await ensureProjectId(ctx.scope, identifier);
   if (!projectId) {
     throw new Error(
       `pipeline: failed to resolve project identifier "${identifier}" to a project record`,

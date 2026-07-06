@@ -201,7 +201,7 @@ export async function listPlaybooks(
   });
   if (!projectIdentifier) return structured;
   const projectId =
-    (await resolveProjectForQuery(projectIdentifier)).project ||
+    (await resolveProjectForQuery(scope, projectIdentifier)).project ||
     projectIdentifier;
   return scopePlaybooks(structured, projectId);
 }
@@ -311,7 +311,7 @@ export async function buildPlaybookContext(
   if (all.length === 0) return null;
 
   const projectId = opts.projectIdentifier
-    ? (await resolveProjectForQuery(opts.projectIdentifier)).project ||
+    ? (await resolveProjectForQuery(scope, opts.projectIdentifier)).project ||
       opts.projectIdentifier
     : undefined;
 

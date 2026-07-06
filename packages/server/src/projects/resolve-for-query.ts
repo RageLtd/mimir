@@ -11,7 +11,7 @@
  */
 
 import { RecordId } from "surrealdb";
-import { getDb, queryFirst } from "../db/surreal";
+import { type OrgScope, scopedQueryFirst } from "../db/scope";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 
@@ -38,15 +38,17 @@ const idString = (id: string | RecordId) => {
  *
  * When input is omitted, auto-detects from cart_file.
  */
-export async function resolveProjectForQuery(input?: string) {
-  if (!input) return autoDetect();
+export async function resolveProjectForQuery(scope: OrgScope, input?: string) {
+  if (!input) return autoDetect(scope);
 
   // 1. Try as project record ID — SELECT FROM a RecordId returns the row
   //    if it exists, empty array if not. No error for missing records.
   const [idErr, byId] = await attempt(() =>
-    queryFirst<{ id: string | RecordId }>(`SELECT id FROM $id`, {
-      id: new RecordId("project", input),
-    }),
+    scopedQueryFirst<{ id: string | RecordId }>(
+      scope,
+      `SELECT id FROM $id WHERE org_id = $scope_org`,
+      { id: new RecordId("project", input), scope_org: scope.orgId },
+    ),
   );
   if (!idErr && byId) {
     return { project: idString(byId.id), error: null };
@@ -54,9 +56,10 @@ export async function resolveProjectForQuery(input?: string) {
 
   // 2. Try as git remote — stable, globally unique, machine-independent.
   const [remoteErr, byRemote] = await attempt(() =>
-    queryFirst<{ id: string | RecordId }>(
-      `SELECT id FROM project WHERE git_remote = $input LIMIT 1`,
-      { input },
+    scopedQueryFirst<{ id: string | RecordId }>(
+      scope,
+      `SELECT id FROM project WHERE git_remote = $input AND org_id = $scope_org LIMIT 1`,
+      { input, scope_org: scope.orgId },
     ),
   );
   if (!remoteErr && byRemote) {
@@ -66,9 +69,10 @@ export async function resolveProjectForQuery(input?: string) {
   // 3. Try as filesystem path — machine-specific but works for local-only
   //    projects that haven't been pushed to a remote yet.
   const [pathErr, byPath] = await attempt(() =>
-    queryFirst<{ id: string | RecordId }>(
-      `SELECT id FROM project WHERE local_path = $input LIMIT 1`,
-      { input },
+    scopedQueryFirst<{ id: string | RecordId }>(
+      scope,
+      `SELECT id FROM project WHERE local_path = $input AND org_id = $scope_org LIMIT 1`,
+      { input, scope_org: scope.orgId },
     ),
   );
   if (!pathErr && byPath) {
@@ -90,11 +94,13 @@ export async function resolveProjectForQuery(input?: string) {
  * Auto-detect the project from cart_file when no identifier is provided.
  * Single project → use it. Multiple → error with listing.
  */
-async function autoDetect() {
-  const db = await getDb();
-  const [result] = await db.query<
+async function autoDetect(scope: OrgScope) {
+  const [result] = await scope.db.query<
     [Array<{ project_id: string; count: number }>]
-  >(`SELECT project_id, count() AS count FROM cart_file GROUP BY project_id`);
+  >(
+    `SELECT project_id, count() AS count FROM cart_file WHERE org_id = $scope_org GROUP BY project_id`,
+    { scope_org: scope.orgId },
+  );
 
   const projects = result ?? [];
 

@@ -1,6 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
-import { getDb } from "../../db/surreal";
+import type { OrgScope } from "../../db/scope";
 import { resolveProjectForQuery } from "../../projects/resolve-for-query";
 import { log } from "../../util/logger";
 import { CACHE_CONTROL } from "./shared";
@@ -56,34 +56,38 @@ function parseJson<T>(fallback: T) {
 
 /**
  * Resolve a project identifier for cart queries. Delegates to the
- * canonical resolver which tries ID → git remote → path → raw fallback.
+ * canonical resolver which tries ID → git remote → path → raw fallback,
+ * scoped to the caller's org.
  */
-async function resolveProject(project?: string) {
-  return resolveProjectForQuery(project);
+async function resolveProject(scope: OrgScope, project?: string) {
+  return resolveProjectForQuery(scope, project);
 }
 
 // ---------------------------------------------------------------------------
 // Execute functions
 // ---------------------------------------------------------------------------
 
-export const executeSearch = async ({
-  project,
-  query,
-  limit,
-}: z.infer<typeof SearchSchema>) => {
-  const resolved = await resolveProject(project);
+export const executeSearch = async (
+  scope: OrgScope,
+  { project, query, limit }: z.infer<typeof SearchSchema>,
+) => {
+  const resolved = await resolveProject(scope, project);
   if (resolved.error) return { files: [], error: resolved.error };
 
-  const db = await getDb();
   const maxResults = limit ?? 10;
 
-  const [result] = await db.query<
+  const [result] = await scope.db.query<
     [Array<{ file_path: string; symbols: string; score: number }>]
   >(
     `SELECT file_path, symbols, search::score(1) AS score FROM cart_file
-     WHERE project_id = $project_id AND searchable @1@ $query
+     WHERE project_id = $project_id AND org_id = $scope_org AND searchable @1@ $query
      ORDER BY score DESC LIMIT $limit`,
-    { project_id: resolved.project, query, limit: maxResults },
+    {
+      project_id: resolved.project,
+      query,
+      limit: maxResults,
+      scope_org: scope.orgId,
+    },
   );
 
   const files = (result ?? []).map((fileRow) => ({
@@ -98,11 +102,11 @@ export const executeSearch = async ({
   return { files, error: null };
 };
 
-export const executeFileInfo = async ({
-  project,
-  file_path,
-}: z.infer<typeof FileInfoSchema>) => {
-  const resolved = await resolveProject(project);
+export const executeFileInfo = async (
+  scope: OrgScope,
+  { project, file_path }: z.infer<typeof FileInfoSchema>,
+) => {
+  const resolved = await resolveProject(scope, project);
   if (resolved.error) {
     return {
       file_path,
@@ -114,14 +118,12 @@ export const executeFileInfo = async ({
     };
   }
 
-  const db = await getDb();
-
-  const [fileResult] = await db.query<
+  const [fileResult] = await scope.db.query<
     [Array<{ language: string; symbols: string }>]
   >(
     `SELECT language, symbols FROM cart_file
-     WHERE project_id = $project_id AND file_path = $file_path LIMIT 1`,
-    { project_id: resolved.project, file_path },
+     WHERE project_id = $project_id AND org_id = $scope_org AND file_path = $file_path LIMIT 1`,
+    { project_id: resolved.project, file_path, scope_org: scope.orgId },
   );
 
   const file = fileResult?.[0];
@@ -137,13 +139,13 @@ export const executeFileInfo = async ({
   }
 
   const [imports, dependents] = await Promise.all([
-    db.query<[Array<{ target_path: string; symbols: string }>]>(
-      `SELECT target_path, symbols FROM cart_import WHERE project_id = $project_id AND source_path = $file_path`,
-      { project_id: resolved.project, file_path },
+    scope.db.query<[Array<{ target_path: string; symbols: string }>]>(
+      `SELECT target_path, symbols FROM cart_import WHERE project_id = $project_id AND org_id = $scope_org AND source_path = $file_path`,
+      { project_id: resolved.project, file_path, scope_org: scope.orgId },
     ),
-    db.query<[Array<{ source_path: string; symbols: string }>]>(
-      `SELECT source_path, symbols FROM cart_import WHERE project_id = $project_id AND target_path = $file_path`,
-      { project_id: resolved.project, file_path },
+    scope.db.query<[Array<{ source_path: string; symbols: string }>]>(
+      `SELECT source_path, symbols FROM cart_import WHERE project_id = $project_id AND org_id = $scope_org AND target_path = $file_path`,
+      { project_id: resolved.project, file_path, scope_org: scope.orgId },
     ),
   ]);
 
@@ -173,16 +175,18 @@ export const executeFileInfo = async ({
   return result;
 };
 
-export const executeQuery = async ({
-  project,
-  entry_points,
-  max_depth,
-  max_results,
-}: z.infer<typeof QuerySchema>) => {
-  const resolved = await resolveProject(project);
+export const executeQuery = async (
+  scope: OrgScope,
+  {
+    project,
+    entry_points,
+    max_depth,
+    max_results,
+  }: z.infer<typeof QuerySchema>,
+) => {
+  const resolved = await resolveProject(scope, project);
   if (resolved.error) return { files: [], error: resolved.error };
 
-  const db = await getDb();
   const maxDepth = max_depth ?? 2;
   const maxFiles = max_results ?? 20;
 
@@ -191,10 +195,14 @@ export const executeQuery = async ({
     entry_points.map(async (entryPoint) =>
       entryPoint.startsWith("/")
         ? [entryPoint]
-        : db
+        : scope.db
             .query<[Array<{ file_path: string }>]>(
-              `SELECT file_path FROM cart_file WHERE project_id = $project_id AND searchable @1@ $query LIMIT 5`,
-              { project_id: resolved.project, query: entryPoint },
+              `SELECT file_path FROM cart_file WHERE project_id = $project_id AND org_id = $scope_org AND searchable @1@ $query LIMIT 5`,
+              {
+                project_id: resolved.project,
+                query: entryPoint,
+                scope_org: scope.orgId,
+              },
             )
             .then((queryResult) =>
               (queryResult[0] ?? []).map((fileRow) => fileRow.file_path),
@@ -226,13 +234,21 @@ export const executeQuery = async ({
     if (!currentNode || currentNode.depth >= maxDepth) continue;
 
     const [dependencies, importers] = await Promise.all([
-      db.query<[Array<{ target_path: string }>]>(
-        `SELECT target_path FROM cart_import WHERE project_id = $project_id AND source_path = $source`,
-        { project_id: resolved.project, source: currentNode.path },
+      scope.db.query<[Array<{ target_path: string }>]>(
+        `SELECT target_path FROM cart_import WHERE project_id = $project_id AND org_id = $scope_org AND source_path = $source`,
+        {
+          project_id: resolved.project,
+          source: currentNode.path,
+          scope_org: scope.orgId,
+        },
       ),
-      db.query<[Array<{ source_path: string }>]>(
-        `SELECT source_path FROM cart_import WHERE project_id = $project_id AND target_path = $target`,
-        { project_id: resolved.project, target: currentNode.path },
+      scope.db.query<[Array<{ source_path: string }>]>(
+        `SELECT source_path FROM cart_import WHERE project_id = $project_id AND org_id = $scope_org AND target_path = $target`,
+        {
+          project_id: resolved.project,
+          target: currentNode.path,
+          scope_org: scope.orgId,
+        },
       ),
     ]);
 
@@ -273,31 +289,41 @@ export const executeQuery = async ({
 // Tool definitions
 // ---------------------------------------------------------------------------
 
-export const cartographerTools = {
-  // cartographer_list_projects removed — project resolution is now handled
-  // automatically by the session_start lifecycle hook in hooks/session.ts.
+/**
+ * Build the cartographer tool group bound to an org scope. Rebuilt per request
+ * so each tool's execute closes over the caller's OrgScope (MIM-69) — the cart_*
+ * tables are org-scoped, so the closure carries the tenant boundary the tool()
+ * execute signature can't.
+ */
+export function buildCartographerTools(scope: OrgScope) {
+  return {
+    // cartographer_list_projects removed — project resolution is now handled
+    // automatically by the session_start lifecycle hook in hooks/session.ts.
 
-  cartographer_search: tool({
-    description:
-      "Search indexed codebase for files by path or symbol name. Omit project to auto-detect.",
-    inputSchema: SearchSchema,
-    providerOptions: CACHE_CONTROL,
-    execute: executeSearch,
-  }),
+    cartographer_search: tool({
+      description:
+        "Search indexed codebase for files by path or symbol name. Omit project to auto-detect.",
+      inputSchema: SearchSchema,
+      providerOptions: CACHE_CONTROL,
+      execute: (args: z.infer<typeof SearchSchema>) =>
+        executeSearch(scope, args),
+    }),
 
-  cartographer_file_info: tool({
-    description:
-      "Get file details: symbols, imports, and dependents. Omit project to auto-detect.",
-    inputSchema: FileInfoSchema,
-    providerOptions: CACHE_CONTROL,
-    execute: executeFileInfo,
-  }),
+    cartographer_file_info: tool({
+      description:
+        "Get file details: symbols, imports, and dependents. Omit project to auto-detect.",
+      inputSchema: FileInfoSchema,
+      providerOptions: CACHE_CONTROL,
+      execute: (args: z.infer<typeof FileInfoSchema>) =>
+        executeFileInfo(scope, args),
+    }),
 
-  cartographer_query: tool({
-    description:
-      "Walk import graph from entry points. Returns dependencies and dependents up to depth.",
-    inputSchema: QuerySchema,
-    providerOptions: CACHE_CONTROL,
-    execute: executeQuery,
-  }),
-};
+    cartographer_query: tool({
+      description:
+        "Walk import graph from entry points. Returns dependencies and dependents up to depth.",
+      inputSchema: QuerySchema,
+      providerOptions: CACHE_CONTROL,
+      execute: (args: z.infer<typeof QuerySchema>) => executeQuery(scope, args),
+    }),
+  };
+}

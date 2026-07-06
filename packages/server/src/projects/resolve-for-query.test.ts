@@ -1,123 +1,109 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import type { Surreal } from "surrealdb";
+import type { OrgScope } from "../db/scope";
+import { resolveProjectForQuery } from "./resolve-for-query";
 
-// Stub the DB layer before importing the module under test.
-let queryFirstStub: ReturnType<typeof mock>;
-let getDbStub: ReturnType<typeof mock>;
+// Resolution now runs on scope.db.query (via scopedQueryFirst) and the
+// auto-detect path also queries scope.db directly. A hand-built OrgScope
+// whose db.query is a mock lets us drive both without a real SurrealDB.
+// The logger is mocked globally by tests/setup.ts (bunfig preload).
 
-const mockQueryResult: Array<{ project_id: string; count: number }> = [];
+const ORG = "test-org";
+const mockAutoDetect: Array<{ project_id: string; count: number }> = [];
+let queryMock: ReturnType<typeof mock>;
 
-mock.module("../db/surreal", () => {
-  queryFirstStub = mock();
-  getDbStub = mock(() =>
-    Promise.resolve({
-      query: mock(() => Promise.resolve([mockQueryResult])),
-    }),
-  );
-  return {
-    queryFirst: queryFirstStub,
-    getDb: getDbStub,
-  };
+const scope = (): OrgScope => ({
+  orgId: ORG,
+  db: { query: queryMock } as unknown as Surreal,
+  isRoot: true,
 });
-
-// Silence log output during tests.
-mock.module("../util/logger", () => ({
-  log: {
-    debug: () => {},
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-  },
-}));
-
-const { resolveProjectForQuery } = await import("./resolve-for-query");
 
 describe("resolveProjectForQuery", () => {
   beforeEach(() => {
-    queryFirstStub.mockReset();
-    mockQueryResult.length = 0;
-  });
-
-  afterEach(() => {
-    queryFirstStub.mockReset();
+    mockAutoDetect.length = 0;
+    // Default impl returns the auto-detect envelope `[rows]`. Input tests
+    // override per-call with the scopedQueryFirst envelope `[[row]]`.
+    queryMock = mock(() => Promise.resolve([mockAutoDetect]));
   });
 
   test("resolves by project record ID (first priority)", async () => {
-    queryFirstStub.mockResolvedValueOnce({ id: "abc123" });
+    queryMock.mockResolvedValueOnce([[{ id: "abc123" }]]);
 
-    const result = await resolveProjectForQuery("abc123");
+    const result = await resolveProjectForQuery(scope(), "abc123");
 
     expect(result.project).toBe("abc123");
     expect(result.error).toBeNull();
     // Should have been called once (ID lookup) and short-circuited.
-    expect(queryFirstStub).toHaveBeenCalledTimes(1);
+    expect(queryMock).toHaveBeenCalledTimes(1);
   });
 
   test("resolves by git remote when ID lookup misses", async () => {
-    // ID lookup returns null
-    queryFirstStub.mockResolvedValueOnce(null);
+    // ID lookup returns no row
+    queryMock.mockResolvedValueOnce([[]]);
     // Git remote lookup returns a match
-    queryFirstStub.mockResolvedValueOnce({ id: "proj-uuid-1" });
+    queryMock.mockResolvedValueOnce([[{ id: "proj-uuid-1" }]]);
 
     const result = await resolveProjectForQuery(
+      scope(),
       "git@github.com:user/repo.git",
     );
 
     expect(result.project).toBe("proj-uuid-1");
     expect(result.error).toBeNull();
-    expect(queryFirstStub).toHaveBeenCalledTimes(2);
+    expect(queryMock).toHaveBeenCalledTimes(2);
   });
 
   test("resolves by filesystem path when ID and remote miss", async () => {
-    // ID lookup returns null
-    queryFirstStub.mockResolvedValueOnce(null);
-    // Git remote lookup returns null
-    queryFirstStub.mockResolvedValueOnce(null);
+    // ID lookup returns no row
+    queryMock.mockResolvedValueOnce([[]]);
+    // Git remote lookup returns no row
+    queryMock.mockResolvedValueOnce([[]]);
     // Path lookup returns a match
-    queryFirstStub.mockResolvedValueOnce({ id: "proj-uuid-2" });
+    queryMock.mockResolvedValueOnce([[{ id: "proj-uuid-2" }]]);
 
-    const result = await resolveProjectForQuery("/Users/dev/my-project");
+    const result = await resolveProjectForQuery(scope(), "/Users/dev/my-project");
 
     expect(result.project).toBe("proj-uuid-2");
     expect(result.error).toBeNull();
-    expect(queryFirstStub).toHaveBeenCalledTimes(3);
+    expect(queryMock).toHaveBeenCalledTimes(3);
   });
 
   test("falls back to raw input when no project table match", async () => {
-    queryFirstStub.mockResolvedValue(null);
+    queryMock.mockResolvedValue([[]]);
 
-    const result = await resolveProjectForQuery("/legacy/path");
+    const result = await resolveProjectForQuery(scope(), "/legacy/path");
 
     expect(result.project).toBe("/legacy/path");
     expect(result.error).toBeNull();
     // All three lookups attempted
-    expect(queryFirstStub).toHaveBeenCalledTimes(3);
+    expect(queryMock).toHaveBeenCalledTimes(3);
   });
 
   test("strips project: prefix from RecordId results", async () => {
-    queryFirstStub.mockResolvedValueOnce({ id: "project:xyz789" });
+    queryMock.mockResolvedValueOnce([[{ id: "project:xyz789" }]]);
 
-    const result = await resolveProjectForQuery("xyz789");
+    const result = await resolveProjectForQuery(scope(), "xyz789");
 
     expect(result.project).toBe("xyz789");
     expect(result.error).toBeNull();
   });
 
   test("auto-detects single project when input omitted", async () => {
-    mockQueryResult.push({ project_id: "only-project", count: 42 });
+    mockAutoDetect.push({ project_id: "only-project", count: 42 });
 
-    const result = await resolveProjectForQuery();
+    const result = await resolveProjectForQuery(scope());
 
     expect(result.project).toBe("only-project");
     expect(result.error).toBeNull();
   });
 
   test("errors on multiple projects when input omitted", async () => {
-    mockQueryResult.push(
+    mockAutoDetect.push(
       { project_id: "proj-a", count: 10 },
       { project_id: "proj-b", count: 20 },
     );
 
-    const result = await resolveProjectForQuery();
+    const result = await resolveProjectForQuery(scope());
 
     expect(result.project).toBe("");
     expect(result.error).toContain("Multiple projects");
@@ -126,9 +112,9 @@ describe("resolveProjectForQuery", () => {
   });
 
   test("errors when no projects indexed and input omitted", async () => {
-    // mockQueryResult is already empty
+    // mockAutoDetect is already empty
 
-    const result = await resolveProjectForQuery();
+    const result = await resolveProjectForQuery(scope());
 
     expect(result.project).toBe("");
     expect(result.error).toContain("No projects indexed");
@@ -136,20 +122,20 @@ describe("resolveProjectForQuery", () => {
 
   test("handles DB errors gracefully — falls through to next lookup", async () => {
     // ID lookup throws
-    queryFirstStub.mockRejectedValueOnce(new Error("db timeout"));
+    queryMock.mockRejectedValueOnce(new Error("db timeout"));
     // Git remote lookup succeeds
-    queryFirstStub.mockResolvedValueOnce({ id: "fallback-proj" });
+    queryMock.mockResolvedValueOnce([[{ id: "fallback-proj" }]]);
 
-    const result = await resolveProjectForQuery("some-input");
+    const result = await resolveProjectForQuery(scope(), "some-input");
 
     expect(result.project).toBe("fallback-proj");
     expect(result.error).toBeNull();
   });
 
   test("returns raw input when all DB lookups fail", async () => {
-    queryFirstStub.mockRejectedValue(new Error("db down"));
+    queryMock.mockRejectedValue(new Error("db down"));
 
-    const result = await resolveProjectForQuery("anything");
+    const result = await resolveProjectForQuery(scope(), "anything");
 
     expect(result.project).toBe("anything");
     expect(result.error).toBeNull();

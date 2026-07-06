@@ -11,11 +11,14 @@
  */
 
 import { Hono } from "hono";
+import { rootScope } from "../db/scope";
+import { getDb } from "../db/surreal";
+import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
 import { getProject, resolveProject, updateProject } from "../projects/store";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 
-export const projects = new Hono();
+export const projects = new Hono<IdentityEnv>();
 
 type ResolveBody = {
   gitRemote?: unknown;
@@ -51,8 +54,9 @@ projects.post("/resolve", async (c) => {
     );
   }
 
+  const scope = rootScope(await getDb(), scopeOrgId(c));
   const [resolveErr, project] = await attempt(() =>
-    resolveProject({
+    resolveProject(scope, {
       gitRemote,
       localPath,
       title: asString(body.title),
@@ -73,7 +77,8 @@ projects.post("/resolve", async (c) => {
 
 projects.get("/:id", async (c) => {
   const id = c.req.param("id");
-  const [err, project] = await attempt(() => getProject(id));
+  const scope = rootScope(await getDb(), scopeOrgId(c));
+  const [err, project] = await attempt(() => getProject(scope, id));
   if (err) {
     log.error({ error: err.message, id }, "project fetch failed");
     return c.json({ error: err.message }, 500);
@@ -91,8 +96,9 @@ projects.patch("/:id", async (c) => {
     return c.json({ error: `Invalid JSON: ${parseErr.message}` }, 400);
   }
 
+  const scope = rootScope(await getDb(), scopeOrgId(c));
   const [updateErr, project] = await attempt(() =>
-    updateProject(id, {
+    updateProject(scope, id, {
       title: asString(body.title),
       description:
         body.description === null ? null : asString(body.description),

@@ -151,7 +151,7 @@ export const storeTypedMemory = async (
   // Failures are non-fatal — store with the raw value rather than
   // blocking memory creation on a resolution hiccup.
   const resolvedProject = project
-    ? (await resolveProjectForQuery(project)).project || project
+    ? (await resolveProjectForQuery(scope, project)).project || project
     : undefined;
 
   // Playbooks embed their trigger (the "use this when…" line), not their

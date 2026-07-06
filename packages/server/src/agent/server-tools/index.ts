@@ -1,6 +1,6 @@
 import type { ToolSet } from "ai";
 import type { OrgScope } from "../../db/scope";
-import { cartographerTools } from "./cartographer";
+import { buildCartographerTools } from "./cartographer";
 import { externalTools } from "./external";
 import { introspectionTools } from "./introspection";
 import { getMcpTools } from "./mcp";
@@ -12,12 +12,12 @@ import { buildPlaybookTools } from "./playbook";
  * Tool-group registry — the ONE place server tool groups are wired.
  *
  * Two kinds of group:
- *  - **Scoped** (memory, playbook): rebuilt per request via a factory that
- *    closes the caller's OrgScope over each tool's execute (MIM-69). The
- *    tool() execute signature can't carry the scope, so the closure does.
- *  - **Static**: groups whose store access isn't org-scoped yet (cartographer
- *    cart_* scoping is a tracked follow-up) or that touch no store at all
- *    (external MCP proxies, introspection, plan/todo).
+ *  - **Scoped** (memory, playbook, cartographer): rebuilt per request via a
+ *    factory that closes the caller's OrgScope over each tool's execute
+ *    (MIM-69). The tool() execute signature can't carry the scope, so the
+ *    closure does.
+ *  - **Static**: groups that touch no org-scoped store at all (external MCP
+ *    proxies, introspection, plan/todo).
  *
  * `mcpPublic` controls whether a group is exposed to external clients through
  * the /mcp endpoint (routes/mcp.ts, routes/tools.ts). External MCP servers'
@@ -35,10 +35,10 @@ const SCOPED_GROUPS: Array<{
 }> = [
   { build: buildMemoryTools, mcpPublic: true },
   { build: buildPlaybookTools, mcpPublic: true },
+  { build: buildCartographerTools, mcpPublic: true },
 ];
 
 const STATIC_GROUPS: Array<{ tools: ToolSet; mcpPublic: boolean }> = [
-  { tools: cartographerTools, mcpPublic: true },
   { tools: externalTools, mcpPublic: true },
   { tools: introspectionTools, mcpPublic: true },
   // Plan/todo tracking is loop-internal — not exposed over /mcp.

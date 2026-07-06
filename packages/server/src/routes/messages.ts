@@ -92,7 +92,9 @@ messages.post("/persist", async (c) => {
     );
   }
 
-  const projectId = await ensureProjectId(identifier);
+  const scope = rootScope(await getDb(), scopeOrgId(c));
+
+  const projectId = await ensureProjectId(scope, identifier);
   if (!projectId) {
     log.error({ identifier }, "failed to resolve project identifier");
     return c.json(
@@ -101,7 +103,6 @@ messages.post("/persist", async (c) => {
     );
   }
 
-  const scope = rootScope(await getDb(), scopeOrgId(c));
   const [appendErr, ids] = await attempt(() =>
     appendTurn(scope, body.messages, projectId),
   );

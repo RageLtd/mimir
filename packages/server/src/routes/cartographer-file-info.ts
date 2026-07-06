@@ -19,8 +19,8 @@
  */
 
 import type { Context } from "hono";
-import { rootScope } from "../db/scope";
-import { getDb, queryFirst, queryOne } from "../db/surreal";
+import { rootScope, scopedQueryFirst, scopedQueryOne } from "../db/scope";
+import { getDb } from "../db/surreal";
 import { formatMemoryList, retrieveMemoryList } from "../goldfish/memory";
 import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
 import { resolveProjectForQuery } from "../projects/resolve-for-query";
@@ -81,10 +81,15 @@ export const fileInfoHandler = async (c: Context<IdentityEnv>) => {
     return c.json({ error: "Missing required field: filePath" }, 400);
   }
 
+  // One scope for the whole handler — the cart_* lookups and memory
+  // retrieval all run on the caller's org (MIM-69).
+  const scope = rootScope(await getDb(), scopeOrgId(c));
+
   // Resolve to the canonical project id — prefers the client-sent id,
   // falls back to resolving the legacy path field. Read path: no
   // get-or-create; an unknown identifier just matches nothing.
   const resolved = await resolveProjectForQuery(
+    scope,
     typeof body.projectId === "string" && body.projectId.length > 0
       ? body.projectId
       : body.project,
@@ -92,11 +97,16 @@ export const fileInfoHandler = async (c: Context<IdentityEnv>) => {
   const projectKey = resolved.project;
 
   const [fileErr, fileRow] = await attempt(() =>
-    queryFirst<CartFileRow>(
+    scopedQueryFirst<CartFileRow>(
+      scope,
       `SELECT symbols, content_hash FROM cart_file
-        WHERE project_id = $project_id AND file_path = $file_path
+        WHERE project_id = $project_id AND org_id = $scope_org AND file_path = $file_path
         LIMIT 1`,
-      { project_id: projectKey, file_path: body.filePath },
+      {
+        project_id: projectKey,
+        file_path: body.filePath,
+        scope_org: scope.orgId,
+      },
     ),
   );
 
@@ -137,10 +147,15 @@ export const fileInfoHandler = async (c: Context<IdentityEnv>) => {
   }
 
   const [importErr, importRows] = await attempt(() =>
-    queryOne<CartImportRow>(
+    scopedQueryOne<CartImportRow>(
+      scope,
       `SELECT target_path, specifier FROM cart_import
-        WHERE project_id = $project_id AND source_path = $file_path`,
-      { project_id: projectKey, file_path: body.filePath },
+        WHERE project_id = $project_id AND org_id = $scope_org AND source_path = $file_path`,
+      {
+        project_id: projectKey,
+        file_path: body.filePath,
+        scope_org: scope.orgId,
+      },
     ),
   );
   if (importErr) {
@@ -152,13 +167,15 @@ export const fileInfoHandler = async (c: Context<IdentityEnv>) => {
   }
 
   const [depErr, dependentRows] = await attempt(() =>
-    queryOne<CartImportRow>(
+    scopedQueryOne<CartImportRow>(
+      scope,
       `SELECT source_path, specifier FROM cart_import
-        WHERE project_id = $project_id AND target_path = $file_path
+        WHERE project_id = $project_id AND org_id = $scope_org AND target_path = $file_path
         LIMIT $limit`,
       {
         project_id: projectKey,
         file_path: body.filePath,
+        scope_org: scope.orgId,
         limit: FILE_INFO_DEPENDENT_LIMIT,
       },
     ),
@@ -185,14 +202,10 @@ export const fileInfoHandler = async (c: Context<IdentityEnv>) => {
   ].join(" ");
 
   const [memErr, memoryList] = await attempt(async () =>
-    retrieveMemoryList(
-      rootScope(await getDb(), scopeOrgId(c)),
-      [{ role: "user", content: memoryQuery }],
-      {
-        topK: FILE_INFO_MEMORY_TOP_K,
-        includeRelated: false,
-      },
-    ),
+    retrieveMemoryList(scope, [{ role: "user", content: memoryQuery }], {
+      topK: FILE_INFO_MEMORY_TOP_K,
+      includeRelated: false,
+    }),
   );
   if (memErr) {
     log.warn(
