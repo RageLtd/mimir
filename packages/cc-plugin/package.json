@@ -10,6 +10,7 @@
     "test": "bun run ../../tests/run-tests.ts cc-plugin"
   },
   "dependencies": {
+    "@mimir/plugin-core": "workspace:*",
     "@ai-sdk/provider-utils": "catalog:ai-sdk",
     "@anthropic-ai/claude-agent-sdk": "catalog:protocol"
   }

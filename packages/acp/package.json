@@ -9,6 +9,7 @@
     "test": "bun run ../../tests/run-tests.ts acp"
   },
   "dependencies": {
+    "@mimir/plugin-core": "workspace:*",
     "@agentclientprotocol/sdk": "catalog:protocol",
     "@modelcontextprotocol/sdk": "catalog:protocol"
   }

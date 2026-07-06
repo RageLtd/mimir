@@ -1,0 +1,38 @@
+{
+  "name": "@mimir/oc-plugin",
+  "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RageLtd/mimir.git",
+    "directory": "packages/oc-plugin"
+  },
+  "main": "dist/mimir-oc.ts",
+  "module": "dist/mimir-oc.ts",
+  "devDependencies": {
+    "@mimir/plugin-core": "workspace:*",
+    "@opencode-ai/plugin": "^1.17.13",
+    "@opencode-ai/sdk": "^1.17.13"
+  },
+  "exports": {
+    ".": "./dist/mimir-oc.ts"
+  },
+  "description": "Mimir persona and runtime for OpenCode. Bundled into a single self-contained TS file at dist/mimir-oc.ts and distributed via GitHub Packages as @RageLtd/mimir-oc — `opencode plugin @RageLtd/mimir-oc` handles the install.",
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "opencode",
+    "plugin",
+    "mimir",
+    "agent"
+  ],
+  "private": true,
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "scripts": {
+    "build": "bun build src/index.ts --outfile dist/mimir-oc.ts --target bun --minify",
+    "test": "bun run ../../tests/run-tests.ts oc-plugin"
+  },
+  "type": "module"
+}

@@ -8,8 +8,9 @@
  */
 
 import type { ModelInfo } from "@agentclientprotocol/sdk";
+import type { ToolDefinition } from "@mimir/plugin-core/tools/user-memory";
+import { errMessage } from "@mimir/plugin-core/util";
 import { iterateSSE, type SSEEvent } from "./sse-parser";
-import { errMessage } from "./util";
 import { createChildLogger, log as rootLog } from "./utils/log";
 
 const log = createChildLogger(rootLog, "server-client");
@@ -30,14 +31,12 @@ export type ChatMessage = {
   readonly name?: string;
 };
 
-export type ToolDefinition = {
-  readonly type: "function";
-  readonly function: {
-    readonly name: string;
-    readonly description: string;
-    readonly parameters: Record<string, unknown>;
-  };
-};
+// Single source of truth for tool-definition shape lives in plugin-core
+// (shared by the server-tools fetch, user-memory tools, and client MCP).
+// Imported for local use and re-exported so acp's many `../server-client`
+// importers are unaffected. plugin-core's shape leaves description/
+// parameters optional — MCP tools may legitimately omit a description.
+export type { ToolDefinition };
 
 export type CompletionRequest = {
   readonly model: string;

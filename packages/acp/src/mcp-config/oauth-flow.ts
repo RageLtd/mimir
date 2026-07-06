@@ -23,10 +23,10 @@
  * the newly-available tools on its next prompt.
  */
 
+import { errMessage } from "@mimir/plugin-core/util";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { errMessage } from "../util";
 import { createChildLogger, log } from "../utils/log";
 import { createOAuthStorage } from "./oauth-storage";
 

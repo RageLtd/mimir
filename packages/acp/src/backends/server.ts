@@ -12,6 +12,7 @@ import { createChildLogger, log as rootLog } from "../utils/log";
 
 const log = createChildLogger(rootLog, "server-backend");
 
+import { errMessage } from "@mimir/plugin-core/util";
 import {
   type ChatMessage,
   type ServerClientConfig,
@@ -24,7 +25,6 @@ import {
   mergeToolCallDelta,
   type SSEEvent,
 } from "../sse-parser";
-import { errMessage } from "../util";
 import type { Backend, BackendRunOptions } from "./types";
 
 /**

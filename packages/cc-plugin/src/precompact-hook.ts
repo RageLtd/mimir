@@ -14,10 +14,10 @@
  * we just make sure the brain doesn't lose anything when CC summarizes.
  */
 
+import { getOrResolveProjectId } from "@mimir/plugin-core/project";
+import { attempt } from "@mimir/plugin-core/result";
 import { readConfig } from "./config";
 import { createLogger } from "./logger";
-import { getOrResolveProjectId } from "./project";
-import { attempt } from "./result";
 import {
   readDelta,
   readWatermark,
@@ -92,9 +92,11 @@ export const runPreCompactHook = async () => {
     return 0;
   }
 
-  const projectId = await getOrResolveProjectId(config.serverUrl, cwd).catch(
-    () => null,
-  );
+  const projectId = await getOrResolveProjectId(
+    config.serverUrl,
+    cwd,
+    config.apiKey,
+  ).catch(() => null);
 
   const result = await shipDelta(config.serverUrl, messages, cwd, projectId);
 

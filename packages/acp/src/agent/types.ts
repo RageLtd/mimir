@@ -3,9 +3,9 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
+import type { ResolvedProject } from "@mimir/plugin-core/project";
+import type { LoadError, RuleEntry } from "@mimir/plugin-core/rules";
 import type { ClientMcpManager } from "../client-mcp/manager";
-import type { ResolvedProject } from "../project/resolver";
-import type { LoadError, RuleEntry } from "../rules";
 import type { ChatMessage } from "../server-client";
 
 /** Reasoning effort levels the server backend accepts. */

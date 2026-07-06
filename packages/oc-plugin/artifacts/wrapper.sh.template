@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+#
+# mimir — launch OpenCode with the Mimir persona, plugin, and hooks.
+# Sets MIMIR_ACTIVE so the plugin's in-process handlers distinguish a
+# real Mimir session from a nested opencode subprocess that happens to
+# inherit the same plugin file.
+
+set -eo pipefail
+export MIMIR_ACTIVE=1
+exec opencode "$@"

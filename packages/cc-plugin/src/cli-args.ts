@@ -5,10 +5,9 @@
  */
 
 import { join } from "node:path";
-
+import { mimirHome } from "@mimir/plugin-core/util";
 import { readConfig } from "./config";
 import type { InstallOptions } from "./install";
-import { mimirHome } from "./util";
 
 type McpConfig = {
   readonly mcpServers?: Record<string, { readonly url?: string }>;

@@ -8,7 +8,7 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
-import { formatLoadErrors, type LoadError } from "../rules";
+import { formatLoadErrors, type LoadError } from "@mimir/plugin-core/rules";
 import type { ChatMessage } from "../server-client";
 import { createChildLogger, log } from "../utils/log";
 import { AVAILABLE_COMMANDS } from "./session";

@@ -19,6 +19,7 @@
 import { chmod, copyFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { mimirHome } from "@mimir/plugin-core/util";
 import mcpTemplate from "../artifacts/mcp.json.template" with { type: "text" };
 import settingsTemplate from "../artifacts/settings.json.template" with {
   type: "text",
@@ -29,10 +30,8 @@ import wrapperTemplate from "../artifacts/wrapper.sh.template" with {
 import ensureBinaryScript from "../scripts/ensure-binary.sh" with {
   type: "text",
 };
-
 import { writeConfig } from "./config";
 import { toAnthropicXml } from "./markdown-to-xml";
-import { mimirHome } from "./util";
 
 type Result<T> =
   | { readonly ok: true; readonly value: T }

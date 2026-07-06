@@ -1,0 +1,10 @@
+{
+  "plugin": ["file://~/.config/opencode/plugins/mimir-oc.ts"],
+  "mcp": {
+    "mimir": {
+      "type": "remote",
+      "url": "{{SERVER_URL}}/mcp"
+    }
+  },
+  "instructions": ["~/.mimir/system-prompt.md"]
+}

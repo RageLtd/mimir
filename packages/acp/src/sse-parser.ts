@@ -5,7 +5,7 @@
  * Tool call accumulation and agent loop logic live in agent.ts.
  */
 
-import { parseJSON } from "./util";
+import { parseJSON } from "@mimir/plugin-core/util";
 import { createChildLogger, log as rootLog } from "./utils/log";
 
 const log = createChildLogger(rootLog, "sse-parser");
@@ -129,11 +129,7 @@ export const chunkToEvents = (chunk: ChatCompletionChunk) => {
   // non-standard wire format that the ACP parser translates into observe-only
   // tool_call + tool_result events.
   const firstChoice = chunk.choices[0];
-  if (
-    firstChoice &&
-    firstChoice.delta &&
-    "mimir_tool_observation" in firstChoice.delta
-  ) {
+  if (firstChoice?.delta && "mimir_tool_observation" in firstChoice.delta) {
     const obs = (firstChoice.delta as Record<string, unknown>)
       .mimir_tool_observation as {
       id: string;

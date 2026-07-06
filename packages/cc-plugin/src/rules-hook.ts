@@ -17,9 +17,13 @@
  * unexpectedly trigger rule enforcement against the parent's rules.
  */
 
+import {
+  type DetectorContext,
+  loadRules,
+  runAndFormat,
+} from "@mimir/plugin-core/rules";
+import { errMessage } from "@mimir/plugin-core/util";
 import { createLogger } from "./logger";
-import { type DetectorContext, loadRules, runAndFormat } from "./rules";
-import { errMessage } from "./util";
 
 const log = createLogger("rules-hook");
 

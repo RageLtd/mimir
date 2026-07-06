@@ -20,10 +20,13 @@
  */
 
 import { spawn } from "node:child_process";
+import {
+  getOrResolveProjectId,
+  toProjectRelative,
+} from "@mimir/plugin-core/project";
+import { errMessage } from "@mimir/plugin-core/util";
 import { readConfig } from "./config";
 import { createLogger } from "./logger";
-import { getOrResolveProjectId, toProjectRelative } from "./project";
-import { errMessage } from "./util";
 
 const log = createLogger("reindex-hook");
 
@@ -139,8 +142,10 @@ const runWorker = async (
     return 0;
   }
 
-  const { spawnCartographer } = await import("./cartographer/client");
-  const { syncIndex } = await import("./cartographer/sync");
+  const { spawnCartographer } = await import(
+    "@mimir/plugin-core/cartographer/client"
+  );
+  const { syncIndex } = await import("@mimir/plugin-core/cartographer/sync");
 
   const client = await spawnCartographer(
     config.cartographerBinary,
@@ -171,6 +176,7 @@ const runWorker = async (
   const projectId = await getOrResolveProjectId(
     config.serverUrl,
     projectPath,
+    config.apiKey,
   ).catch(() => null);
 
   // Single-file reindex MUST use upsert mode — replace mode would wipe

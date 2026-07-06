@@ -15,12 +15,12 @@
  * Mimir transport it's running under.
  */
 
+import { getOrResolveProjectId } from "@mimir/plugin-core/project";
+import { createUserMemoryStore } from "@mimir/plugin-core/store/user-memories";
+import { buildUserContext } from "@mimir/plugin-core/tools/user-memory";
+import { errMessage } from "@mimir/plugin-core/util";
 import { authHeaders, readConfig } from "./config";
 import { createLogger } from "./logger";
-import { getOrResolveProjectId } from "./project";
-import { createUserMemoryStore } from "./store/user-memories";
-import { buildUserContext } from "./tools/user-memory";
-import { errMessage } from "./util";
 
 const log = createLogger("boot-context");
 
@@ -154,6 +154,7 @@ export const assembleBootContext = async (
   const projectId = await getOrResolveProjectId(
     config.serverUrl,
     opts.projectPath,
+    config.apiKey,
   ).catch(() => null);
 
   const [profile, sessionContext] = await Promise.all([

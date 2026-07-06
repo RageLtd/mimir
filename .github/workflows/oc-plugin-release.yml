@@ -1,0 +1,192 @@
+name: oc-plugin Release
+
+# Auto-versioned release for packages/oc-plugin, driven by conventional
+# commits — no manual tagging. On a push to main that touches the
+# package, packages/oc-plugin/scripts/release.sh analyzes commits, bumps
+# the version in package.json, commits chore(release), and tags
+# oc-plugin/v<version>. The build job then builds the bundle and the
+# publish job renames the package for npm scope, `bun publish`es to
+# GitHub Packages, and creates a GitHub Release on the new tag.
+#
+# The conventional-commit rules match the cc-plugin's release.sh
+# verbatim — feat!:/BREAKING CHANGE → major, feat: → minor,
+# fix|refactor|perf|revert|build: → patch, docs:|chore:|test:|style:|ci:
+# → no release. See packages/oc-plugin/scripts/release.sh for the
+# details.
+#
+# To cut a release:
+#   1. Commit changes to packages/oc-plugin/ with conventional-commit
+#      messages (feat:, fix:, etc.) and push to main.
+#   2. The workflow analyses the commits, bumps the version, creates the
+#      oc-plugin/v<version> tag, pushes it, builds the bundle, and
+#      publishes the npm package to GitHub Packages.
+#   3. The release commit triggers a re-run of this workflow, which
+#      exits with `should_release: false` (skipping the bump because
+#      the head commit is chore(release)).
+#
+# To publish the first release (no prior tag), the package.json
+# `version` field needs to be at the initial version (0.1.0) and the
+# workflow's version-bump job will create the initial tag without a
+# version bump.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/oc-plugin/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  test:
+    name: Test
+    uses: ./.github/workflows/test.yml
+
+  version-bump:
+    name: Analyze & Bump Version
+    needs: [test]
+    runs-on: ubuntu-latest
+    # Avoid the release commit re-triggering the workflow.
+    if: "!startsWith(github.event.head_commit.message, 'chore(release): oc-plugin')"
+    outputs:
+      should_release: ${{ steps.dry-run.outputs.should_release }}
+      new_version: ${{ steps.dry-run.outputs.new_version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Analyze commits (dry run)
+        id: dry-run
+        run: |
+          OUTPUT=$(sh packages/oc-plugin/scripts/release.sh --dry-run 2>&1)
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -q "Nothing to do"; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            NEW_VERSION=$(echo "$OUTPUT" | grep "Version:" | sed 's/.*→ //' | tr -d '[:space:]')
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump, commit, tag
+        if: steps.dry-run.outputs.should_release == 'true'
+        run: sh packages/oc-plugin/scripts/release.sh
+
+      - name: Push changes and tags
+        if: steps.dry-run.outputs.should_release == 'true'
+        run: git push --follow-tags
+
+  build:
+    name: Build Bundle
+    runs-on: ubuntu-latest
+    needs: [version-bump]
+    if: needs.version-bump.outputs.should_release == 'true'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run --filter @mimir/oc-plugin build
+
+      - name: Verify bundle
+        run: |
+          BUNDLE="packages/oc-plugin/dist/mimir-oc.ts"
+          test -f "$BUNDLE" || (echo "Bundle missing: $BUNDLE" && exit 1)
+          SIZE=$(wc -c < "$BUNDLE")
+          echo "Bundle size: $SIZE bytes"
+          # Bundles smaller than 10KB almost certainly mean the build
+          # silently emitted an empty file. The plugins have grown to
+          # ~330KB and would only shrink if a major refactor pulled
+          # out most of the code — this is a tripwire, not a real
+          # quality gate.
+          if [ "$SIZE" -lt 10240 ]; then
+            echo "Bundle suspiciously small ($SIZE bytes) — failing"
+            exit 1
+          fi
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: mimir-oc-bundle
+          path: packages/oc-plugin/dist/mimir-oc.ts
+          if-no-files-found: error
+
+  publish:
+    name: Publish to GitHub Packages
+    runs-on: ubuntu-latest
+    # version-bump is required here: the rename/version steps below read
+    # needs.version-bump.outputs.new_version, which is only in scope for
+    # jobs that list version-bump in `needs`.
+    needs: [build, version-bump]
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Update package.json for publish
+        working-directory: packages/oc-plugin
+        run: |
+          VERSION="${{ needs.version-bump.outputs.new_version }}"
+          # Three edits before `bun publish`, all via jq (the version-bump
+          # job already uses jq — stay consistent, and jq handles the
+          # `/` in the scoped names that a sed s/// delimiter chokes on):
+          # 1. Rename @mimir/oc-plugin → the publish target @RageLtd/mimir-oc.
+          #    The in-monorepo name stays @mimir/oc-plugin for the workspace
+          #    filter and cc-plugin naming consistency; only the published
+          #    artifact uses the public scope.
+          # 2. Belt-and-braces version bump — robust against the version-bump
+          #    job being skipped (manual dispatch).
+          # 3. Strip `private: true`. `bun publish` (like npm) refuses a
+          #    package marked private; the in-repo manifest stays private for
+          #    the workspace, so we only del it on this throwaway CI checkout.
+          # 4. Strip devDependencies. The published artifact is the single
+          #    self-contained dist/mimir-oc.ts bundle (files: ["dist"]) —
+          #    plugin-core is inlined by `bun build` and @opencode-ai/* are
+          #    type-only (erased). It has zero runtime deps, and leaving the
+          #    `workspace:*` plugin-core devDep makes `bun publish` fail
+          #    ("Failed to resolve workspace version").
+          jq --arg v "$VERSION" \
+            '.name = "@RageLtd/mimir-oc" | .version = $v | del(.private) | del(.devDependencies)' \
+            package.json > package.json.tmp
+          mv package.json.tmp package.json
+          jq '{name, version, private, devDependencies}' package.json
+
+      - name: Publish to GitHub Packages
+        working-directory: packages/oc-plugin
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bun publish --registry https://npm.pkg.github.com
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="oc-plugin/v${{ needs.version-bump.outputs.new_version }}"
+          gh release create "$TAG" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "$TAG" \
+            --generate-notes

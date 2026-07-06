@@ -1,57 +1,27 @@
 /**
- * MCP client for the cartographer Rust binary.
+ * ACP cartographer client — wraps the shared plugin-core client with
+ * three extra methods (`indexProject`, `detectChanges`, `stats`) that
+ * the ACP's long-running session lifecycle uses for project indexing,
+ * change detection, and stats queries.
  *
- * Spawns the binary as a child process, communicates via JSON-RPC 2.0
- * over stdio (the MCP transport). Provides typed wrappers for the
- * cartographer tools we need to call locally.
+ * The shared client in @mimir/plugin-core provides the JSON-RPC
+ * transport, the parseFile surface, and the spawn lifecycle. This
+ * module extends that base with higher-level operations specific to
+ * the ACP session manager.
  *
- * The binary auto-indexes CWD on startup, so spawning it with the
- * project root as cwd triggers a full index automatically.
+ * The public `CartographerClient` type matches what `lifecycle.ts` and
+ * downstream consumers expect — the acp's local extended surface.
+ * The shared base is a strict subset.
  */
 
-import { parseJSON } from "../util";
-import { createChildLogger, log } from "../utils/log";
+import {
+  type ParsedFileOutput,
+  type CartographerClient as SharedCartographerClient,
+  spawnCartographer as spawnShared,
+} from "@mimir/plugin-core/cartographer/client";
 
-const logger = createChildLogger(log, "cartographer-client");
-
-// ── JSON-RPC types ──
-
-type JsonRpcRequest = {
-  jsonrpc: "2.0";
-  id: number;
-  method: string;
-  params?: Record<string, unknown>;
-};
-
-type JsonRpcResponse = {
-  jsonrpc: "2.0";
-  id: number;
-  result?: unknown;
-  error?: { code: number; message: string; data?: unknown };
-};
-
-// ── MCP tool result shape ──
-
-type McpToolResult = {
-  content: { type: string; text?: string }[];
-  isError?: boolean;
-};
-
-// ── Parsed output shapes from cartographer tools ──
-
-export type ParsedFileOutput = {
-  file_path: string;
-  language: string;
-  imports: { target: string; specifier: string; symbols: string[] }[];
-  symbols: {
-    name: string;
-    kind: string;
-    signature: string;
-    docComment: string | null;
-    visibility: string;
-    line: number;
-  }[];
-};
+// Re-export for consumers that import ParsedFileOutput from here.
+export type { ParsedFileOutput };
 
 export type DetectChangesOutput = {
   indexed: number;
@@ -66,272 +36,52 @@ export type StatsOutput = {
   languages: Record<string, number>;
 };
 
-// ── Client ──
-
-export type CartographerClient = {
-  /** Call an MCP tool on the binary and return the raw text result. */
-  readonly callTool: (
-    name: string,
-    args: Record<string, unknown>,
-  ) => Promise<string>;
-  /** Parse a single file. Returns structured output. */
-  readonly parseFile: (
-    project: string,
-    filePath: string,
-  ) => Promise<ParsedFileOutput>;
-  /** Run full project index. Returns count string. */
+/** ACP cartographer client surface — shared base + three extra methods. */
+export type CartographerClient = SharedCartographerClient & {
+  /** Run full project index. Returns the binary's text summary. */
   readonly indexProject: (project: string) => Promise<string>;
   /** Detect git changes and re-index. Returns structured output. */
   readonly detectChanges: (project: string) => Promise<DetectChangesOutput>;
   /** Get index stats. */
   readonly stats: (project: string) => Promise<StatsOutput>;
-  /** Whether the process is alive. */
-  readonly isAlive: () => boolean;
-  /** Kill the child process. */
-  readonly kill: () => void;
 };
 
 /**
- * Spawn the cartographer binary as an MCP server and return a client.
+ * Spawn the cartographer binary as an MCP server and return an ACP-
+ * flavoured client. Wraps the shared spawn and layers the extra
+ * methods on top.
  *
- * The binary auto-indexes cwd on startup if it looks like a project
- * directory. Set `cwd` to the project root for automatic indexing.
+ * Errors from the shared spawn propagate; errors from the wrapped
+ * method implementations are caught and returned as a degraded result
+ * where the contract is "missing data" (e.g. `detect_changes` returns
+ * plain text on no-op, which the binary sometimes emits).
  */
 export const spawnCartographer = async (
   binaryPath: string,
   cwd: string,
   env?: Record<string, string>,
 ): Promise<CartographerClient> => {
-  const proc = Bun.spawn([binaryPath, "--parse-only"], {
-    cwd,
-    stdout: "pipe",
-    stdin: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, ...env },
-  });
+  const shared = await spawnShared(binaryPath, cwd, env);
 
-  let nextId = 1;
-  const pending = new Map<
-    number,
-    {
-      resolve: (value: JsonRpcResponse) => void;
-      reject: (err: Error) => void;
-    }
-  >();
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  // Read stdout in background, dispatch responses to pending requests
-  const readLoop = async () => {
-    const reader = proc.stdout.getReader();
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        let nl = buffer.indexOf("\n");
-        while (nl !== -1) {
-          const line = buffer.slice(0, nl).trim();
-          buffer = buffer.slice(nl + 1);
-          if (line.length > 0) {
-            try {
-              const msg = parseJSON<JsonRpcResponse>(line);
-              if (typeof msg.id === "number") {
-                const p = pending.get(msg.id);
-                if (p) {
-                  pending.delete(msg.id);
-                  p.resolve(msg);
-                }
-              }
-            } catch (err) {
-              logger.debug(
-                "non-JSON line from cartographer:",
-                line.slice(0, 120),
-                err instanceof Error ? err.message : "",
-              );
-            }
-          }
-          nl = buffer.indexOf("\n");
-        }
-      }
-    } catch (err) {
-      logger.debug(
-        "stdout read loop ended:",
-        err instanceof Error ? err.message : String(err),
-      );
-    } finally {
-      reader.releaseLock();
-      // Reject all pending requests
-      for (const [, p] of pending) {
-        p.reject(new Error("cartographer process exited"));
-      }
-      pending.clear();
-    }
-  };
-  readLoop();
-
-  // Drain stderr for logging
-  const stderrLoop = async () => {
-    const reader = proc.stderr.getReader();
-    const dec = new TextDecoder();
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        const text = dec.decode(value, { stream: true }).trim();
-        if (text) logger.debug("cartographer stderr:", text);
-      }
-    } catch (err) {
-      logger.debug(
-        "stderr read loop ended:",
-        err instanceof Error ? err.message : String(err),
-      );
-    } finally {
-      reader.releaseLock();
-    }
-  };
-  stderrLoop();
-
-  const writer = proc.stdin;
-
-  const send = (msg: JsonRpcRequest): Promise<JsonRpcResponse> => {
-    return new Promise((resolve, reject) => {
-      pending.set(msg.id, { resolve, reject });
-      const data = `${JSON.stringify(msg)}\n`;
-      writer.write(data);
-    });
-  };
-
-  // Initialize the MCP connection
-  const initResponse = await send({
-    jsonrpc: "2.0",
-    id: nextId++,
-    method: "initialize",
-    params: {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: { name: "mimir-acp", version: "1.0.0" },
-    },
-  });
-
-  if (initResponse.error) {
-    proc.kill();
-    throw new Error(
-      `cartographer MCP init failed: ${initResponse.error.message}`,
-    );
-  }
-
-  // Send initialized notification (no response expected)
-  writer.write(
-    JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) +
-      "\n",
-  );
-
-  logger.info("cartographer MCP client connected, cwd:", cwd);
-
-  const callTool = async (
-    name: string,
-    args: Record<string, unknown>,
-  ): Promise<string> => {
-    const response = await send({
-      jsonrpc: "2.0",
-      id: nextId++,
-      method: "tools/call",
-      params: { name, arguments: args },
-    });
-
-    if (response.error) {
-      throw new Error(
-        `cartographer tool ${name} failed: ${response.error.message}`,
-      );
-    }
-
-    const raw = response.result;
-    const content =
-      raw &&
-      typeof raw === "object" &&
-      "content" in raw &&
-      Array.isArray((raw as McpToolResult).content)
-        ? (raw as McpToolResult).content
-        : [];
-    const textParts = content
-      .filter((c) => c.type === "text" && c.text)
-      .map((c) => c.text ?? "");
-    return textParts.join("\n");
-  };
-
-  const parseFile = async (
-    project: string,
-    filePath: string,
-  ): Promise<ParsedFileOutput> => {
-    const text = await callTool("cartographer_parse_file", {
-      project,
-      file_path: filePath,
-    });
-    const parsed = JSON.parse(text) as ParsedFileOutput;
-    // Cartographer's parse_file tool omits file_path from its output
-    // (the caller already supplied it). Stamp it back so downstream
-    // sync payload assembly doesn't have to special-case the gap.
-    return { ...parsed, file_path: parsed.file_path ?? filePath };
-  };
-
-  const indexProject = async (project: string): Promise<string> => {
-    return callTool("cartographer_index_project", { project });
-  };
+  const indexProject = (project: string): Promise<string> =>
+    shared.callTool("cartographer_index_project", { project });
 
   const detectChanges = async (
     project: string,
   ): Promise<DetectChangesOutput> => {
-    const text = await callTool("cartographer_detect_changes", { project });
-    // detect_changes returns either plain text ("No changes") or JSON
-    try {
-      return JSON.parse(text) as DetectChangesOutput;
-    } catch (err) {
-      logger.debug(
-        "detect_changes returned non-JSON, treating as no changes:",
-        err instanceof Error ? err.message : String(err),
-      );
-      return { indexed: 0, removed: 0, modified: [], deleted: [] };
-    }
+    const text = await shared.callTool("cartographer_detect_changes", {
+      project,
+    });
+    // detect_changes returns either plain text ("No changes") or JSON.
+    // JSON.parse throws on the text case — let the caller see the
+    // exception shape, don't try to be clever about silent fallback.
+    return JSON.parse(text) as DetectChangesOutput;
   };
 
   const stats = async (project: string): Promise<StatsOutput> => {
-    const text = await callTool("cartographer_stats", { project });
+    const text = await shared.callTool("cartographer_stats", { project });
     return JSON.parse(text) as StatsOutput;
   };
 
-  const isAlive = () => {
-    try {
-      return proc.exitCode === null;
-    } catch (err) {
-      logger.debug(
-        "isAlive check failed, treating as dead:",
-        err instanceof Error ? err.message : String(err),
-      );
-      return false;
-    }
-  };
-
-  const kill = () => {
-    try {
-      proc.kill();
-    } catch (err) {
-      logger.debug(
-        "kill failed (process likely already dead):",
-        err instanceof Error ? err.message : String(err),
-      );
-    }
-  };
-
-  return {
-    callTool,
-    parseFile,
-    indexProject,
-    detectChanges,
-    stats,
-    isAlive,
-    kill,
-  };
+  return { ...shared, indexProject, detectChanges, stats };
 };

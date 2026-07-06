@@ -6,20 +6,22 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
+import {
+  collectProjectMetadata,
+  detectGitRemote,
+  patchProjectMetadata,
+  type ResolvedProject,
+  resolveProjectForPath,
+} from "@mimir/plugin-core/project";
+import { type LoadError, loadRules } from "@mimir/plugin-core/rules";
+import type { UserMemoryStore } from "@mimir/plugin-core/store/user-memories";
+import { errMessage } from "@mimir/plugin-core/util";
 import type { BackendRouter } from "../backends";
 import type { CartographerManager } from "../cartographer/lifecycle";
 import { formatRulesForPrompt, readProjectRules } from "../cartographer/rules";
 import { createClientMcpManager } from "../client-mcp/manager";
 import type { MimirConfig } from "../config";
-import { collectProjectMetadata } from "../project/metadata";
-import {
-  patchProjectMetadata,
-  resolveProjectForPath,
-} from "../project/resolver";
-import { type LoadError, loadRules } from "../rules";
 import type { SessionStore } from "../store/sessions";
-import type { UserMemoryStore } from "../store/user-memories";
-import { errMessage } from "../util";
 import { createChildLogger, log } from "../utils/log";
 import { emitAgentText } from "./lifecycle-helpers";
 import { promptViaServer } from "./prompt-server";
@@ -53,7 +55,7 @@ const kickOffSessionInit = (
   projectPath: string,
   serverUrl: string,
   apiKey: string,
-  onResolved: (project: import("../project/resolver").ResolvedProject) => void,
+  onResolved: (project: ResolvedProject) => void,
   settleProjectId: (id: string | null) => void,
   onRuleErrors?: (errors: readonly LoadError[]) => void,
 ) => {
@@ -81,7 +83,10 @@ const kickOffSessionInit = (
     })
     .catch((err) => logger.warn("failed to load rules:", err));
 
-  resolveProjectForPath({ serverUrl, apiKey }, projectPath)
+  detectGitRemote(projectPath)
+    .then((gitRemote) =>
+      resolveProjectForPath(serverUrl, apiKey, projectPath, gitRemote),
+    )
     .then(async (project) => {
       if (!project) {
         // Resolution returned nothing — settle so autoIndex stops waiting
@@ -99,7 +104,7 @@ const kickOffSessionInit = (
       // current state of the filesystem on every session start.
       const metadata = await collectProjectMetadata(projectPath);
       if (metadata.technologies.length > 0 || metadata.description) {
-        await patchProjectMetadata({ serverUrl, apiKey }, project.id, metadata);
+        await patchProjectMetadata(serverUrl, apiKey, project.id, metadata);
       }
     })
     .catch((err) => {

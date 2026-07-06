@@ -9,10 +9,10 @@
 
 import * as path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
+import type { UserMemoryStore } from "@mimir/plugin-core/store/user-memories";
 import { assembleClientMcpServers } from "../mcp-config/assemble";
 import { authenticateServer } from "../mcp-config/auth-injector";
 import { probeHttpServer } from "../mcp-config/probe";
-import type { UserMemoryStore } from "../store/user-memories";
 import { emitAgentText } from "./lifecycle-helpers";
 import {
   buildRulesGeneratePrompt,

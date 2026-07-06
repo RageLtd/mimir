@@ -9,9 +9,12 @@
  * Env: MIMIR_USER_MEMORY_DB — path to the SQLite database file.
  */
 
-import { createUserMemoryStore } from "../store/user-memories";
-import { errMessage } from "../util";
-import { executeUserMemoryTool, userMemoryToolDefs } from "./user-memory";
+import { createUserMemoryStore } from "@mimir/plugin-core/store/user-memories";
+import {
+  executeUserMemoryTool,
+  userMemoryToolDefs,
+} from "@mimir/plugin-core/tools/user-memory";
+import { errMessage } from "@mimir/plugin-core/util";
 
 const dbPath = process.env.MIMIR_USER_MEMORY_DB;
 if (!dbPath) {

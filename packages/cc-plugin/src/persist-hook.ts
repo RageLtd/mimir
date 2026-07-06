@@ -17,11 +17,10 @@
  */
 
 import type { ModelMessage } from "@ai-sdk/provider-utils";
-
+import { getOrResolveProjectId } from "@mimir/plugin-core/project";
+import { attempt } from "@mimir/plugin-core/result";
 import { authHeaders, readConfig } from "./config";
 import { createLogger } from "./logger";
-import { getOrResolveProjectId } from "./project";
-import { attempt } from "./result";
 import {
   readDelta,
   readWatermark,
@@ -162,9 +161,11 @@ export const runPersistHook = async () => {
     return 0;
   }
 
-  const projectId = await getOrResolveProjectId(config.serverUrl, cwd).catch(
-    () => null,
-  );
+  const projectId = await getOrResolveProjectId(
+    config.serverUrl,
+    cwd,
+    config.apiKey,
+  ).catch(() => null);
 
   const result = await shipDelta(config.serverUrl, messages, cwd, projectId);
 

@@ -1,114 +1,24 @@
 /**
- * File-based logger for the mimir-cc runtime.
+ * CC plugin logger — binds the shared logger factory from
+ * @mimir/plugin-core to `mimir-cc.log` and `mimir-cc.prev.log` under
+ * `~/.mimir/logs/`.
  *
- * Writes structured log lines to `~/.mimir/logs/mimir-cc.log`, append-only.
- * Hooks run as short-lived subprocesses with stdin/stdout reserved for the
- * CC hook protocol, so anything chatty has to go somewhere durable — the
- * developer can `tail -f` this file to debug rule misfires, reindex
- * failures, or boot-context assembly errors.
+ * Every hook imports `createLogger` from this local wrapper and calls
+ * `createLogger("<component>")`; the factory takes care of writing to
+ * the right file. `flushLogs` is re-exported so `cli.ts` can drain
+ * pending writes before `process.exit()`.
  *
- * Log level is INFO by default; set MIMIR_DEBUG=1 to enable DEBUG.
- *
- * The logger is fire-and-forget at the call site (sync-looking API) but
- * every write chains onto a module-local Promise so cli.ts can
- * `await flushLogs()` before `process.exit()` and guarantee the most
- * recent lines actually hit disk. Errors anywhere in the chain are
- * absorbed via `.catch(() => undefined)` — log infrastructure should
- * never take down a hook, and chaining `.catch` keeps us out of
- * try/catch for control flow.
- *
- * Format: `<ISO timestamp> [<level>] <component>: <message> <json-context?>`
- * One line per call. Context is appended as compact JSON when present.
+ * The future oc-plugin will have its own thin wrapper here, bound to
+ * `mimir-oc.log` and `mimir-oc.prev.log`. The shared layer stays
+ * host-agnostic — it knows about log file paths, not about which
+ * adapter wrote them.
  */
 
-import { appendFile, mkdir, rename } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { createLoggerFactory } from "@mimir/plugin-core/logger";
 
-import { mimirHome } from "./util";
+const { createLogger, flushLogs } = createLoggerFactory(
+  "mimir-cc.log",
+  "mimir-cc.prev.log",
+);
 
-type LogLevel = "debug" | "info" | "warn" | "error";
-
-const LEVEL_PRIORITY: Record<LogLevel, number> = {
-  debug: 10,
-  info: 20,
-  warn: 30,
-  error: 40,
-};
-
-const currentLevel: LogLevel =
-  process.env.MIMIR_DEBUG === "1" ? "debug" : "info";
-
-const minPriority = LEVEL_PRIORITY[currentLevel];
-
-const LOG_NAME = "mimir-cc.log";
-const PREV_NAME = "mimir-cc.prev.log";
-
-const logPath = () => join(mimirHome(), "logs", LOG_NAME);
-const prevPath = () => join(mimirHome(), "logs", PREV_NAME);
-
-/**
- * Render the optional context payload. JSON.stringify can throw on
- * circular references; we let the throw propagate up to the writeLine
- * promise chain, which catches it into a no-op. The result is one
- * dropped log line — acceptable trade-off vs. a try/catch here.
- */
-const formatContext = (context: unknown): string => {
-  if (context === undefined) return "";
-  if (context instanceof Error) {
-    return ` ${JSON.stringify({ error: context.message, stack: context.stack })}`;
-  }
-  return ` ${JSON.stringify(context)}`;
-};
-
-const formatLine = (
-  level: LogLevel,
-  component: string,
-  message: string,
-  context: unknown,
-) =>
-  `${new Date().toISOString()} [${level.toUpperCase()}] ${component}: ${message}${formatContext(context)}\n`;
-
-// ── Pending-write chain ──
-// Every writeLine call appends onto `pending`. The first link mkdir's the
-// log directory, rotates the previous log, then subsequent links append
-// text. Failures at any step are absorbed into a no-op so the chain
-// never enters a rejected state.
-
-let pending: Promise<void> = mkdir(dirname(logPath()), { recursive: true })
-  .then(() => rename(logPath(), prevPath()).catch(() => undefined))
-  .then(() => undefined)
-  .catch(() => undefined);
-
-const writeLine = (line: string) => {
-  pending = pending
-    .then(() => appendFile(logPath(), line))
-    .catch(() => undefined);
-};
-
-/**
- * Wait for every pending log write to flush to disk. Called from cli.ts
- * immediately before `process.exit()` so the last log line — usually the
- * one that explains why the hook is exiting — actually lands.
- */
-export const flushLogs = () => pending;
-
-export type Logger = {
-  readonly debug: (message: string, context?: unknown) => void;
-  readonly info: (message: string, context?: unknown) => void;
-  readonly warn: (message: string, context?: unknown) => void;
-  readonly error: (message: string, context?: unknown) => void;
-};
-
-export const createLogger = (component: string): Logger => {
-  const log = (level: LogLevel, message: string, context?: unknown) => {
-    if (LEVEL_PRIORITY[level] < minPriority) return;
-    writeLine(formatLine(level, component, message, context));
-  };
-
-  return {
-    debug: (message, context) => log("debug", message, context),
-    info: (message, context) => log("info", message, context),
-    warn: (message, context) => log("warn", message, context),
-    error: (message, context) => log("error", message, context),
-  };
-};
+export { createLogger, flushLogs };

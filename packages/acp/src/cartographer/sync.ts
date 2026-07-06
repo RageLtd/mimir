@@ -8,7 +8,7 @@
 
 import { createHash } from "node:crypto";
 import * as path from "node:path";
-import { errMessage } from "../util";
+import { errMessage } from "@mimir/plugin-core/util";
 import type { Logger } from "../utils/log";
 import type { ParsedFileOutput } from "./client";
 

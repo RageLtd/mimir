@@ -12,7 +12,7 @@
 
 import { join } from "node:path";
 
-import { mimirHome } from "./util";
+import { mimirHome } from "@mimir/plugin-core/util";
 
 export type MimirConfig = {
   readonly serverUrl: string;

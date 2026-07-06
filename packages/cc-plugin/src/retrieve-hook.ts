@@ -22,12 +22,11 @@
 
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-
+import { getOrResolveProjectId } from "@mimir/plugin-core/project";
+import { attempt } from "@mimir/plugin-core/result";
+import { errMessage, mimirHome } from "@mimir/plugin-core/util";
 import { authHeaders, readConfig } from "./config";
 import { createLogger } from "./logger";
-import { getOrResolveProjectId } from "./project";
-import { attempt } from "./result";
-import { errMessage, mimirHome } from "./util";
 
 const log = createLogger("retrieve-hook");
 
@@ -158,9 +157,11 @@ export const runRetrieveHook = async () => {
     return 0;
   }
 
-  const projectId = await getOrResolveProjectId(config.serverUrl, cwd).catch(
-    () => null,
-  );
+  const projectId = await getOrResolveProjectId(
+    config.serverUrl,
+    cwd,
+    config.apiKey,
+  ).catch(() => null);
 
   const payload = await fetchRetrieval(
     config.serverUrl,

@@ -9,6 +9,7 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
+import { createUserMemoryStore } from "@mimir/plugin-core/store/user-memories";
 import { createBackendRouter } from "../backends";
 import {
   type CartographerManager,
@@ -16,7 +17,6 @@ import {
 } from "../cartographer/lifecycle";
 import { config } from "../config";
 import { createSessionStore } from "../store/sessions";
-import { createUserMemoryStore } from "../store/user-memories";
 import { createAgentCore } from "./core";
 import type { HandlerDeps } from "./handlers";
 import * as handlers from "./handlers";

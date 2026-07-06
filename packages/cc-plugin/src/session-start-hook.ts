@@ -18,16 +18,15 @@
  */
 
 import { spawn } from "node:child_process";
-
-import { readConfig } from "./config";
-import { createLogger } from "./logger";
 import {
   collectProjectMetadata,
   getOrResolveProjectId,
   patchProjectMetadata,
-} from "./project";
-import { attempt } from "./result";
-import { errMessage } from "./util";
+} from "@mimir/plugin-core/project";
+import { attempt } from "@mimir/plugin-core/result";
+import { errMessage } from "@mimir/plugin-core/util";
+import { readConfig } from "./config";
+import { createLogger } from "./logger";
 
 const log = createLogger("session-start-hook");
 
@@ -144,8 +143,10 @@ const runWorker = async (projectPath: string) => {
     fileCount: files.length,
   });
 
-  const { spawnCartographer } = await import("./cartographer/client");
-  const { syncIndex } = await import("./cartographer/sync");
+  const { spawnCartographer } = await import(
+    "@mimir/plugin-core/cartographer/client"
+  );
+  const { syncIndex } = await import("@mimir/plugin-core/cartographer/sync");
 
   const [spawnErr, client] = await attempt(() =>
     spawnCartographer(config.cartographerBinary as string, projectPath),
@@ -193,6 +194,7 @@ const runWorker = async (projectPath: string) => {
   const projectId = await getOrResolveProjectId(
     config.serverUrl,
     projectPath,
+    config.apiKey,
   ).catch(() => null);
 
   // Slice 1.5 metadata refresh: once we have a UUID, scan the manifest
@@ -202,7 +204,12 @@ const runWorker = async (projectPath: string) => {
   if (projectId) {
     collectProjectMetadata(projectPath)
       .then((metadata) =>
-        patchProjectMetadata(config.serverUrl, projectId, metadata),
+        patchProjectMetadata(
+          config.serverUrl,
+          config.apiKey,
+          projectId,
+          metadata,
+        ),
       )
       .catch((err) =>
         log.warn("metadata refresh failed", {

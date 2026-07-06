@@ -20,12 +20,14 @@
 
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-
+import {
+  getOrResolveProjectId,
+  toProjectRelative,
+} from "@mimir/plugin-core/project";
+import { attempt } from "@mimir/plugin-core/result";
+import { mimirHome } from "@mimir/plugin-core/util";
 import { authHeaders, readConfig } from "./config";
 import { createLogger } from "./logger";
-import { getOrResolveProjectId, toProjectRelative } from "./project";
-import { attempt } from "./result";
-import { mimirHome } from "./util";
 
 const log = createLogger("file-context-hook");
 
@@ -239,9 +241,11 @@ export const runFileContextHook = async () => {
   // of a session). Null is fine — `getOrResolveProjectId` already returns
   // null on any failure, and the server falls back to the legacy `project`
   // key in the body.
-  const projectId = await getOrResolveProjectId(config.serverUrl, cwd).catch(
-    () => null,
-  );
+  const projectId = await getOrResolveProjectId(
+    config.serverUrl,
+    cwd,
+    config.apiKey,
+  ).catch(() => null);
 
   // Cart_file rows store relative paths after Slice 1. Query by the same
   // representation or every lookup misses. The dedup cache key uses the

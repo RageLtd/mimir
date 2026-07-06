@@ -13,9 +13,12 @@
  * so mcp.json points at `mimir-cc` rather than a bun script.
  */
 
-import { createUserMemoryStore } from "./store/user-memories";
-import { executeUserMemoryTool, userMemoryToolDefs } from "./tools/user-memory";
-import { errMessage } from "./util";
+import { createUserMemoryStore } from "@mimir/plugin-core/store/user-memories";
+import {
+  executeUserMemoryTool,
+  userMemoryToolDefs,
+} from "@mimir/plugin-core/tools/user-memory";
+import { errMessage } from "@mimir/plugin-core/util";
 
 // ── JSON-RPC types ──
 

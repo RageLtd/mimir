@@ -16,7 +16,7 @@
 
 import { join } from "node:path";
 
-import { errMessage, mimirHome } from "./util";
+import { errMessage, mimirHome } from "@mimir/plugin-core/util";
 
 // ── Log file paths ──
 

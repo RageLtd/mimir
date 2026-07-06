@@ -20,6 +20,15 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
+import { runAndFormat } from "@mimir/plugin-core/rules";
+import type { UserMemoryStore } from "@mimir/plugin-core/store/user-memories";
+import {
+  buildUserContext,
+  executeUserMemoryTool,
+  userMemoryToolDefs,
+  userMemoryToolNames,
+} from "@mimir/plugin-core/tools/user-memory";
+import { errMessage } from "@mimir/plugin-core/util";
 import type { Backend } from "../backends/types";
 import type { CartographerManager } from "../cartographer/lifecycle";
 import {
@@ -28,16 +37,7 @@ import {
 } from "../cartographer/lifecycle";
 import type { MimirConfig } from "../config";
 import { createRequestToolPermission } from "../permissions";
-import { runAndFormat } from "../rules";
 import { getTools, type ToolDefinition } from "../server-client";
-import type { UserMemoryStore } from "../store/user-memories";
-import {
-  buildUserContext,
-  executeUserMemoryTool,
-  userMemoryToolDefs,
-  userMemoryToolNames,
-} from "../tools/user-memory";
-import { errMessage } from "../util";
 import { createChildLogger, log } from "../utils/log";
 import {
   clientToolDefs,

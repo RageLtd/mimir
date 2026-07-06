@@ -8,11 +8,11 @@
  */
 
 import * as acp from "@agentclientprotocol/sdk";
+import type { UserMemoryStore } from "@mimir/plugin-core/store/user-memories";
 import type { BackendRouter } from "../backends";
 import type { CartographerManager } from "../cartographer/lifecycle";
 import type { MimirConfig } from "../config";
 import { assembleClientMcpServers } from "../mcp-config/assemble";
-import type { UserMemoryStore } from "../store/user-memories";
 import { createChildLogger, log } from "../utils/log";
 import { handleCommand } from "./commands";
 import { formatContentBlocks } from "./content";

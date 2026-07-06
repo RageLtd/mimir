@@ -11,8 +11,8 @@
  */
 
 import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk";
+import type { RuleEntry } from "@mimir/plugin-core/rules";
 import type { SessionState, ThoughtLevel } from "../agent/types";
-import type { RuleEntry } from "../rules";
 import type { ChatMessage, ToolDefinition } from "../server-client";
 
 export type BackendEvent =
