@@ -19,10 +19,9 @@
  */
 
 import type { Context } from "hono";
-import { requestScope } from "../db/build-scope";
-import { closeScope, scopedQueryFirst, scopedQueryOne } from "../db/scope";
+import { scopedQueryFirst, scopedQueryOne } from "../db/scope";
 import { formatMemoryList, retrieveMemoryList } from "../goldfish/memory";
-import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
+import type { ScopedEnv } from "../middleware/scope";
 import { resolveProjectForQuery } from "../projects/resolve-for-query";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
@@ -67,7 +66,7 @@ type CartImportRow = {
 
 type SymbolRow = { kind: string; name: string; line: number; column: number };
 
-export const fileInfoHandler = async (c: Context<IdentityEnv>) => {
+export const fileInfoHandler = async (c: Context<ScopedEnv>) => {
   const [bodyErr, body] = await attempt(() => c.req.json<FileInfoRequest>());
   if (bodyErr) {
     log.debug({ err: bodyErr.message }, "invalid file-info JSON body");
@@ -81,180 +80,175 @@ export const fileInfoHandler = async (c: Context<IdentityEnv>) => {
     return c.json({ error: "Missing required field: filePath" }, 400);
   }
 
-  // One scope for the whole handler — the cart_* lookups and memory
-  // retrieval all run on the caller's org (MIM-69). Slice 5: a scoped JWT
-  // connection when auth is on; closed in the finally below.
-  const scope = await requestScope(c.get("identity"), scopeOrgId(c));
-  try {
-    // Resolve to the canonical project id — prefers the client-sent id,
-    // falls back to resolving the legacy path field. Read path: no
-    // get-or-create; an unknown identifier just matches nothing.
-    const resolved = await resolveProjectForQuery(
-      scope,
-      typeof body.projectId === "string" && body.projectId.length > 0
-        ? body.projectId
-        : body.project,
-    );
-    const projectKey = resolved.project;
+  // The cart_* lookups and memory retrieval all run on the caller's scoped
+  // connection (MIM-69), supplied and closed by scopeMiddleware.
+  const scope = c.get("scope");
+  // Resolve to the canonical project id — prefers the client-sent id,
+  // falls back to resolving the legacy path field. Read path: no
+  // get-or-create; an unknown identifier just matches nothing.
+  const resolved = await resolveProjectForQuery(
+    scope,
+    typeof body.projectId === "string" && body.projectId.length > 0
+      ? body.projectId
+      : body.project,
+  );
+  const projectKey = resolved.project;
 
-    const [fileErr, fileRow] = await attempt(() =>
-      scopedQueryFirst<CartFileRow>(
-        scope,
-        `SELECT symbols, content_hash FROM cart_file
+  const [fileErr, fileRow] = await attempt(() =>
+    scopedQueryFirst<CartFileRow>(
+      scope,
+      `SELECT symbols, content_hash FROM cart_file
         WHERE project_id = $project_id AND org_id = $scope_org AND file_path = $file_path
         LIMIT 1`,
-        {
-          project_id: projectKey,
-          file_path: body.filePath,
-          scope_org: scope.orgId,
-        },
-      ),
-    );
-
-    if (fileErr) {
-      log.error(
-        {
-          err: fileErr.message,
-          project: body.project,
-          projectId: body.projectId,
-          filePath: body.filePath,
-        },
-        "file-info cart_file lookup failed",
-      );
-      return c.json({ error: fileErr.message }, 500);
-    }
-
-    // File not indexed — return the empty shape so the hook skips injection.
-    if (!fileRow) {
-      return c.json({
-        contentHash: "",
-        symbols: [],
-        imports: [],
-        dependents: [],
-        memories: null,
-        memoryCount: 0,
-      });
-    }
-
-    const [parseErr, symbols] = await attempt(() =>
-      Promise.resolve(JSON.parse(fileRow.symbols) as SymbolRow[]),
-    );
-    const safeSymbols = parseErr ? [] : symbols;
-    if (parseErr) {
-      log.warn(
-        { err: parseErr.message, filePath: body.filePath },
-        "file-info: cart_file.symbols JSON parse failed, using empty",
-      );
-    }
-
-    const [importErr, importRows] = await attempt(() =>
-      scopedQueryOne<CartImportRow>(
-        scope,
-        `SELECT target_path, specifier FROM cart_import
-        WHERE project_id = $project_id AND org_id = $scope_org AND source_path = $file_path`,
-        {
-          project_id: projectKey,
-          file_path: body.filePath,
-          scope_org: scope.orgId,
-        },
-      ),
-    );
-    if (importErr) {
-      log.error(
-        { err: importErr.message, filePath: body.filePath },
-        "file-info imports query failed",
-      );
-      return c.json({ error: importErr.message }, 500);
-    }
-
-    const [depErr, dependentRows] = await attempt(() =>
-      scopedQueryOne<CartImportRow>(
-        scope,
-        `SELECT source_path, specifier FROM cart_import
-        WHERE project_id = $project_id AND org_id = $scope_org AND target_path = $file_path
-        LIMIT $limit`,
-        {
-          project_id: projectKey,
-          file_path: body.filePath,
-          scope_org: scope.orgId,
-          limit: FILE_INFO_DEPENDENT_LIMIT,
-        },
-      ),
-    );
-    if (depErr) {
-      log.error(
-        { err: depErr.message, filePath: body.filePath },
-        "file-info dependents query failed",
-      );
-      return c.json({ error: depErr.message }, 500);
-    }
-
-    // Memory retrieval: first-cut signal is filepath + top symbol names.
-    // Embedding similarity will find memories that mention the path or any
-    // of the symbols (function/type names tend to appear verbatim in
-    // captured memories). Crude but useful until proper file-tagging
-    // lands. Failure is non-fatal — we still return the cartographer half.
-    const memoryQuery = [
-      body.filePath,
-      ...safeSymbols
-        .slice(0, FILE_INFO_MEMORY_SYMBOL_LIMIT)
-        .map((s) => s.name)
-        .filter((n) => typeof n === "string" && n.length > 0),
-    ].join(" ");
-
-    const [memErr, memoryList] = await attempt(async () =>
-      retrieveMemoryList(scope, [{ role: "user", content: memoryQuery }], {
-        topK: FILE_INFO_MEMORY_TOP_K,
-        includeRelated: false,
-      }),
-    );
-    if (memErr) {
-      log.warn(
-        { err: memErr.message, filePath: body.filePath },
-        "file-info memory retrieval failed — returning without memories",
-      );
-    }
-    const memories = memErr || !memoryList ? null : memoryList;
-
-    const imports = importRows
-      .map((r) => ({
-        target: r.target_path ?? "",
-        specifier: r.specifier ?? "",
-      }))
-      .filter((i) => i.target.length > 0);
-    const dependents = dependentRows
-      .map((r) => ({
-        source: r.source_path ?? "",
-        specifier: r.specifier ?? "",
-      }))
-      .filter((d) => d.source.length > 0);
-
-    log.info(
       {
+        project_id: projectKey,
+        file_path: body.filePath,
+        scope_org: scope.orgId,
+      },
+    ),
+  );
+
+  if (fileErr) {
+    log.error(
+      {
+        err: fileErr.message,
         project: body.project,
         projectId: body.projectId,
-        projectKey,
         filePath: body.filePath,
-        symbols: safeSymbols.length,
-        imports: imports.length,
-        dependents: dependents.length,
-        memories: memories?.length ?? 0,
-        contentHash: fileRow.content_hash || "(empty)",
       },
-      "file-info served",
+      "file-info cart_file lookup failed",
     );
-
-    return c.json({
-      contentHash: fileRow.content_hash ?? "",
-      symbols: safeSymbols,
-      imports,
-      dependents,
-      memories: memories ? formatMemoryList(memories) : null,
-      // True memory count — the formatted string is multi-line per memory,
-      // so the plugin cannot derive this by counting lines.
-      memoryCount: memories?.length ?? 0,
-    });
-  } finally {
-    await closeScope(scope);
+    return c.json({ error: fileErr.message }, 500);
   }
+
+  // File not indexed — return the empty shape so the hook skips injection.
+  if (!fileRow) {
+    return c.json({
+      contentHash: "",
+      symbols: [],
+      imports: [],
+      dependents: [],
+      memories: null,
+      memoryCount: 0,
+    });
+  }
+
+  const [parseErr, symbols] = await attempt(() =>
+    Promise.resolve(JSON.parse(fileRow.symbols) as SymbolRow[]),
+  );
+  const safeSymbols = parseErr ? [] : symbols;
+  if (parseErr) {
+    log.warn(
+      { err: parseErr.message, filePath: body.filePath },
+      "file-info: cart_file.symbols JSON parse failed, using empty",
+    );
+  }
+
+  const [importErr, importRows] = await attempt(() =>
+    scopedQueryOne<CartImportRow>(
+      scope,
+      `SELECT target_path, specifier FROM cart_import
+        WHERE project_id = $project_id AND org_id = $scope_org AND source_path = $file_path`,
+      {
+        project_id: projectKey,
+        file_path: body.filePath,
+        scope_org: scope.orgId,
+      },
+    ),
+  );
+  if (importErr) {
+    log.error(
+      { err: importErr.message, filePath: body.filePath },
+      "file-info imports query failed",
+    );
+    return c.json({ error: importErr.message }, 500);
+  }
+
+  const [depErr, dependentRows] = await attempt(() =>
+    scopedQueryOne<CartImportRow>(
+      scope,
+      `SELECT source_path, specifier FROM cart_import
+        WHERE project_id = $project_id AND org_id = $scope_org AND target_path = $file_path
+        LIMIT $limit`,
+      {
+        project_id: projectKey,
+        file_path: body.filePath,
+        scope_org: scope.orgId,
+        limit: FILE_INFO_DEPENDENT_LIMIT,
+      },
+    ),
+  );
+  if (depErr) {
+    log.error(
+      { err: depErr.message, filePath: body.filePath },
+      "file-info dependents query failed",
+    );
+    return c.json({ error: depErr.message }, 500);
+  }
+
+  // Memory retrieval: first-cut signal is filepath + top symbol names.
+  // Embedding similarity will find memories that mention the path or any
+  // of the symbols (function/type names tend to appear verbatim in
+  // captured memories). Crude but useful until proper file-tagging
+  // lands. Failure is non-fatal — we still return the cartographer half.
+  const memoryQuery = [
+    body.filePath,
+    ...safeSymbols
+      .slice(0, FILE_INFO_MEMORY_SYMBOL_LIMIT)
+      .map((s) => s.name)
+      .filter((n) => typeof n === "string" && n.length > 0),
+  ].join(" ");
+
+  const [memErr, memoryList] = await attempt(async () =>
+    retrieveMemoryList(scope, [{ role: "user", content: memoryQuery }], {
+      topK: FILE_INFO_MEMORY_TOP_K,
+      includeRelated: false,
+    }),
+  );
+  if (memErr) {
+    log.warn(
+      { err: memErr.message, filePath: body.filePath },
+      "file-info memory retrieval failed — returning without memories",
+    );
+  }
+  const memories = memErr || !memoryList ? null : memoryList;
+
+  const imports = importRows
+    .map((r) => ({
+      target: r.target_path ?? "",
+      specifier: r.specifier ?? "",
+    }))
+    .filter((i) => i.target.length > 0);
+  const dependents = dependentRows
+    .map((r) => ({
+      source: r.source_path ?? "",
+      specifier: r.specifier ?? "",
+    }))
+    .filter((d) => d.source.length > 0);
+
+  log.info(
+    {
+      project: body.project,
+      projectId: body.projectId,
+      projectKey,
+      filePath: body.filePath,
+      symbols: safeSymbols.length,
+      imports: imports.length,
+      dependents: dependents.length,
+      memories: memories?.length ?? 0,
+      contentHash: fileRow.content_hash || "(empty)",
+    },
+    "file-info served",
+  );
+
+  return c.json({
+    contentHash: fileRow.content_hash ?? "",
+    symbols: safeSymbols,
+    imports,
+    dependents,
+    memories: memories ? formatMemoryList(memories) : null,
+    // True memory count — the formatted string is multi-line per memory,
+    // so the plugin cannot derive this by counting lines.
+    memoryCount: memories?.length ?? 0,
+  });
 };

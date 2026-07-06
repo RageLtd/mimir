@@ -17,12 +17,10 @@
 import { asSchema } from "ai";
 import { Hono } from "hono";
 import { buildMcpPublicTools } from "../agent/server-tools";
-import { requestScope } from "../db/build-scope";
-import { closeScope } from "../db/scope";
-import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
+import { type ScopedEnv, scopeMiddleware } from "../middleware/scope";
 import { log } from "../util/logger";
 
-export const mcp = new Hono<IdentityEnv>();
+export const mcp = new Hono<ScopedEnv>();
 
 // ── Tool registry ──────────────────────────────────────────────────────────
 // Built per request via buildMcpPublicTools(scope) — add new tools there, not
@@ -134,27 +132,20 @@ async function dispatch(req: JsonRpcRequest, TOOLS: Tools) {
  * - Notifications (no id): 202 Accepted, no body.
  * - Requests: 200 with application/json response.
  */
-mcp.post("/", async (c) => {
+mcp.post("/", scopeMiddleware, async (c) => {
   const body = (await c.req.json()) as JsonRpcRequest;
   log.info({ method: body.method }, "mcp request");
 
-  // Scope the tool set per request to the gate-resolved org — a scoped JWT
-  // connection when auth is on (DB enforces PERMISSIONS), the owner-sentinel
-  // root connection when off. dispatch awaits every tool result, so closing in
-  // the finally can't sever an in-flight tool call.
-  const scope = await requestScope(c.get("identity"), scopeOrgId(c));
-  try {
-    const tools = buildMcpPublicTools(scope);
-    const response = await dispatch(body, tools);
+  // Tool set is bound to the caller's scoped connection (supplied + closed by
+  // scopeMiddleware); dispatch awaits every tool result before returning.
+  const tools = buildMcpPublicTools(c.get("scope"));
+  const response = await dispatch(body, tools);
 
-    if (response === null) {
-      return new Response(null, { status: 202 });
-    }
-
-    return c.json(response);
-  } finally {
-    await closeScope(scope);
+  if (response === null) {
+    return new Response(null, { status: 202 });
   }
+
+  return c.json(response);
 });
 
 /**

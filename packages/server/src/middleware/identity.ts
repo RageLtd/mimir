@@ -176,6 +176,6 @@ export const createIdentityGate =
  * identity; falls back to the owner sentinel when auth is off (no gate ran) so
  * the self-hosted single-org path is unchanged.
  */
-export function scopeOrgId(c: Context<IdentityEnv>) {
+export function scopeOrgId<E extends IdentityEnv>(c: Context<E>) {
   return c.get("identity")?.orgId ?? OWNER_ORG_SENTINEL;
 }

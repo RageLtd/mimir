@@ -21,18 +21,16 @@ import { Hono } from "hono";
 import { modelContentToString } from "../agent/message-log/message-utils";
 import { appendTurn } from "../agent/message-log/persistence";
 import { extractMemoriesFromResponse } from "../agent/post-processing";
-import { requestScope } from "../db/build-scope";
-import { closeScope } from "../db/scope";
-import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
 import {
   extractProviderOverride,
   PROVIDER_KEY_HEADER,
 } from "../middleware/pipeline";
+import { type ScopedEnv, scopeMiddleware } from "../middleware/scope";
 import { ensureProjectId } from "../projects/store";
 import { requestLog } from "../util/logger";
 import { attempt } from "../util/result";
 
-export const messages = new Hono<IdentityEnv>();
+export const messages = new Hono<ScopedEnv>();
 
 type PersistRequest = {
   messages: ModelMessage[];
@@ -59,7 +57,7 @@ type PersistRequest = {
   small_model?: string;
 };
 
-messages.post("/persist", async (c) => {
+messages.post("/persist", scopeMiddleware, async (c) => {
   const rid = c.req.header("x-request-id") ?? "persist";
   const log = requestLog(rid);
 
@@ -92,82 +90,78 @@ messages.post("/persist", async (c) => {
     );
   }
 
-  // Slice 5: scoped JWT connection (auth-on) or root (auth-off). appendTurn is
-  // the only synchronous user of scope.db; the extraction below is fire-and-
-  // forget on its own root connection, so closing in the finally is safe.
-  const scope = await requestScope(c.get("identity"), scopeOrgId(c));
-  try {
-    const projectId = await ensureProjectId(scope, identifier);
-    if (!projectId) {
-      log.error({ identifier }, "failed to resolve project identifier");
-      return c.json(
-        { error: `Failed to resolve project identifier "${identifier}"` },
-        500,
-      );
-    }
-
-    const [appendErr, ids] = await attempt(() =>
-      appendTurn(scope, body.messages, projectId),
+  // Scoped connection supplied + closed by scopeMiddleware. appendTurn is the
+  // only synchronous user of it; the extraction below is fire-and-forget on its
+  // own root connection, so the middleware close never severs it.
+  const scope = c.get("scope");
+  const projectId = await ensureProjectId(scope, identifier);
+  if (!projectId) {
+    log.error({ identifier }, "failed to resolve project identifier");
+    return c.json(
+      { error: `Failed to resolve project identifier "${identifier}"` },
+      500,
     );
-    if (appendErr) {
-      log.error(
-        { error: appendErr.message, projectId },
-        "conversation persist failed",
-      );
-      return c.json({ error: appendErr.message }, 500);
-    }
+  }
 
-    if (typeof body.totalCostUsd === "number" && body.totalCostUsd > 0) {
-      log.info(
-        {
-          projectId,
-          totalCostUsd: body.totalCostUsd,
-        },
-        "cc turn cost",
-      );
-    }
+  const [appendErr, ids] = await attempt(() =>
+    appendTurn(scope, body.messages, projectId),
+  );
+  if (appendErr) {
+    log.error(
+      { error: appendErr.message, projectId },
+      "conversation persist failed",
+    );
+    return c.json({ error: appendErr.message }, 500);
+  }
 
-    // Mirror server-backend post-processing: kick off async memory
-    // extraction from the latest user/assistant exchange. Fire-and-forget;
-    // never blocks the response.
-    if (ids.length > 0) {
-      const lastAssistant = [...body.messages]
-        .reverse()
-        .find((m) => m.role === "assistant");
-      const lastUser = [...body.messages]
-        .reverse()
-        .find((m) => m.role === "user");
-      if (lastAssistant && lastUser) {
-        const assistantText = modelContentToString(lastAssistant.content);
-        if (assistantText) {
-          // BYOK (MIM-74): same key transport as the ingress routes — the
-          // extraction this persist spawns runs on the caller's key when
-          // one was sent, the env small model otherwise.
-          const override = extractProviderOverride(
-            c.req.header(PROVIDER_KEY_HEADER),
-            { provider: body.provider, small_model: body.small_model },
-          );
-          extractMemoriesFromResponse(
-            assistantText,
-            lastUser,
-            projectId,
-            scopeOrgId(c),
-            override ? { override } : null,
-          );
-        }
-      }
-    }
-
+  if (typeof body.totalCostUsd === "number" && body.totalCostUsd > 0) {
     log.info(
       {
         projectId,
-        clientCount: body.messages.length,
-        appended: ids.length,
+        totalCostUsd: body.totalCostUsd,
       },
-      "conversation persisted",
+      "cc turn cost",
     );
-    return c.json({ appended: ids.length, ids });
-  } finally {
-    await closeScope(scope);
   }
+
+  // Mirror server-backend post-processing: kick off async memory
+  // extraction from the latest user/assistant exchange. Fire-and-forget;
+  // never blocks the response.
+  if (ids.length > 0) {
+    const lastAssistant = [...body.messages]
+      .reverse()
+      .find((m) => m.role === "assistant");
+    const lastUser = [...body.messages]
+      .reverse()
+      .find((m) => m.role === "user");
+    if (lastAssistant && lastUser) {
+      const assistantText = modelContentToString(lastAssistant.content);
+      if (assistantText) {
+        // BYOK (MIM-74): same key transport as the ingress routes — the
+        // extraction this persist spawns runs on the caller's key when
+        // one was sent, the env small model otherwise.
+        const override = extractProviderOverride(
+          c.req.header(PROVIDER_KEY_HEADER),
+          { provider: body.provider, small_model: body.small_model },
+        );
+        extractMemoriesFromResponse(
+          assistantText,
+          lastUser,
+          projectId,
+          scope.orgId,
+          override ? { override } : null,
+        );
+      }
+    }
+  }
+
+  log.info(
+    {
+      projectId,
+      clientCount: body.messages.length,
+      appended: ids.length,
+    },
+    "conversation persisted",
+  );
+  return c.json({ appended: ids.length, ids });
 });
