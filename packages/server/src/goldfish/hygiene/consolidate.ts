@@ -18,13 +18,16 @@ import {
 } from "../store";
 import { createCanonicalMemory } from "../store-hygiene";
 import { groupClusters, type NeighborEdge } from "./cluster";
-import { mergeMemoriesText } from "./llm";
+import { type HygieneByok, mergeMemoriesText } from "./llm";
 
 export interface ConsolidationOpts {
   readonly dryRun: boolean;
   readonly mergeDistance: number;
   readonly maxClusterSize: number;
   readonly maxMergesPerSweep: number;
+  /** BYOK context for a manually-triggered sweep (MIM-75) — absent on the
+   *  scheduler's env-model path. */
+  readonly byok?: HygieneByok | null;
 }
 
 export interface MergeProposal {
@@ -131,7 +134,7 @@ export async function runConsolidation(
 
     processed++;
     const memberContents = members.map((m) => m.content);
-    const canonicalText = await mergeMemoriesText(memberContents);
+    const canonicalText = await mergeMemoriesText(memberContents, opts.byok);
     if (!canonicalText) {
       proposals.push({
         memberIds,

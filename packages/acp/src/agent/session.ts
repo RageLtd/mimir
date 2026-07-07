@@ -50,6 +50,12 @@ export const AVAILABLE_COMMANDS: acp.AvailableCommand[] = [
       "Rule-engine operations: `generate` scans `.claude/rules/` for rule body markdowns that lack `.enforce.toml` files and asks the model to generate enforcement specs for the mechanical ones.",
     input: { hint: "generate" },
   },
+  {
+    name: "hygiene",
+    description:
+      "Run a memory hygiene sweep on the server (consolidate near-duplicates, prune stale memories). Dry-run by default — pass `--live` to apply. Runs on your provider key when one is configured for the model.",
+    input: { hint: "[model] [--live]" },
+  },
 ];
 
 // ── Command parsing ──
@@ -65,7 +71,8 @@ export type ParsedCommand =
   | { type: "mcp_list" }
   | { type: "mcp_reload" }
   | { type: "mcp_auth"; name: string }
-  | { type: "rules_generate" };
+  | { type: "rules_generate" }
+  | { type: "hygiene"; modelId: string | undefined; live: boolean };
 
 /**
  * Parse a slash command from user input.
@@ -139,6 +146,15 @@ export const parseCommand = (text: string) => {
         default:
           return null;
       }
+    }
+    case "hygiene": {
+      // `/hygiene [model] [--live]` — trigger a server-side memory hygiene
+      // sweep (MIM-75). Dry-run unless --live; model defaults to the
+      // session's current model at dispatch time.
+      const rest = parts.slice(1);
+      const live = rest.includes("--live");
+      const modelId = rest.filter((p) => p !== "--live").join(" ") || undefined;
+      return { type: "hygiene" as const, modelId, live };
     }
     default:
       return null;

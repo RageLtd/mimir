@@ -36,7 +36,7 @@ import {
   routePair,
   selectContradictionPairs,
 } from "./contradict-pairs";
-import { classifyPair, mergeMemoriesText } from "./llm";
+import { classifyPair, type HygieneByok, mergeMemoriesText } from "./llm";
 
 /** Neighbours fetched per fact when building the candidate edge list. */
 const NEIGHBORS_PER_FACT = 5;
@@ -51,6 +51,9 @@ export interface ContradictionOpts {
   readonly maxChecks: number;
   /** Multiply the loser's confidence by this on a confirmed contradiction. */
   readonly demotionFactor: number;
+  /** BYOK context for a manually-triggered sweep (MIM-75) — absent on the
+   *  scheduler's env-model path. */
+  readonly byok?: HygieneByok | null;
 }
 
 export interface DemotionProposal {
@@ -169,7 +172,7 @@ export async function runContradiction(
     const b = byId.get(pair.b);
     if (!a || !b) continue;
 
-    const verdict = await classifyPair(a.content, b.content);
+    const verdict = await classifyPair(a.content, b.content, opts.byok);
     if (!verdict) continue; // classifier failed/unparseable — leave the pair alone
 
     const routing = routePair(pair, verdict);
@@ -216,7 +219,9 @@ export async function runContradiction(
       case "merge": {
         consumed.add(pair.a);
         consumed.add(pair.b);
-        merges.push(await proposePairMerge(scope, a, b, opts.dryRun));
+        merges.push(
+          await proposePairMerge(scope, a, b, opts.dryRun, opts.byok),
+        );
         break;
       }
 
@@ -303,12 +308,13 @@ async function proposePairMerge(
   a: Memory,
   b: Memory,
   dryRun: boolean,
+  byok?: HygieneByok | null,
 ) {
   const members = [a, b];
   const memberIds = members.map((m) => String(m.id));
   const memberContents = members.map((m) => m.content);
 
-  const canonicalText = await mergeMemoriesText(memberContents);
+  const canonicalText = await mergeMemoriesText(memberContents, byok);
   if (!canonicalText) {
     return {
       memberIds,

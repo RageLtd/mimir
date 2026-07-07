@@ -13,6 +13,7 @@ import type { UserMemoryStore } from "@mimir/plugin-core/store/user-memories";
 import { assembleClientMcpServers } from "../mcp-config/assemble";
 import { authenticateServer } from "../mcp-config/auth-injector";
 import { probeHttpServer } from "../mcp-config/probe";
+import { runHygiene } from "./hygiene-command";
 import { emitAgentText } from "./lifecycle-helpers";
 import {
   buildRulesGeneratePrompt,
@@ -385,5 +386,7 @@ export const handleCommand = async (
       return runMcpAuth(deps, sessionId, cmd.name);
     case "rules_generate":
       return runRulesGenerate(deps, sessionId);
+    case "hygiene":
+      return runHygiene(deps, sessionId, cmd);
   }
 };

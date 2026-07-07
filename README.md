@@ -102,7 +102,8 @@ With `image:` (from the base file) and `build:` (from the override) both set, `d
 - `CONTEXT7_API_KEY` — documentation lookup (free tier works without key)
 
 **Memory hygiene (background sweep):**
-- `HYGIENE_MODEL` — judgment model for fusing merged memories; no default, the sweep refuses to run while unset
+- `HYGIENE_ENABLED` — run the periodic scheduler (default: `true`). **Cloud deployments set `false`**: sweeps become triggered-only via `POST /v1/hygiene/sweep` (or the `/hygiene` ACP command, `/run-hygiene` in Claude Code, `mimir_hygiene` in OpenCode), running on the caller's provider key
+- `HYGIENE_MODEL` — judgment model for fusing merged memories; no default, keyless sweeps refuse to run while unset (keyed triggers name their model per request)
 - `HYGIENE_DRY_RUN` — report proposed merges/prunes without mutating (default: `true`)
 - See the `HYGIENE_*` block in `.env.example` for the full set of tuning knobs
 

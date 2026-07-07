@@ -27,6 +27,7 @@ import {
   parsePartialOptions,
 } from "./cli-args";
 import { runFileContextHook } from "./file-context-hook";
+import { runHygieneCommand } from "./hygiene-command";
 import { runInstallCommand } from "./install";
 import { runLogMcp } from "./log-mcp";
 import { flushLogs } from "./logger";
@@ -60,6 +61,7 @@ const USAGE = [
   "  session-start           SessionStart hook: full project re-index (replace mode).",
   "  user-memory-mcp         Stdio MCP server for user-memory tools.",
   "  log-mcp                 Stdio MCP server for reading plugin logs.",
+  "  hygiene                 Trigger a server-side memory hygiene sweep (--live to apply, --model <id>).",
 ].join("\n");
 
 const dispatch = async (argv: readonly string[]): Promise<number> => {
@@ -121,6 +123,9 @@ const dispatch = async (argv: readonly string[]): Promise<number> => {
 
     case "log-mcp":
       return runLogMcp();
+
+    case "hygiene":
+      return runHygieneCommand(rest);
 
     case undefined:
     case "":

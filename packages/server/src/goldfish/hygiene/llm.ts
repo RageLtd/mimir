@@ -8,13 +8,31 @@
  * whatever model happens to be configured elsewhere.
  */
 
+import { runOverrideCompletion } from "../../agent/provider/override-completion";
 import { config } from "../../config";
+import type { ProviderOverride } from "../../middleware/types";
 import { safeParseJSON } from "../../util/json";
 import { log } from "../../util/logger";
 import { attempt } from "../../util/result";
 
 /** OpenAI-compatible chat completions path appended to the hygiene base URL. */
 const CHAT_COMPLETIONS_PATH = "/v1/chat/completions";
+
+/** Deadline for a single hygiene model call — reasoning models spend a while
+ *  thinking before the (tiny) answer, so this is generous. */
+const HYGIENE_CALL_TIMEOUT_MS = 120_000;
+
+/**
+ * BYOK context for a manually-triggered sweep (MIM-75 Part 1): the caller's
+ * transient provider key plus their explicitly named judgment model. Transient
+ * — held for the sweep only, never persisted. Absent → the env HYGIENE_MODEL
+ * path serves as before. MIM-74's hard rule applies: a keyed call that fails
+ * returns null and must NEVER fall back to operator-funded inference.
+ */
+export type HygieneByok = {
+  readonly override: ProviderOverride;
+  readonly modelId: string;
+};
 
 const MERGE_SYSTEM_PROMPT = `You consolidate overlapping development memories into one.
 
@@ -65,20 +83,20 @@ export function getHygieneModelConfig(): HygieneModelConfig | null {
 }
 
 /**
- * Ask the hygiene model to merge a cluster of memory contents into one
- * canonical statement. Returns the merged text, or null on failure (the caller
- * then leaves the cluster untouched rather than guessing).
+ * One env-configured hygiene model call: system+user in, content string out,
+ * null on any failure (call error, empty content) with the diagnostics logged.
+ * Shared by merge and classify so the transport can't drift between them.
  */
-export async function mergeMemoriesText(
-  contents: string[],
-): Promise<string | null> {
+async function completeWithEnvModel(opts: {
+  system: string;
+  user: string;
+  label: string;
+}) {
   const cfg = getHygieneModelConfig();
   if (!cfg) {
-    log.warn("HYGIENE_MODEL unset — cannot consolidate");
+    log.warn({ label: opts.label }, "HYGIENE_MODEL unset — cannot run");
     return null;
   }
-
-  const userContent = contents.map((c, i) => `${i + 1}. ${c}`).join("\n");
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -89,55 +107,93 @@ export async function mergeMemoriesText(
     fetch(`${cfg.baseUrl}${CHAT_COMPLETIONS_PATH}`, {
       method: "POST",
       headers,
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(HYGIENE_CALL_TIMEOUT_MS),
       body: JSON.stringify({
         model: cfg.model,
         stream: false,
         temperature: 0.1,
         // Reasoning models (GLM-5.1) spend tokens thinking before they answer.
         // Too small a budget and the whole allowance goes to reasoning, leaving
-        // `content` empty — so this is generous, the merged text itself is tiny.
+        // `content` empty — so this is generous, the answer itself is tiny.
         max_tokens: config.hygiene.maxTokens,
         messages: [
-          { role: "system", content: MERGE_SYSTEM_PROMPT },
-          { role: "user", content: userContent },
+          { role: "system", content: opts.system },
+          { role: "user", content: opts.user },
         ],
       }),
     }).then((r) => r.json() as Promise<ChatCompletionResponse>),
   );
 
   if (err) {
-    log.error(
-      { err, count: contents.length },
-      "consolidation model call failed",
-    );
+    log.error({ err, label: opts.label }, "hygiene model call failed");
     return null;
   }
 
   const choice = res.choices?.[0];
-  const merged = choice?.message?.content?.trim();
-  if (!merged) {
+  const content = choice?.message?.content?.trim();
+  if (!content) {
     // Surface WHY it's empty: finish_reason "length" = truncated (bump
     // max_tokens); reasoning present with empty content = same story.
     log.error(
       {
+        label: opts.label,
         finishReason: choice?.finish_reason,
         reasoningChars: choice?.message?.reasoning_content?.length ?? 0,
         completionTokens: res.usage?.completion_tokens,
         maxTokens: config.hygiene.maxTokens,
       },
-      "consolidation model returned empty content",
+      "hygiene model returned empty content",
     );
     return null;
   }
+  return content;
+}
+
+/**
+ * One hygiene model completion, routed by key presence: a BYOK sweep runs on
+ * the caller's key and named model via runOverrideCompletion (keyed failure →
+ * null, never the env path); a keyless sweep uses the env HYGIENE_MODEL
+ * transport unchanged.
+ */
+async function completeHygiene(opts: {
+  system: string;
+  user: string;
+  label: string;
+  byok?: HygieneByok | null;
+}) {
+  if (opts.byok) {
+    return runOverrideCompletion({
+      system: opts.system,
+      user: opts.user,
+      maxOutputTokens: config.hygiene.maxTokens,
+      timeoutMs: HYGIENE_CALL_TIMEOUT_MS,
+      modelId: opts.byok.modelId,
+      override: opts.byok.override,
+    });
+  }
+  return completeWithEnvModel(opts);
+}
+
+/**
+ * Ask the hygiene model to merge a cluster of memory contents into one
+ * canonical statement. Returns the merged text, or null on failure (the caller
+ * then leaves the cluster untouched rather than guessing).
+ */
+export async function mergeMemoriesText(
+  contents: string[],
+  byok?: HygieneByok | null,
+) {
+  const userContent = contents.map((c, i) => `${i + 1}. ${c}`).join("\n");
+  const merged = await completeHygiene({
+    system: MERGE_SYSTEM_PROMPT,
+    user: userContent,
+    label: "consolidation merge",
+    byok,
+  });
+  if (!merged) return null;
 
   log.debug(
-    {
-      inputs: contents.length,
-      mergedChars: merged.length,
-      promptTokens: res.usage?.prompt_tokens,
-      completionTokens: res.usage?.completion_tokens,
-    },
+    { inputs: contents.length, mergedChars: merged.length, byok: !!byok },
     "consolidation merge produced",
   );
   return merged;
@@ -184,58 +240,18 @@ function parseVerdict(content: string) {
  * any failure (call error, empty content, unparseable response) — the caller
  * then leaves the pair alone rather than guessing, mirroring mergeMemoriesText.
  */
-export async function classifyPair(a: string, b: string) {
-  const cfg = getHygieneModelConfig();
-  if (!cfg) {
-    log.warn("HYGIENE_MODEL unset — cannot classify memory pairs");
-    return null;
-  }
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  if (cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`;
-
-  const [err, res] = await attempt(() =>
-    fetch(`${cfg.baseUrl}${CHAT_COMPLETIONS_PATH}`, {
-      method: "POST",
-      headers,
-      signal: AbortSignal.timeout(120_000),
-      body: JSON.stringify({
-        model: cfg.model,
-        stream: false,
-        temperature: 0.1,
-        max_tokens: config.hygiene.maxTokens,
-        messages: [
-          { role: "system", content: CLASSIFY_SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: `Statement 1:\n${a}\n\nStatement 2:\n${b}`,
-          },
-        ],
-      }),
-    }).then((r) => r.json() as Promise<ChatCompletionResponse>),
-  );
-
-  if (err) {
-    log.error({ err }, "pair classifier call failed");
-    return null;
-  }
-
-  const choice = res.choices?.[0];
-  const content = choice?.message?.content?.trim();
-  if (!content) {
-    log.error(
-      {
-        finishReason: choice?.finish_reason,
-        reasoningChars: choice?.message?.reasoning_content?.length ?? 0,
-        completionTokens: res.usage?.completion_tokens,
-        maxTokens: config.hygiene.maxTokens,
-      },
-      "pair classifier returned empty content",
-    );
-    return null;
-  }
+export async function classifyPair(
+  a: string,
+  b: string,
+  byok?: HygieneByok | null,
+) {
+  const content = await completeHygiene({
+    system: CLASSIFY_SYSTEM_PROMPT,
+    user: `Statement 1:\n${a}\n\nStatement 2:\n${b}`,
+    label: "pair classifier",
+    byok,
+  });
+  if (!content) return null;
 
   const verdict = parseVerdict(content);
   if (!verdict) {

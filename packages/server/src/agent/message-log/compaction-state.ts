@@ -5,6 +5,7 @@
  * from message persistence operations.
  */
 
+import { RecordId } from "surrealdb";
 import { config } from "../../config";
 import { getDb, queryFirst, queryOne } from "../../db/surreal";
 import { log } from "../../util/logger";
@@ -19,16 +20,19 @@ export interface CompactionState {
   updated_at: string;
 }
 
-/** SQL reference to an org's compaction-state record — per-org so one tenant's
- *  stream and lock never interfere with another's (MIM-66). Bind `$org`. */
-const STATE_REF = "type::thing('compaction_state', $org)";
+/** An org's compaction-state record id — per-org so one tenant's stream and
+ *  lock never interfere with another's (MIM-66). Bound as a query param;
+ *  NEVER inline a `type::thing(...)` call in statement text instead — the
+ *  function was removed in SurrealDB 3.x and every statement position
+ *  rejects it with a parse error (caught live by the MIM-75 smoke). */
+const stateId = (orgId: string) => new RecordId("compaction_state", orgId);
 
 /**
  * Get an org's compaction state.
  */
 export async function getCompactionState(orgId: string) {
-  return queryFirst<CompactionState>(`SELECT * FROM ${STATE_REF}`, {
-    org: orgId,
+  return queryFirst<CompactionState>("SELECT * FROM $state", {
+    state: stateId(orgId),
   });
 }
 
@@ -60,13 +64,13 @@ export async function updateTokenCount(
   if (!currentState) {
     const db = await getDb();
     await db.query(
-      `CREATE ${STATE_REF} SET
+      `CREATE $state SET
         org_id = $org,
         tokens_since_last = 0,
         is_compacting = false,
         last_prompt_tokens = 0,
         updated_at = time::now()`,
-      { org: orgId },
+      { state: stateId(orgId), org: orgId },
     );
   }
 
@@ -94,7 +98,7 @@ export async function updateTokenCount(
   // Atomic update: only apply if last_prompt_tokens hasn't changed since we read it.
   // This prevents concurrent requests from double-counting the same tokens.
   const state = await queryFirst<CompactionState>(
-    `UPDATE ${STATE_REF}
+    `UPDATE $state
      SET
        tokens_since_last = $newSince,
        last_prompt_tokens = $promptTokens,
@@ -102,7 +106,7 @@ export async function updateTokenCount(
      WHERE last_prompt_tokens = $lastPromptTokens
      RETURN AFTER`,
     {
-      org: orgId,
+      state: stateId(orgId),
       promptTokens,
       lastPromptTokens,
       newSince: lastSinceCompaction + delta,
@@ -172,14 +176,14 @@ export async function startCompaction(orgId: string) {
 
   // Try to create state if it doesn't exist
   await db.query(
-    `INSERT IGNORE INTO compaction_state { id: ${STATE_REF}, org_id: $org, tokens_since_last: 0, is_compacting: false, last_prompt_tokens: 0 }`,
-    { org: orgId },
+    "INSERT IGNORE INTO compaction_state { id: $state, org_id: $org, tokens_since_last: 0, is_compacting: false, last_prompt_tokens: 0 }",
+    { state: stateId(orgId), org: orgId },
   );
 
   // Only set is_compacting = true if it's currently false (atomic lock acquisition)
   const result = await queryOne<CompactionState>(
-    `UPDATE ${STATE_REF} SET is_compacting = true, updated_at = time::now() WHERE is_compacting = false`,
-    { org: orgId },
+    "UPDATE $state SET is_compacting = true, updated_at = time::now() WHERE is_compacting = false",
+    { state: stateId(orgId) },
   );
 
   // If we updated a record, we acquired the lock
@@ -220,13 +224,13 @@ export async function finishCompaction(orgId: string) {
   const db = await getDb();
 
   await db.query(
-    `UPDATE ${STATE_REF} SET
+    `UPDATE $state SET
       tokens_since_last = 0,
       is_compacting = false,
       last_prompt_tokens = 0,
       last_compaction = time::now(),
       updated_at = time::now()`,
-    { org: orgId },
+    { state: stateId(orgId) },
   );
 
   log.debug("compaction state reset");

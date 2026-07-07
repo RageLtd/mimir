@@ -92,9 +92,28 @@ export const readConfig = async (): Promise<MimirConfig | null> => {
  * over config.json so a key can be rotated per-session without a
  * reinstall. Returns empty object when neither is set (ungated servers).
  */
-export const authHeaders = async (): Promise<Record<string, string>> => {
+export const authHeaders = async () => {
   const key = process.env.MIMIR_API_KEY ?? (await readConfig())?.apiKey;
   const headers: Record<string, string> = {};
   if (key) headers.Authorization = `Bearer ${key}`;
   return headers;
+};
+
+/**
+ * BYOK provider credentials (MIM-74/MIM-75). Env wins over config.json —
+ * the same rotation-without-reinstall discipline as authHeaders(). Null
+ * when no provider key is configured: the server uses its env models.
+ * Mirrors cc-plugin's providerByok exactly.
+ */
+export const providerByok = async () => {
+  const config = await readConfig();
+  const apiKey = process.env.MIMIR_PROVIDER_API_KEY ?? config?.providerApiKey;
+  if (!apiKey) return null;
+  const provider = process.env.MIMIR_PROVIDER ?? config?.provider;
+  const smallModel = process.env.MIMIR_SMALL_MODEL ?? config?.smallModel;
+  return {
+    apiKey,
+    ...(provider ? { provider } : {}),
+    ...(smallModel ? { smallModel } : {}),
+  };
 };

@@ -60,8 +60,9 @@ const authHeaders = (apiKey: string): Record<string, string> =>
 
 // ── BYOK (MIM-73) ──
 
-/** BYOK key transport header — mirrors PROVIDER_KEY_HEADER on the server. */
-const PROVIDER_KEY_HEADER = "X-Provider-Api-Key";
+/** BYOK key transport header — mirrors PROVIDER_KEY_HEADER on the server.
+ *  Exported for the `/hygiene` command's keyed sweep trigger. */
+export const PROVIDER_KEY_HEADER = "X-Provider-Api-Key";
 
 /**
  * modelId → provider API-key env var name, learned from `/v1/models`'

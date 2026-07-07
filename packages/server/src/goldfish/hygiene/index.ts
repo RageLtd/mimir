@@ -19,7 +19,7 @@ import { listAllMemories } from "../store-hygiene";
 import { type ConsolidationReport, runConsolidation } from "./consolidate";
 import { type ContradictionReport, runContradiction } from "./contradict";
 import { type ForgettingReport, runForgetting } from "./forget";
-import { getHygieneModelConfig } from "./llm";
+import { getHygieneModelConfig, type HygieneByok } from "./llm";
 import { finishHygiene, resetHygieneLock, startHygiene } from "./state";
 
 export interface SweepReport {
@@ -36,13 +36,21 @@ export interface SweepReport {
 export interface SweepOpts {
   /** Override the configured dry-run default (manual route passes this). */
   readonly dryRun?: boolean;
+  /** BYOK context for a manually-triggered sweep (MIM-75 Part 1): the
+   *  caller's transient key + named judgment model. The scheduler never sets
+   *  this — its sweeps stay on the env HYGIENE_MODEL path. */
+  readonly byok?: HygieneByok | null;
 }
 
 export async function runHygieneSweep(orgId: string, opts: SweepOpts = {}) {
   const dryRun = opts.dryRun ?? config.hygiene.dryRun;
+  const byok = opts.byok ?? null;
 
+  // A keyed sweep brings its own judgment model; the env HYGIENE_MODEL gate
+  // only applies to keyless sweeps.
   const modelCfg = getHygieneModelConfig();
-  if (!modelCfg) {
+  const model = byok?.modelId ?? modelCfg?.model;
+  if (!model) {
     log.warn("hygiene sweep skipped — HYGIENE_MODEL unset");
     return { dryRun, skipped: "HYGIENE_MODEL unset" };
   }
@@ -53,7 +61,7 @@ export async function runHygieneSweep(orgId: string, opts: SweepOpts = {}) {
   }
 
   const start = Date.now();
-  log.info({ dryRun, orgId, model: modelCfg.model }, "hygiene sweep starting");
+  log.info({ dryRun, orgId, model, byok: !!byok }, "hygiene sweep starting");
 
   // Sweep runs on the root connection (bypasses PERMISSIONS) but scoped to the
   // one org whose lock we hold, so it only ever touches that tenant's memories.
@@ -64,6 +72,7 @@ export async function runHygieneSweep(orgId: string, opts: SweepOpts = {}) {
 
     const consolidation = await runConsolidation(scope, memories, {
       dryRun,
+      byok,
       mergeDistance: config.hygiene.consolidation.mergeDistance,
       maxClusterSize: config.hygiene.consolidation.maxClusterSize,
       maxMergesPerSweep: config.hygiene.consolidation.maxMergesPerSweep,
@@ -78,6 +87,7 @@ export async function runHygieneSweep(orgId: string, opts: SweepOpts = {}) {
     const contradiction = config.hygiene.contradiction.enabled
       ? await runContradiction(scope, afterConsolidation, {
           dryRun,
+          byok,
           mergeDistance: config.hygiene.consolidation.mergeDistance,
           contradictionDistance:
             config.hygiene.contradiction.contradictionDistance,
@@ -102,7 +112,7 @@ export async function runHygieneSweep(orgId: string, opts: SweepOpts = {}) {
 
     return {
       dryRun,
-      model: modelCfg.model,
+      model,
       memoryCount: memories.length,
       consolidation,
       contradiction,

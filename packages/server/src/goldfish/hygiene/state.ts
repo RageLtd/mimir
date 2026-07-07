@@ -9,6 +9,7 @@
  *   - clearStaleHygiene recovers a lock left stuck by a crash mid-sweep
  */
 
+import { RecordId } from "surrealdb";
 import { getDb, queryFirst, queryOne } from "../../db/surreal";
 import { log } from "../../util/logger";
 
@@ -19,12 +20,17 @@ export interface HygieneState {
   updated_at: string;
 }
 
-/** SQL reference to an org's hygiene-state record. Bind `$org`. */
-const STATE_REF = "type::thing('hygiene_state', $org)";
+/** An org's hygiene-state record id, bound as a query param. NEVER inline a
+ *  `type::thing(...)` call in statement text instead — the function was
+ *  removed in SurrealDB 3.x and every statement position rejects it with a
+ *  parse error (caught live by the MIM-75 smoke). */
+const lockId = (orgId: string) => new RecordId("hygiene_state", orgId);
 
 /** Read an org's hygiene state, or null if no sweep has ever run for it. */
 export async function getHygieneState(orgId: string) {
-  return queryFirst<HygieneState>(`SELECT * FROM ${STATE_REF}`, { org: orgId });
+  return queryFirst<HygieneState>("SELECT * FROM $lock", {
+    lock: lockId(orgId),
+  });
 }
 
 /**
@@ -35,13 +41,13 @@ export async function startHygiene(orgId: string) {
   const db = await getDb();
 
   await db.query(
-    `INSERT IGNORE INTO hygiene_state { id: ${STATE_REF}, org_id: $org, is_running: false }`,
-    { org: orgId },
+    "INSERT IGNORE INTO hygiene_state { id: $lock, org_id: $org, is_running: false }",
+    { lock: lockId(orgId), org: orgId },
   );
 
   const result = await queryOne<HygieneState>(
-    `UPDATE ${STATE_REF} SET is_running = true, updated_at = time::now() WHERE is_running = false`,
-    { org: orgId },
+    "UPDATE $lock SET is_running = true, updated_at = time::now() WHERE is_running = false",
+    { lock: lockId(orgId) },
   );
 
   const acquired = result.length > 0;
@@ -68,11 +74,11 @@ export async function resetHygieneLock() {
 export async function finishHygiene(orgId: string) {
   const db = await getDb();
   await db.query(
-    `UPDATE ${STATE_REF} SET
+    `UPDATE $lock SET
       is_running = false,
       last_run = time::now(),
       updated_at = time::now()`,
-    { org: orgId },
+    { lock: lockId(orgId) },
   );
   log.debug({ orgId }, "hygiene lock released");
 }

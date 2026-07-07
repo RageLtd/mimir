@@ -109,6 +109,39 @@ curl -X POST http://mimir.conhost.lan/v1/hygiene/sweep -d '{"dryRun": false}'
 The report returns every merge proposal (model-written `canonicalText` +
 `memberContents`) and every prune (`score`, `ageDays`, `reason`).
 
+### Cloud mode: triggered-only + BYOK (MIM-75 Part 1)
+
+**Triggered-only is the cloud default.** The periodic sweep runs a heavier
+judgment model and cannot be operator-funded, nor fire when no client is
+connected (no key present). Cloud deployments set `HYGIENE_ENABLED=false` —
+the scheduler never starts, while `POST /v1/hygiene/sweep` stays live as the
+deliberate trigger. Dry-run remains the default, so a bare trigger never
+mutates.
+
+**Keyed (BYOK) sweeps** run every judgment-model call on the caller's key —
+the same transient-key discipline as MIM-73/74. The key rides the
+`X-Provider-Api-Key` header; non-secret hints ride the body:
+
+```bash
+curl -X POST https://<server>/v1/hygiene/sweep \
+  -H "Authorization: Bearer $MIMIR_API_KEY" \
+  -H "X-Provider-Api-Key: $ANTHROPIC_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "anthropic/claude-sonnet-4-5", "provider": "anthropic"}'
+```
+
+A key **without** a `model` is refused (400) — hygiene never guesses its
+judgment model, mirroring the env `HYGIENE_MODEL` refusal. A keyed call that
+fails returns nothing rather than falling back to operator-funded inference
+(MIM-74's hard rule). Keyless triggers use the env `HYGIENE_MODEL` transport
+exactly as before; the scheduler path is always keyless.
+
+**Client triggers** (all read credentials outside the model transcript):
+
+- ACP (Zed): `/hygiene [model] [--live]` slash command
+- Claude Code: `/run-hygiene` command → `mimir-cc hygiene [--live] [--model <id>]`
+- OpenCode: the `mimir_hygiene` in-process tool
+
 ### Verification state
 
 - [x] `tsc --noEmit` clean

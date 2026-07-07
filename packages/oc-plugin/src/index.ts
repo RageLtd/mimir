@@ -44,7 +44,7 @@ import {
   lastUserMessage,
 } from "./message-inject";
 import { runFullReindex, runReindexWorker } from "./reindex";
-import { installTool, userMemoryTools } from "./tools";
+import { hygieneTool, installTool, userMemoryTools } from "./tools";
 import { persistSessionTranscript } from "./transcript-persistence";
 
 // ── Per-session state ──
@@ -147,6 +147,7 @@ export const MimirPlugin: Plugin = async (ctx) => {
     tool: {
       ...userMemoryTools(userMemoryStore),
       mimir_install: installTool(),
+      mimir_hygiene: hygieneTool(),
     },
 
     // ─── Persona system prompt ───

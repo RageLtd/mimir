@@ -13,7 +13,12 @@
 
 import { Hono } from "hono";
 import { runHygieneSweep } from "../goldfish/hygiene";
+import type { HygieneByok } from "../goldfish/hygiene/llm";
 import { type IdentityEnv, scopeOrgId } from "../middleware/identity";
+import {
+  extractProviderOverride,
+  PROVIDER_KEY_HEADER,
+} from "../middleware/pipeline";
 import { requestLog } from "../util/logger";
 import { attempt } from "../util/result";
 
@@ -22,6 +27,13 @@ export const hygiene = new Hono<IdentityEnv>();
 type SweepRequest = {
   /** Omitted → dry run. Only an explicit false arms the destructive pass. */
   dryRun?: boolean;
+  /** BYOK hints (MIM-75): non-secret routing info rides the body, the key
+   *  rides the X-Provider-Api-Key header — same split as /persist. */
+  provider?: string;
+  base_url?: string;
+  /** The judgment model a keyed sweep runs on. REQUIRED with a key — hygiene
+   *  refuses to guess its model, mirroring the env HYGIENE_MODEL refusal. */
+  model?: string;
 };
 
 hygiene.post("/sweep", async (c) => {
@@ -45,9 +57,31 @@ hygiene.post("/sweep", async (c) => {
 
   const dryRun = body.dryRun !== false;
 
+  // BYOK (MIM-75 Part 1): a keyed trigger runs the sweep's model calls on the
+  // caller's key. Transient — the override lives for this sweep only. A key
+  // without a named model is refused rather than guessed at or silently
+  // billed to the operator (MIM-74's hard rule).
+  const override = extractProviderOverride(c.req.header(PROVIDER_KEY_HEADER), {
+    provider: body.provider,
+    base_url: body.base_url,
+  });
+  let byok: HygieneByok | null = null;
+  if (override) {
+    if (!body.model) {
+      return c.json(
+        {
+          error:
+            "model is required when a provider key is sent — name the judgment model the sweep should run on",
+        },
+        400,
+      );
+    }
+    byok = { override, modelId: body.model };
+  }
+
   // Manual sweep scopes to the caller's org (owner sentinel when auth is off).
   const [err, report] = await attempt(() =>
-    runHygieneSweep(scopeOrgId(c), { dryRun }),
+    runHygieneSweep(scopeOrgId(c), { dryRun, byok }),
   );
   if (err) {
     log.error({ error: err.message }, "hygiene sweep failed");
