@@ -19,7 +19,7 @@ import { log } from "../util/logger";
  * Keep these lists in lockstep with the cart_file / cart_import DEFINE
  * statements in initSchema. Anything live but absent here is removed at boot.
  */
-const CART_DECLARED_FIELDS: Record<string, readonly string[]> = {
+export const CART_DECLARED_FIELDS: Record<string, readonly string[]> = {
   cart_file: [
     "project_id",
     "file_path",
@@ -28,6 +28,10 @@ const CART_DECLARED_FIELDS: Record<string, readonly string[]> = {
     "searchable",
     "content_hash",
     "indexed_at",
+    // MIM-69 org scoping: declared in initSchema's DEFINE block and backfilled
+    // by migrateOrgScope. Absent here, drift-removal strips it right back off
+    // before the backfill runs, and the SCHEMAFULL UPDATE then rejects it.
+    "org_id",
   ],
   cart_import: [
     "project_id",
@@ -36,6 +40,7 @@ const CART_DECLARED_FIELDS: Record<string, readonly string[]> = {
     "specifier",
     "symbols",
     "indexed_at",
+    "org_id",
   ],
 };
 

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { ORG_SCOPED_TABLES } from "./migrate-org-scope";
 import {
   buildDriftRemovalSql,
   buildOrphanValuePurgeSql,
+  CART_DECLARED_FIELDS,
   parseIndexDimension,
 } from "./schema-drift";
 
@@ -47,6 +49,20 @@ describe("buildDriftRemovalSql", () => {
     const declared = ["project", "symbols"];
     const sql = buildDriftRemovalSql("cart_file", live, declared);
     expect(sql).toEqual(["REMOVE FIELD IF EXISTS stray ON TABLE cart_file;"]);
+  });
+});
+
+describe("CART_DECLARED_FIELDS lockstep", () => {
+  // Regression: slice 4c/5 added org_id to the cart DEFINE block but not to
+  // this drift list, so removeDriftedCartFields stripped it back off before
+  // migrateOrgScope's backfill, aborting boot with "no such field 'org_id'".
+  // Every org-scoped cart table this module manages must declare org_id.
+  test("declares org_id for every org-scoped cart table it manages", () => {
+    for (const table of ORG_SCOPED_TABLES) {
+      const declared = CART_DECLARED_FIELDS[table];
+      if (!declared) continue; // schema-drift only manages cart_file/cart_import
+      expect(declared).toContain("org_id");
+    }
   });
 });
 
