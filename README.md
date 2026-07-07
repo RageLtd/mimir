@@ -2,6 +2,8 @@
 
 A coding agent with persistent memory, personality, and multi-provider inference. Mimir runs as three components: a server that owns knowledge and context, an ACP adapter that connects ACP editors (Zed) to the server's inference, and a Claude Code plugin that runs Mimir inside Claude Code against that same server.
 
+> **Security:** Mimir is being built so that the server operator can never read your data — memories, code, and conversations stay on your machine or leave it only as ciphertext. Read exactly what the server can and cannot see in [THREAT_MODEL.md](./THREAT_MODEL.md).
+
 ## Architecture
 
 ```
