@@ -2,6 +2,17 @@ import { RecordId } from "surrealdb";
 import { type OrgScope, scopedQueryFirst, scopedQueryOne } from "../db/scope";
 import { log } from "../util/logger";
 
+/**
+ * Cosine DISTANCE projection for the brute-force KNN queries below. SurrealDB
+ * ships `vector::similarity::cosine` (higher = closer), not a
+ * `vector::distance::cosine` — so distance is `1 - similarity` (0 = identical,
+ * ascending = nearest first). Every consumer here treats the alias as a
+ * distance: `ORDER BY distance`, the dedup `<= threshold`, the neighbour
+ * `<= maxDistance`. Bind $embedding on the query.
+ */
+const COSINE_DISTANCE_SELECT =
+  "(1 - vector::similarity::cosine(embedding, $embedding)) AS distance";
+
 /** Convert a string ID like "memory:abc123" to a SurrealDB RecordId.
  *  Passes through RecordId objects unchanged — safe on query results. */
 export function toRecordId(id: string | RecordId) {
@@ -78,7 +89,8 @@ export async function storeMemory(scope: OrgScope, memory: Memory) {
 
 /**
  * Vector search scoped to the org. Exact cosine KNN (MIM-69): a `WHERE org_id`
- * filter + brute-force `vector::distance::cosine` ordering. Per-org memory
+ * filter + brute-force cosine-distance ordering (see COSINE_DISTANCE_SELECT).
+ * Per-org memory
  * counts are in the thousands, so exact is fast and — unlike the dropped
  * global HNSW index — never starves a tenant by post-filtering another's
  * nearest vectors (surrealdb#7372).
@@ -91,7 +103,7 @@ export async function searchByVector(
   const start = Date.now();
   const found = await scopedQueryOne<Memory>(
     scope,
-    `SELECT *, vector::distance::cosine(embedding, $embedding) AS distance
+    `SELECT *, ${COSINE_DISTANCE_SELECT}
      FROM memory
      WHERE org_id = $scope_org
      ORDER BY distance
@@ -132,7 +144,7 @@ export async function findDuplicate(
 ) {
   const top = await scopedQueryFirst<Memory & { distance: number }>(
     scope,
-    `SELECT *, vector::distance::cosine(embedding, $embedding) AS distance
+    `SELECT *, ${COSINE_DISTANCE_SELECT}
      FROM memory
      WHERE org_id = $scope_org
      ORDER BY distance
@@ -159,7 +171,7 @@ export async function findNeighbors(
 ) {
   const results = await scopedQueryOne<Memory & { distance: number }>(
     scope,
-    `SELECT *, vector::distance::cosine(embedding, $embedding) AS distance
+    `SELECT *, ${COSINE_DISTANCE_SELECT}
      FROM memory
      WHERE org_id = $scope_org
      ORDER BY distance
