@@ -20,7 +20,7 @@
           {
             "type": "command",
             "command": "{{MIMIR_CC_BIN}} voice-anchor",
-            "timeout": 10
+            "timeout": 30
           }
         ]
       },
@@ -29,7 +29,7 @@
           {
             "type": "command",
             "command": "{{MIMIR_CC_BIN}} retrieve",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }

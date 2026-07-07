@@ -40,8 +40,15 @@ export interface SurrealIdentityClaims {
 }
 
 /**
- * Assemble the claim set SurrealDB requires for database-level JWT access
- * (exp/ac/ns/db) plus the identity claims MIM-69's PERMISSIONS consume.
+ * Assemble the claim set SurrealDB requires for record access with JWT
+ * (exp/ac/ns/db/id) plus the identity claims MIM-69's PERMISSIONS consume.
+ *
+ * The `id` claim is what makes the session a RECORD user — table and field
+ * PERMISSIONS apply exclusively to record users; without it the session is
+ * system-user-equivalent and bypasses them entirely (the MIM-69 smoke caught
+ * exactly this). The record it names lives in Better Auth's sqlite, not in
+ * Surreal, so `$auth.*` is empty by design — the PERMISSIONS predicate binds
+ * to `$token.org_id`, never `$auth`.
  */
 export function buildSurrealClaims(
   identity: SurrealIdentityClaims,
@@ -53,6 +60,7 @@ export function buildSurrealClaims(
     ac: SURREAL_ACCESS_NAME,
     ns: config.surreal.namespace,
     db: config.surreal.database,
+    id: `user:⟨${identity.userId}⟩`,
     user_id: identity.userId,
     org_id: identity.orgId,
   };
@@ -80,9 +88,15 @@ export function mintSurrealToken(
  * The DEFINE ACCESS statement initSchema applies when the bridge secret is
  * configured. OVERWRITE (not IF NOT EXISTS) so secret rotation takes effect
  * on the next boot instead of being silently ignored.
+ *
+ * TYPE RECORD WITH JWT — NOT plain TYPE JWT. Per the SurrealDB docs, access
+ * granted by a database-level JWT access method "is equivalent to that of
+ * system users, bypassing fine-grained permissions": reads would see every
+ * org's rows. Only record users are subject to table PERMISSIONS, and record
+ * access requires the token's `id` claim (buildSurrealClaims above).
  */
 export function buildDefineAccessSql(secret: string) {
-  return `DEFINE ACCESS OVERWRITE ${SURREAL_ACCESS_NAME} ON DATABASE TYPE JWT ALGORITHM HS256 KEY ${JSON.stringify(secret)};`;
+  return `DEFINE ACCESS OVERWRITE ${SURREAL_ACCESS_NAME} ON DATABASE TYPE RECORD WITH JWT ALGORITHM HS256 KEY ${JSON.stringify(secret)};`;
 }
 
 /**

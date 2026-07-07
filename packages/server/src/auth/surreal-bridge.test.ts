@@ -47,7 +47,7 @@ describe("signJwtHs256", () => {
 });
 
 describe("buildSurrealClaims", () => {
-  test("carries SurrealDB's required database-level claims plus identity", () => {
+  test("carries SurrealDB's required record-access claims plus identity", () => {
     const claims = buildSurrealClaims(
       { userId: "user_abc", orgId: "org_xyz" },
       { nowSeconds: 1_000_000, ttlSeconds: 900 },
@@ -59,6 +59,11 @@ describe("buildSurrealClaims", () => {
     expect(typeof claims.db).toBe("string");
     expect(claims.user_id).toBe("user_abc");
     expect(claims.org_id).toBe("org_xyz");
+  });
+
+  test("carries the id claim that makes the session a RECORD user — table PERMISSIONS only apply to record users", () => {
+    const claims = buildSurrealClaims({ userId: "user_abc", orgId: "org_xyz" });
+    expect(claims.id).toBe("user:⟨user_abc⟩");
   });
 
   test("null orgId survives as an explicit null claim", () => {
@@ -92,8 +97,14 @@ describe("buildDefineAccessSql", () => {
   test("targets the database with HS256 and OVERWRITE semantics", () => {
     const sql = buildDefineAccessSql(SECRET);
     expect(sql).toContain(`DEFINE ACCESS OVERWRITE ${SURREAL_ACCESS_NAME}`);
-    expect(sql).toContain("ON DATABASE TYPE JWT ALGORITHM HS256");
+    expect(sql).toContain("ON DATABASE TYPE RECORD WITH JWT ALGORITHM HS256");
     expect(sql).toContain(JSON.stringify(SECRET));
+  });
+
+  test("defines RECORD access, never plain JWT — database-level JWT sessions are system-user-equivalent and bypass table PERMISSIONS", () => {
+    const sql = buildDefineAccessSql(SECRET);
+    expect(sql).toContain("TYPE RECORD WITH JWT");
+    expect(sql).not.toContain("TYPE JWT");
   });
 
   test("quotes and escapes hostile secret characters", () => {
