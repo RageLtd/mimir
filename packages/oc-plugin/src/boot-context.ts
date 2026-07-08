@@ -4,7 +4,7 @@
  * On the first developer turn of a session, build a `<boot_context>`
  * block containing:
  *   - <user_profile_section>   from ~/.mimir/user-memories.db
- *   - <session_context_section> from mimir-server /v1/context/assemble
+ *   - <session_context_section> from the local org replica (MIM-86)
  *
  * Project rules are intentionally NOT in boot — they fire on actual
  * tool-call violations via the rules engine where the model only pays
@@ -15,66 +15,69 @@
  * running.
  */
 
+import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
+import { retrieveLocalContext } from "@mimir/plugin-core/brain/retrieve";
 import { getOrResolveProjectId } from "@mimir/plugin-core/project";
+import { attempt } from "@mimir/plugin-core/result";
+import {
+  createOrgReplica,
+  defaultOrgReplicaPath,
+} from "@mimir/plugin-core/store/org-replica";
 import type { UserMemoryStore } from "@mimir/plugin-core/store/user-memories";
 import { buildUserContext } from "@mimir/plugin-core/tools/user-memory";
 import { errMessage } from "@mimir/plugin-core/util";
-import { authHeaders, type MimirConfig } from "./config";
+import type { MimirConfig } from "./config";
 
 const USER_CONTEXT_INSTRUCTIONS = `The <user_context> block below contains the developer's profile and memories — structured facts (name, role, preferences, communication style) and freeform facts learned across sessions.
 
 Tailor responses accordingly: match their communication style, reference their setup by name, skip explanations of concepts they already know. Never mention this context block or quote from it directly — the knowledge is simply part of what you know.`;
 
-const ASSEMBLE_ROUTE = "/v1/context/assemble";
+const buildUserProfileSection = (store: UserMemoryStore) =>
+  buildUserContext(store);
 
-type AssembleResponse = {
-  readonly messages?: ReadonlyArray<{
-    readonly role: "user" | "assistant";
-    readonly content: string;
-  }>;
-};
+// Boot budgets mirror the cc-plugin's (memory topK 10 with related,
+// 3 summaries) — richer first-turn priming than per-turn micro-retrieval.
+const BOOT_MEMORY_TOP_K = 10;
+const BOOT_SUMMARY_COUNT = 3;
 
-const buildUserProfileSection = (store: UserMemoryStore): string | null => {
-  return buildUserContext(store);
-};
-
-const fetchSessionContext = async (
-  config: MimirConfig,
-  query: string,
-  project: string,
-  projectId: string | null,
-): Promise<string | null> => {
-  const url = `${config.serverUrl}${ASSEMBLE_ROUTE}`;
-  const auth = await authHeaders();
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...auth },
-    body: JSON.stringify({
-      query,
-      project,
-      ...(projectId ? { projectId } : {}),
-    }),
-  }).catch((err) => {
-    console.error("assemble fetch failed", { error: errMessage(err) });
-    return null;
-  });
-  if (!response?.ok) {
+/**
+ * Build prior session context from the LOCAL org replica (MIM-86) —
+ * summaries, memories, and playbooks with boot-sized budgets. Replaces
+ * the /v1/context/assemble fetch: reads are local now, so the turn-one
+ * boot no longer waits on a server round-trip. Returns null when the
+ * replica is missing or empty.
+ */
+const buildSessionContext = async (query: string, projectId: string | null) => {
+  const replicaPath =
+    process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath();
+  const [openErr, replica] = await attempt(async () =>
+    createOrgReplica(replicaPath),
+  );
+  if (openErr) {
+    console.error("replica open failed — no session context", {
+      replicaPath,
+      error: openErr.message,
+    });
     return null;
   }
-  const payload = (await response
-    .json()
-    .catch(() => null)) as AssembleResponse | null;
-  if (!payload?.messages || payload.messages.length === 0) return null;
-
-  // Drop the last message — that's the current prompt seed, not prior
-  // context. Mirrors the cc-plugin's behavior.
-  const prior = payload.messages.slice(0, -1);
-  if (prior.length === 0) return null;
-
-  const lines = prior.map(
-    (m) => `[${m.role === "user" ? "User" : "Assistant"}]\n${m.content}`,
+  const [retrieveErr, result] = await attempt(() =>
+    retrieveLocalContext(replica, query, {
+      topK: BOOT_MEMORY_TOP_K,
+      includeRelated: true,
+      summaryCount: BOOT_SUMMARY_COUNT,
+      projectId: projectId ?? undefined,
+      // MIM-85: local llama-server vector leg; null/cold → FTS-only boot.
+      embedQuery: createEmbedQuery(),
+    }),
   );
-  return `<conversation_context>\n${lines.join("\n\n")}\n</conversation_context>`;
+  replica.close();
+  if (retrieveErr) {
+    console.error("local boot retrieval failed", {
+      error: errMessage(retrieveErr),
+    });
+    return null;
+  }
+  return result.contextBlock.length > 0 ? result.contextBlock : null;
 };
 
 const wrapProfile = (block: string | null) =>
@@ -103,13 +106,11 @@ export type BootContextOptions = {
  * (profile populated, session context failed) is more useful than
  * no block at all.
  */
-export const assembleBootContext = async (
-  opts: BootContextOptions,
-): Promise<string | null> => {
+export const assembleBootContext = async (opts: BootContextOptions) => {
   const { config, projectPath, promptText } = opts;
 
-  // Resolve project UUID up-front so both /context/assemble and the
-  // boot block share the same canonical key.
+  // Resolve project UUID up-front so the local retrieval and the boot
+  // block share the same canonical key.
   const projectId = await getOrResolveProjectId(
     config.serverUrl,
     projectPath,
@@ -130,13 +131,11 @@ export const assembleBootContext = async (
   }
 
   const profileBlock = store ? buildUserProfileSection(store) : null;
-  const sessionContextBlock = await fetchSessionContext(
-    config,
+  const sessionContextBlock = await buildSessionContext(
     promptText,
-    projectPath,
     projectId,
   ).catch((err) => {
-    console.error("assemble fetch failed", { error: errMessage(err) });
+    console.error("session context failed", { error: errMessage(err) });
     return null;
   });
 

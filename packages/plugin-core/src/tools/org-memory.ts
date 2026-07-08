@@ -73,7 +73,7 @@ const linkNeighbors = (
 
 /** Embed → dedup → store → link, mirroring the server's storeTypedMemory.
  *  Without an embedder every embedding-dependent step degrades gracefully. */
-const storeTyped = async (
+export const storeTyped = async (
   replica: OrgReplica,
   embedQuery: EmbedQuery | undefined,
   args: {

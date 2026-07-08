@@ -30,7 +30,6 @@ describe("createMimirContext", () => {
     expect(ctx.projectRules).toBeNull();
     expect(ctx.conversationMessages).toEqual([]);
     expect(ctx.contextInjection).toEqual([]);
-    expect(ctx.compactionTriggered).toBe(false);
     expect(Object.keys(ctx.serverTools)).toHaveLength(0);
     expect(Object.keys(ctx.clientTools)).toHaveLength(0);
     expect(Object.keys(ctx.allTools)).toHaveLength(0);

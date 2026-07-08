@@ -9,7 +9,7 @@
  * downstream call. Fix: build the CONTENT payload conditionally so
  * unset option<string> fields are absent rather than null.
  *
- * Mock-based pattern matches message-log.test.ts — a hand-built OrgScope
+ * Mock-based pattern: a hand-built OrgScope
  * whose `db.query` is a mock intercepts the DB calls (reads and writes now
  * run on scope.db via scopedQueryFirst) so we can assert on the query
  * parameters without standing up a real SurrealDB.

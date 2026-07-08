@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { clearStaleCompaction } from "./agent/message-log";
 import {
   initProviderRegistry,
   loadProviderData,
@@ -12,17 +11,10 @@ import { countUsers, createClaimGuard, SIGNUP_PATH } from "./auth/claim";
 import { getAuth, getAuthDb, runAuthMigrations } from "./auth/instance";
 import { config, OPENROUTER_API_URL } from "./config";
 import { closeDb, getDb, initSchema } from "./db/surreal";
-import {
-  startHygieneScheduler,
-  stopHygieneScheduler,
-} from "./goldfish/hygiene";
 import { createIdentityGate, type IdentityEnv } from "./middleware/identity";
 import { cartographer } from "./routes/cartographer";
 import { completions } from "./routes/completions";
-import { context } from "./routes/context";
-import { hygiene } from "./routes/hygiene";
 import { mcp } from "./routes/mcp";
-import { messages } from "./routes/messages";
 import { messagesIngress } from "./routes/messages-ingress";
 import { models as modelsRoute } from "./routes/models";
 import { projects } from "./routes/projects";
@@ -140,8 +132,6 @@ app.route("/", modelsRoute);
 
 // Context provider API (for CC backend and external consumers)
 app.route("/v1/system-prompt", systemPrompt);
-app.route("/v1/context", context);
-app.route("/v1/messages", messages);
 app.route("/v1/messages", messagesIngress);
 
 // Cartographer and tools
@@ -150,9 +140,6 @@ app.route("/v1/tools", tools);
 
 // Project registry
 app.route("/v1/projects", projects);
-
-// Memory hygiene — manual sweep trigger
-app.route("/v1/hygiene", hygiene);
 
 // MCP server for Claude Code tool injection
 app.route("/mcp", mcp);
@@ -175,9 +162,6 @@ async function boot() {
     process.exit(1);
   }
   log.info("SurrealDB connected");
-  // Recover from crashes mid-compaction — a stuck is_compacting lock
-  // permanently blocks all future compactions
-  await clearStaleCompaction();
 
   // Better Auth (MIM-70) — fatal by the same zombie logic as the DB above:
   // an auth-enabled server whose auth layer can't initialise would 401
@@ -261,8 +245,8 @@ async function boot() {
       port: config.port,
       hostname: config.host,
       idleTimeout: 0, // disabled — long-running requests (Ollama cold starts,
-      // vLLM long generations, multi-merge hygiene sweeps) own their own
-      // duration; a fixed idle ceiling here is our limit to impose, not Bun's.
+      // vLLM long generations) own their own duration; a fixed idle ceiling
+      // here is our limit to impose, not Bun's.
     }),
   );
   if (serveErr) {
@@ -285,19 +269,12 @@ async function boot() {
     },
     "listening",
   );
-
-  // Periodic memory hygiene sweep (clears its own stale lock on start).
-  const [hygieneErr] = await attempt(startHygieneScheduler);
-  if (hygieneErr) {
-    log.warn({ err: hygieneErr }, "hygiene scheduler failed to start");
-  }
 }
 
 // Graceful shutdown
 async function shutdown(signal: string) {
   log.info({ signal }, "shutdown requested");
 
-  stopHygieneScheduler();
   stopProviderDataRefresh();
 
   if (server) {

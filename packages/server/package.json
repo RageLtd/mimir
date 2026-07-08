@@ -25,7 +25,6 @@
     "@tavily/core": "catalog:server",
     "ai": "catalog:ai-sdk",
     "better-auth": "^1.6.23",
-    "gpt-tokenizer": "catalog:server",
     "hono": "catalog:server",
     "pino": "catalog:server",
     "pino-pretty": "catalog:server",

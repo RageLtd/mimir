@@ -108,7 +108,6 @@ export interface MimirContext {
   // -- Set by MW3: context assembly --
   conversationMessages: ModelMessage[]; // the actual messages to send to the model
   contextInjection: ModelMessage[]; // synthetic user+assistant pair (summaries + memories)
-  compactionTriggered: boolean;
 
   // -- Set by MW4: tool classification --
   serverTools: ToolSet; // AI SDK v6: tools with execute(), run server-side

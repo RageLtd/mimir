@@ -2,8 +2,8 @@
  * Tests for the CC transcript delta pipeline.
  *
  * Focuses on the pure-data path: JSONL → filter → coalesce → ModelMessage[].
- * Watermark round-trip uses a temp file. shipDelta is exercised by stubbing
- * globalThis.fetch — keeps the test hermetic without an HTTP mock library.
+ * Watermark round-trip uses a temp file. (shipDelta died with MIM-86 —
+ * hooks distill locally; extraction transport is tested in plugin-core.)
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -11,12 +11,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  readDelta,
-  readWatermark,
-  shipDelta,
-  writeWatermark,
-} from "./transcript-delta";
+import { readDelta, readWatermark, writeWatermark } from "./transcript-delta";
 
 // Each test gets a fresh temp dir + transcript path. We set MIMIR_HOME
 // (NOT HOME) because Bun caches `homedir()` at process start and the
@@ -236,130 +231,3 @@ describe("readDelta coalescing", () => {
   });
 });
 
-describe("shipDelta", () => {
-  const originalFetch = globalThis.fetch;
-  const BYOK_ENV_VARS = [
-    "MIMIR_PROVIDER_API_KEY",
-    "MIMIR_PROVIDER",
-    "MIMIR_SMALL_MODEL",
-  ] as const;
-  const savedByokEnv: Record<string, string | undefined> = {};
-
-  beforeEach(() => {
-    // Isolate from the developer's real BYOK env (MIM-74)
-    for (const name of BYOK_ENV_VARS) {
-      savedByokEnv[name] = process.env[name];
-      delete process.env[name];
-    }
-  });
-
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    for (const name of BYOK_ENV_VARS) {
-      const saved = savedByokEnv[name];
-      if (saved === undefined) delete process.env[name];
-      else process.env[name] = saved;
-    }
-  });
-
-  test("returns ok with no-op for empty messages", async () => {
-    const result = await shipDelta("http://stub", [], "proj");
-    expect(result).toEqual({ ok: true, appended: 0 });
-  });
-
-  test("POSTs to /v1/messages/persist with the expected body", async () => {
-    let capturedUrl = "";
-    let capturedBody: unknown = null;
-    globalThis.fetch = (async (url: string, init?: RequestInit) => {
-      capturedUrl = url;
-      capturedBody = init?.body ? JSON.parse(String(init.body)) : null;
-      return new Response(JSON.stringify({ appended: 1, ids: ["x"] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }) as unknown as typeof globalThis.fetch;
-
-    const result = await shipDelta(
-      "http://server:3000",
-      [{ role: "user", content: "hi" }],
-      "/repo",
-    );
-    expect(result).toEqual({ ok: true, appended: 1 });
-    expect(capturedUrl).toBe("http://server:3000/v1/messages/persist");
-    expect(capturedBody).toEqual({
-      messages: [{ role: "user", content: "hi" }],
-      project: "/repo",
-    });
-  });
-
-  test("sends BYOK key header + body hints when configured (MIM-74)", async () => {
-    process.env.MIMIR_PROVIDER_API_KEY = "sk-prov";
-    process.env.MIMIR_PROVIDER = "anthropic";
-    process.env.MIMIR_SMALL_MODEL = "anthropic/haiku";
-
-    let capturedHeaders: Record<string, string> = {};
-    let capturedBody: Record<string, unknown> = {};
-    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
-      capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
-      capturedBody = init?.body
-        ? (JSON.parse(String(init.body)) as Record<string, unknown>)
-        : {};
-      return new Response(JSON.stringify({ appended: 1, ids: ["x"] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }) as unknown as typeof globalThis.fetch;
-
-    const result = await shipDelta(
-      "http://server:3000",
-      [{ role: "user", content: "hi" }],
-      "/repo",
-    );
-    expect(result).toEqual({ ok: true, appended: 1 });
-    // Key rides the header, never the body
-    expect(capturedHeaders["X-Provider-Api-Key"]).toBe("sk-prov");
-    expect(JSON.stringify(capturedBody)).not.toContain("sk-prov");
-    // Non-secret hints ride the body
-    expect(capturedBody.provider).toBe("anthropic");
-    expect(capturedBody.small_model).toBe("anthropic/haiku");
-  });
-
-  test("no BYOK config → no key header, no body hints", async () => {
-    let capturedHeaders: Record<string, string> = {};
-    let capturedBody: Record<string, unknown> = {};
-    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
-      capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
-      capturedBody = init?.body
-        ? (JSON.parse(String(init.body)) as Record<string, unknown>)
-        : {};
-      return new Response(JSON.stringify({ appended: 1, ids: ["x"] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }) as unknown as typeof globalThis.fetch;
-
-    await shipDelta(
-      "http://server:3000",
-      [{ role: "user", content: "hi" }],
-      "/repo",
-    );
-    expect(capturedHeaders["X-Provider-Api-Key"]).toBeUndefined();
-    expect(capturedBody.provider).toBeUndefined();
-    expect(capturedBody.small_model).toBeUndefined();
-  });
-
-  test("returns ok:false when the server returns non-200", async () => {
-    globalThis.fetch = (async () =>
-      new Response("nope", {
-        status: 500,
-      })) as unknown as typeof globalThis.fetch;
-
-    const result = await shipDelta(
-      "http://server:3000",
-      [{ role: "user", content: "hi" }],
-      "/repo",
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toBe("status 500");
-  });
-});

@@ -9,8 +9,8 @@
  *
  * Callers resolve by posting `{ gitRemote?, localPath?, title? }`; the store
  * returns an existing record or creates one. Downstream tables (cart_file,
- * message_log, memory) store the project's id portion (after the "project:"
- * prefix) in their `project` field.
+ * memory) store the project's id portion (after the "project:" prefix) in
+ * their `project` field.
  */
 
 import { RecordId } from "surrealdb";

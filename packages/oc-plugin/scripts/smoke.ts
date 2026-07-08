@@ -8,13 +8,14 @@
  *   2. voice anchor injects on cadence into the recency slot (as a text
  *      part on the last user message)
  *   3. <file_context> appears after a `read`
- *   4. the transcript persists with NON-EMPTY user turns (the summary.body
- *      → text-parts fix)
+ *   4. the compacting hook distills the session into the LOCAL replica
+ *      (MIM-86) via the stubbed extraction endpoint
  *   5. reindex on file.edited degrades gracefully with no cartographer binary
- *   6. compaction hook persists before discard
  *
- * No network to prod: MIMIR_HOME points at a throwaway dir and serverUrl
- * points at the in-process stub. Run: `bun packages/oc-plugin/scripts/smoke.ts`.
+ * No network to prod: MIMIR_HOME points at a throwaway dir, serverUrl
+ * points at the in-process stub (project resolve + cartographer +
+ * extraction chat/completions), and the org replica is a temp SQLite.
+ * Run: `bun packages/oc-plugin/scripts/smoke.ts`.
  */
 
 // biome-ignore-all lint/suspicious/noExplicitAny: this harness simulates
@@ -30,24 +31,14 @@ const results: { name: string; ok: boolean; detail: string }[] = [];
 const check = (name: string, ok: boolean, detail = "") =>
   results.push({ name, ok, detail });
 
-// ── Stub mimir-server ──
-const persistBodies: unknown[] = [];
+// ── Stub mimir-server (+ extraction endpoint) ──
 const server = Bun.serve({
   port: 0,
   async fetch(req) {
     const url = new URL(req.url);
-    const body = await req.json().catch(() => ({}));
+    await req.json().catch(() => ({}));
     if (url.pathname === "/v1/projects/resolve") {
       return Response.json({ id: "proj-smoke", localPath: "/tmp/x" });
-    }
-    if (url.pathname === "/v1/context/assemble") {
-      return Response.json({
-        messages: [
-          { role: "user", content: "an earlier question" },
-          { role: "assistant", content: "an earlier answer" },
-          { role: "user", content: "the current seed" },
-        ],
-      });
     }
     if (url.pathname === "/v1/cartographer/file-info") {
       return Response.json({
@@ -58,9 +49,12 @@ const server = Bun.serve({
         memories: null,
       });
     }
-    if (url.pathname === "/v1/messages/persist") {
-      persistBodies.push(body);
-      return Response.json({ ok: true, appended: 1 });
+    // MIM-86: local extraction dials an OpenAI-compatible endpoint —
+    // the stub returns one canned memory.
+    if (url.pathname === "/v1/chat/completions") {
+      return Response.json({
+        choices: [{ message: { content: '["smoke fact extracted locally"]' } }],
+      });
     }
     return new Response("not found", { status: 404 });
   },
@@ -71,6 +65,12 @@ const serverUrl = `http://localhost:${server.port}`;
 const home = await mkdtemp(join(tmpdir(), "mimir-oc-smoke-"));
 process.env.MIMIR_HOME = home;
 process.env.MIMIR_ANCHOR_INTERVAL = "2"; // anchor fires on turn 2, after boot
+// MIM-86 local distillation: extraction dials the stub, replica is a temp
+// SQLite. Embedder defaults apply — warm llama-server embeds for real,
+// cold degrades to unembedded stores (backfill's job).
+process.env.MIMIR_EXTRACTION_BASE_URL = serverUrl;
+process.env.MIMIR_EXTRACTION_MODEL = "smoke-model";
+process.env.MIMIR_ORG_REPLICA_DB = join(home, "org-replica.db");
 await writeFile(
   join(home, "config.json"),
   JSON.stringify({ serverUrl, userMemoryDb: join(home, "mem.db") }),
@@ -118,9 +118,18 @@ const assistantMsg = (id: string, text: string) => ({
     },
   ],
 });
+// Two user turns and enough rendered text to clear the extraction gates
+// (≥2 user turns, ≥200 chars).
 const transcriptFixture = [
-  userMsg("u1", "my real question"),
-  assistantMsg("a1", "my answer"),
+  userMsg(
+    "u1",
+    "my real question about how the gateway service handles large aggregation queries when the timeout is set too low for ClickHouse",
+  ),
+  assistantMsg(
+    "a1",
+    "the gateway proxy timeout was thirty seconds which is too low for large aggregations — raised it to one hundred twenty seconds and added a per-query timeout parameter",
+  ),
+  userMsg("u2", "that fixed it, thanks — write that down for next time"),
 ];
 
 const ctx = {
@@ -190,22 +199,24 @@ check(
   "",
 );
 
-// ── 4. Transcript persists NON-EMPTY user turns ──
+// ── 4. Compacting hook distills into the LOCAL replica (MIM-86) ──
 await hooks["experimental.session.compacting"]?.(
   { sessionID: "sess-smoke" } as any,
   {
     context: [],
   } as any,
 );
-const persisted = persistBodies.at(-1) as {
-  messages?: { role: string; content: unknown }[];
-};
-const userTurn = persisted?.messages?.find((m) => m.role === "user");
+const { createOrgReplica } = await import(
+  "@mimir/plugin-core/store/org-replica"
+);
+const replica = createOrgReplica(process.env.MIMIR_ORG_REPLICA_DB ?? "");
+const distilled = replica.searchByText("smoke fact", 5);
+replica.close();
 check(
-  "transcript persists non-empty user turn (summary.body bug)",
-  typeof userTurn?.content === "string" &&
-    userTurn.content === "my real question",
-  `user content: ${JSON.stringify(userTurn?.content)}`,
+  "compacting hook distills session into local replica",
+  distilled.length > 0 &&
+    distilled.some((m) => m.content.includes("smoke fact")),
+  `replica hits: ${distilled.length}`,
 );
 
 // ── 5. Reindex degrades gracefully with no cartographer binary ──

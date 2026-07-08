@@ -12,7 +12,7 @@ The plugin matches the Mimir capabilities the cc-plugin exposes under Claude Cod
 - **Cartographer reindex** — on every file edit, spawns a one-shot cartographer reindex worker that parses the file and syncs to the server. Full project reindex on session start.
 - **User-memory tools** — seven in-process custom tools (`user_memory_search`, `user_memory_store`, `user_memory_list`, `user_memory_delete`, `user_profile_get`, `user_profile_add`, `user_profile_remove`) for recalling and storing facts about the developer. SQLite-backed at `~/.mimir/user-memories.db`.
 - **Boot context** — on the first turn of a session, prepends a `<boot_context>` block (user profile + prior session context + project id) so the model reads the lead-in as the most recent content.
-- **PreCompact persistence** — before context compaction, signals the model to ship the transcript delta to the server.
+- **Local distillation (MIM-86)** — on session idle and before compaction, the new turns are extracted into the local memory replica on the developer's configured extraction model (`MIMIR_EXTRACTION_*`). The transcript never leaves the machine.
 - **Install + update slash commands** — `/mimir-install` and `/mimir-update` for the runtime state; the plugin bundle itself is installed via `opencode plugin`.
 
 ## Install

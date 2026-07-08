@@ -357,6 +357,23 @@ export const createOrgReplica = (dbPath: string) => {
     return result.changes > 0;
   };
 
+  /** Hygiene surface (MIM-86): every fact WITH its decoded embedding —
+   *  the sweep computes pairwise distances itself over the full set. */
+  const listFactsWithEmbeddings = () =>
+    db
+      .query<MemoryRow, []>("SELECT * FROM memory WHERE type = 'fact'")
+      .all()
+      .map((row) => ({
+        ...stripEmbedding(row),
+        embedding: row.embedding ? blobToEmbedding(row.embedding) : null,
+      }));
+
+  /** Hygiene surface (MIM-86): confidence decay + contradiction demotion. */
+  const setConfidence = (id: string, confidence: number) =>
+    db
+      .query("UPDATE memory SET confidence = ? WHERE id = ?")
+      .run(confidence, id).changes > 0;
+
   const countMemories = () => {
     const row = db
       .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM memory")
@@ -386,6 +403,8 @@ export const createOrgReplica = (dbPath: string) => {
     deleteMemory,
     listUnembedded,
     setEmbedding,
+    listFactsWithEmbeddings,
+    setConfidence,
     countMemories,
     close,
   };

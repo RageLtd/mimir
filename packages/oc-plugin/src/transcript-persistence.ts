@@ -1,30 +1,36 @@
 /**
- * Transcript persistence — fetch the full session transcript from
- * OpenCode's server and ship it to mimir-server's /v1/messages/persist.
+ * Turn distillation — fetch the session transcript from OpenCode's
+ * server and extract memories from it into the LOCAL replica (MIM-86).
+ * The server persist leg is gone: the transcript never leaves the
+ * machine; the org-shared artifact is the extracted memory.
  *
- * The cc-plugin's pattern reads CC's JSONL transcript file, coalesces
- * streaming chunks, and tracks a watermark per session. OpenCode's
- * server-side message store is the source of truth here — we don't
- * need to accumulate or coalesce because OpenCode has already done
- * that. On `session.idle` we just fetch the full message list with
- * parts and POST the lot.
+ * OpenCode's message store is the source of truth — no JSONL coalescing
+ * needed (unlike the cc-plugin's transcript-delta). The watermark is an
+ * in-memory per-session message count: the plugin lives in-process for
+ * the whole session, so it survives across `session.idle` fires. A
+ * process restart re-extracts the conversation once; storeTyped's
+ * vector dedupe absorbs the repeats.
  *
- * The server's `appendTurn` function dedupes by fingerprint, so
- * re-persisting the same transcript across multiple `session.idle`
- * fires is safe (and expected — the plugin runs in-process across
- * all events in the lifetime of one OpenCode session).
+ * Watermark semantics mirror the cc-plugin persist hook: advance on
+ * success OR deliberate skip (extraction gates), keep on transport
+ * failure so the next idle retries the same delta. Unconfigured
+ * extraction advances too — otherwise the delta grows forever toward
+ * an endpoint that will never exist.
  *
- * Errors are logged but never block the session going idle. A failed
- * persist just means the server didn't get the transcript; the user
- * can re-trigger via /mimir-update or by inspecting the log.
+ * Errors are logged but never block the session going idle.
  */
 
+import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
+import { extractFromConversation } from "@mimir/plugin-core/brain/extract";
 import { getOrResolveProjectId } from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
+import {
+  createOrgReplica,
+  defaultOrgReplicaPath,
+} from "@mimir/plugin-core/store/org-replica";
+import { storeTyped } from "@mimir/plugin-core/tools/org-memory";
 import { errMessage } from "@mimir/plugin-core/util";
-import { authHeaders, type MimirConfig } from "./config";
-
-const PERSIST_ROUTE = "/v1/messages/persist";
+import { extractionConfig, type MimirConfig } from "./config";
 
 // ── ModelMessage shape ──
 //
@@ -165,9 +171,15 @@ export const convertMessage = (msg: OpenCodeMessage) => {
   return null;
 };
 
+// Per-session extraction watermark: count of RAW OpenCode messages already
+// consumed. Module-level because the plugin is a single in-process instance
+// for the session's lifetime. Exported for tests only.
+export const _extractionWatermarks = new Map<string, number>();
+
 /**
- * Fetch the session's transcript from OpenCode and POST it to the
- * mimir-server's persist endpoint. Fire-and-forget: errors are
+ * Fetch the session's transcript from OpenCode, take the delta since the
+ * last watermark, and distill it into the local replica via the
+ * user-configured extraction endpoint. Fire-and-forget: errors are
  * logged but never propagated.
  */
 export const persistSessionTranscript = async (
@@ -176,7 +188,7 @@ export const persistSessionTranscript = async (
   config: MimirConfig,
   log: TranscriptLogger,
   client: TranscriptClient,
-): Promise<void> => {
+) => {
   const [fetchErr, result] = await attempt(() =>
     client.session.messages({ path: { id: sessionID } }),
   );
@@ -195,68 +207,109 @@ export const persistSessionTranscript = async (
     return;
   }
   const messages = result.data ?? [];
+  const watermark = _extractionWatermarks.get(sessionID) ?? 0;
+  const delta = messages.slice(watermark);
 
-  if (messages.length === 0) {
-    log.debug("session idle — no messages to persist", { sessionID });
+  if (delta.length === 0) {
+    log.debug("session idle — no new messages since watermark", {
+      sessionID,
+      watermark,
+    });
     return;
   }
 
   const modelMessages: ModelMessage[] = [];
-  for (const msg of messages) {
+  for (const msg of delta) {
     const converted = convertMessage(msg);
     if (converted) modelMessages.push(converted);
   }
 
   if (modelMessages.length === 0) {
-    log.debug("session idle — no convertible messages", { sessionID });
+    // Nothing convertible — advance past the noise so it isn't rescanned.
+    _extractionWatermarks.set(sessionID, messages.length);
+    log.debug("session idle — no convertible messages in delta", {
+      sessionID,
+    });
     return;
   }
 
-  let projectId: string | null = null;
-  try {
-    projectId = await getOrResolveProjectId(
-      config.serverUrl,
-      projectPath,
-      config.apiKey,
+  const extraction = await extractionConfig();
+  if (!extraction) {
+    // No endpoint will ever consume this delta — advance so it can't
+    // accumulate forever. Loud once per idle in the log.
+    _extractionWatermarks.set(sessionID, messages.length);
+    log.warn(
+      "extraction unconfigured (MIMIR_EXTRACTION_BASE_URL / extractionBaseUrl) — session not distilled",
+      { sessionID, messages: modelMessages.length },
     );
-  } catch (err) {
+    return;
+  }
+
+  const outcome = await extractFromConversation(extraction, modelMessages);
+  if (!outcome.ok) {
+    log.error("extraction failed — keeping watermark for retry", {
+      sessionID,
+      messages: modelMessages.length,
+      model: extraction.model,
+    });
+    return;
+  }
+
+  if (outcome.skipped) {
+    _extractionWatermarks.set(sessionID, messages.length);
+    log.debug("extraction skipped", { sessionID, reason: outcome.skipped });
+    return;
+  }
+
+  // Project id for memory attribution — disk-cached after first resolution.
+  const projectId = await getOrResolveProjectId(
+    config.serverUrl,
+    projectPath,
+    config.apiKey,
+  ).catch((err) => {
     log.warn("project id resolve failed", {
       sessionID,
       error: errMessage(err),
     });
-  }
-
-  const url = `${config.serverUrl.replace(/\/+$/, "")}${PERSIST_ROUTE}`;
-  const headers = await authHeaders();
-  const body = JSON.stringify({
-    messages: modelMessages,
-    project: projectPath,
-    ...(projectId ? { projectId } : {}),
+    return null;
   });
 
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...headers },
-      body,
-    });
-    if (!response.ok) {
-      const responseText = await response.text().catch(() => "");
-      log.error("transcript persist non-OK", {
-        sessionID,
-        status: response.status,
-        body: responseText,
-      });
-      return;
+  const replica = createOrgReplica(
+    process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
+  );
+  const embedQuery = createEmbedQuery();
+
+  let stored = 0;
+  let duplicates = 0;
+  for (const memory of outcome.memories) {
+    const [storeErr, storeResult] = await attempt(() =>
+      storeTyped(replica, embedQuery, {
+        content: memory,
+        type: "fact",
+        ...(projectId ? { project: projectId } : {}),
+      }),
+    );
+    if (storeErr) {
+      log.warn("memory store failed", { error: storeErr.message });
+      continue;
     }
-    log.info("transcript persisted", {
-      sessionID,
-      messageCount: modelMessages.length,
-    });
-  } catch (err) {
-    log.error("transcript persist fetch failed", {
-      sessionID,
-      error: errMessage(err),
-    });
+    if (storeResult.stored) stored++;
+    else duplicates++;
   }
+  replica.close();
+
+  _extractionWatermarks.set(sessionID, messages.length);
+
+  log.info("session distilled locally", {
+    sessionID,
+    project: projectPath,
+    projectId,
+    watermark,
+    newWatermark: messages.length,
+    messagesInDelta: modelMessages.length,
+    extracted: outcome.memories.length,
+    stored,
+    duplicates,
+    model: extraction.model,
+  });
 };

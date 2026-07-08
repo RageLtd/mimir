@@ -5,18 +5,11 @@
  * editor, executes tool calls (local or editor-forwarded), and loops
  * until the model finishes without requesting tools.
  *
- * Why this path doesn't call `persistTurn` / `reportTokenUsage`:
- *   mimir-server owns all transcript writes for this backend. Specifically:
- *   - User + tool messages → `appendTrailingTurn` in
- *     `middleware/context-assembly.ts` (request-time, before the agent loop).
- *   - Assistant messages → `persistAssistantTurn` in `agent/run/loop.ts` /
- *     `response.ts` (post-stream).
- *   - Token tracking + compaction → `triggerCompactionIfNeeded` (post-stream).
- *   - Memory extraction → `extractMemoriesFromResponse` (post-stream).
- *   The CC backend has to call `/v1/messages/persist` and
- *   `/v1/context/token-report` itself because it runs inference locally and
- *   the server never sees its assistant emissions; the server backend gets
- *   all of that for free at the `/v1/chat/completions` boundary.
+ * The conversation lives in `session.messages` on this side — the request
+ * carries the full history every turn and the server persists nothing
+ * (MIM-86: the transcript is a personal, per-machine artifact; the server's
+ * message_log, compaction, and extraction all died with it). Cross-session
+ * continuity and local extraction land with the MIM-89 inversion.
  */
 
 import type * as acp from "@agentclientprotocol/sdk";

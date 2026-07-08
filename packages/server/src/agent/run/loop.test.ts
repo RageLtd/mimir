@@ -24,7 +24,6 @@ function makeCtx(
     projectRules: null,
     conversationMessages: [],
     contextInjection: [],
-    compactionTriggered: false,
     resolvedModel: null,
   } satisfies MimirContext;
 }

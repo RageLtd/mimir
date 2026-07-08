@@ -205,9 +205,9 @@ export const MimirPlugin: Plugin = async (ctx) => {
 
       if (!s.bootDone) {
         s.bootDone = true;
-        // assembleBootContext reads the user-memory store and POSTs to
-        // mimir-server's /v1/context/assemble, returning a <boot_context>
-        // XML block ready for injection.
+        // assembleBootContext reads the user-memory store and the local
+        // org replica (MIM-86), returning a <boot_context> XML block
+        // ready for injection.
         const boot = await assembleBootContext({
           promptText: extractLastUserPrompt(output.messages),
           projectPath: ctx.directory,
@@ -290,15 +290,13 @@ export const MimirPlugin: Plugin = async (ctx) => {
       });
     },
 
-    // ─── Persist before compaction ───
+    // ─── Distill before compaction ───
     //
-    // Fires before OpenCode summarizes the session away. Persist the full
-    // transcript first so the brain keeps the complete record — the
-    // parity of cc-plugin's PreCompact hook. Awaited (not fire-and-forget)
-    // so the record reaches the server before the discard; the server's
-    // appendTurn dedupes, so overlap with the session.idle persist is
-    // cheap. We don't override the compaction prompt — OpenCode's default
-    // summary is fine; we only guarantee durability.
+    // Fires before OpenCode summarizes the session away. Extract the
+    // remaining delta into the local replica first so the facts survive
+    // the discard — the parity of cc-plugin's PreCompact hook. Awaited
+    // (not fire-and-forget) so extraction completes before the discard;
+    // the watermark makes overlap with the session.idle pass cheap.
     "experimental.session.compacting": async (input) => {
       await persistSessionTranscript(
         input.sessionID,
@@ -341,10 +339,10 @@ export const MimirPlugin: Plugin = async (ctx) => {
       }
 
       if (event.type === "session.idle") {
-        // Persist the session's transcript to the mimir-server. Fire-
-        // and-forget: errors are logged inside the function but never
-        // propagated. The server's `appendTurn` dedupes by fingerprint,
-        // so re-persisting on each idle is safe.
+        // Distill the session's new turns into the local replica
+        // (MIM-86). Fire-and-forget: errors are logged inside the
+        // function but never propagated. The per-session watermark
+        // makes repeat idles cheap; storeTyped dedupes.
         void persistSessionTranscript(
           event.properties.sessionID,
           ctx.directory,

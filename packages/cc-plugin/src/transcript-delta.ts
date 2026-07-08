@@ -36,17 +36,10 @@ import type {
   ToolContent,
 } from "@ai-sdk/provider-utils";
 import { attempt } from "@mimir/plugin-core/result";
-import { errMessage, mimirHome } from "@mimir/plugin-core/util";
-import { authHeaders, providerByok } from "./config";
+import { mimirHome } from "@mimir/plugin-core/util";
 import { createLogger } from "./logger";
 
 const log = createLogger("transcript-delta");
-
-const PERSIST_ROUTE = "/v1/messages/persist";
-
-/** BYOK key transport (MIM-74) — header, never body: request bodies get
- *  logged on validation failure server-side; headers don't. */
-const PROVIDER_KEY_HEADER = "X-Provider-Api-Key";
 
 const stateDir = () => join(mimirHome(), "persist-state");
 const statePath = (sessionId: string) => join(stateDir(), `${sessionId}.json`);
@@ -305,7 +298,7 @@ const groupToModelMessages = (
 };
 
 // ---------------------------------------------------------------------------
-// Public: readDelta + shipDelta
+// Public: readDelta
 // ---------------------------------------------------------------------------
 
 export const readDelta = async (transcriptPath: string, watermark: number) => {
@@ -372,58 +365,5 @@ export const readDelta = async (transcriptPath: string, watermark: number) => {
   return { messages, newOffset: totalLines };
 };
 
-export type ShipResult =
-  | { ok: true; appended: number }
-  | { ok: false; error: string };
-
-export const shipDelta = async (
-  serverUrl: string,
-  messages: readonly ModelMessage[],
-  project: string,
-  projectId?: string | null,
-) => {
-  if (messages.length === 0) {
-    return { ok: true, appended: 0 } as ShipResult;
-  }
-
-  const url = `${serverUrl}${PERSIST_ROUTE}`;
-  const auth = await authHeaders();
-  // BYOK (MIM-74): the extraction this persist spawns runs on the user's
-  // provider key when configured. Key in the header; the non-secret
-  // provider/small-model hints ride the body.
-  const byok = await providerByok();
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...auth,
-  };
-  if (byok) headers[PROVIDER_KEY_HEADER] = byok.apiKey;
-  const response = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      messages,
-      project,
-      ...(projectId ? { projectId } : {}),
-      ...(byok?.provider ? { provider: byok.provider } : {}),
-      ...(byok?.smallModel ? { small_model: byok.smallModel } : {}),
-    }),
-  }).catch((err) => {
-    log.error("persist fetch failed", { url, error: errMessage(err) });
-    return null;
-  });
-
-  if (!response) return { ok: false, error: "fetch failed" } as ShipResult;
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    log.error("persist non-OK", { status: response.status, body });
-    return {
-      ok: false,
-      error: `status ${response.status}`,
-    } as ShipResult;
-  }
-
-  const payload = (await response.json().catch(() => null)) as {
-    appended?: number;
-  } | null;
-  return { ok: true, appended: payload?.appended ?? 0 } as ShipResult;
-};
+// shipDelta and its /v1/messages/persist transport died with MIM-86 —
+// the transcript never leaves the machine. Both hooks distill locally.

@@ -2,8 +2,8 @@
  * One-time (idempotent) migration: consolidate every table on canonical
  * project_id ULIDs and drop the legacy `project` path-string key.
  *
- * History: pre-Slice-2 writers keyed message_log, memory, and the cart_*
- * tables on a `project` string holding whatever the client had in hand —
+ * History: pre-Slice-2 writers keyed memory and the cart_* tables on a
+ * `project` string holding whatever the client had in hand —
  * usually a cwd path, later a resolved ULID. This migration:
  *
  *   1. Collects the distinct legacy `project` values still lacking a
@@ -29,9 +29,10 @@
 import { RecordId, type Surreal } from "surrealdb";
 import { log } from "../util/logger";
 
-/** Tables that historically carried the legacy `project` string key. */
+/** Tables that historically carried the legacy `project` string key.
+ *  message_log dropped from the list when the table died (MIM-86) — its
+ *  legacy rows, if any remain, are orphaned data the table drop removes. */
 const LEGACY_KEYED_TABLES = [
-  "message_log",
   "memory",
   "cart_file",
   "cart_import",

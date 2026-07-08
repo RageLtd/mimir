@@ -114,7 +114,7 @@ describe("buildDefineAccessSql", () => {
 });
 
 describe("buildTablePermissionsSql", () => {
-  const TABLES = ["memory", "message_log", "project"];
+  const TABLES = ["memory", "cart_file", "project"];
 
   test("emits one non-destructive ALTER per table bound to $token.org_id", () => {
     const sql = buildTablePermissionsSql(TABLES);

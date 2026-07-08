@@ -1,11 +1,21 @@
 # Memory Hygiene & Skill Generation
 
-Status: **Phase 1 production-validated. Phase 2 contradiction pass
-production-validated (2026-06-07). Skill/playbook layer v1 shipped
-(`project_playbook_store`, retrieved-as-memory).**
-Owner: Rage · Last updated: 2026-06-14
+Status: **RELOCATED CLIENT-SIDE (MIM-86, 2026-07-08).** The sweep now runs
+in `packages/plugin-core/src/brain/hygiene.ts` over the local SQLite
+replica, triggered-only (`hygiene --live`), on the developer's configured
+extraction model. The server-side scheduler, `/v1/hygiene/sweep` route, and
+`goldfish/hygiene/*` modules are deleted — the server retains zero memory
+intelligence. Merges express as delete+delete+create so the LWW sync
+protocol carries them without special cases; the org-concurrency lease is
+deferred to MIM-88.
 
-A server-side background loop that keeps the memory store healthy and, later,
+Everything below is the original server-side design record. The **passes,
+thresholds, and scoring were ported verbatim** into the local sweep, so the
+validation history (merge distance 0.18, contradiction band 0.30, score
+floor 0.15, etc.) still governs the client-side implementation.
+Owner: Rage · Last updated: 2026-07-08
+
+A background loop that keeps the memory store healthy and, later,
 distills repeated work into contextual playbooks. The goal: a model that doesn't
 just *remember* but *learns the trade* — repeated tasks succeed because the
 relevant know-how is surfaced at the right moment.

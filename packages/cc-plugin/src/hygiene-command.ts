@@ -1,37 +1,38 @@
 /**
- * `mimir-cc hygiene [--live] [--model <id>]` — trigger a server-side memory
- * hygiene sweep (MIM-75 Part 1). In cloud mode the periodic scheduler is off
- * (triggered-only); this subcommand is the deliberate trigger. Dry-run
- * unless --live.
+ * `mimir-cc hygiene [--live] [--model <id>]` — run the memory hygiene
+ * sweep over the LOCAL replica (MIM-86; formerly triggered the server's
+ * /v1/hygiene/sweep, which is gone).
  *
- * Credentials never enter the model transcript: this process reads the
- * MIMIR_API_KEY / MIMIR_PROVIDER_API_KEY env (or config.json) itself and
- * sends the provider key in the X-Provider-Api-Key header, mirroring the
- * transcript-delta shipper (MIM-74). A keyed sweep must name its judgment
- * model — --model wins, the configured small model is the fallback.
+ * Dry-run by default; --live applies merges/demotions/prunes. The
+ * judgment model is the extraction trio (MIMIR_EXTRACTION_*), --model
+ * overriding just the model id. Last-sweep state (drives untouched-decay)
+ * lives at ~/.mimir/hygiene-state.json and only advances on live runs.
  */
 
+import { join } from "node:path";
+import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
+import { runLocalHygieneSweep } from "@mimir/plugin-core/brain/hygiene";
 import { attempt } from "@mimir/plugin-core/result";
-import { authHeaders, providerByok, readConfig } from "./config";
+import {
+  createOrgReplica,
+  defaultOrgReplicaPath,
+} from "@mimir/plugin-core/store/org-replica";
+import { mimirHome } from "@mimir/plugin-core/util";
+import { extractionConfig } from "./config";
+import { createLogger } from "./logger";
 
-/** Mirrors PROVIDER_KEY_HEADER on the server (middleware/pipeline.ts). */
-const PROVIDER_KEY_HEADER = "X-Provider-Api-Key";
+const log = createLogger("hygiene-command");
 
-/** Sweeps chain multiple judgment-model calls — allow them plenty of time. */
-const HYGIENE_SWEEP_TIMEOUT_MS = 600_000;
+const statePath = () => join(mimirHome(), "hygiene-state.json");
 
-type SweepReport = {
-  readonly dryRun?: boolean;
-  readonly skipped?: string;
-  readonly model?: string;
-  readonly memoryCount?: number;
-  readonly consolidation?: { merged?: number; clustersFound?: number };
-  readonly contradiction?: {
-    demotions?: { applied?: boolean }[];
-    merges?: { applied?: boolean }[];
-  };
-  readonly forgetting?: { prunedCount?: number; decayedCount?: number };
-  readonly elapsedMs?: number;
+const readLastSweepMs = async () => {
+  const file = Bun.file(statePath());
+  if (!(await file.exists())) return null;
+  const [err, parsed] = await attempt(
+    async () => (await file.json()) as { lastSweepMs?: number },
+  );
+  if (err || typeof parsed.lastSweepMs !== "number") return null;
+  return parsed.lastSweepMs;
 };
 
 export const parseHygieneArgs = (args: readonly string[]) => {
@@ -51,81 +52,60 @@ export const parseHygieneArgs = (args: readonly string[]) => {
   return { live, model };
 };
 
-export const formatSweepReport = (report: SweepReport) => {
-  if (report.skipped) return `Hygiene sweep skipped: ${report.skipped}`;
-  const demoted =
-    report.contradiction?.demotions?.filter((d) => d.applied).length ?? 0;
-  const pairMerged =
-    report.contradiction?.merges?.filter((m) => m.applied).length ?? 0;
-  const lines = [
-    `Hygiene sweep ${report.dryRun ? "dry run" : "LIVE run"} complete (model ${report.model ?? "?"}, ${report.memoryCount ?? 0} memories, ${Math.round((report.elapsedMs ?? 0) / 1000)}s).`,
-    `- Consolidation: ${report.consolidation?.clustersFound ?? 0} cluster(s) found, ${report.consolidation?.merged ?? 0} merged`,
-    `- Contradiction: ${demoted} demoted, ${pairMerged} pair-merged`,
-    `- Forgetting: ${report.forgetting?.prunedCount ?? 0} pruned, ${report.forgetting?.decayedCount ?? 0} decayed`,
-  ];
-  if (report.dryRun) {
-    lines.push("Nothing was mutated — pass --live to apply.");
-  }
-  return lines.join("\n");
-};
-
 export const runHygieneCommand = async (args: readonly string[]) => {
   const parsed = parseHygieneArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
-    return 1;
-  }
-
-  const config = await readConfig();
-  if (!config?.serverUrl) {
-    console.error("Mimir is not installed — run the installer first.");
-    return 1;
-  }
-
-  const byok = await providerByok();
-  const model = parsed.model ?? byok?.smallModel;
-  if (byok && !model) {
     console.error(
-      "A provider key is configured but no model is named — pass --model <id> (or set MIMIR_SMALL_MODEL).",
+      `${parsed.error}\nUsage: mimir-cc hygiene [--live] [--model <id>]`,
     );
     return 1;
   }
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(await authHeaders()),
-  };
-  if (byok) headers[PROVIDER_KEY_HEADER] = byok.apiKey;
-
-  const body = {
-    dryRun: !parsed.live,
-    ...(byok
-      ? { model, ...(byok.provider ? { provider: byok.provider } : {}) }
-      : {}),
-  };
-
-  console.log(
-    `Running memory hygiene sweep (${parsed.live ? "LIVE" : "dry run"}${byok ? `, model ${model} on your key` : ", server-configured model"}) — this can take a few minutes.`,
-  );
-
-  const [err, report] = await attempt(async () => {
-    const response = await fetch(`${config.serverUrl}/v1/hygiene/sweep`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(HYGIENE_SWEEP_TIMEOUT_MS),
-    });
-    if (!response.ok) {
-      const text = await response.text().catch(() => "unknown error");
-      throw new Error(`server returned ${response.status}: ${text}`);
-    }
-    return (await response.json()) as SweepReport;
-  });
-
-  if (err) {
-    console.error(`Hygiene sweep failed: ${err.message}`);
+  const base = await extractionConfig();
+  if (!base) {
+    console.error(
+      "Hygiene needs an extraction endpoint: set MIMIR_EXTRACTION_BASE_URL " +
+        "(and MIMIR_EXTRACTION_MODEL or MIMIR_SMALL_MODEL), or the " +
+        "config.json extraction fields.",
+    );
     return 1;
   }
-  console.log(formatSweepReport(report));
+  const config = parsed.model ? { ...base, model: parsed.model } : base;
+
+  const replica = createOrgReplica(
+    process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
+  );
+  const lastSweepMs = await readLastSweepMs();
+
+  console.log(
+    `Hygiene sweep (${parsed.live ? "LIVE" : "dry-run"}) on ${config.model} — ` +
+      `${replica.countMemories()} memories, last sweep ${
+        lastSweepMs ? new Date(lastSweepMs).toISOString() : "never"
+      }`,
+  );
+
+  const report = await runLocalHygieneSweep({
+    replica,
+    config,
+    embed: createEmbedQuery(),
+    dryRun: !parsed.live,
+    lastSweepMs,
+  });
+  replica.close();
+
+  if (parsed.live) {
+    await Bun.write(statePath(), JSON.stringify({ lastSweepMs: Date.now() }));
+  }
+
+  log.info("hygiene sweep complete", {
+    live: parsed.live,
+    model: report.model,
+    clustersFound: report.clustersFound,
+    contradictions: report.contradictions.length,
+    decayed: report.decayed,
+    pruneCandidates: report.pruneCandidates.length,
+    pruned: report.pruned,
+  });
+  console.log(JSON.stringify(report, null, 2));
   return 0;
 };

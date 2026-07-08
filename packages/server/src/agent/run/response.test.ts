@@ -30,7 +30,6 @@ mock.module("../post-processing", () => ({
     serverCalls: [],
     clientCalls: toolCalls,
   }),
-  finalizeTurn: () => {},
 }));
 
 const { streamingResponse } = await import("./response");
@@ -53,7 +52,6 @@ function makeCtx(model: string): MimirContext {
     projectRules: null,
     conversationMessages: [],
     contextInjection: [],
-    compactionTriggered: false,
     serverTools: {},
     clientTools: {},
     allTools: {},

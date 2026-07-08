@@ -77,7 +77,6 @@ export function createMimirContext(
     projectRules: null,
     conversationMessages: [],
     contextInjection: [],
-    compactionTriggered: false,
     serverTools: {},
     clientTools: {},
     allTools: {},

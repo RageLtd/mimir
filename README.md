@@ -103,16 +103,8 @@ With `image:` (from the base file) and `build:` (from the override) both set, `d
 - `TAVILY_API_KEY` — web search tool
 - `CONTEXT7_API_KEY` — documentation lookup (free tier works without key)
 
-**Memory hygiene (background sweep):**
-- `HYGIENE_ENABLED` — run the periodic scheduler (default: `true`). **Cloud deployments set `false`**: sweeps become triggered-only via `POST /v1/hygiene/sweep` (or the `/hygiene` ACP command, `/run-hygiene` in Claude Code, `mimir_hygiene` in OpenCode), running on the caller's provider key
-- `HYGIENE_MODEL` — judgment model for fusing merged memories; no default, keyless sweeps refuse to run while unset (keyed triggers name their model per request)
-- `HYGIENE_DRY_RUN` — report proposed merges/prunes without mutating (default: `true`)
-- See the `HYGIENE_*` block in `.env.example` for the full set of tuning knobs
-
 **Context management:**
 - `SYSTEM_PROMPT_PATH` — path to the system prompt markdown (default: `./system-prompt.md`)
-- `CONTEXT_MAX_TOKENS` — model context window size (default: 262144)
-- `CONTEXT_COMPACTION_THRESHOLD` — trigger compaction at this utilization (default: 0.8)
 
 #### Verifying the Server
 
@@ -306,20 +298,20 @@ The system prompt is converted from markdown to XML tags for Anthropic's models,
 
 ### Memory System
 
-**Goldfish** (server-side) — conversation-level memories stored in SurrealDB with vector embeddings. Automatically extracted from conversations and retrieved by relevance on each request. Compacted into summaries when the context window fills up.
+**Goldfish** (server-side) — conversation-level memories stored in SurrealDB with vector embeddings, retrieved by relevance on each request. Extraction happens client-side (MIM-86): the plugin distills each turn into facts on the developer's own machine with their own extraction model — the server never runs memory intelligence over plaintext.
 
 **User memories** (local) — static profile facts and queryable entries stored in SQLite on the user's machine. Profile entries are injected into every request. Queryable memories are available as tools the model can call.
 
-**Memory hygiene** (server-side) — a background sweep keeps the Goldfish store healthy on a timer (default every 6 hours, in-process, guarded by a DB lock). It runs three ordered passes: consolidation fuses near-duplicate memories into one canonical record, contradiction resolution demotes the losing side of conflicting facts and records a supersedes edge, and forgetting prunes low-value facts past an age and score floor. It defaults to dry-run (reports proposed changes without mutating) and refuses to run until `HYGIENE_MODEL` is set. Trigger a manual sweep with `POST /v1/hygiene/sweep`; see `packages/server/docs/memory-hygiene.md` for the full design and the `HYGIENE_*` block in `.env.example` for the tuning knobs.
+**Memory hygiene** (client-side) — a triggered-only sweep keeps the local replica healthy. It runs three ordered passes on the developer's configured extraction model: consolidation fuses near-duplicate memories into one canonical record, contradiction resolution demotes the losing side of conflicting facts, and forgetting prunes low-value facts past an age and score floor. It defaults to dry-run; pass `--live` to apply. See `packages/server/docs/memory-hygiene.md` for the design.
 
 ### Context Assembly
 
 Every request gets assembled context regardless of backend:
 1. System prompt (personality, rules, tool usage patterns)
-2. Recent conversation summaries (from Goldfish compaction)
+2. Recent conversation summaries
 3. Relevant memories (vector search against the current query)
 4. User profile (from local SQLite)
-5. Conversation history (from the message log)
+5. Conversation history (carried by the request — the client owns the transcript)
 
 ## Development
 

@@ -10,8 +10,8 @@
  *   2. **Sentinel remap** — once an instance that started life on the sentinel
  *      is claimed, move those rows onto the real owner org id.
  *   3. **Project dedupe** — collapse duplicate project records that share a
- *      git_remote onto one canonical record, reassigning history (message_log,
- *      memory) and dropping regenerable index rows (cart_*).
+ *      git_remote onto one canonical record, reassigning history (memory)
+ *      and dropping regenerable index rows (cart_*).
  *
  * Owner resolution reads the auth SQLite store, which at first boot may not
  * have its schema yet (initSchema runs before runAuthMigrations) or may be
@@ -36,9 +36,6 @@ import { OWNER_ORG_SENTINEL } from "./scope";
 export const ORG_SCOPED_TABLES = [
   "memory",
   "relates_to",
-  "message_log",
-  "compaction_state",
-  "hygiene_state",
   "cart_file",
   "cart_import",
   "cart_git_state",
@@ -47,7 +44,7 @@ export const ORG_SCOPED_TABLES = [
 
 /** On a project merge these carry history and are reassigned onto the
  *  canonical id — their rows are the brain and must survive. */
-export const REASSIGN_CHILD_TABLES = ["message_log", "memory"] as const;
+export const REASSIGN_CHILD_TABLES = ["memory"] as const;
 
 /** On a project merge these are dropped for the duplicate: the index is a
  *  full DELETE-then-INSERT per sync, so the canonical record's next sync

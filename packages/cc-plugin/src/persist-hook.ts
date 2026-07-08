@@ -1,41 +1,34 @@
 /**
- * Stop hook — persist completed CC turns to the mimir brain.
+ * Stop hook — extract memories from completed CC turns into the LOCAL
+ * replica (MIM-86). The server persist/token-report legs are gone: the
+ * transcript never leaves the machine. Reads new lines from the session's
+ * transcript JSONL since the last watermark, renders them to conversation
+ * text, runs extraction on the user-chosen endpoint (extractionConfig),
+ * and stores the results via the replica's embed→dedupe→store path.
  *
- * Fires after every model turn ends (CC's Stop event). Reads new lines
- * from the session's transcript JSONL since the last watermark, converts
- * them to AI SDK ModelMessages via `transcript-delta.ts`, ships to
- * `/v1/messages/persist`, and advances the watermark.
- *
- * Also reports a rough token count to `/v1/context/token-report` so the
- * brain's async compaction threshold actually fires for CC-driven
- * growth. Without this, the server only sees ACP-side traffic and
- * compaction never triggers from pure-CC usage.
+ * Watermark semantics: advance on success OR deliberate skip (gates),
+ * keep on extraction transport failure so the next turn retries the same
+ * delta. Unconfigured extraction advances too — otherwise the delta grows
+ * unboundedly toward an endpoint that will never exist.
  *
  * Exit code is always 0. Returning non-zero from Stop would prevent CC
- * from finishing the turn — far worse than a silent persist failure
- * (which we recover from on the next turn via the unchanged watermark).
+ * from finishing the turn — far worse than a lost extraction cycle.
  */
 
-import type { ModelMessage } from "@ai-sdk/provider-utils";
+import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
+import { extractFromConversation } from "@mimir/plugin-core/brain/extract";
 import { getOrResolveProjectId } from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
-import { authHeaders, readConfig } from "./config";
-import { createLogger } from "./logger";
 import {
-  readDelta,
-  readWatermark,
-  shipDelta,
-  writeWatermark,
-} from "./transcript-delta";
+  createOrgReplica,
+  defaultOrgReplicaPath,
+} from "@mimir/plugin-core/store/org-replica";
+import { storeTyped } from "@mimir/plugin-core/tools/org-memory";
+import { extractionConfig, readConfig } from "./config";
+import { createLogger } from "./logger";
+import { readDelta, readWatermark, writeWatermark } from "./transcript-delta";
 
 const log = createLogger("persist-hook");
-
-const TOKEN_REPORT_ROUTE = "/v1/context/token-report";
-
-// Rough char-to-token heuristic. Anthropic's tokenizer averages ~3.5–4
-// chars per token for English/code. Slight overcount is intentional —
-// the compaction trigger is conservative by design.
-const CHARS_PER_TOKEN = 4;
 
 type HookInput = {
   readonly session_id?: string;
@@ -58,68 +51,9 @@ const safeParseHookInput = async (raw: string) => {
   return err ? ({} as HookInput) : parsed;
 };
 
-const stringifyContent = (content: ModelMessage["content"]) => {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((p) => {
-      if (!p || typeof p !== "object") return "";
-      // Cheap textual approximation — text parts contribute their text,
-      // tool calls / results contribute their JSON shape so the token
-      // estimate accounts for them.
-      const part = p as {
-        type?: string;
-        text?: string;
-        input?: unknown;
-        output?: unknown;
-      };
-      if (part.type === "text") return part.text ?? "";
-      return JSON.stringify(part);
-    })
-    .join("\n");
-};
-
-const estimatePromptTokens = (messages: readonly ModelMessage[]) => {
-  let chars = 0;
-  for (const m of messages) chars += stringifyContent(m.content).length;
-  return Math.ceil(chars / CHARS_PER_TOKEN);
-};
-
-const reportTokens = async (
-  serverUrl: string,
-  promptTokens: number,
-  project: string,
-  projectId: string | null,
-) => {
-  if (promptTokens <= 0) return;
-  const url = `${serverUrl}${TOKEN_REPORT_ROUTE}`;
-  const auth = await authHeaders();
-  const [err, response] = await attempt(() =>
-    fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...auth },
-      body: JSON.stringify({
-        promptTokens,
-        project,
-        ...(projectId ? { projectId } : {}),
-      }),
-    }),
-  );
-  if (err) {
-    log.warn("token-report fetch failed", { url, error: err.message });
-    return;
-  }
-  if (!response.ok) {
-    log.warn("token-report non-OK", { url, status: response.status });
-  }
-};
-
 /**
  * Entry point invoked from cli.ts when argv[2] === "persist".
- *
- * Exit 0 on every path. Returning non-zero from Stop prevents CC from
- * finishing the turn, which would be a much worse failure mode than
- * losing one persist cycle.
+ * Exit 0 on every path — see module doc.
  */
 export const runPersistHook = async () => {
   if (process.env.MIMIR_ACTIVE !== "1") return 0;
@@ -140,12 +74,6 @@ export const runPersistHook = async () => {
     return 0;
   }
 
-  const config = await readConfig();
-  if (!config) {
-    log.debug("no config — skipping persist");
-    return 0;
-  }
-
   const watermark = await readWatermark(sessionId);
   const { messages, newOffset } = await readDelta(transcriptPath, watermark);
 
@@ -153,48 +81,83 @@ export const runPersistHook = async () => {
     // Still advance the watermark if we read past empty/meta lines, so we
     // don't re-scan them next turn.
     if (newOffset > watermark) await writeWatermark(sessionId, newOffset);
-    log.debug("no new messages in delta", {
-      sessionId,
-      watermark,
-      newOffset,
-    });
+    log.debug("no new messages in delta", { sessionId, watermark, newOffset });
     return 0;
   }
 
-  const projectId = await getOrResolveProjectId(
-    config.serverUrl,
-    cwd,
-    config.apiKey,
-  ).catch(() => null);
+  const extraction = await extractionConfig();
+  if (!extraction) {
+    // No endpoint will ever consume this delta — advance so it can't
+    // accumulate forever. Loud once per turn in the log.
+    await writeWatermark(sessionId, newOffset);
+    log.warn(
+      "extraction unconfigured (MIMIR_EXTRACTION_BASE_URL / extractionBaseUrl) — turn not distilled",
+      { sessionId, messages: messages.length },
+    );
+    return 0;
+  }
 
-  const result = await shipDelta(config.serverUrl, messages, cwd, projectId);
-
-  if (!result.ok) {
-    log.error("shipDelta failed — leaving watermark in place for retry", {
+  const outcome = await extractFromConversation(extraction, messages);
+  if (!outcome.ok) {
+    log.error("extraction failed — leaving watermark in place for retry", {
       sessionId,
       messages: messages.length,
-      error: result.error,
+      model: extraction.model,
     });
     return 0;
   }
+
+  if (outcome.skipped) {
+    await writeWatermark(sessionId, newOffset);
+    log.debug("extraction skipped", { sessionId, reason: outcome.skipped });
+    return 0;
+  }
+
+  // Project id for memory attribution — disk-cached after first resolution.
+  const config = await readConfig();
+  const projectId = config
+    ? await getOrResolveProjectId(config.serverUrl, cwd, config.apiKey).catch(
+        () => null,
+      )
+    : null;
+
+  const replica = createOrgReplica(
+    process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
+  );
+  const embedQuery = createEmbedQuery();
+
+  let stored = 0;
+  let duplicates = 0;
+  for (const memory of outcome.memories) {
+    const [storeErr, result] = await attempt(() =>
+      storeTyped(replica, embedQuery, {
+        content: memory,
+        type: "fact",
+        ...(projectId ? { project: projectId } : {}),
+      }),
+    );
+    if (storeErr) {
+      log.warn("memory store failed", { error: storeErr.message });
+      continue;
+    }
+    if (result.stored) stored++;
+    else duplicates++;
+  }
+  replica.close();
 
   await writeWatermark(sessionId, newOffset);
 
-  // Token-report runs after a successful ship so the server's tracker
-  // stays consistent with what's actually been logged. Fire-and-forget;
-  // a failed report just means the next turn carries more weight.
-  const promptTokens = estimatePromptTokens(messages);
-  await reportTokens(config.serverUrl, promptTokens, cwd, projectId);
-
-  log.info("turn persisted", {
+  log.info("turn distilled locally", {
     sessionId,
     project: cwd,
     projectId,
     watermark,
     newOffset,
-    messagesShipped: messages.length,
-    appended: result.appended,
-    estimatedTokens: promptTokens,
+    messagesInDelta: messages.length,
+    extracted: outcome.memories.length,
+    stored,
+    duplicates,
+    model: extraction.model,
   });
 
   return 0;

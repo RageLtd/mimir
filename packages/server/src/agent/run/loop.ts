@@ -24,7 +24,7 @@ import type {
 import type { MimirContext } from "../../middleware/types";
 import { parseToolInput } from "../../util/json";
 import { log } from "../../util/logger";
-import { classifyToolCalls, finalizeTurn } from "../post-processing";
+import { classifyToolCalls } from "../post-processing";
 import { getContextWindow } from "../provider/query";
 import type { buildCallOptions } from "./tools";
 
@@ -62,13 +62,6 @@ export async function agentLoop(
   // turn" value.
   let totalOutputTokens = 0;
   let lastAssistantText = "";
-  let lastReasoningText = "";
-  // Final assistant output destined for the client — accumulated here so
-  // we can persist it to the global log once the turn ends. Server-tool
-  // internal iterations are NOT persisted (they're ephemeral by design).
-  // Record<string, unknown> to carry providerMetadata and any future
-  // SDK fields through the loop without enumerating.
-  let finalClientToolCalls: Array<Record<string, unknown>> = [];
 
   for (let step = 0; step < MAX_AGENT_STEPS; step++) {
     log.info(
@@ -151,7 +144,6 @@ export async function agentLoop(
     lastStepInputTokens = stepInputTokens;
     totalOutputTokens += stepOutputTokens;
     lastAssistantText = textChunks.join("");
-    lastReasoningText = reasoningChunks.join("");
 
     log.debug(
       {
@@ -180,7 +172,6 @@ export async function agentLoop(
 
     // Client tool calls → emit and stop
     if (clientCalls.length > 0) {
-      finalClientToolCalls = clientCalls;
       let i = 0;
       for (const tc of clientCalls) {
         emitSSE(
@@ -231,15 +222,6 @@ export async function agentLoop(
       ? { context_window: getContextWindow(ctx.request.model) }
       : {}),
   });
-
-  // Post-processing: persist, compact, extract memories (fire-and-forget)
-  finalizeTurn(
-    lastAssistantText,
-    finalClientToolCalls,
-    lastReasoningText || undefined,
-    ctx,
-    lastStepInputTokens,
-  );
 }
 
 // ---------------------------------------------------------------------------

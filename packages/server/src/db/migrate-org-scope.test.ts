@@ -25,8 +25,8 @@ describe("SQL builders", () => {
   });
 
   test("reassign moves a history child onto the canonical project", () => {
-    expect(buildReassignChildSql("message_log")).toBe(
-      "UPDATE message_log SET project_id = $canonical WHERE project_id = $dup;",
+    expect(buildReassignChildSql("memory")).toBe(
+      "UPDATE memory SET project_id = $canonical WHERE project_id = $dup;",
     );
   });
 
@@ -38,16 +38,13 @@ describe("SQL builders", () => {
 });
 
 describe("table sets", () => {
-  test("all nine tenant tables are org-scoped", () => {
+  test("all six tenant tables are org-scoped", () => {
     expect(new Set<string>(ORG_SCOPED_TABLES)).toEqual(
       new Set([
         "cart_file",
         "cart_git_state",
         "cart_import",
-        "compaction_state",
-        "hygiene_state",
         "memory",
-        "message_log",
         "project",
         "relates_to",
       ]),
@@ -61,7 +58,7 @@ describe("table sets", () => {
   });
 
   test("history survives (reassigned), index rows are dropped", () => {
-    expect([...REASSIGN_CHILD_TABLES]).toEqual(["message_log", "memory"]);
+    expect([...REASSIGN_CHILD_TABLES]).toEqual(["memory"]);
     expect([...DELETE_CHILD_TABLES]).toEqual([
       "cart_file",
       "cart_import",

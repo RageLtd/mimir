@@ -1,19 +1,14 @@
 import type { ModelMessage } from "@ai-sdk/provider-utils";
-import { modelContentToString } from "../agent/message-log/message-utils";
-import type { BackgroundByok } from "../agent/provider/override-completion";
 import type { OrgScope } from "../db/scope";
 import { log } from "../util/logger";
-import { embed, embedOne, extractMemories } from "./clients";
+import { modelContentToString } from "../util/model-message";
+import { embedOne } from "./clients";
 import {
   computeFreshness,
-  createRelation,
-  findDuplicate,
-  findNeighbors,
   getRelatedMemories,
   type Memory,
   searchByText,
   searchByVector,
-  storeMemory,
   touchMemories,
 } from "./store";
 
@@ -230,168 +225,4 @@ export async function retrieveMemories(
 ) {
   const memories = await retrieveMemoryList(scope, messages, opts);
   return memories ? formatMemoryList(memories) : null;
-}
-
-/**
- * Build extraction text from a conversation.
- * Includes user messages and assistant text responses.
- * Strips tool results (raw data) and tool_call-only assistant messages
- * (just invocation noise).
- */
-/** Max chars to send to the extraction model — keeps prompt eval under ~60s on Vulkan */
-const EXTRACTION_MAX_CHARS = 4000;
-
-function buildExtractionText(messages: ModelMessage[]) {
-  const filtered = messages.filter((m) => {
-    if (m.role === "tool") return false;
-    if (m.role === "system") return false;
-    const text = modelContentToString(m.content);
-    if (!text) return false;
-    if (m.role === "assistant" && text.trim().length < 20) {
-      return false;
-    }
-    return true;
-  });
-
-  // Always include the last message untruncated, then fill backward with budget
-  if (filtered.length === 0) return "";
-
-  const lastMsg = filtered.at(-1);
-  if (!lastMsg) return "";
-  const lastLine = `${lastMsg.role}: ${modelContentToString(lastMsg.content)}`;
-  const lines: string[] = [lastLine];
-  let totalChars = lastLine.length;
-
-  for (let i = filtered.length - 2; i >= 0; i--) {
-    const msg = filtered[i];
-    if (!msg) continue;
-    const line = `${msg.role}: ${modelContentToString(msg.content)}`;
-    if (totalChars + line.length > EXTRACTION_MAX_CHARS) break;
-    lines.unshift(line);
-    totalChars += line.length;
-  }
-
-  return lines.join("\n");
-}
-
-/**
- * Embed, dedup, store, and link a batch of memory strings.
- * Shared by extraction and compaction pipelines.
- * projectId is the canonical project ULID — a retrieval tiebreaker
- * (see PROJECT_MATCH_BONUS), not a filter.
- */
-export async function storeMemoryBatch(
-  scope: OrgScope,
-  memories: string[],
-  projectId?: string,
-) {
-  const embeddings = await embed(memories);
-  if (!embeddings) {
-    log.error("failed to embed memory batch");
-    return { stored: 0, duplicates: 0 };
-  }
-
-  let stored = 0;
-  let duplicates = 0;
-
-  for (let i = 0; i < memories.length; i++) {
-    const embedding = embeddings[i];
-    if (!embedding) continue;
-
-    const dup = await findDuplicate(scope, embedding);
-    if (dup) {
-      duplicates++;
-      log.debug(
-        { newMemory: memories[i], existingId: dup.id },
-        "skipping duplicate memory",
-      );
-      continue;
-    }
-
-    const memoryId = await storeMemory(scope, {
-      content: memories[i] ?? "",
-      project_id: projectId,
-      type: "fact",
-      embedding,
-    });
-    if (!memoryId) continue;
-    stored++;
-
-    const neighbors = await findNeighbors(scope, embedding, memoryId, 5, 0.3);
-    for (const neighbor of neighbors) {
-      if (!neighbor.id) continue;
-      await createRelation(
-        scope,
-        memoryId,
-        neighbor.id,
-        Math.max(0, 1 - neighbor.distance),
-      );
-    }
-  }
-
-  return { stored, duplicates };
-}
-
-export async function extractAndStoreMemories(
-  scope: OrgScope,
-  messages: ModelMessage[],
-  projectId?: string,
-  byok: BackgroundByok = null,
-) {
-  const start = Date.now();
-
-  // Need at least 2 user messages for a meaningful exchange —
-  // a greeting + first response isn't worth extracting from
-  const userMessages = messages.filter(
-    (m) => m.role === "user" && modelContentToString(m.content),
-  );
-  if (userMessages.length < 2) {
-    log.debug(
-      { userTurns: userMessages.length },
-      "not enough user turns for extraction, skipping",
-    );
-    return;
-  }
-
-  const conversationText = buildExtractionText(messages);
-  if (!conversationText || conversationText.length < 200) {
-    log.debug(
-      { textLength: conversationText?.length ?? 0 },
-      "conversation too short for extraction, skipping",
-    );
-    return;
-  }
-
-  log.info(
-    {
-      userTurns: userMessages.length,
-      totalMessages: messages.length,
-      extractionTextChars: conversationText.length,
-      projectId,
-    },
-    "starting memory extraction",
-  );
-
-  const memories = await extractMemories(conversationText, byok);
-  if (memories.length === 0) {
-    log.debug("no memories extracted from conversation");
-    return;
-  }
-
-  log.info({ count: memories.length }, "extracted memories, embedding");
-  const { stored, duplicates } = await storeMemoryBatch(
-    scope,
-    memories,
-    projectId,
-  );
-
-  log.info(
-    {
-      stored,
-      duplicates,
-      total: memories.length,
-      elapsed: `${Date.now() - start}ms`,
-    },
-    "memory extraction complete",
-  );
 }

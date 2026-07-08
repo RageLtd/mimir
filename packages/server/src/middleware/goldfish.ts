@@ -6,10 +6,10 @@
  */
 
 import type { ModelMessage } from "ai";
-import { modelContentToString } from "../agent/message-log/message-utils";
 import { retrieveMemories } from "../goldfish/memory";
 import { buildPlaybookContext } from "../goldfish/playbook";
 import { log } from "../util/logger";
+import { modelContentToString } from "../util/model-message";
 import type { MimirContext } from "./types";
 
 /**

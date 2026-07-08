@@ -231,40 +231,6 @@ export async function initSchema() {
     DEFINE FIELD IF NOT EXISTS weight ON relates_to TYPE float;
     DEFINE FIELD IF NOT EXISTS relation_type ON relates_to TYPE string;
 
-    -- Message log (Phase 6: Single Brain Architecture)
-    -- Global append-only log keyed by [project_id, timestamp]
-    -- Enables efficient time-range queries for context assembly
-    --
-    -- project_id is the canonical project ULID from /v1/projects/resolve.
-    -- The legacy cwd-style \`project\` path string was consolidated into it
-    -- by migrateLegacyProjectKeys (see db/migrate-project-keys.ts). Typed
-    -- option<string> because pre-migration rows are backfilled in place,
-    -- but every writer is required to supply it.
-    DEFINE TABLE IF NOT EXISTS message_log SCHEMALESS;
-    DEFINE FIELD IF NOT EXISTS project_id ON message_log TYPE option<string>;
-    DEFINE FIELD IF NOT EXISTS role ON message_log TYPE string;
-    DEFINE FIELD IF NOT EXISTS content ON message_log TYPE string | array;
-    DEFINE FIELD IF NOT EXISTS tool_call_id ON message_log TYPE option<string>;
-    DEFINE FIELD IF NOT EXISTS tool_calls ON message_log TYPE option<array>;
-    DEFINE FIELD IF NOT EXISTS name ON message_log TYPE option<string>;
-    DEFINE FIELD IF NOT EXISTS created_at ON message_log TYPE datetime DEFAULT time::now();
-
-    -- Compaction state (Phase 6)
-    -- Single global state for the global message log
-    DEFINE TABLE IF NOT EXISTS compaction_state SCHEMALESS;
-    DEFINE FIELD IF NOT EXISTS tokens_since_last ON compaction_state TYPE int DEFAULT 0;
-    DEFINE FIELD IF NOT EXISTS is_compacting ON compaction_state TYPE bool DEFAULT false;
-    DEFINE FIELD IF NOT EXISTS last_compaction ON compaction_state TYPE option<datetime>;
-    DEFINE FIELD IF NOT EXISTS updated_at ON compaction_state TYPE datetime DEFAULT time::now();
-
-    -- Memory hygiene state — single global lock for the periodic sweep.
-    -- Mirrors compaction_state: atomic acquire via UPDATE ... WHERE is_running
-    -- = false, stale-clear on boot to recover from a crash mid-sweep.
-    DEFINE TABLE IF NOT EXISTS hygiene_state SCHEMALESS;
-    DEFINE FIELD IF NOT EXISTS is_running ON hygiene_state TYPE bool DEFAULT false;
-    DEFINE FIELD IF NOT EXISTS last_run ON hygiene_state TYPE option<datetime>;
-    DEFINE FIELD IF NOT EXISTS updated_at ON hygiene_state TYPE datetime DEFAULT time::now();
-
     -- Cartographer tables. project_id is the canonical project ULID —
     -- indexes over it are defined AFTER migrateLegacyProjectKeys runs
     -- (below), because the UNIQUE indexes would collide on legacy rows
@@ -325,9 +291,6 @@ export async function initSchema() {
     -- key; org_id is the tenant boundary the row-level PERMISSIONS bind to.
     DEFINE FIELD IF NOT EXISTS org_id ON memory TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS org_id ON relates_to TYPE option<string>;
-    DEFINE FIELD IF NOT EXISTS org_id ON message_log TYPE option<string>;
-    DEFINE FIELD IF NOT EXISTS org_id ON compaction_state TYPE option<string>;
-    DEFINE FIELD IF NOT EXISTS org_id ON hygiene_state TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS org_id ON cart_file TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS org_id ON cart_import TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS org_id ON cart_git_state TYPE option<string>;
@@ -385,10 +348,8 @@ export async function initSchema() {
     -- MIM-69 org-scoped read paths. Composite (org_id, project_id) so an
     -- org-only filter uses the leftmost prefix and an (org, project) filter
     -- uses the whole key. relates_to and project have no project_id, so they
-    -- index org_id alone. compaction_state/hygiene_state indexes land in the
-    -- slice that re-keys them per (org, project) (MIM-66 fold-in).
+    -- index org_id alone.
     DEFINE INDEX IF NOT EXISTS memory_org_project ON memory FIELDS org_id, project_id;
-    DEFINE INDEX IF NOT EXISTS message_log_org_project ON message_log FIELDS org_id, project_id;
     DEFINE INDEX IF NOT EXISTS cart_file_org_project ON cart_file FIELDS org_id, project_id;
     DEFINE INDEX IF NOT EXISTS cart_import_org_project ON cart_import FIELDS org_id, project_id;
     DEFINE INDEX IF NOT EXISTS cart_git_state_org_project ON cart_git_state FIELDS org_id, project_id;

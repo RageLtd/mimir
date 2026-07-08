@@ -45,7 +45,6 @@
       "server": {
         "@hono/zod-validator": "^0.7.6",
         "@tavily/core": "^0.7.2",
-        "gpt-tokenizer": "^3.4.0",
         "hono": "^4.12.12",
         "pino": "^10.3.1",
         "pino-pretty": "^13.1.3",

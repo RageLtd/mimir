@@ -36,6 +36,13 @@ export type MimirConfig = {
   /** Small/cheap model for the spawned background jobs (e.g.
    *  "anthropic/claude-haiku-4-5"). */
   readonly smallModel?: string;
+  /** MIM-86 extraction trio: user-chosen OpenAI-compatible endpoint that
+   *  runs local memory extraction/summarization. baseUrl is required for
+   *  the local paths to activate; model falls back to smallModel, key to
+   *  providerApiKey (keyless local endpoints need none). */
+  readonly extractionBaseUrl?: string;
+  readonly extractionModel?: string;
+  readonly extractionApiKey?: string;
 };
 
 const optionalString = (value: unknown) =>
@@ -66,6 +73,9 @@ export const readConfig = async (): Promise<MimirConfig | null> => {
     const providerApiKey = optionalString(parsed.providerApiKey);
     const provider = optionalString(parsed.provider);
     const smallModel = optionalString(parsed.smallModel);
+    const extractionBaseUrl = optionalString(parsed.extractionBaseUrl);
+    const extractionModel = optionalString(parsed.extractionModel);
+    const extractionApiKey = optionalString(parsed.extractionApiKey);
     return {
       serverUrl: parsed.serverUrl,
       userMemoryDb: parsed.userMemoryDb,
@@ -78,6 +88,9 @@ export const readConfig = async (): Promise<MimirConfig | null> => {
       ...(providerApiKey ? { providerApiKey } : {}),
       ...(provider ? { provider } : {}),
       ...(smallModel ? { smallModel } : {}),
+      ...(extractionBaseUrl ? { extractionBaseUrl } : {}),
+      ...(extractionModel ? { extractionModel } : {}),
+      ...(extractionApiKey ? { extractionApiKey } : {}),
     };
   } catch (err) {
     // Malformed JSON or unreadable file — log and treat as unconfigured.
@@ -116,4 +129,31 @@ export const providerByok = async () => {
     ...(provider ? { provider } : {}),
     ...(smallModel ? { smallModel } : {}),
   };
+};
+
+/**
+ * MIM-86 extraction endpoint — the user-chosen model that distills
+ * memories locally. Env wins over config.json (rotation without
+ * reinstall). Fallback chain mirrors cc-plugin's extractionConfig:
+ * model ← MIMIR_SMALL_MODEL/config.smallModel; key ←
+ * MIMIR_PROVIDER_API_KEY/config.providerApiKey (unset is fine — keyless
+ * local endpoints). Null (extraction skipped, logged by callers) when
+ * baseUrl or model can't be resolved.
+ */
+export const extractionConfig = async () => {
+  const config = await readConfig();
+  const baseUrl =
+    process.env.MIMIR_EXTRACTION_BASE_URL ?? config?.extractionBaseUrl;
+  const model =
+    process.env.MIMIR_EXTRACTION_MODEL ??
+    config?.extractionModel ??
+    process.env.MIMIR_SMALL_MODEL ??
+    config?.smallModel;
+  if (!baseUrl || !model) return null;
+  const apiKey =
+    process.env.MIMIR_EXTRACTION_API_KEY ??
+    config?.extractionApiKey ??
+    process.env.MIMIR_PROVIDER_API_KEY ??
+    config?.providerApiKey;
+  return { baseUrl, model, ...(apiKey ? { apiKey } : {}) };
 };
