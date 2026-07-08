@@ -31,5 +31,8 @@
     "pino-pretty": "catalog:server",
     "surrealdb": "catalog:server",
     "zod": "catalog:server"
+  },
+  "devDependencies": {
+    "@mimir/plugin-core": "workspace:*"
   }
 }

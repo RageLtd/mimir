@@ -2,19 +2,23 @@
  * Per-turn retrieval injection — UserPromptSubmit hook.
  *
  * Fires on every developer prompt EXCEPT the first one (boot-context
- * handles the first prompt, owned by voice-anchor.ts). Calls
- * mimir-server's /v1/context/retrieve, receives a flattened
- * `<retrieved_context>` block plus memory/summary counts, then emits:
+ * handles the first prompt, owned by voice-anchor.ts). Reads the LOCAL
+ * org replica (MIM-84) — no server round-trip — and emits:
  *
- *   - hookSpecificOutput.additionalContext — the block, hidden from the
- *     developer's transcript view but visible to the model.
+ *   - hookSpecificOutput.additionalContext — the `<retrieved_context>`
+ *     block, hidden from the developer's transcript view but visible to
+ *     the model.
  *   - systemMessage — a tiny "↻ Retrieved N memories / M summaries"
  *     indicator displayed to the developer (NOT seen by the model).
  *
+ * Empty or missing replica → inject nothing (same contract as an empty
+ * retrieval). Run scripts/import-replica.ts to seed it; MIM-86 makes it
+ * self-sustaining. The lone remaining network touch is project-id
+ * resolution, which is disk-cached after the first call per project.
+ *
  * State: `~/.mimir/retrieve-state/<session-id>.json` — created on the
  * first hook call as a marker. Subsequent calls in the same session see
- * the marker exists and proceed with retrieval. Format is forward-
- * compatible (just records `initialized` timestamp today).
+ * the marker exists and proceed with retrieval.
  *
  * Defence-in-depth: MIMIR_ACTIVE gate matches voice-anchor / rules /
  * reindex hooks so nested `claude` subprocesses can't accidentally fire.
@@ -22,27 +26,24 @@
 
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { retrieveLocalContext } from "@mimir/plugin-core/brain/retrieve";
 import { getOrResolveProjectId } from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
+import {
+  createOrgReplica,
+  defaultOrgReplicaPath,
+} from "@mimir/plugin-core/store/org-replica";
 import { errMessage, mimirHome } from "@mimir/plugin-core/util";
-import { authHeaders, readConfig } from "./config";
+import { readConfig } from "./config";
 import { createLogger } from "./logger";
 
 const log = createLogger("retrieve-hook");
-
-const RETRIEVE_ROUTE = "/v1/context/retrieve";
 
 type HookInput = {
   readonly session_id?: string;
   readonly hook_event_name?: string;
   readonly prompt?: string;
   readonly cwd?: string;
-};
-
-type RetrieveResponse = {
-  readonly contextBlock?: string;
-  readonly memoryCount?: number;
-  readonly summaryCount?: number;
 };
 
 const markerPath = (sessionId: string) =>
@@ -71,43 +72,6 @@ const ensureMarker = async (sessionId: string) => {
   return false;
 };
 
-const fetchRetrieval = async (
-  serverUrl: string,
-  query: string,
-  project: string,
-  projectId: string | null,
-) => {
-  const url = `${serverUrl}${RETRIEVE_ROUTE}`;
-  const auth = await authHeaders();
-  const [fetchErr, response] = await attempt(() =>
-    fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...auth },
-      body: JSON.stringify({
-        query,
-        project,
-        ...(projectId ? { projectId } : {}),
-      }),
-    }),
-  );
-  if (fetchErr) {
-    log.warn("retrieve fetch failed", { url, error: fetchErr.message });
-    return null;
-  }
-  if (!response.ok) {
-    log.warn("retrieve non-OK", { url, status: response.status });
-    return null;
-  }
-  const [parseErr, payload] = await attempt(
-    () => response.json() as Promise<RetrieveResponse>,
-  );
-  if (parseErr) {
-    log.warn("retrieve JSON parse failed", { error: parseErr.message });
-    return null;
-  }
-  return payload;
-};
-
 const emitInjection = (
   block: string,
   memoryCount: number,
@@ -119,7 +83,7 @@ const emitInjection = (
         hookEventName: "UserPromptSubmit",
         additionalContext: block,
       },
-      systemMessage: `↻ Retrieved ${memoryCount} memories / ${summaryCount} summaries`,
+      systemMessage: `↻ Retrieved ${memoryCount} memories / ${summaryCount} summaries (local)`,
     }),
   );
 };
@@ -151,29 +115,41 @@ export const runRetrieveHook = async () => {
     return 0;
   }
 
-  const config = await readConfig();
-  if (!config) {
-    log.debug("no config — skipping retrieve");
+  const replicaPath =
+    process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath();
+  const [openErr, replica] = await attempt(async () =>
+    createOrgReplica(replicaPath),
+  );
+  if (openErr) {
+    log.warn("replica open failed — no injection", {
+      replicaPath,
+      error: openErr.message,
+    });
     return 0;
   }
 
-  const projectId = await getOrResolveProjectId(
-    config.serverUrl,
-    cwd,
-    config.apiKey,
-  ).catch(() => null);
+  // Project id for the scoring tiebreaker + playbook scope + the
+  // <active_project> prefix. Disk-cached after first resolution; the
+  // config/server is only consulted on a cache miss.
+  const config = await readConfig();
+  const projectId = config
+    ? await getOrResolveProjectId(config.serverUrl, cwd, config.apiKey).catch(
+        () => null,
+      )
+    : null;
 
-  const payload = await fetchRetrieval(
-    config.serverUrl,
-    prompt,
-    cwd,
-    projectId,
-  ).catch((err) => {
-    log.warn("fetchRetrieval threw", { error: errMessage(err) });
-    return null;
-  });
+  const [retrieveErr, result] = await attempt(() =>
+    retrieveLocalContext(replica, prompt, {
+      projectId: projectId ?? undefined,
+    }),
+  );
+  replica.close();
+  if (retrieveErr) {
+    log.warn("local retrieval failed", { error: errMessage(retrieveErr) });
+    return 0;
+  }
 
-  if (!payload?.contextBlock || payload.contextBlock.length === 0) {
+  if (result.contextBlock.length === 0) {
     log.debug("empty retrieval — no memories or summaries to inject");
     return 0;
   }
@@ -183,19 +159,16 @@ export const runRetrieveHook = async () => {
   const projectPrefix = projectId
     ? `<active_project id="${projectId}" />\n`
     : "";
-  const contextBlock = `${projectPrefix}${payload.contextBlock}`;
+  const contextBlock = `${projectPrefix}${result.contextBlock}`;
 
-  const memoryCount = payload.memoryCount ?? 0;
-  const summaryCount = payload.summaryCount ?? 0;
+  emitInjection(contextBlock, result.memoryCount, result.summaryCount);
 
-  emitInjection(contextBlock, memoryCount, summaryCount);
-
-  log.info("retrieved context injected", {
+  log.info("retrieved context injected (local replica)", {
     sessionId,
     projectId,
-    memoryCount,
-    summaryCount,
-    chars: payload.contextBlock.length,
+    memoryCount: result.memoryCount,
+    summaryCount: result.summaryCount,
+    chars: result.contextBlock.length,
   });
 
   return 0;

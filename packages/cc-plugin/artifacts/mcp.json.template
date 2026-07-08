@@ -1,10 +1,11 @@
 {
   "mcpServers": {
-    {{CARTOGRAPHER_BLOCK}}"user-memory": {
+    {{CARTOGRAPHER_BLOCK}}"mimir-local": {
       "command": "{{MIMIR_CC_BIN}}",
       "args": ["user-memory-mcp"],
       "env": {
-        "MIMIR_USER_MEMORY_DB": "{{USER_MEMORY_DB}}"
+        "MIMIR_USER_MEMORY_DB": "{{USER_MEMORY_DB}}",
+        "MIMIR_ORG_REPLICA_DB": "{{ORG_REPLICA_DB}}"
       }
     },
     "mimir-logs": {

@@ -19,6 +19,7 @@
 import { chmod, copyFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { defaultOrgReplicaPath } from "@mimir/plugin-core/store/org-replica";
 import { mimirHome } from "@mimir/plugin-core/util";
 import mcpTemplate from "../artifacts/mcp.json.template" with { type: "text" };
 import settingsTemplate from "../artifacts/settings.json.template" with {
@@ -182,13 +183,16 @@ const renderMcp = (opts: {
   readonly cartographerBinary?: string;
   readonly apiKey?: string;
   readonly selfPath: string;
-}): string => {
+}) => {
   const baseForMcp = opts.serverUrl.replace(/\/+$/, "");
 
   let rendered = mcpTemplate
     .replaceAll("{{MIMIR_SERVER_URL}}", baseForMcp)
     .replaceAll("{{MIMIR_CC_BIN}}", opts.selfPath)
     .replaceAll("{{USER_MEMORY_DB}}", opts.userMemoryDb)
+    // Org replica (MIM-84): fixed default path, env-overridable at runtime —
+    // no install flag until someone actually needs a custom location.
+    .replaceAll("{{ORG_REPLICA_DB}}", defaultOrgReplicaPath())
     // The mimir HTTP MCP entry needs the gate key on its connection
     // (MIM-77) — CC's HTTP MCP config carries it as a headers block.
     .replace(

@@ -4,7 +4,7 @@
  * On the first developer prompt of a session, prepend a `<boot_context>`
  * XML block to the user message containing:
  *   - <user_profile_section>   from ~/.mimir/user-memories.db
- *   - <session_context_section> from mimir-server /v1/context/assemble
+ *   - <session_context_section> from the local org replica (MIM-84)
  *
  * Project rules are intentionally NOT in boot — they fire on actual
  * tool-call violations via the PreToolUse hook (rules-hook.ts) where
@@ -15,11 +15,17 @@
  * Mimir transport it's running under.
  */
 
+import { retrieveLocalContext } from "@mimir/plugin-core/brain/retrieve";
 import { getOrResolveProjectId } from "@mimir/plugin-core/project";
+import { attempt } from "@mimir/plugin-core/result";
+import {
+  createOrgReplica,
+  defaultOrgReplicaPath,
+} from "@mimir/plugin-core/store/org-replica";
 import { createUserMemoryStore } from "@mimir/plugin-core/store/user-memories";
 import { buildUserContext } from "@mimir/plugin-core/tools/user-memory";
 import { errMessage } from "@mimir/plugin-core/util";
-import { authHeaders, readConfig } from "./config";
+import { readConfig } from "./config";
 import { createLogger } from "./logger";
 
 const log = createLogger("boot-context");
@@ -56,64 +62,53 @@ const buildUserProfileSection = async (dbPath: string) => {
   return block;
 };
 
+// Boot budgets mirror the server /assemble defaults (goldfish retrieval
+// topK 10 with related, 3 summaries) — richer first-turn priming than the
+// per-turn micro-retrieval.
+const BOOT_MEMORY_TOP_K = 10;
+const BOOT_SUMMARY_COUNT = 3;
+
 /**
- * Fetch prior session context from mimir-server's /v1/context/assemble.
- * Returns the formatted `<conversation_context>` block (matching the
- * monorepo's formatContextForPrompt shape), or null when no prior
- * context exists or the fetch fails.
+ * Build prior session context from the LOCAL org replica (MIM-84) —
+ * summaries, memories, and playbooks with boot-sized budgets. Replaces
+ * the /v1/context/assemble fetch: reads are local now, so the turn-one
+ * boot no longer waits on a server round-trip (the hook-timeout class
+ * this used to trip is gone with it).
  *
- * `query` doubles as the seed for context-aware retrieval; the
- * developer's first prompt is the natural pick. `project` is the
- * canonical project identifier — we use cwd as a stable handle.
+ * Divergence from the server path, deliberate: no raw conversation-log
+ * replay — the message log stays server-side until MIM-86, and summaries
+ * carry the cross-session narrative. Returns null when the replica is
+ * missing or empty (run scripts/import-replica.ts to seed).
  */
-const fetchSessionContext = async (
-  serverUrl: string,
-  query: string,
-  projectPath: string,
-  projectId: string | null,
-) => {
-  const url = `${serverUrl}/v1/context/assemble`;
-  const auth = await authHeaders();
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...auth },
-    body: JSON.stringify({
-      query,
-      project: projectPath,
-      ...(projectId ? { projectId } : {}),
-    }),
-  }).catch((err) => {
-    log.warn("assemble fetch failed", { error: errMessage(err) });
-    return null;
-  });
-  if (!response?.ok) {
-    if (response) {
-      log.warn("assemble returned non-OK", { status: response.status });
-    }
+const buildSessionContext = async (query: string, projectId: string | null) => {
+  const replicaPath =
+    process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath();
+  const [openErr, replica] = await attempt(async () =>
+    createOrgReplica(replicaPath),
+  );
+  if (openErr) {
+    log.warn("replica open failed — no session context", {
+      replicaPath,
+      error: openErr.message,
+    });
     return null;
   }
-
-  const payload = (await response.json().catch((err) => {
-    log.warn("assemble JSON parse failed", { error: errMessage(err) });
-    return null;
-  })) as {
-    readonly messages?: ReadonlyArray<{
-      readonly role: "user" | "assistant";
-      readonly content: string;
-    }>;
-  } | null;
-
-  if (!payload?.messages || payload.messages.length === 0) return null;
-
-  // Drop the last message — that's the current prompt seed, not prior
-  // context. ACP does the same (priorMessages = contextMessages.slice(0, -1)).
-  const prior = payload.messages.slice(0, -1);
-  if (prior.length === 0) return null;
-
-  const lines = prior.map(
-    (m) => `[${m.role === "user" ? "User" : "Assistant"}]\n${m.content}`,
+  const [retrieveErr, result] = await attempt(() =>
+    retrieveLocalContext(replica, query, {
+      topK: BOOT_MEMORY_TOP_K,
+      includeRelated: true,
+      summaryCount: BOOT_SUMMARY_COUNT,
+      projectId: projectId ?? undefined,
+    }),
   );
-  return `<conversation_context>\n${lines.join("\n\n")}\n</conversation_context>`;
+  replica.close();
+  if (retrieveErr) {
+    log.warn("local boot retrieval failed", {
+      error: errMessage(retrieveErr),
+    });
+    return null;
+  }
+  return result.contextBlock.length > 0 ? result.contextBlock : null;
 };
 
 const wrapProfile = (block: string | null) =>
@@ -159,12 +154,7 @@ export const assembleBootContext = async (
 
   const [profile, sessionContext] = await Promise.all([
     buildUserProfileSection(config.userMemoryDb),
-    fetchSessionContext(
-      config.serverUrl,
-      opts.promptText,
-      opts.projectPath,
-      projectId,
-    ),
+    buildSessionContext(opts.promptText, projectId),
   ]);
 
   const profileSection = wrapProfile(profile);
