@@ -20,10 +20,7 @@
  */
 
 import { spawn } from "node:child_process";
-import {
-  getOrResolveProjectId,
-  toProjectRelative,
-} from "@mimir/plugin-core/project";
+import { toProjectRelative } from "@mimir/plugin-core/project";
 import { errMessage } from "@mimir/plugin-core/util";
 import { readConfig } from "./config";
 import { createLogger } from "./logger";
@@ -170,28 +167,11 @@ const runWorker = async (
   client.kill();
   if (!parsed) return 0;
 
-  // Resolve the project to a UUID. On cache hit this is a single disk
-  // read with no HTTP; on miss it falls back to keying by rootPath when
-  // the resolver is unreachable.
-  const projectId = await getOrResolveProjectId(
-    config.serverUrl,
-    projectPath,
-    config.apiKey,
-  ).catch(() => null);
-
   // Single-file reindex MUST use upsert mode — replace mode would wipe
-  // the project's entire cart_file/cart_import index on every Edit and
-  // leave only the one file we just parsed. The SessionStart hook owns
-  // full-project replace.
-  // Env wins over config.json — same precedence as authHeaders (MIM-77).
-  const apiKey = process.env.MIMIR_API_KEY ?? config.apiKey;
-  const result = await syncIndex(
-    { serverUrl: config.serverUrl, ...(apiKey ? { apiKey } : {}) },
-    projectPath,
-    [parsed],
-    projectId,
-    "upsert",
-  );
+  // the project's entire local index on every Edit and leave only the one
+  // file we just parsed. The SessionStart hook owns full-project replace.
+  // Local write (MIM-91): no server, no projectId — rootPath is the key.
+  const result = await syncIndex(projectPath, [parsed], "upsert");
   if (!result.ok) {
     log.error("syncIndex returned !ok", { filePath, error: result.error });
   }

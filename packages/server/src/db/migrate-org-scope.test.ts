@@ -1,10 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildBackfillSql,
-  buildDeleteChildSql,
   buildReassignChildSql,
   buildSentinelRemapSql,
-  DELETE_CHILD_TABLES,
   ORG_SCOPED_TABLES,
   planProjectMerges,
   type ProjectDedupeRow,
@@ -19,8 +17,8 @@ describe("SQL builders", () => {
   });
 
   test("sentinel remap moves parked rows onto the real owner id", () => {
-    expect(buildSentinelRemapSql("cart_file")).toBe(
-      "UPDATE cart_file SET org_id = $owner WHERE org_id = $sentinel;",
+    expect(buildSentinelRemapSql("project")).toBe(
+      "UPDATE project SET org_id = $owner WHERE org_id = $sentinel;",
     );
   });
 
@@ -29,41 +27,17 @@ describe("SQL builders", () => {
       "UPDATE memory SET project_id = $canonical WHERE project_id = $dup;",
     );
   });
-
-  test("delete drops a regenerable index child of a duplicate", () => {
-    expect(buildDeleteChildSql("cart_import")).toBe(
-      "DELETE cart_import WHERE project_id = $dup;",
-    );
-  });
 });
 
 describe("table sets", () => {
-  test("all six tenant tables are org-scoped", () => {
+  test("all three tenant tables are org-scoped (cart_* left with MIM-91)", () => {
     expect(new Set<string>(ORG_SCOPED_TABLES)).toEqual(
-      new Set([
-        "cart_file",
-        "cart_git_state",
-        "cart_import",
-        "memory",
-        "project",
-        "relates_to",
-      ]),
+      new Set(["memory", "project", "relates_to"]),
     );
   });
 
-  test("reassign and delete child tables are disjoint", () => {
-    const del = new Set<string>(DELETE_CHILD_TABLES);
-    const overlap = [...REASSIGN_CHILD_TABLES].filter((t) => del.has(t));
-    expect(overlap).toEqual([]);
-  });
-
-  test("history survives (reassigned), index rows are dropped", () => {
+  test("history survives project merges (reassigned)", () => {
     expect([...REASSIGN_CHILD_TABLES]).toEqual(["memory"]);
-    expect([...DELETE_CHILD_TABLES]).toEqual([
-      "cart_file",
-      "cart_import",
-      "cart_git_state",
-    ]);
   });
 });
 

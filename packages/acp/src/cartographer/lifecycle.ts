@@ -5,20 +5,13 @@
  * auto-index the project, detect changes incrementally, and clean up
  * on dispose.
  *
- * Tool classification:
- *   Local (run by mimir-acp via the binary):
- *     - cartographer_index_project
- *     - cartographer_detect_changes
- *     - cartographer_parse_file
- *
- *   Server (already on mimir-server, queried remotely):
- *     - cartographer_query
- *     - cartographer_search
- *     - cartographer_get_file_info
- *     - cartographer_find_cycles
- *     - cartographer_stats
+ * Tools run locally via the binary (cartographer_index_project /
+ * cartographer_detect_changes / cartographer_parse_file); the parsed
+ * index lands in the LOCAL cart index (MIM-91) where the query tools
+ * (search / file info / graph walk) serve from — no server leg remains.
  */
 
+import { syncIndex } from "@mimir/plugin-core/cartographer/sync";
 import { Glob } from "bun";
 import { createChildLogger, log } from "../utils/log";
 import {
@@ -26,7 +19,6 @@ import {
   type ParsedFileOutput,
   spawnCartographer,
 } from "./client";
-import { syncIndex } from "./sync";
 
 const logger = createChildLogger(log, "cartographer-lifecycle");
 
@@ -63,37 +55,6 @@ export const isFileWriteTool = (name: string) => FILE_WRITE_TOOLS.has(name);
 const shouldIndexFile = (path: string) =>
   !path.split("/").some((part) => part.startsWith(".") || SKIP_DIRS.has(part));
 
-/**
- * Max time autoIndex waits for the project resolver before syncing under the
- * filesystem path. The resolver is normally sub-second (one git call + one
- * edge-deployed POST); this only bounds the wait so a hung resolver can't
- * wedge indexing forever.
- */
-const PROJECT_ID_WAIT_MS = 10_000;
-
-/**
- * Await the resolved project id, bounded by a deadline. Returns the UUID once
- * the resolver settles, or null when there's no resolver, it resolved to null,
- * or it didn't answer in time (the server then keys the index by path as a
- * back-compat fallback). Awaiting here — rather than reading a snapshot at fire
- * time — is what closes the race: a projectId that's still unresolved when
- * autoIndex starts is picked up once it settles, instead of syncing as null and
- * fragmenting the project across path- and UUID-keyed records.
- */
-export const awaitProjectId = async (
-  projectIdReady: Promise<string | null> | undefined,
-  timeoutMs = PROJECT_ID_WAIT_MS,
-) => {
-  if (!projectIdReady) return null;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), timeoutMs);
-  });
-  const resolved = await Promise.race([projectIdReady, deadline]);
-  if (timer) clearTimeout(timer);
-  return resolved;
-};
-
 const collectProjectFiles = async (projectPath: string) => {
   const glob = new Glob(SOURCE_GLOB);
   const files: string[] = [];
@@ -114,15 +75,11 @@ export type CartographerManager = {
     args: Record<string, unknown>,
   ) => Promise<string>;
   /**
-   * Trigger an auto-index for a project (fire-and-forget). `projectIdReady`
-   * is the session's project-resolution promise; autoIndex awaits it (bounded
-   * by a timeout) before posting, so the sync is keyed by the canonical UUID
-   * rather than racing the resolver into a path-keyed duplicate record.
+   * Trigger an auto-index for a project (fire-and-forget). Writes to the
+   * LOCAL cart index (MIM-91) — keyed by project path, no server, no
+   * project-resolution race to wait out.
    */
-  readonly autoIndex: (
-    projectPath: string,
-    projectIdReady?: Promise<string | null>,
-  ) => void;
+  readonly autoIndex: (projectPath: string) => void;
   /** Kill all child processes. */
   readonly dispose: () => void;
 };
@@ -132,10 +89,6 @@ export type CartographerManagerConfig = {
   readonly binaryPath: string;
   /** Environment variables to pass to the binary. */
   readonly env?: Record<string, string>;
-  /** mimir-server URL for syncing the parsed index. */
-  readonly serverUrl: string;
-  /** API key for mimir-server. */
-  readonly apiKey: string;
 };
 
 export const createCartographerManager = (
@@ -182,13 +135,11 @@ export const createCartographerManager = (
     return client.callTool(name, args);
   };
 
-  const autoIndex = (
-    projectPath: string,
-    projectIdReady?: Promise<string | null>,
-  ) => {
+  const autoIndex = (projectPath: string) => {
     // In --parse-only mode the binary has no DB access, and its full-index
-    // tool returns a human summary. ACP owns the persisted index payload by
-    // walking source files, parsing each one locally, and syncing the results.
+    // tool returns a human summary. ACP owns the index payload by walking
+    // source files, parsing each one locally, and writing to the local
+    // cart index (MIM-91 — code content never leaves the machine).
     getClient(projectPath)
       .then(async (client) => {
         logger.info("auto-indexing project:", projectPath);
@@ -212,17 +163,7 @@ export const createCartographerManager = (
           return;
         }
 
-        // Wait for the canonical project id before posting so the index is
-        // keyed by the UUID, not the filesystem path. Parsing above usually
-        // outlasts resolution, so this rarely blocks.
-        const projectId = await awaitProjectId(projectIdReady);
-
-        await syncIndex(
-          { serverUrl: config.serverUrl, apiKey: config.apiKey, logger },
-          projectPath,
-          parsedFiles,
-          projectId,
-        );
+        await syncIndex(projectPath, parsedFiles, "replace");
       })
       .catch((err) => {
         logger.warn("auto-index failed:", err);

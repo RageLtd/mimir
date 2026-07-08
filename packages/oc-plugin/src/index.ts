@@ -44,7 +44,12 @@ import {
   lastUserMessage,
 } from "./message-inject";
 import { runFullReindex, runReindexWorker } from "./reindex";
-import { hygieneTool, installTool, userMemoryTools } from "./tools";
+import {
+  cartographerTools,
+  hygieneTool,
+  installTool,
+  userMemoryTools,
+} from "./tools";
 import { persistSessionTranscript } from "./transcript-persistence";
 
 // ── Per-session state ──
@@ -146,6 +151,7 @@ export const MimirPlugin: Plugin = async (ctx) => {
     // tool checks for the plugin bundle + MIMIR_API_KEY first.
     tool: {
       ...userMemoryTools(userMemoryStore),
+      ...cartographerTools(ctx.directory),
       mimir_install: installTool(),
       mimir_hygiene: hygieneTool(),
     },

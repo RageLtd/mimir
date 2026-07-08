@@ -30,8 +30,6 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
     ? createCartographerManager({
         binaryPath: config.cartographer.binaryPath,
         env: config.cartographer.env,
-        serverUrl: config.serverUrl,
-        apiKey: config.apiKey,
       })
     : null;
 

@@ -89,8 +89,8 @@ const kickOffSessionInit = (
     )
     .then(async (project) => {
       if (!project) {
-        // Resolution returned nothing — settle so autoIndex stops waiting
-        // and syncs under the filesystem path (the server's back-compat key).
+        // Resolution returned nothing — settle so any consumer awaiting
+        // the project id (memory attribution, metadata) gets its answer.
         settleProjectId(null);
         return;
       }
@@ -392,7 +392,7 @@ export const createAgentCore = (
     // Reindex after any turn that modified files so Cartographer queries
     // reflect the current state on the next prompt.
     if (result.filesModified && cartographer && session.projectPath) {
-      cartographer.autoIndex(session.projectPath, session.projectIdReady);
+      cartographer.autoIndex(session.projectPath);
     }
 
     return result;

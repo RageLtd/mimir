@@ -2,36 +2,37 @@
  * File-context injection on Read — PreToolUse hook.
  *
  * Matched against the built-in `Read` tool. Before the model reads a
- * file, this hook fetches cartographer info (symbols, imports,
- * dependents) and semantically-related memories from mimir-server, then
+ * file, this hook builds cartographer info (symbols, imports,
+ * dependents) from the LOCAL cart index and semantically-related
+ * memories from the local replica (MIM-91 — no server round-trip), then
  * injects them as `additionalContext` alongside the tool_call so the
  * model frames the read with that knowledge.
  *
  * Dedup is hash-keyed, not path-keyed: the state file maps
  * `filePath → contentHash`, and re-injection happens only when the
- * server's content_hash differs from the cached value. That makes the
+ * index's content_hash differs from the cached value. That makes the
  * cache invalidate naturally after an Edit → reindex cycle (the
- * reindex worker updates cart_file.content_hash, the next Read sees a
- * new hash, and re-injection fires).
+ * reindex worker updates the local index's content_hash, the next Read
+ * sees a new hash, and re-injection fires).
  *
- * Never blocks the read. Empty server response (file not in index) ⇒
+ * Never blocks the read. Empty index result (file not indexed) ⇒
  * skip injection without an error.
  */
 
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
+import { buildLocalFileInfo } from "@mimir/plugin-core/cartographer/file-context";
 import {
   getOrResolveProjectId,
   toProjectRelative,
 } from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
 import { mimirHome } from "@mimir/plugin-core/util";
-import { authHeaders, readConfig } from "./config";
+import { readConfig } from "./config";
 import { createLogger } from "./logger";
 
 const log = createLogger("file-context-hook");
-
-const FILE_INFO_ROUTE = "/v1/cartographer/file-info";
 
 type HookInput = {
   readonly session_id?: string;
@@ -116,45 +117,25 @@ const writeCache = async (sessionId: string, cache: DedupCache) => {
   await Bun.write(path, JSON.stringify(cache));
 };
 
-const fetchFileInfo = async (
-  serverUrl: string,
-  project: string,
+const localFileInfo = async (
+  rootPath: string,
   filePath: string,
   projectId: string | null,
 ) => {
-  const url = `${serverUrl}${FILE_INFO_ROUTE}`;
-  const auth = await authHeaders();
-  const [fetchErr, response] = await attempt(() =>
-    fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...auth },
-      // `project` (= cwd) stays in the body as the legacy key the server
-      // currently reads. `projectId` rides alongside it — the server's
-      // file-info route ignores unknown fields in Slice 1, then prefers
-      // projectId once Slice 2 wires the consumer. No second plugin edit
-      // is needed when that ships.
-      body: JSON.stringify({
-        project,
-        filePath,
-        ...(projectId ? { projectId } : {}),
-      }),
+  const [err, info] = await attempt(() =>
+    buildLocalFileInfo({
+      rootPath,
+      filePath,
+      projectId,
+      // MIM-85 vector leg; cold/absent embedder degrades to FTS-only.
+      embedQuery: createEmbedQuery(),
     }),
   );
-  if (fetchErr) {
-    log.warn("file-info fetch failed", { url, error: fetchErr.message });
+  if (err) {
+    log.warn("local file-info failed", { filePath, error: err.message });
     return null;
   }
-  if (!response.ok) {
-    log.warn("file-info non-OK", { url, status: response.status });
-    return null;
-  }
-  const [parseErr, payload] = await attempt(
-    () => response.json() as Promise<FileInfoResponse>,
-  );
-  if (parseErr) {
-    log.warn("file-info JSON parse failed", { error: parseErr.message });
-    return null;
-  }
+  const payload: FileInfoResponse = info;
   return payload;
 };
 
@@ -237,28 +218,22 @@ export const runFileContextHook = async () => {
     return 0;
   }
 
-  // Resolve cwd → project UUID (cache-warm on every hook after the first
-  // of a session). Null is fine — `getOrResolveProjectId` already returns
-  // null on any failure, and the server falls back to the legacy `project`
-  // key in the body.
+  // Resolve cwd → project UUID (disk-cached after the first hook of a
+  // session). Used only as the memory-scoring tiebreaker — the cart
+  // lookup itself is keyed by rootPath and needs no server at all.
   const projectId = await getOrResolveProjectId(
     config.serverUrl,
     cwd,
     config.apiKey,
   ).catch(() => null);
 
-  // Cart_file rows store relative paths after Slice 1. Query by the same
+  // Cart rows store project-relative paths. Query by the same
   // representation or every lookup misses. The dedup cache key uses the
   // relative form too — anything else would silently re-inject when CC
   // hands us the same file via a path that round-trips differently.
   const relativeFilePath = toProjectRelative(cwd, filePath);
 
-  const info = await fetchFileInfo(
-    config.serverUrl,
-    cwd,
-    relativeFilePath,
-    projectId,
-  );
+  const info = await localFileInfo(cwd, relativeFilePath, projectId);
   if (!info) return 0;
 
   // File not in cartographer index — no contentHash, no content to inject.

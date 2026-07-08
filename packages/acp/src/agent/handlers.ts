@@ -94,11 +94,8 @@ export const newSession = async (
   session.clientSuppliedMcpServers = params.mcpServers;
   logger.info("new session:", session.sessionId, "cwd:", projectPath);
 
-  // autoIndex awaits session.projectIdReady before it posts — the resolver
-  // runs in parallel with session init, and awaiting its result (rather than
-  // reading a possibly-null snapshot) guarantees the index is keyed by the
-  // canonical UUID instead of racing the resolver into a path-keyed record.
-  deps.cartographer?.autoIndex(projectPath, session.projectIdReady);
+  // Local cart index (MIM-91): keyed by project path, no resolver race.
+  deps.cartographer?.autoIndex(projectPath);
 
   // Pass the freshly-created session's currentModelId as preferred so that
   // when MIMIR_MODEL is unset and we fall back to the first discovered

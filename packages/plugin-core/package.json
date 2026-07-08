@@ -11,6 +11,7 @@
     "./logger": "./src/logger.ts",
     "./store/user-memories": "./src/store/user-memories.ts",
     "./store/org-replica": "./src/store/org-replica.ts",
+    "./store/cart-index": "./src/store/cart-index.ts",
     "./brain/retrieve": "./src/brain/retrieve.ts",
     "./brain/embedder": "./src/brain/embedder.ts",
     "./brain/embedder-install": "./src/brain/embedder-install.ts",
@@ -20,8 +21,10 @@
     "./brain/hygiene": "./src/brain/hygiene.ts",
     "./tools/user-memory": "./src/tools/user-memory.ts",
     "./tools/org-memory": "./src/tools/org-memory.ts",
+    "./tools/cart-tools": "./src/tools/cart-tools.ts",
     "./cartographer/client": "./src/cartographer/client.ts",
     "./cartographer/sync": "./src/cartographer/sync.ts",
+    "./cartographer/file-context": "./src/cartographer/file-context.ts",
     "./rules": "./src/rules/index.ts",
     "./project": "./src/project/index.ts",
     "./voice-anchor": "./src/voice-anchor.ts"

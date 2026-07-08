@@ -344,7 +344,7 @@ mimir/
 │   │   ├── src/
 │   │   │   ├── agent/          # Agent loop, session, model resolution, commands
 │   │   │   ├── backends/       # Backend abstraction — server only
-│   │   │   ├── cartographer/   # Cartographer index sync client
+│   │   │   ├── cartographer/   # Cartographer parse client + local index sync
 │   │   │   ├── client-mcp/     # MCP servers exposed to the editor
 │   │   │   ├── mcp-config/     # MCP configuration assembly
 │   │   │   ├── project/        # Project resolution

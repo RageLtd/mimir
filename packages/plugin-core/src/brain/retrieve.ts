@@ -220,7 +220,7 @@ export const buildPlaybookContext = async (
 
 // ── Block assembly (port of buildContextInjection + /retrieve flattening) ──
 
-const formatMemoryList = (memories: string[]) =>
+export const formatMemoryList = (memories: string[]) =>
   memories.map((m) => `- ${m}`).join("\n");
 
 const buildContextParts = (

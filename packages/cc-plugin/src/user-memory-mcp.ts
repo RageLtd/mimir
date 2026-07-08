@@ -32,6 +32,11 @@ import {
 } from "@mimir/plugin-core/store/org-replica";
 import { createUserMemoryStore } from "@mimir/plugin-core/store/user-memories";
 import {
+  cartToolDefs,
+  cartToolNames,
+  executeCartTool,
+} from "@mimir/plugin-core/tools/cart-tools";
+import {
   executeOrgMemoryTool,
   orgMemoryToolDefs,
   orgMemoryToolNames,
@@ -97,8 +102,13 @@ export const runUserMemoryMcp = async () => {
   const embedQuery = createEmbedQuery();
 
   // Convert OpenAI-style tool defs into MCP's expected
-  // {name, description, inputSchema} shape.
-  const mcpTools = [...userMemoryToolDefs, ...orgMemoryToolDefs].map((t) => ({
+  // {name, description, inputSchema} shape. Cartographer tools serve
+  // from the local cart index (MIM-91).
+  const mcpTools = [
+    ...userMemoryToolDefs,
+    ...orgMemoryToolDefs,
+    ...cartToolDefs,
+  ].map((t) => ({
     name: t.function.name,
     description: t.function.description ?? "",
     inputSchema: t.function.parameters ?? { type: "object", properties: {} },
@@ -128,9 +138,11 @@ export const runUserMemoryMcp = async () => {
       case "tools/call": {
         const name = (params?.name ?? "") as string;
         const args = (params?.arguments ?? {}) as Record<string, unknown>;
-        const result = orgMemoryToolNames.has(name)
-          ? await executeOrgMemoryTool(replica, name, args, embedQuery)
-          : executeUserMemoryTool(store, name, args);
+        const result = cartToolNames.has(name)
+          ? await executeCartTool(name, args)
+          : orgMemoryToolNames.has(name)
+            ? await executeOrgMemoryTool(replica, name, args, embedQuery)
+            : executeUserMemoryTool(store, name, args);
         respond(id, {
           content: [{ type: "text", text: result.content }],
           isError: result.isError ?? false,

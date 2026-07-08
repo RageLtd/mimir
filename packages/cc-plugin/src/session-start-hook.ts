@@ -188,19 +188,14 @@ const runWorker = async (projectPath: string) => {
     return 0;
   }
 
-  // Resolve the project to a UUID before syncing. Null result means the
-  // resolver / git / cache all failed — syncIndex falls back to keying
-  // by rootPath in that case, preserving pre-Slice-1 behaviour.
+  // Project-registry metadata refresh (stays server-side — the registry
+  // holds no code content): resolve the UUID, scan manifest files, PATCH
+  // the project record. Fire-and-forget; never gates the local sync.
   const projectId = await getOrResolveProjectId(
     config.serverUrl,
     projectPath,
     config.apiKey,
   ).catch(() => null);
-
-  // Slice 1.5 metadata refresh: once we have a UUID, scan the manifest
-  // files and PATCH the project record so the entity reflects the live
-  // tree (technologies, description). Runs in parallel with the sync —
-  // fire-and-forget on errors, never gates the cartographer push.
   if (projectId) {
     collectProjectMetadata(projectPath)
       .then((metadata) =>
@@ -219,18 +214,13 @@ const runWorker = async (projectPath: string) => {
       );
   }
 
-  // Env wins over config.json — same precedence as authHeaders (MIM-77).
-  const apiKey = process.env.MIMIR_API_KEY ?? config.apiKey;
-  const result = await syncIndex(
-    { serverUrl: config.serverUrl, ...(apiKey ? { apiKey } : {}) },
-    projectPath,
-    parsed,
-    projectId,
-    "replace",
-  ).catch((err) => {
-    log.error("syncIndex threw", { error: errMessage(err) });
-    return { ok: false, error: errMessage(err) };
-  });
+  // Local write (MIM-91): full-scan replace drops deleted/moved files.
+  const result = await syncIndex(projectPath, parsed, "replace").catch(
+    (err) => {
+      log.error("syncIndex threw", { error: errMessage(err) });
+      return { ok: false, error: errMessage(err) };
+    },
+  );
 
   log.info("session-start reindex complete", {
     projectPath,

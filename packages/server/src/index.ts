@@ -12,7 +12,6 @@ import { getAuth, getAuthDb, runAuthMigrations } from "./auth/instance";
 import { config, OPENROUTER_API_URL } from "./config";
 import { closeDb, getDb, initSchema } from "./db/surreal";
 import { createIdentityGate, type IdentityEnv } from "./middleware/identity";
-import { cartographer } from "./routes/cartographer";
 import { completions } from "./routes/completions";
 import { mcp } from "./routes/mcp";
 import { messagesIngress } from "./routes/messages-ingress";
@@ -134,8 +133,7 @@ app.route("/", modelsRoute);
 app.route("/v1/system-prompt", systemPrompt);
 app.route("/v1/messages", messagesIngress);
 
-// Cartographer and tools
-app.route("/v1/cartographer", cartographer);
+// Tool listing
 app.route("/v1/tools", tools);
 
 // Project registry

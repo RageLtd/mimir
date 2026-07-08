@@ -1,6 +1,5 @@
 import type { ToolSet } from "ai";
 import type { OrgScope } from "../../db/scope";
-import { buildCartographerTools } from "./cartographer";
 import { externalTools } from "./external";
 import { introspectionTools } from "./introspection";
 import { getMcpTools } from "./mcp";
@@ -12,10 +11,11 @@ import { buildPlaybookTools } from "./playbook";
  * Tool-group registry — the ONE place server tool groups are wired.
  *
  * Two kinds of group:
- *  - **Scoped** (memory, playbook, cartographer): rebuilt per request via a
- *    factory that closes the caller's OrgScope over each tool's execute
- *    (MIM-69). The tool() execute signature can't carry the scope, so the
- *    closure does.
+ *  - **Scoped** (memory, playbook): rebuilt per request via a factory that
+ *    closes the caller's OrgScope over each tool's execute (MIM-69). The
+ *    tool() execute signature can't carry the scope, so the closure does.
+ *    (Cartographer tools left with MIM-91 — they serve from the clients'
+ *    local index now; code content never reaches the server.)
  *  - **Static**: groups that touch no org-scoped store at all (external MCP
  *    proxies, introspection, plan/todo).
  *
@@ -35,7 +35,6 @@ const SCOPED_GROUPS: Array<{
 }> = [
   { build: buildMemoryTools, mcpPublic: true },
   { build: buildPlaybookTools, mcpPublic: true },
-  { build: buildCartographerTools, mcpPublic: true },
 ];
 
 const STATIC_GROUPS: Array<{ tools: ToolSet; mcpPublic: boolean }> = [

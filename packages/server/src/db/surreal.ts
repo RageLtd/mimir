@@ -9,10 +9,7 @@ import { attempt } from "../util/result";
 import { withTimeout } from "../util/timeout";
 import { migrateOrgScope, ORG_SCOPED_TABLES } from "./migrate-org-scope";
 import { migrateLegacyProjectKeys } from "./migrate-project-keys";
-import {
-  ensureEmbeddingIndexDimension,
-  removeDriftedCartFields,
-} from "./schema-drift";
+import { ensureEmbeddingIndexDimension } from "./schema-drift";
 
 let db: Surreal | null = null;
 
@@ -231,45 +228,6 @@ export async function initSchema() {
     DEFINE FIELD IF NOT EXISTS weight ON relates_to TYPE float;
     DEFINE FIELD IF NOT EXISTS relation_type ON relates_to TYPE string;
 
-    -- Cartographer tables. project_id is the canonical project ULID —
-    -- indexes over it are defined AFTER migrateLegacyProjectKeys runs
-    -- (below), because the UNIQUE indexes would collide on legacy rows
-    -- that still carry project_id = NONE at DEFINE time.
-    DEFINE TABLE IF NOT EXISTS cart_file SCHEMAFULL;
-    DEFINE FIELD IF NOT EXISTS project_id ON cart_file TYPE option<string>;
-    DEFINE FIELD IF NOT EXISTS file_path ON cart_file TYPE string;
-    DEFINE FIELD IF NOT EXISTS language ON cart_file TYPE string;
-    DEFINE FIELD IF NOT EXISTS symbols ON cart_file TYPE string;
-    DEFINE FIELD IF NOT EXISTS searchable ON cart_file TYPE string;
-    -- SHA-256 hex of the file contents at sync time. Clients compute and
-    -- send this so the server can detect stale-index conditions without
-    -- needing filesystem access to the source tree.
-    DEFINE FIELD IF NOT EXISTS content_hash ON cart_file TYPE string;
-    DEFINE FIELD IF NOT EXISTS indexed_at ON cart_file TYPE datetime DEFAULT time::now();
-    DEFINE INDEX IF NOT EXISTS cart_file_path ON cart_file FIELDS file_path;
-    DEFINE INDEX IF NOT EXISTS cart_file_searchable ON cart_file FIELDS searchable
-      FULLTEXT ANALYZER memory_analyzer BM25;
-
-    DEFINE TABLE IF NOT EXISTS cart_import SCHEMAFULL;
-    DEFINE FIELD IF NOT EXISTS project_id ON cart_import TYPE option<string>;
-    DEFINE FIELD IF NOT EXISTS source_path ON cart_import TYPE string;
-    DEFINE FIELD IF NOT EXISTS target_path ON cart_import TYPE string;
-    -- Raw import specifier string as it appears in source ("./util",
-    -- "react", "../config"). Distinct from target_path, which is the
-    -- resolved absolute path. Authored-side identity matters for
-    -- detecting refactors and for the (project_id, source, target,
-    -- specifier) UNIQUE edge.
-    DEFINE FIELD IF NOT EXISTS specifier ON cart_import TYPE string;
-    DEFINE FIELD IF NOT EXISTS symbols ON cart_import TYPE string;
-    DEFINE FIELD IF NOT EXISTS indexed_at ON cart_import TYPE datetime DEFAULT time::now();
-    DEFINE INDEX IF NOT EXISTS cart_import_source ON cart_import FIELDS source_path;
-    DEFINE INDEX IF NOT EXISTS cart_import_target ON cart_import FIELDS target_path;
-
-    DEFINE TABLE IF NOT EXISTS cart_git_state SCHEMAFULL;
-    DEFINE FIELD IF NOT EXISTS project_id ON cart_git_state TYPE option<string>;
-    DEFINE FIELD IF NOT EXISTS git_head ON cart_git_state TYPE string;
-    DEFINE FIELD IF NOT EXISTS indexed_at ON cart_git_state TYPE datetime DEFAULT time::now();
-
     -- Projects (UUID-keyed; identity anchored to git_remote when available,
     -- falling back to local_path). Other tables reference the record id
     -- portion (after "project:") as their 'project' field.
@@ -291,24 +249,11 @@ export async function initSchema() {
     -- key; org_id is the tenant boundary the row-level PERMISSIONS bind to.
     DEFINE FIELD IF NOT EXISTS org_id ON memory TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS org_id ON relates_to TYPE option<string>;
-    DEFINE FIELD IF NOT EXISTS org_id ON cart_file TYPE option<string>;
-    DEFINE FIELD IF NOT EXISTS org_id ON cart_import TYPE option<string>;
-    DEFINE FIELD IF NOT EXISTS org_id ON cart_git_state TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS org_id ON project TYPE option<string>;
   `);
 
   // Guard the vector index against embedder/dimension config changes.
   await ensureEmbeddingIndexDimension(db);
-
-  // Converge drifted cart schemas BEFORE the migration — its UPDATEs fail
-  // SCHEMAFULL validation on rows still carrying orphaned undeclared values.
-  const pruned = await removeDriftedCartFields(db);
-  if (pruned.length > 0) {
-    log.warn(
-      { pruned },
-      "converged cartographer schema — removed drifted fields",
-    );
-  }
 
   // Consolidate legacy path-string keys onto project_id BEFORE the
   // project_id indexes exist — the UNIQUE indexes below are built over
@@ -324,35 +269,11 @@ export async function initSchema() {
   await migrateOrgScope(db);
 
   await db.query(/* surql */ `
-    -- Legacy project-string indexes, superseded by the project_id set.
-    REMOVE INDEX IF EXISTS cart_file_project ON TABLE cart_file;
-    REMOVE INDEX IF EXISTS cart_file_unique ON TABLE cart_file;
-    REMOVE INDEX IF EXISTS cart_import_project ON TABLE cart_import;
-    REMOVE INDEX IF EXISTS cart_import_edge ON TABLE cart_import;
-    REMOVE INDEX IF EXISTS cart_git_state_project ON TABLE cart_git_state;
-
-    DEFINE INDEX IF NOT EXISTS cart_file_project_id ON cart_file FIELDS project_id;
-    -- Sync uses a full DELETE-then-INSERT per project, so one row per
-    -- (project_id, file_path) pair is the invariant. The UNIQUE index
-    -- makes it a hard constraint rather than a convention waiting to fail.
-    DEFINE INDEX IF NOT EXISTS cart_file_project_id_unique ON cart_file
-      FIELDS project_id, file_path UNIQUE;
-    DEFINE INDEX IF NOT EXISTS cart_import_project_id ON cart_import FIELDS project_id;
-    -- One row per distinct edge — same source+target via two different
-    -- specifiers (re-export shims, aliased imports) are still separate
-    -- edges and stay as separate rows.
-    DEFINE INDEX IF NOT EXISTS cart_import_project_id_edge ON cart_import
-      FIELDS project_id, source_path, target_path, specifier UNIQUE;
-    DEFINE INDEX IF NOT EXISTS cart_git_state_project_id ON cart_git_state FIELDS project_id;
-
     -- MIM-69 org-scoped read paths. Composite (org_id, project_id) so an
     -- org-only filter uses the leftmost prefix and an (org, project) filter
     -- uses the whole key. relates_to and project have no project_id, so they
     -- index org_id alone.
     DEFINE INDEX IF NOT EXISTS memory_org_project ON memory FIELDS org_id, project_id;
-    DEFINE INDEX IF NOT EXISTS cart_file_org_project ON cart_file FIELDS org_id, project_id;
-    DEFINE INDEX IF NOT EXISTS cart_import_org_project ON cart_import FIELDS org_id, project_id;
-    DEFINE INDEX IF NOT EXISTS cart_git_state_org_project ON cart_git_state FIELDS org_id, project_id;
     DEFINE INDEX IF NOT EXISTS relates_to_org ON relates_to FIELDS org_id;
     DEFINE INDEX IF NOT EXISTS project_org ON project FIELDS org_id;
   `);

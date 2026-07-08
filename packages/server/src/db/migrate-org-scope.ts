@@ -32,29 +32,13 @@ import { log } from "../util/logger";
 import { attempt, attemptSync } from "../util/result";
 import { OWNER_ORG_SENTINEL } from "./scope";
 
-/** Every tenant table gains org_id — the full scoping surface. */
-export const ORG_SCOPED_TABLES = [
-  "memory",
-  "relates_to",
-  "cart_file",
-  "cart_import",
-  "cart_git_state",
-  "project",
-] as const;
+/** Every tenant table gains org_id — the full scoping surface.
+ *  (cart_* left with MIM-91: the code index is local now.) */
+export const ORG_SCOPED_TABLES = ["memory", "relates_to", "project"] as const;
 
 /** On a project merge these carry history and are reassigned onto the
  *  canonical id — their rows are the brain and must survive. */
 export const REASSIGN_CHILD_TABLES = ["memory"] as const;
-
-/** On a project merge these are dropped for the duplicate: the index is a
- *  full DELETE-then-INSERT per sync, so the canonical record's next sync
- *  rebuilds them — and dropping sidesteps the cart_file (project_id,
- *  file_path) UNIQUE index colliding on reassignment. */
-export const DELETE_CHILD_TABLES = [
-  "cart_file",
-  "cart_import",
-  "cart_git_state",
-] as const;
 
 // ---------------------------------------------------------------------------
 // Pure SQL builders (unit-tested)
@@ -71,10 +55,6 @@ export const buildSentinelRemapSql = (table: string) =>
 /** Reassign a history child from a duplicate project onto the canonical. */
 export const buildReassignChildSql = (table: string) =>
   `UPDATE ${table} SET project_id = $canonical WHERE project_id = $dup;`;
-
-/** Drop a regenerable index child belonging to a duplicate project. */
-export const buildDeleteChildSql = (table: string) =>
-  `DELETE ${table} WHERE project_id = $dup;`;
 
 // ---------------------------------------------------------------------------
 // Pure dedupe planning (unit-tested)
@@ -229,9 +209,6 @@ async function dedupeProjects(db: Surreal) {
           canonical: plan.canonicalId,
           dup,
         });
-      }
-      for (const table of DELETE_CHILD_TABLES) {
-        await db.query(buildDeleteChildSql(table), { dup });
       }
       await db.query(`DELETE $id`, {
         id: new RecordId("project", dup),

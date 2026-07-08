@@ -15,9 +15,8 @@
 import { spawnCartographer } from "@mimir/plugin-core/cartographer/client";
 import { syncIndex } from "@mimir/plugin-core/cartographer/sync";
 import type { createLoggerFactory } from "@mimir/plugin-core/logger";
-import { getOrResolveProjectId } from "@mimir/plugin-core/project";
 import { errMessage } from "@mimir/plugin-core/util";
-import { authHeaders, type MimirConfig } from "./config";
+import type { MimirConfig } from "./config";
 
 type Logger = ReturnType<
   ReturnType<typeof createLoggerFactory>["createLogger"]
@@ -59,20 +58,8 @@ export const runReindexWorker = async (
   client.kill();
   if (!parsed) return;
 
-  const projectId = await getOrResolveProjectId(
-    config.serverUrl,
-    projectPath,
-    config.apiKey,
-  ).catch(() => null);
-
-  const headers = await authHeaders();
-  const result = await syncIndex(
-    { serverUrl: config.serverUrl, ...headers },
-    projectPath,
-    [parsed],
-    projectId,
-    "upsert",
-  );
+  // Local write (MIM-91): no server, no projectId — rootPath is the key.
+  const result = await syncIndex(projectPath, [parsed], "upsert");
   if (!result.ok) {
     log.error("syncIndex returned !ok", { filePath, error: result.error });
   }
@@ -129,20 +116,8 @@ export const runFullReindex = async (
     return;
   }
 
-  const projectId = await getOrResolveProjectId(
-    config.serverUrl,
-    projectPath,
-    config.apiKey,
-  ).catch(() => null);
-
-  const headers = await authHeaders();
-  const result = await syncIndex(
-    { serverUrl: config.serverUrl, ...headers },
-    projectPath,
-    parsed,
-    projectId,
-    "replace",
-  );
+  // Local write (MIM-91): full-scan replace drops deleted/moved files.
+  const result = await syncIndex(projectPath, parsed, "replace");
   if (!result.ok) {
     log.error("syncIndex returned !ok", { error: result.error });
   }

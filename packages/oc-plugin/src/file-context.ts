@@ -5,22 +5,25 @@
  * adapted to OpenCode's event model.
  *
  * OpenCode's `read` tool returns the file content as a string in
- * `output.output`. We fetch the cartographer's file-info (symbols,
- * imports, dependents, related memories) and append a rendered
- * `<file_context>` block to the output, so the model reads the
- * cartographer context alongside the file contents.
+ * `output.output`. We build file-info (symbols, imports, dependents,
+ * related memories) from the LOCAL cart index and replica (MIM-91 —
+ * no server round-trip) and append a rendered `<file_context>` block
+ * to the output, so the model reads the cartographer context alongside
+ * the file contents.
  *
- * A per-session content-hash cache skips the round-trip when the
- * file hasn't changed since the last read. The cartographer's
- * `/v1/cartographer/file-info` response includes the file's
- * content_hash, so the comparison is exact.
+ * A per-session content-hash cache skips the rebuild when the file
+ * hasn't changed since the last read. The local index stores the
+ * file's content_hash, so the comparison is exact.
  */
 
-import { getOrResolveProjectId } from "@mimir/plugin-core/project";
+import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
+import { buildLocalFileInfo } from "@mimir/plugin-core/cartographer/file-context";
+import {
+  getOrResolveProjectId,
+  toProjectRelative,
+} from "@mimir/plugin-core/project";
 import { errMessage } from "@mimir/plugin-core/util";
-import { authHeaders, type MimirConfig } from "./config";
-
-const FILE_INFO_ROUTE = "/v1/cartographer/file-info";
+import type { MimirConfig } from "./config";
 
 // ── Response shape (narrow) ──
 
@@ -132,35 +135,26 @@ const renderFileContext = (
   return `<file_context path="${filePath}">\n${sections.join("\n\n")}\n</file_context>`;
 };
 
-// ── Fetch ──
+// ── Local lookup ──
 
 /**
- * POST to /v1/cartographer/file-info. Returns null on any failure —
- * the caller treats that as "no context available, don't augment".
+ * Build file-info from the local cart index + replica. Returns null on
+ * any failure — the caller treats that as "no context available, don't
+ * augment".
  */
-const fetchFileInfo = async (
-  config: MimirConfig,
-  project: string,
+const localFileInfo = async (
+  rootPath: string,
   filePath: string,
   projectId: string | null,
-): Promise<FileInfoResponse | null> => {
-  const url = `${config.serverUrl.replace(/\/+$/, "")}${FILE_INFO_ROUTE}`;
-  const headers = await authHeaders();
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...headers },
-      body: JSON.stringify({
-        project,
-        filePath,
-        ...(projectId ? { projectId } : {}),
-      }),
-    });
-    if (!response.ok) return null;
-    return (await response.json().catch(() => null)) as FileInfoResponse | null;
-  } catch {
-    return null;
-  }
+) => {
+  const info: FileInfoResponse | null = await buildLocalFileInfo({
+    rootPath,
+    filePath,
+    projectId,
+    // MIM-85 vector leg; cold/absent embedder degrades to FTS-only.
+    embedQuery: createEmbedQuery(),
+  }).catch(() => null);
+  return info;
 };
 
 // ── Public entry ──
@@ -212,8 +206,10 @@ export const augmentReadOutput = async (
     });
   }
 
+  // The index stores project-relative paths — normalize before lookup.
+  const relativeFilePath = toProjectRelative(projectPath, filePath);
   const cached = cache.get(filePath);
-  const info = await fetchFileInfo(config, projectPath, filePath, projectId);
+  const info = await localFileInfo(projectPath, relativeFilePath, projectId);
   if (!info) return;
 
   // File not in the cartographer index yet — nothing to augment.

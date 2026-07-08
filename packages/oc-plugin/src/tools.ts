@@ -31,6 +31,7 @@ import {
   defaultOrgReplicaPath,
 } from "@mimir/plugin-core/store/org-replica";
 import type { UserMemoryStore } from "@mimir/plugin-core/store/user-memories";
+import { executeCartTool } from "@mimir/plugin-core/tools/cart-tools";
 import { executeUserMemoryTool } from "@mimir/plugin-core/tools/user-memory";
 import { mimirHome } from "@mimir/plugin-core/util";
 import { tool } from "@opencode-ai/plugin";
@@ -223,6 +224,83 @@ export const installTool = () =>
       return result.message;
     },
   });
+
+/**
+ * Local cartographer tools (MIM-91) — served from the local cart index
+ * via the shared plugin-core executor; schemas mirror the retired server
+ * /mcp versions. The `projectPath` closure supplies auto-detection (the
+ * OpenCode plugin knows its project directory; process.cwd() may not be
+ * it).
+ */
+export const cartographerTools = (projectPath: string) => ({
+  cartographer_search: tool({
+    description:
+      "Search indexed codebase for files by path or symbol name. Omit project to auto-detect.",
+    args: {
+      query: tool.schema
+        .string()
+        .describe("Search query — matches file paths and symbol names"),
+      limit: tool.schema
+        .number()
+        .optional()
+        .describe("Maximum results (default: 10)"),
+    },
+    async execute(args) {
+      const result = await executeCartTool("cartographer_search", {
+        project: projectPath,
+        query: args.query,
+        ...(args.limit !== undefined ? { limit: args.limit } : {}),
+      });
+      return result.isError ? `Error: ${result.content}` : result.content;
+    },
+  }),
+
+  cartographer_file_info: tool({
+    description:
+      "Get file details: symbols, imports, and dependents. Omit project to auto-detect.",
+    args: {
+      file_path: tool.schema
+        .string()
+        .describe("Path to the file (project-relative or absolute)"),
+    },
+    async execute(args) {
+      const result = await executeCartTool("cartographer_file_info", {
+        project: projectPath,
+        file_path: args.file_path,
+      });
+      return result.isError ? `Error: ${result.content}` : result.content;
+    },
+  }),
+
+  cartographer_query: tool({
+    description:
+      "Walk import graph from entry points. Returns dependencies and dependents up to depth.",
+    args: {
+      entry_points: tool.schema
+        .array(tool.schema.string())
+        .describe("File paths or search terms to start from"),
+      max_depth: tool.schema
+        .number()
+        .optional()
+        .describe("Maximum hops (default: 2)"),
+      max_results: tool.schema
+        .number()
+        .optional()
+        .describe("Maximum files (default: 20)"),
+    },
+    async execute(args) {
+      const result = await executeCartTool("cartographer_query", {
+        project: projectPath,
+        entry_points: args.entry_points,
+        ...(args.max_depth !== undefined ? { max_depth: args.max_depth } : {}),
+        ...(args.max_results !== undefined
+          ? { max_results: args.max_results }
+          : {}),
+      });
+      return result.isError ? `Error: ${result.content}` : result.content;
+    },
+  }),
+});
 
 // Shared with the cc-plugin's hygiene command — both sweep the SAME local
 // replica, so the untouched-decay clock must be one clock.

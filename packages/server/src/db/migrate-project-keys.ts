@@ -30,14 +30,9 @@ import { RecordId, type Surreal } from "surrealdb";
 import { log } from "../util/logger";
 
 /** Tables that historically carried the legacy `project` string key.
- *  message_log dropped from the list when the table died (MIM-86) — its
- *  legacy rows, if any remain, are orphaned data the table drop removes. */
-const LEGACY_KEYED_TABLES = [
-  "memory",
-  "cart_file",
-  "cart_import",
-  "cart_git_state",
-] as const;
+ *  message_log dropped when the table died (MIM-86); cart_* dropped when
+ *  the code index went local (MIM-91). Only memory remains. */
+const LEGACY_KEYED_TABLES = ["memory"] as const;
 
 /** Legacy keys are cwd-style paths; canonical ids never contain a slash. */
 const isPathKey = (key: string) => key.includes("/");
