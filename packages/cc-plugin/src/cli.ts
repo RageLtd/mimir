@@ -21,6 +21,7 @@
  * Anything else prints usage and exits non-zero.
  */
 
+import { runBackfillCommand } from "./backfill-command";
 import {
   mergeUpdateOptions,
   parseInstallArgs,
@@ -62,6 +63,7 @@ const USAGE = [
   "  user-memory-mcp         Stdio MCP server for user-memory tools.",
   "  log-mcp                 Stdio MCP server for reading plugin logs.",
   "  hygiene                 Trigger a server-side memory hygiene sweep (--live to apply, --model <id>).",
+  "  embed-backfill          Vectorize org-replica memories that lack embeddings (MIM-85).",
 ].join("\n");
 
 const dispatch = async (argv: readonly string[]): Promise<number> => {
@@ -126,6 +128,9 @@ const dispatch = async (argv: readonly string[]): Promise<number> => {
 
     case "hygiene":
       return runHygieneCommand(rest);
+
+    case "embed-backfill":
+      return runBackfillCommand();
 
     case undefined:
     case "":

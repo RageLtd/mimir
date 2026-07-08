@@ -24,6 +24,7 @@
  * only the mcp.json server key and serverInfo say "mimir-local".
  */
 
+import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
 import {
   createOrgReplica,
   defaultOrgReplicaPath,
@@ -90,6 +91,10 @@ export const runUserMemoryMcp = async () => {
   // Opening auto-creates an empty replica when the import hasn't run yet —
   // tools then answer honestly ("no memories found") instead of erroring.
   const replica: OrgReplica = createOrgReplica(replicaPath);
+  // MIM-85: local llama-server vector leg for org tools — searches gain
+  // hybrid retrieval, writes get embedded at store time. Cold/absent
+  // embedder degrades per-call to FTS-only / unembedded rows.
+  const embedQuery = createEmbedQuery();
 
   // Convert OpenAI-style tool defs into MCP's expected
   // {name, description, inputSchema} shape.
@@ -123,10 +128,8 @@ export const runUserMemoryMcp = async () => {
       case "tools/call": {
         const name = (params?.name ?? "") as string;
         const args = (params?.arguments ?? {}) as Record<string, unknown>;
-        // embedQuery deliberately absent until MIM-85 wires llama-server —
-        // org tools degrade to FTS-only / unembedded stores.
         const result = orgMemoryToolNames.has(name)
-          ? await executeOrgMemoryTool(replica, name, args)
+          ? await executeOrgMemoryTool(replica, name, args, embedQuery)
           : executeUserMemoryTool(store, name, args);
         respond(id, {
           content: [{ type: "text", text: result.content }],

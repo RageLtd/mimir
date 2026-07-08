@@ -16,7 +16,7 @@
  */
 
 import type { EmbedQuery } from "../brain/retrieve";
-import type { OrgReplica } from "../store/org-replica";
+import { memoryEmbedSource, type OrgReplica } from "../store/org-replica";
 
 export { orgMemoryToolDefs, orgMemoryToolNames } from "./org-memory-defs";
 
@@ -84,11 +84,7 @@ const storeTyped = async (
     trigger?: string;
   },
 ) => {
-  // Playbooks embed name+trigger (the matching key), facts their content.
-  const embedSource =
-    args.type === "playbook" && args.trigger
-      ? `${args.name ?? ""}\n${args.trigger}`.trim()
-      : args.content;
+  const embedSource = memoryEmbedSource(args);
   const embedding = embedQuery ? await embedQuery(embedSource) : null;
 
   if (embedding) {

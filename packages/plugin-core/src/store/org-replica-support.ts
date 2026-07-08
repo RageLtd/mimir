@@ -127,6 +127,19 @@ export const computeFreshness = (lastAccessed?: string | null) => {
  * prompt like "what's the auth flow?" would be a syntax error. Quote each
  * token so every query is a plain term disjunction.
  */
+/** Embed-source rule, shared by store-time embedding (tools/org-memory)
+ *  and the MIM-85 backfill so the two can never drift: playbooks embed
+ *  name+trigger (the matching key), everything else its content. */
+export const memoryEmbedSource = (memory: {
+  readonly type: string;
+  readonly name?: string | null;
+  readonly trigger?: string | null;
+  readonly content: string;
+}) =>
+  memory.type === "playbook" && memory.trigger
+    ? `${memory.name ?? ""}\n${memory.trigger}`.trim()
+    : memory.content;
+
 export const escapeFtsQuery = (query: string) =>
   query
     .split(/\s+/)

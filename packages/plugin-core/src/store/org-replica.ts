@@ -36,6 +36,7 @@ export {
   cosineDistance,
   defaultOrgReplicaPath,
   generateMemoryId,
+  memoryEmbedSource,
 } from "./org-replica-support";
 
 export type MemoryType = "fact" | "summary" | "playbook" | "skill";

@@ -26,6 +26,7 @@
 
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
 import { retrieveLocalContext } from "@mimir/plugin-core/brain/retrieve";
 import { getOrResolveProjectId } from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
@@ -141,6 +142,8 @@ export const runRetrieveHook = async () => {
   const [retrieveErr, result] = await attempt(() =>
     retrieveLocalContext(replica, prompt, {
       projectId: projectId ?? undefined,
+      // MIM-85: local llama-server vector leg; null/cold → FTS-only turn.
+      embedQuery: createEmbedQuery(),
     }),
   );
   replica.close();

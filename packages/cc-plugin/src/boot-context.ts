@@ -15,6 +15,7 @@
  * Mimir transport it's running under.
  */
 
+import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
 import { retrieveLocalContext } from "@mimir/plugin-core/brain/retrieve";
 import { getOrResolveProjectId } from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
@@ -99,6 +100,8 @@ const buildSessionContext = async (query: string, projectId: string | null) => {
       includeRelated: true,
       summaryCount: BOOT_SUMMARY_COUNT,
       projectId: projectId ?? undefined,
+      // MIM-85: local llama-server vector leg; null/cold → FTS-only boot.
+      embedQuery: createEmbedQuery(),
     }),
   );
   replica.close();

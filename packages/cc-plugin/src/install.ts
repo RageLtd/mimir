@@ -19,6 +19,8 @@
 import { chmod, copyFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { embedderDir } from "@mimir/plugin-core/brain/embedder";
+import { installEmbedderArtifacts } from "@mimir/plugin-core/brain/embedder-install";
 import { defaultOrgReplicaPath } from "@mimir/plugin-core/store/org-replica";
 import { mimirHome } from "@mimir/plugin-core/util";
 import mcpTemplate from "../artifacts/mcp.json.template" with { type: "text" };
@@ -34,19 +36,17 @@ import ensureBinaryScript from "../scripts/ensure-binary.sh" with {
 import { writeConfig } from "./config";
 import { toAnthropicXml } from "./markdown-to-xml";
 
-type Result<T> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly error: string };
-
-const ok = <T>(value: T): Result<T> => ({ ok: true, value });
-const err = (error: string): Result<never> => ({ ok: false, error });
+// `as const` keeps the discriminant literal so the ok/err union
+// discriminates without a return annotation blinding the compiler.
+const ok = <T>(value: T) => ({ ok: true as const, value });
+const err = (error: string) => ({ ok: false as const, error });
 
 type SystemPromptResponse = {
   readonly content?: unknown;
   readonly version?: unknown;
 };
 
-const validateUrl = (raw: string): Result<URL> => {
+const validateUrl = (raw: string) => {
   let parsed: URL;
   try {
     parsed = new URL(raw);
@@ -59,10 +59,7 @@ const validateUrl = (raw: string): Result<URL> => {
   return ok(parsed);
 };
 
-const fetchSystemPrompt = async (
-  baseUrl: URL,
-  apiKey?: string,
-): Promise<Result<{ content: string; version: string }>> => {
+const fetchSystemPrompt = async (baseUrl: URL, apiKey?: string) => {
   // Allow base URL with or without a trailing slash; /v1/system-prompt is
   // always relative to the root of mimir-server.
   const endpoint = new URL("/v1/system-prompt", baseUrl);
@@ -120,9 +117,7 @@ const writeExecutable = async (path: string, contents: string) => {
  * dev runs, process.execPath is the bun runtime; copying that as mimir-cc
  * would be useless, so skip and tell the developer how to proceed.
  */
-const installSelfBinary = async (
-  destination: string,
-): Promise<Result<true>> => {
+const installSelfBinary = async (destination: string) => {
   const source = process.execPath;
   const sourceBase = source.split("/").pop() ?? "";
 
@@ -163,11 +158,6 @@ export type InstallOptions = {
   readonly provider?: string;
   /** Small/cheap model for the spawned background jobs. */
   readonly smallModel?: string;
-};
-
-type RenderedTemplates = {
-  readonly mcp: string;
-  readonly settings: string;
 };
 
 /**
@@ -214,7 +204,7 @@ const renderMcp = (opts: {
   return rendered;
 };
 
-const renderSettings = (opts: { readonly selfPath: string }): string =>
+const renderSettings = (opts: { readonly selfPath: string }) =>
   settingsTemplate.replaceAll("{{MIMIR_CC_BIN}}", opts.selfPath);
 
 const buildTemplates = (opts: {
@@ -223,14 +213,15 @@ const buildTemplates = (opts: {
   readonly cartographerBinary?: string;
   readonly apiKey?: string;
   readonly selfPath: string;
-}): RenderedTemplates => ({
+}) => ({
   mcp: renderMcp(opts),
   settings: renderSettings({ selfPath: opts.selfPath }),
 });
 
 export const runInstall = async (
   opts: InstallOptions,
-): Promise<Result<{ home: string; binDir: string; version: string }>> => {
+  log: (message: string) => void = () => {},
+) => {
   const urlResult = validateUrl(opts.serverUrl);
   if (!urlResult.ok) return urlResult;
 
@@ -280,6 +271,14 @@ export const runInstall = async (
     ...(opts.smallModel ? { smallModel: opts.smallModel } : {}),
   });
 
+  // MIM-85: embedder artifacts (pinned llama.cpp release + hash-verified
+  // GGUF, ~640MB on first run). A failure fails the WHOLE install — no
+  // silent text-only installs; re-run once the network/mirror recovers.
+  const embedderErr = await installEmbedderArtifacts(log);
+  if (embedderErr) {
+    return err(`Embedder install failed: ${embedderErr.message}`);
+  }
+
   const selfResult = await installSelfBinary(selfPath);
   if (!selfResult.ok) return selfResult;
 
@@ -290,9 +289,7 @@ export const runInstall = async (
  * CLI entry point — called from cli.ts. Prints user-facing output and
  * translates Result into a process exit code.
  */
-export const runInstallCommand = async (
-  opts: InstallOptions,
-): Promise<number> => {
+export const runInstallCommand = async (opts: InstallOptions) => {
   if (!opts.serverUrl) {
     console.error(
       "Usage: mimir-cc install <mimir-server-url> [--user-memory-db PATH] [--cartographer PATH]\n" +
@@ -301,7 +298,7 @@ export const runInstallCommand = async (
     return 1;
   }
 
-  const result = await runInstall(opts);
+  const result = await runInstall(opts, (msg) => console.log(`  ${msg}`));
   if (!result.ok) {
     console.error(`Install failed: ${result.error}`);
     return 1;
@@ -321,6 +318,7 @@ export const runInstallCommand = async (
       `  Hook settings:  ${home}/settings.json`,
       `  Runtime config: ${home}/config.json`,
       `  User memories:  ${opts.userMemoryDb ?? join(home, "user-memories.db")}`,
+      `  Embedder:       ${embedderDir()}  (llama.cpp + pinned GGUF)`,
       carto,
       `  Wrapper:        ${binDir}/mimir`,
       `  Binary:         ${binDir}/mimir-cc`,
