@@ -147,6 +147,24 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Each job gets a fresh runner: the build job's setup-bun does NOT
+      # carry over, so `bun publish` below needs Bun installed here too.
+      # Without this the job died with `bun: command not found` (exit 127)
+      # before ever reaching the publish or release steps.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # `dist/` is gitignored, so a fresh checkout has no bundle for
+      # `bun publish` to pack (files: ["dist"]). Pull the bundle the build
+      # job produced instead of rebuilding — download-artifact restores it
+      # to packages/oc-plugin/dist/mimir-oc.ts.
+      - name: Download bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: mimir-oc-bundle
+          path: packages/oc-plugin/dist
+
       - name: Update package.json for publish
         working-directory: packages/oc-plugin
         run: |
@@ -177,8 +195,12 @@ jobs:
 
       - name: Publish to GitHub Packages
         working-directory: packages/oc-plugin
+        # `bun publish` authenticates via NPM_CONFIG_TOKEN, NOT NODE_AUTH_TOKEN
+        # (npm's var). With NODE_AUTH_TOKEN the publish fails "missing
+        # authentication" even with a valid GITHUB_TOKEN. See Bun docs:
+        # https://bun.sh/docs/pm/cli/publish
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_CONFIG_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bun publish --registry https://npm.pkg.github.com
 
       - name: Create GitHub Release
