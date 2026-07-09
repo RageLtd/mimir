@@ -1,19 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import pino from "pino";
-import { REDACT_CENSOR, REDACT_PATHS, redactSecret } from "./redact";
+import { REDACT_CENSOR, REDACT_PATHS } from "./redact";
 
-describe("redactSecret", () => {
-  test("scrubs every occurrence of the secret", () => {
-    const msg = "401 from upstream: Bearer sk-abc123 rejected (key sk-abc123)";
-    expect(redactSecret(msg, "sk-abc123")).toBe(
-      `401 from upstream: Bearer ${REDACT_CENSOR} rejected (key ${REDACT_CENSOR})`,
-    );
-  });
-
-  test("no secret → passthrough", () => {
-    expect(redactSecret("plain error", undefined)).toBe("plain error");
-  });
-});
+// redactSecret (value-layer scrubbing) relocated to plugin-core's engine
+// with its tests — the server keeps only the pino path layer.
 
 describe("pino redaction with REDACT_PATHS", () => {
   // Real pino instance writing to a memory sink — proves the path config

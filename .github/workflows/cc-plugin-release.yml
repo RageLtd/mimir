@@ -81,6 +81,11 @@ jobs:
         with:
           bun-version: latest
 
+      # Fresh runner — without this, `bun build` can't resolve the
+      # @mimir/plugin-core workspace imports the CLI bundles (MIM-87/88).
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
       # build.sh cross-compiles darwin-arm64 + linux-x64 from this Linux
       # runner and skips its codesign step off-Darwin; ensure-binary.sh
       # re-signs on the user's Mac after download. No macOS runner or signing

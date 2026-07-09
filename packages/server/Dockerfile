@@ -8,6 +8,8 @@ COPY package.json bun.lock ./
 COPY packages/server/package.json packages/server/
 COPY packages/acp/package.json packages/acp/
 COPY packages/cc-plugin/package.json packages/cc-plugin/
+COPY packages/oc-plugin/package.json packages/oc-plugin/
+COPY packages/plugin-core/package.json packages/plugin-core/
 RUN bun install
 
 COPY packages/server/src packages/server/src
