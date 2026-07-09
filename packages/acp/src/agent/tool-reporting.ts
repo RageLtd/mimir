@@ -40,7 +40,6 @@ const TOOL_KIND_MAP: Record<string, acp.ToolKind> = {
   cartographer_search: "search",
   cartographer_file_info: "read",
   cartographer_query: "search",
-  web_search: "fetch",
   read_mimir_logs: "read",
   // Local user memory tools
   user_memory_search: "search",
@@ -95,8 +94,6 @@ export const toolTitle = (name: string, args: Record<string, unknown>) => {
     return `Inspect ${args.file_path}`;
   if (name === "cartographer_query" && typeof args.entry_points === "string")
     return `Query dependencies: ${args.entry_points.length > 40 ? `${args.entry_points.slice(0, 37)}...` : args.entry_points}`;
-  if (name === "web_search" && typeof args.query === "string")
-    return `Web search: ${args.query.length > 50 ? `${args.query.slice(0, 47)}...` : args.query}`;
   if (name === "read_mimir_logs") return "Read Mimir logs";
 
   // User memory / profile tools
@@ -198,7 +195,6 @@ export const buildToolCallContent = (
     name === "Grep" ||
     name === "WebFetch" ||
     name === "WebSearch" ||
-    name === "web_search" ||
     name === "project_memory_search" ||
     name === "project_memory_list" ||
     name === "cartographer_search" ||

@@ -12,7 +12,6 @@
     "@ai-sdk/provider-utils": "catalog:ai-sdk",
     "@better-auth/api-key": "^1.6.23",
     "@better-auth/passkey": "^1.6.23",
-    "@tavily/core": "catalog:server",
     "ai": "catalog:ai-sdk",
     "better-auth": "^1.6.23",
     "hono": "catalog:server",

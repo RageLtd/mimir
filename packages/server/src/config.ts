@@ -76,21 +76,6 @@ export const config = {
     timeoutMs: parseInt(Bun.env.SURREAL_TIMEOUT_MS ?? "10000", 10),
   },
 
-  /** Bundled server-side integrations — the Tavily-backed web_search tool
-   * exposed over /mcp. On by default so self-hosted keeps today's
-   * behaviour; cloud deployments set BUNDLED_TOOLS_ENABLED=false so it
-   * doesn't burn the operator's tokens for every user (MIM-76). The
-   * Context7/Time stdio MCP children died with the agent loop (MIM-89) —
-   * they were loop-only tools, never exposed over /mcp. */
-  bundledTools: {
-    enabled: Bun.env.BUNDLED_TOOLS_ENABLED !== "false",
-  },
-
-  /** Tavily — API key required for web search */
-  tavily: {
-    apiKey: Bun.env.TAVILY_API_KEY ?? "",
-  },
-
   /** System prompt — loaded from markdown file */
   systemPromptPath: Bun.env.SYSTEM_PROMPT_PATH ?? "./system-prompt.md",
 } as const;

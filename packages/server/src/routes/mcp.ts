@@ -1,7 +1,7 @@
 /**
  * MCP Streamable HTTP server — POST /mcp (+ GET /mcp → 405)
  *
- * Exposes Goldfish (memory), Cartographer, and web_search to Claude Code
+ * Exposes Goldfish (memory/playbooks) and introspection to Claude Code
  * via the Model Context Protocol Streamable HTTP transport (2025-03-26).
  *
  * Transport: Streamable HTTP (MCP spec 2025-03-26)

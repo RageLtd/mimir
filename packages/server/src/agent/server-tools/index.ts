@@ -1,6 +1,5 @@
 import type { ToolSet } from "ai";
 import type { OrgScope } from "../../db/scope";
-import { externalTools } from "./external";
 import { introspectionTools } from "./introspection";
 import { buildMemoryTools } from "./memory";
 import { buildPlaybookTools } from "./playbook";
@@ -15,16 +14,17 @@ import { buildPlaybookTools } from "./playbook";
  *    closes the caller's OrgScope over each tool's execute (MIM-69). The
  *    tool() execute signature can't carry the scope, so the closure does.
  *    (Cartographer tools left with MIM-91; plan/TodoWrite left with the
- *    loop in MIM-89 — it renders in the editor, client-side.)
- *  - **Static**: groups that touch no org-scoped store at all (web search,
- *    introspection).
+ *    loop in MIM-89; web_search REMOVED in MIM-90 — search queries are
+ *    content and must not transit the operator's server. Docs lookup is
+ *    the client-side Context7 MCP, keyless.)
+ *  - **Static**: groups that touch no org-scoped store at all
+ *    (introspection).
  */
 const SCOPED_GROUPS: Array<{
   build: (scope: OrgScope) => ToolSet;
 }> = [{ build: buildMemoryTools }, { build: buildPlaybookTools }];
 
 const STATIC_GROUPS: Array<{ tools: ToolSet }> = [
-  { tools: externalTools },
   { tools: introspectionTools },
 ];
 
