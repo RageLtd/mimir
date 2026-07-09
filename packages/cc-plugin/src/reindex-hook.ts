@@ -4,14 +4,14 @@
  * Wired into ~/.mimir/settings.json as a PostToolUse hook on Edit, Write,
  * and MultiEdit. CC fires us with the tool payload on stdin; we extract
  * the file path, spawn a detached `reindex --worker` child to do the
- * actual parse + server sync, and exit immediately so CC's next model
- * turn isn't blocked on a Rust binary plus an HTTP round-trip.
+ * actual parse + local index write, and exit immediately so CC's next
+ * model turn isn't blocked on a Rust binary.
  *
  * The worker mode (`mimir-cc reindex --worker <project> <file>`) is the
- * one that actually spawns cartographer, parses the file, and POSTs to
- * mimir-server. Detaching from the hook process means CC sees a clean
- * exit code 0 immediately while the indexer keeps running in the
- * background.
+ * one that actually spawns cartographer, parses the file, and writes the
+ * result to the local cartographer index (MIM-91 — nothing leaves the
+ * machine). Detaching from the hook process means CC sees a clean exit
+ * code 0 immediately while the indexer keeps running in the background.
  *
  * No-op when MIMIR_ACTIVE != 1 (defence in depth — settings.json scoping
  * already restricts the hook to mimir sessions), when the tool isn't a

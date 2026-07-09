@@ -13,7 +13,7 @@ The plugin's only job is to land files. Once `/mimir-install` has run, the runti
 
 ~/.mimir/
   system-prompt.md       ← fetched from mimir-server, XML-converted at install
-  mcp.json               ← MCP server config (mimir HTTP + user-memory stdio + optional cartographer)
+  mcp.json               ← MCP server config (mimir-local + mimir-logs stdio, mimir HTTP, optional cartographer)
   settings.json          ← hook config (voice-anchor, rules, reindex)
   config.json            ← runtime config consumed by the binary (server URL, DB path, cartographer path)
   user-memories.db       ← SQLite store backing the user-memory stdio MCP
@@ -117,14 +117,15 @@ Three hooks get wired into `~/.mimir/settings.json`:
 
 - **`UserPromptSubmit` → voice-anchor.** Assembles the boot-context block (user profile, recent project memories, session context) on every prompt, and every N turns (default 5, override via `MIMIR_ANCHOR_INTERVAL`) injects a `<voice_anchor>` block sampled from the system prompt's voice library. Recency-slot persona refresh that counteracts long-context drift.
 - **`PreToolUse` → rules.** Runs the rule engine against every `.claude/**/*.enforce.toml` file under the project root. On match, emits `additionalContext` with the violation message so the model sees the nudge alongside the tool call. See [Rules engine](#rules-engine).
-- **`PostToolUse` (Edit | Write | MultiEdit) → reindex.** Spawns a detached cartographer worker that parses the changed file and syncs symbols + imports to mimir-server. Disabled when no cartographer binary is configured.
+- **`PostToolUse` (Edit | Write | MultiEdit) → reindex.** Spawns a detached cartographer worker that parses the changed file and updates the local cartographer index. Disabled when no cartographer binary is configured.
 
 All three hooks are scoped to `MIMIR_ACTIVE=1` sessions and no-op silently in nested `claude` subprocesses.
 
 ### MCP servers (mcp.json)
 
-- **`mimir`** (HTTP, always present). Connects to mimir-server's `/mcp` endpoint. Exposes Goldfish project memory, Cartographer codebase queries, introspection, and web search. Tools arrive prefixed as `mcp__mimir__*`.
-- **`user-memory`** (stdio, always present). The `mimir-cc user-memory-mcp` subcommand. Exposes the local developer-scoped memory + profile store backed by `~/.mimir/user-memories.db`. Tools arrive prefixed as `mcp__user-memory__*`.
+- **`mimir-local`** (stdio, always present). The `mimir-cc user-memory-mcp` subcommand. Exposes the local memory brain: developer-scoped memory + profile tools (`user_memory_*`, `user_profile_*`) over `~/.mimir/user-memories.db`, and project memory + playbook tools (`project_memory_*`, `project_playbook_*`) over the local org replica. Tools arrive prefixed as `mcp__mimir-local__*`.
+- **`mimir-logs`** (stdio, always present). The `mimir-cc log-mcp` subcommand — reads the local plugin logs for self-debugging. Tools arrive prefixed as `mcp__mimir-logs__*`.
+- **`mimir`** (HTTP, always present). Connects to mimir-server's `/mcp` endpoint — introspection only (server logs, self-hosted). Tools arrive prefixed as `mcp__mimir__*`.
 - **`cartographer`** (stdio, optional). The cartographer binary in `--parse-only` mode. Enabled when `--cartographer PATH` was passed at install time. Tools arrive prefixed as `mcp__cartographer__*`.
 
 ## Rules engine
@@ -148,7 +149,7 @@ Use `detector = "builtin:<name>"` (with optional `detector_args = { ... }`) inst
 
 ## Voice anchor
 
-The `voice-anchor` subcommand runs as the `UserPromptSubmit` hook. Every prompt assembles the boot-context block — user profile and freeform memories from `~/.mimir/user-memories.db`, recent Goldfish project memories from mimir-server. Every `MIMIR_ANCHOR_INTERVAL` turns (default 5) it also samples one exchange from the system prompt's `<voice_in_action>` library and prepends a `<voice_anchor>` block to the user prompt.
+The `voice-anchor` subcommand runs as the `UserPromptSubmit` hook. Every prompt assembles the boot-context block — user profile and freeform memories from `~/.mimir/user-memories.db`, recent project memories from the local org replica. Every `MIMIR_ANCHOR_INTERVAL` turns (default 5) it also samples one exchange from the system prompt's `<voice_in_action>` library and prepends a `<voice_anchor>` block to the user prompt.
 
 State lives per-session at `~/.mimir/voice-state/<session-id>.json`. The hash-of-session-start offset prevents every fresh session from anchoring on turn 5 with the same exchange.
 
@@ -156,7 +157,7 @@ State lives per-session at `~/.mimir/voice-state/<session-id>.json`. The hash-of
 
 When `--cartographer PATH` was provided at install, the `PostToolUse` reindex hook fires on every Edit/Write/MultiEdit. The hook itself is a fast detached fork — spawns `mimir-cc reindex --worker <project> <file>` and exits 0 immediately so the next CC turn isn't blocked on a Rust binary plus an HTTP round-trip.
 
-The worker spawns cartographer in `--parse-only` mode, parses the changed file, hashes the contents (SHA-256), and POSTs the result to mimir-server's `/v1/cartographer/sync` endpoint. Failures get logged but never block the user's tool call.
+The worker spawns cartographer in `--parse-only` mode, parses the changed file, hashes the contents (SHA-256), and writes the result to the local cartographer index — nothing leaves the machine (MIM-91). Failures get logged but never block the user's tool call.
 
 ## Building
 

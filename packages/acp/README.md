@@ -1,135 +1,129 @@
 # @mimir/acp
 
-ACP (Agent Client Protocol) agent layer for Mimir. Bridges editor agent panels — primarily Zed — to the Claude Code Agent SDK and mimir-server, providing a unified coding agent experience with persistent memory, codebase indexing, and user-aware context.
+ACP (Agent Client Protocol) agent for Mimir — connects editor agent panels (primarily Zed) to a **fully local** agent. Inference, the agent loop, tool execution, memory retrieval, extraction, and compaction all run in this process on plugin-core; the server is contacted only for the boot-time system prompt, the project registry, key distribution, and encrypted memory sync.
 
 ## Architecture
 
 ```
-Editor (Zed)           mimir-acp (this package)         External Services
-┌──────────┐          ┌─────────────────────────┐      ┌──────────────────┐
-│ Agent    │◄─stdio──►│ ACP Connection (NDJSON)  │      │                  │
-│ Panel    │          │                         │      │ mimir-server     │
-│          │          │ Agent Core              │      │  ├─ /mcp         │
-│ Model    │          │  ├─ Session management   │◄────►│  ├─ /v1/context │
-│ Selector │          │  ├─ Backend routing      │      │  └─ /v1/models  │
-│          │          │  └─ Tool reporting       │      │                  │
-│ Terminal │          │                         │      │ Claude Code SDK  │
-│ Output   │          │ Backends                │◄────►│  └─ query()      │
-│          │          │  ├─ claude-code (SDK)    │      │                  │
-└──────────┘          │  └─ server (HTTP+SSE)   │      │ MCP Servers      │
-                      │                         │      │  ├─ user-memory  │
-                      │ Local Stores            │      │  └─ context7     │
-                      │  ├─ User memories (SQLite)│     └──────────────────┘
-                      │  └─ Sessions (SQLite)   │
-                      │                         │
-                      │ Cartographer (optional)  │
-                      │  └─ Tree-sitter indexer  │
-                      └─────────────────────────┘
+Editor (Zed)           mimir-acp (this package)              mimir-server
+┌──────────┐          ┌───────────────────────────────┐      ┌───────────────────┐
+│ Agent    │◄─stdio──►│ ACP connection (NDJSON)       │      │ /v1/system-prompt │
+│ Panel    │          │                               │      │ /v1/projects      │
+│          │          │ Agent loop (prompt-server)    │─────►│ /v1/keys          │
+│ Model    │          │  ├ local backend — the        │ boot │ /v1/sync          │
+│ Selector │          │  │   plugin-core engine, BYOK │ +sync└───────────────────┘
+│          │          │  ├ tool execution (local +    │
+│ Terminal │          │  │   forwarded to the editor) │       Providers (direct)
+│ Output   │          │  └ compaction → local replica │      ┌───────────────────┐
+└──────────┘          │                               │─────►│ Anthropic, ORouter│
+                      │ Local brain (plugin-core)     │ BYOK │ vLLM, Ollama,     │
+                      │  ├ org replica (SQLite + FTS) │      │ LM Studio, …      │
+                      │  ├ local embeddings           │      └───────────────────┘
+                      │  ├ extraction + hygiene       │
+                      │  └ user memories, sessions    │
+                      │                               │
+                      │ Cartographer (optional,       │
+                      │   fully local index)          │
+                      └───────────────────────────────┘
 ```
 
-## Backends
-
-Backend selection is per-request, driven by the model ID prefix. Users can switch backends mid-conversation via the editor's model dropdown.
-
-### Claude Code (`claude-code/*` models)
-
-Uses `query()` from `@anthropic-ai/claude-agent-sdk`. The SDK manages sessions, auth (via `CLAUDE_CODE_OAUTH_TOKEN`), and tool execution internally. mimir-acp observes tool calls and results for editor display but does not execute them — CC handles its own tool loop.
-
-Three MCP servers are wired into each SDK session:
-
-- **mimir** (HTTP) — Goldfish memory, Cartographer indexing, web search, introspection via mimir-server's `/mcp` endpoint
-- **user-memory** (stdio) — local SQLite-backed user profile and memory management
-- **context7** (stdio) — library documentation lookup
-
-### Server (`*` all other models)
-
-Routes through mimir-server's OpenAI-compatible `/v1/chat/completions` endpoint. The agent loop executes tool calls locally or forwards them to the editor via ACP. Used for models running on vLLM, OpenRouter, or any other provider configured in mimir-server.
-
-## Source Layout
-
-```
-src/
-├── agent/                  # ACP agent factory, session management, prompt dispatch
-│   ├── index.ts            # Agent factory — the public entry point
-│   ├── core.ts             # AgentCore: prompt routing, mode/model switching
-│   ├── session.ts          # Session state management
-│   ├── types.ts            # Shared agent types (SessionState, AgentCore)
-│   ├── content.ts          # ACP content block formatting and conversion
-│   ├── tool-reporting.ts   # Tool call display: kinds, titles, diff content
-│   ├── client-tools.ts     # ACP client tool forwarding (readTextFile, etc.)
-│   └── prompt-server.ts    # Server backend prompt path with tool interception
-│
-├── backends/               # Backend abstraction and implementations
-│   ├── types.ts            # Backend interface, BackendEvent, BackendRunOptions
-│   ├── index.ts            # Backend factory and router
-│   ├── server.ts           # mimir-server HTTP+SSE backend adapter
-│   └── claude-code/        # Claude Code Agent SDK backend
-│       ├── index.ts        # Barrel exports
-│       ├── adapter.ts      # Backend interface → runClaudeCode bridge
-│       ├── runner.ts       # SDK query() invocation and event translation
-│       ├── formatting.ts   # Context formatting and SDK option building
-│       ├── mcp-config.ts   # MCP server config builder for the SDK
-│       └── prompt-cc.ts    # Context assembly, system prompt, event dispatch
-│
-├── cartographer/           # Tree-sitter codebase indexing integration
-│   ├── client.ts           # Cartographer binary client
-│   ├── lifecycle.ts        # Startup/shutdown management
-│   └── sync.ts             # File change detection and re-indexing
-│
-├── store/                  # Local SQLite data stores
-│   ├── user-memories.ts    # User profile and memory CRUD (bun:sqlite)
-│   └── sessions.ts         # Session persistence
-│
-├── tools/                  # MCP tool implementations
-│   ├── user-memory.ts      # User memory tool definitions and context builder
-│   └── user-memory-mcp.ts  # Stdio MCP server for user memory (JSON-RPC 2.0)
-│
-├── utils/                  # Shared utilities
-│   └── log.ts              # Pino logger setup
-│
-├── config.ts               # Environment-based configuration
-├── routing.ts              # Model-based backend routing and model list management
-├── context-client.ts       # mimir-server context assembly client
-├── server-client.ts        # mimir-server API types and HTTP client
-├── sse-parser.ts           # SSE stream parser for server backend
-└── util.ts                 # Shared error utilities
-```
+Every model in the editor's picker resolves through the local provider registry — providers activate from your own env keys (BYOK) or local base URLs. No inference traffic ever transits mimir-server.
 
 ## Configuration
 
-All configuration is via environment variables. See `src/config.ts` for the full list with defaults.
+All configuration is via environment variables, set in the editor's agent env block. See `src/config.ts` for defaults.
+
+**Server connection:**
 
 | Variable | Default | Description |
 |---|---|---|
-| `MIMIR_SERVER_URL` | `http://mimir.conhost.lan:3777` | mimir-server base URL |
-| `MIMIR_API_KEY` | (empty) | API key for mimir-server |
-| `MIMIR_MODEL` | `openrouter/auto` | Default model for the server backend |
-| `MIMIR_USER_MEMORY_DB` | `~/.mimir/user-memories.db` | SQLite database for user memories |
-| `MIMIR_SESSION_DB` | `~/.mimir/sessions.db` | SQLite database for sessions |
-| `MIMIR_CC_ENABLED` | `true` | Enable/disable Claude Code backend |
-| `MIMIR_CC_PERMISSION_MODE` | `bypassPermissions` | CC permission mode |
-| `MIMIR_CC_DISALLOWED_TOOLS` | (see config.ts) | Comma-separated CC tools to disable |
-| `MIMIR_CC_WORKING_DIR` | (cwd) | Override CC working directory |
-| `MIMIR_CARTOGRAPHER_ENABLED` | `true` | Enable Cartographer indexing |
-| `MIMIR_CARTOGRAPHER_BIN` | `cartographer` | Path to Cartographer binary |
-| `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
+| `MIMIR_SERVER_URL` | `http://mimir.conhost.lan` | mimir-server base URL |
+| `MIMIR_API_KEY` | (empty) | Server API key — required for encrypted sync against an auth-enabled server |
+
+**Inference (BYOK — keys never leave your machine):**
+
+| Variable | Description |
+|---|---|
+| `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `OPENCODE_API_KEY`, … | Any provider key in the [models.dev](https://models.dev) registry activates that provider's models |
+| `VLLM_BASE_URL` / `OLLAMA_BASE_URL` / `LMSTUDIO_BASE_URL` | Local OpenAI-compatible endpoints — models auto-discovered |
+| `MIMIR_MODEL` | Default model (empty = editor picker drives it) |
+| `MIMIR_SMALL_MODEL` | Cheap model for background jobs (extraction, compaction) |
+
+**Memory brain:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `MIMIR_EXTRACTION_BASE_URL` | — | OpenAI-compatible endpoint for local memory distillation |
+| `MIMIR_EXTRACTION_MODEL` | falls back to `MIMIR_SMALL_MODEL` | Extraction/summarization model |
+| `MIMIR_EXTRACTION_API_KEY` | falls back to `MIMIR_PROVIDER_API_KEY` | Optional — keyless local endpoints work |
+| `MIMIR_ORG_REPLICA_DB` | `~/.mimir/org-replica.db` | Local org-memory replica (SQLite) |
+| `MIMIR_USER_MEMORY_DB` | `~/.mimir/user-memories.db` | Local user-memory store |
+| `MIMIR_SESSION_DB` | `~/.mimir/sessions.db` | Session persistence |
+
+**Everything else:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `MIMIR_CARTOGRAPHER_ENABLED` | `true` | Cartographer codebase indexing (fully local) |
+| `MIMIR_CARTOGRAPHER_BIN` | `cartographer` | Binary path, resolved on `PATH` |
+| `AUTO_APPROVE_TOOLS` | `false` | Auto-approve read/search tool calls |
+| `MIMIR_ACP_LOG_FILE` | `~/.mimir/logs/acp.log` | Log file (empty string disables) |
+| `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
+
+## Key ceremonies and sync
+
+The E2E key ceremonies and manual sync run as argv subcommands, dispatched before the ACP handshake:
+
+```bash
+bun run packages/acp/index.ts keys <status|setup|adopt|rotate|recovery-setup|recover>
+bun run packages/acp/index.ts sync
+```
+
+The implementation is shared plugin-core code — the same ceremonies as `mimir keys` under Claude Code and OpenCode. Sync also runs automatically at engine boot and after each turn's distillation.
+
+## Source layout
+
+```
+index.ts                    # Entry point — argv dispatch (keys/sync), then ACP handshake
+src/
+├── agent/                  # Agent factory, session management, the local agent loop
+│   ├── index.ts            # createMimirAgent — replica + engine boot, agent factory
+│   ├── core.ts             # Prompt routing, mode/model switching
+│   ├── prompt-server.ts    # The agent loop: context assembly, tool cycle, events
+│   ├── brain.ts            # Extraction + compaction wiring into the replica
+│   ├── turn-context.ts     # Per-turn context injection, TodoWrite plan tool
+│   ├── model-resolution.ts # Local registry → editor model picker
+│   ├── session.ts          # Session state
+│   ├── commands.ts         # Slash commands
+│   ├── tool-dispatch.ts / tool-reporting.ts / client-tools.ts
+│   └── content.ts / handlers.ts / lifecycle-helpers.ts / types.ts
+├── backends/               # Backend abstraction — local.ts (plugin-core engine)
+├── engine-boot.ts          # Provider registry init + system-prompt fetch (cached)
+├── client-mcp/             # User-configured MCP servers exposed to the loop
+├── mcp-config/             # MCP configuration assembly
+├── cartographer/           # Local tree-sitter index integration
+├── store/                  # Session persistence (bun:sqlite)
+├── tools/                  # User-memory stdio MCP
+├── permissions.ts          # Tool permission gating
+└── config.ts               # Env-based configuration
+```
 
 ## Running
 
 ```bash
-# Development (stdio — connect via Zed's ACP agent config)
+# Development (stdio — connect via Zed's agent_servers config)
 bun run start
 
 # Compile to standalone binary
 bun run build
 ```
 
-The agent communicates via NDJSON over stdin/stdout per the ACP specification. Configure Zed to spawn it as an ACP agent in the editor's agent settings.
+The agent speaks NDJSON over stdin/stdout per the ACP specification. The Zed registration snippet lives in the [root README](../../README.md#zed-acp).
 
 ## Testing
 
-```bash
-bun test
-```
+Always via the root harness:
 
-Tests are colocated with their source files. The test suite covers content block conversion, context formatting, SDK option building, MCP server config merging, and the prompt pipeline.
+```bash
+bun run test:acp
+```

@@ -9,7 +9,7 @@ The plugin matches the Mimir capabilities the cc-plugin exposes under Claude Cod
 - **Persona system prompt** — `~/.mimir/system-prompt.md` is appended to every LLM call's system prompt. Markdown form, no XML conversion (the conversion is Claude-specific).
 - **Voice anchor rotation** — on a fixed cadence (default every 5 turns, override `MIMIR_ANCHOR_INTERVAL`), injects a `<voice_anchor>` block into the recency slot to combat persona drift over long sessions.
 - **Rules engine** — `.claude/**/*.enforce.toml` files in the project are evaluated on every tool call. Violations fail the call with the nudge as the error message.
-- **Cartographer reindex** — on every file edit, spawns a one-shot cartographer reindex worker that parses the file and syncs to the server. Full project reindex on session start.
+- **Cartographer reindex** — on every file edit, spawns a one-shot cartographer reindex worker that parses the file and updates the local index (nothing leaves the machine). Full project reindex on session start.
 - **User-memory tools** — seven in-process custom tools (`user_memory_search`, `user_memory_store`, `user_memory_list`, `user_memory_delete`, `user_profile_get`, `user_profile_add`, `user_profile_remove`) for recalling and storing facts about the developer. SQLite-backed at `~/.mimir/user-memories.db`.
 - **Boot context** — on the first turn of a session, prepends a `<boot_context>` block (user profile + prior session context + project id) so the model reads the lead-in as the most recent content.
 - **Local distillation (MIM-86)** — on session idle and before compaction, the new turns are extracted into the local memory replica on the developer's configured extraction model (`MIMIR_EXTRACTION_*`). The transcript never leaves the machine.
@@ -67,6 +67,8 @@ The install writes two slash commands to `~/.config/opencode/commands/`:
 export PATH="$HOME/.local/bin:$PATH"
 mimir   # equivalent to `MIMIR_ACTIVE=1 opencode`
 ```
+
+The wrapper also dispatches the E2E key ceremonies and manual sync without entering the editor — `mimir keys <status|setup|adopt|rotate|recovery-setup|recover>` and `mimir sync` run the plugin bundle directly via `bun` (the same shared plugin-core implementation as the Claude Code and ACP wrappers).
 
 ## Development
 
