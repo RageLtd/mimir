@@ -18,6 +18,10 @@
  */
 
 import { join } from "node:path";
+import {
+  reconcileFromSharedConfig,
+  runKeysCommand,
+} from "@mimir/plugin-core/keys/cli";
 import { createLoggerFactory } from "@mimir/plugin-core/logger";
 import { markdownToXml } from "@mimir/plugin-core/markdown-to-xml";
 import { loadRules, runAndFormat } from "@mimir/plugin-core/rules";
@@ -341,6 +345,13 @@ export const MimirPlugin: Plugin = async (ctx) => {
         void runFullReindex(log, config, ctx.directory).catch((err) =>
           log.error("full reindex crashed", { error: errMessage(err) }),
         );
+        // Silent key reconcile (MIM-87): fulfil pending wraps, surface
+        // owed ceremonies in the log. Never blocks, never mints secrets.
+        void reconcileFromSharedConfig()
+          .then((result) => log.info("key reconcile", { ...result }))
+          .catch((err) =>
+            log.error("key reconcile crashed", { error: errMessage(err) }),
+          );
         return;
       }
 
@@ -365,3 +376,12 @@ export const MimirPlugin: Plugin = async (ctx) => {
 };
 
 export default MimirPlugin;
+
+// Argv-program mode: the `mimir` wrapper dispatches `keys …` to this
+// bundle directly (`bun mimir-oc.ts keys …`). import.meta.main is false
+// when OpenCode imports the file as a plugin, so this path is inert in
+// normal operation — one artifact, two roles (MIM-87 editor-agnostic
+// key-ceremony rule).
+if (import.meta.main && Bun.argv[2] === "keys") {
+  process.exit(await runKeysCommand(Bun.argv.slice(3)));
+}

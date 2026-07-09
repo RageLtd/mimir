@@ -24,3 +24,19 @@ export const attempt = async <T>(fn: () => Promise<T>) =>
     (data) => [null, data] as Result<T>,
     (err) => [toError(err), null] as Result<T>,
   );
+
+/**
+ * Sync counterpart — the ONE sanctioned sync throw→Result converter,
+ * mirroring `packages/server/src/util/result.ts`. For boundaries where
+ * the throw is genuinely synchronous and expected (JSON.parse, AEAD
+ * auth failures in keys/crypto). The try/catch is this function's entire
+ * job: it is the single boundary that turns throwing code into Result
+ * tuples — the same role attempt()'s rejection handler plays for async.
+ */
+export const attemptSync = <T>(fn: () => T) => {
+  try {
+    return [null, fn()] as Result<T>;
+  } catch (raw) {
+    return [toError(raw), null] as Result<T>;
+  }
+};

@@ -5,6 +5,7 @@ import { getAuth, getAuthDb, runAuthMigrations } from "./auth/instance";
 import { config } from "./config";
 import { closeDb, getDb, initSchema } from "./db/surreal";
 import { createIdentityGate, type IdentityEnv } from "./middleware/identity";
+import { keys } from "./routes/keys";
 import { mcp } from "./routes/mcp";
 import { projects } from "./routes/projects";
 import { systemPrompt } from "./routes/system-prompt";
@@ -97,6 +98,9 @@ app.route("/v1/system-prompt", systemPrompt);
 
 // Project registry
 app.route("/v1/projects", projects);
+
+// Wrapped-key distribution (MIM-87) — ciphertext relay only
+app.route("/v1/keys", keys);
 
 // MCP server for Claude Code tool injection
 app.route("/mcp", mcp);

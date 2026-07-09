@@ -87,17 +87,26 @@ is 256-bit. Schema columns already exist (Better Auth `additionalFields`,
 `packages/server/src/auth/instance.ts`).
 
 ```
-device secret (per device, OS credential store)
-  └─ unlocks → user X25519 private key
-       user X25519 public key ──────────── stored on user record (server, public)
-  └─ unwraps → org data key (per org, symmetric, 256-bit)
+device secret (per user, held per device in the OS credential store)
+  └─ HKDF → keyset-encryption key → decrypts the ENCRYPTED KEYSET
+       user.encryptedKeyset ─────────────── stored on user record (server, ciphertext)
+       keyset = user X25519 private key; public half on user record (server, public)
+  └─ private key unwraps → org KEYRING (all live key generations)
        wrapped per member to their public key ── member.wrappedOrgKey (server, ciphertext)
-  └─ encrypts → envelope payloads (§6)
+  └─ current-generation org key encrypts → envelope payloads (§6)
 
 org recovery keyset (opt-in; default ON multi-member, OFF solo)
   organization.recoveryPublicKey (server, public)
-  organization.wrappedRecoveryKey (server, ciphertext)
+  organization.wrappedRecoveryKey (server, ciphertext — keyring wrapped to recovery key)
 ```
+
+**The encrypted keyset is stored server-side** — the direct analog of
+1Password's encrypted keyset. The server holds it but cannot open it (the
+device secret never leaves the client), and a new device needs only the
+password-manager copy of the device secret: pull the encrypted keyset,
+decrypt locally, done. **Wraps carry the whole keyring** — every live key
+generation — so one unwrap reads a mixed-generation store during rotation
+rollover; the re-encrypt push (sync ticket) prunes retired generations.
 
 **Device secret storage:** `Bun.secrets` — the OS credential store (macOS
 Keychain Services, Linux libsecret, Windows Credential Manager). Encrypted at
@@ -218,7 +227,13 @@ products.
 - Primitives are Bun-native `node:crypto` only (AES-256-GCM, X25519, HKDF,
   `randomBytes`). No native-compiled dependencies; no WASM crypto in v1.
 - `Bun.secrets` is accessed only through the device-secret provider module
-  (experimental-API churn containment + fallback host).
+  (experimental-API churn containment + fallback host). The keychain-less
+  fallback is a passphrase-encrypted file (`~/.mimir/device-secret.enc`,
+  scrypt → AES-256-GCM) with the passphrase supplied via
+  `MIMIR_KEY_PASSPHRASE`.
+- Secrets a human must hold (device secret at generation, recovery private
+  key at setup) are printed exactly once by the explicit `mimir keys`
+  ceremonies and never logged; silent boot reconciliation never mints them.
 - The seam ships with: nonce-freshness test, AAD-tamper test (transplanted
   ciphertext must fail), key-generation rollover test, LWW convergence test.
 - macOS note for the install story: keychain ACLs bind to the `bun` binary;

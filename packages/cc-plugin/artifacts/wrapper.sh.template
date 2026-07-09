@@ -26,6 +26,12 @@ if [[ -x "$ENSURE_BINARY" ]]; then
   "$ENSURE_BINARY" || echo "mimir: binary update check failed — continuing with the installed binary." >&2
 fi
 
+# `mimir keys …` — E2E key ceremonies (MIM-87). Dispatched to the shared
+# plugin-core implementation inside mimir-cc; never launches claude.
+if [[ "${1:-}" == "keys" ]]; then
+  exec "$HOME/.local/bin/mimir-cc" "$@"
+fi
+
 MIMIR_MARKER="$HOME/.mimir/next-session.json"
 BASE_ARGS=(
   --system-prompt-file "$HOME/.mimir/system-prompt.md"

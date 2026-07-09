@@ -18,6 +18,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { reconcileFromSharedConfig } from "@mimir/plugin-core/keys/cli";
 import {
   collectProjectMetadata,
   getOrResolveProjectId,
@@ -78,6 +79,28 @@ const runHook = async () => {
   }
 
   const cwd = input.cwd ?? process.cwd();
+
+  // Silent key reconcile (MIM-87): fulfil pending wraps, surface owed
+  // ceremonies in the log. Bounded await — the hook process exits after
+  // dispatch, so a detached promise would be killed mid-flight; a missed
+  // deadline just retries on the next session start. Never mints secrets.
+  const RECONCILE_DEADLINE_MS = 10_000;
+  const [reconcileErr, reconciled] = await attempt(() =>
+    Promise.race([
+      reconcileFromSharedConfig(),
+      new Promise<{ status: "deadline" }>((resolve) =>
+        setTimeout(
+          () => resolve({ status: "deadline" }),
+          RECONCILE_DEADLINE_MS,
+        ),
+      ),
+    ]),
+  );
+  if (reconcileErr) {
+    log.warn("key reconcile failed", { error: reconcileErr.message });
+  } else {
+    log.info("key reconcile", { ...reconciled });
+  }
 
   const config = await readConfig();
   if (!config?.cartographerBinary) {

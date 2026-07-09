@@ -7,4 +7,13 @@
 
 set -eo pipefail
 export MIMIR_ACTIVE=1
+
+# `mimir keys …` — E2E key ceremonies (MIM-87). The plugin bundle doubles
+# as an argv program via its import.meta.main guard; OpenCode importing
+# it as a plugin never triggers this path.
+if [[ "${1:-}" == "keys" ]]; then
+  shift
+  exec bun "$HOME/.config/opencode/plugins/mimir-oc.ts" keys "$@"
+fi
+
 exec opencode "$@"

@@ -21,6 +21,7 @@
  * Anything else prints usage and exits non-zero.
  */
 
+import { runKeysCommand } from "@mimir/plugin-core/keys/cli";
 import { runBackfillCommand } from "./backfill-command";
 import {
   mergeUpdateOptions,
@@ -64,6 +65,8 @@ const USAGE = [
   "  log-mcp                 Stdio MCP server for reading plugin logs.",
   "  hygiene                 Trigger a server-side memory hygiene sweep (--live to apply, --model <id>).",
   "  embed-backfill          Vectorize org-replica memories that lack embeddings (MIM-85).",
+  "  keys <command>          E2E key ceremonies (MIM-87): status, setup, adopt,",
+  "                          rotate, recovery-setup, recover.",
 ].join("\n");
 
 const dispatch = async (argv: readonly string[]): Promise<number> => {
@@ -131,6 +134,11 @@ const dispatch = async (argv: readonly string[]): Promise<number> => {
 
     case "embed-backfill":
       return runBackfillCommand();
+
+    case "keys":
+      // Shared editor-agnostic implementation (plugin-core) — the same
+      // ceremonies are reachable from mimir-acp and the oc wrapper.
+      return runKeysCommand(rest);
 
     case undefined:
     case "":

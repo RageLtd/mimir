@@ -52,6 +52,11 @@ export function buildAuthOptions(database: Database, secret: string) {
         /** User's public key (X25519) — the half the org key gets wrapped
          *  to. Registered by the client at first login. */
         publicKey: { type: "string", required: false, input: true },
+        /** MIM-87: the user's keyset (X25519 keypair) encrypted under the
+         *  device secret — the 1Password encrypted-keyset analog. Stored
+         *  server-side so a new device needs only the password-manager
+         *  copy of the device secret. Ciphertext the server cannot open. */
+        encryptedKeyset: { type: "string", required: false, input: true },
       },
     },
     plugins: [
@@ -72,6 +77,11 @@ export function buildAuthOptions(database: Database, secret: string) {
                 required: false,
                 input: true,
               },
+              /** MIM-87: current org-key generation (metadata, accepted
+               *  residual — the operator may observe THAT a rotation
+               *  happened). input:false — only the /v1/keys routes write
+               *  it, atomically with the member re-wraps. */
+              keyGeneration: { type: "number", required: false, input: false },
             },
           },
           member: {
@@ -122,7 +132,11 @@ let store: Database | null = null;
 /**
  * Direct handle on the auth SQLite store — for the read-only row counts the
  * claim flow needs (user/invitation counts have no better-auth API surface).
- * Writes stay better-auth's exclusive business.
+ * Writes stay better-auth's exclusive business, with ONE documented
+ * exception: routes/keys.ts writes the MIM-87 key-distribution columns
+ * (member.wrappedOrgKey, organization.keyGeneration + recovery fields)
+ * because better-auth has no endpoint that writes another member's row,
+ * and rotation must replace every member's wrap in one transaction.
  */
 export function getAuthDb() {
   if (!store) {

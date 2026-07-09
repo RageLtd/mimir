@@ -93,6 +93,22 @@ Only needed if you're working on the plugin itself. It lives as the `@mimir/cc-p
 
 Alpha ships `darwin-arm64` and `linux-x64` binaries only. Other platforms will error out of `/mimir-install`.
 
+## Key ceremonies (`mimir keys`)
+
+Against an auth-enabled server, E2E key material is managed with `mimir keys
+<status|setup|adopt|rotate|recovery-setup|recover>` — the same commands work
+from `mimir-acp keys …` and the OpenCode wrapper (the implementation is
+shared in plugin-core; no editor owns it). `setup` prints your **device
+secret exactly once** — store it in your password manager; it is the only
+way to bring a new device online (`mimir keys adopt`).
+
+The device secret lives in the OS credential store via `Bun.secrets`
+(macOS Keychain Services / Linux libsecret / Windows Credential Manager).
+macOS note: the keychain ACL binds to the `bun` binary — the first access
+prompts once and covers all hook processes; upgrading Bun re-prompts once.
+Headless/keychain-less environments set `MIMIR_KEY_PASSPHRASE` to use the
+encrypted-file fallback at `~/.mimir/device-secret.enc`.
+
 ## What the install lands
 
 ### Hooks (settings.json)
