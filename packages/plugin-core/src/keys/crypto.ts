@@ -67,9 +67,16 @@ const publicKeyObject = (publicKey: string) =>
   });
 
 /** Recompute the public half from a raw private key — recovery-key
- *  validation and new-device keyset verification. */
+ *  validation and new-device keyset verification.
+ *
+ *  Exports the private KeyObject's own JWK rather than routing through
+ *  createPublicKey(KeyObject): the runtime recomputes the true `x` even
+ *  when the key was imported with `x: ""`, and @types/node 26 dropped
+ *  KeyObject from createPublicKey's parameter union (types regression —
+ *  the runtime still accepts it, but this form checks on both type
+ *  generations). */
 export function publicKeyFromPrivate(privateKey: string) {
-  const jwk = createPublicKey(privateKeyObject(privateKey)).export({
+  const jwk = privateKeyObject(privateKey).export({
     format: "jwk",
   });
   if (!jwk.x) {
