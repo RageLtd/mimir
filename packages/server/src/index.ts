@@ -3,11 +3,12 @@ import { cors } from "hono/cors";
 import { countUsers, createClaimGuard, SIGNUP_PATH } from "./auth/claim";
 import { getAuth, getAuthDb, runAuthMigrations } from "./auth/instance";
 import { config } from "./config";
-import { closeDb, getDb, initSchema } from "./db/surreal";
+import { getTenantDb } from "./db/tenant";
 import { createIdentityGate, type IdentityEnv } from "./middleware/identity";
 import { keys } from "./routes/keys";
 import { mcp } from "./routes/mcp";
 import { projects } from "./routes/projects";
+import { sync } from "./routes/sync";
 import { systemPrompt } from "./routes/system-prompt";
 import { log } from "./util/logger";
 import { attempt, attemptSync } from "./util/result";
@@ -33,63 +34,20 @@ if (config.auth.enabled) {
   );
 }
 
-// Rich health check — pings all backend services in parallel
+// Health check — post-MIM-88 the only backing service is the tenant
+// SQLite store (in-process); a trivial read proves the handle is alive.
 type HealthStatus = { status: string; latency?: string; error?: string };
 
-async function pingService(url: string): Promise<HealthStatus> {
+app.get("/health", (c) => {
   const start = Date.now();
-  const [err] = await attempt(() =>
-    fetch(url, { signal: AbortSignal.timeout(5_000) }).then((r) => {
-      if (!r.ok) throw new Error(`${r.status}`);
-    }),
-  );
-  return err
+  const [err] = attemptSync(() => getTenantDb().query("SELECT 1").get());
+  const store: HealthStatus = err
     ? { status: "down", error: err.message }
     : { status: "ok", latency: `${Date.now() - start}ms` };
-}
-
-app.get("/health", async (c) => {
-  // Post-MIM-89 the server runs no inference — provider pings left with
-  // it. Surreal is the critical dependency; the embedding endpoint feeds
-  // /mcp memory retrieval and degrades the answer quality, not the server.
-  const healthChecks = [
-    (async () => {
-      const start = Date.now();
-      const [err] = await attempt(async () => {
-        const db = await getDb();
-        await db.query("RETURN true");
-      });
-      const entry: [string, HealthStatus] = [
-        "surrealdb",
-        err
-          ? { status: "down", error: err.message }
-          : { status: "ok", latency: `${Date.now() - start}ms` },
-      ];
-      return entry;
-    })(),
-  ];
-
-  // Only the OpenAI-compatible embedding path has a pingable base URL;
-  // the Cohere path is a hosted API with its own availability story.
-  if (config.embedding.type === "openai") {
-    healthChecks.push(
-      pingService(`${config.embedding.baseUrl}/api/tags`).then(
-        (r) => ["embedding", r] as [string, HealthStatus],
-      ),
-    );
-  }
-
-  const results = await Promise.all(healthChecks);
-  const checks = Object.fromEntries(results);
-  const allUp = Object.values(checks).every(
-    (c) => (c as HealthStatus).status === "ok",
-  );
-  const criticalDown = (checks.surrealdb as HealthStatus)?.status === "down";
-  const status = allUp ? "ok" : criticalDown ? "degraded" : "partial";
-
+  const status = err ? "degraded" : "ok";
   return c.json(
-    { status, version: "0.3.0", services: checks },
-    status === "ok" ? 200 : 503,
+    { status, version: "0.3.0", services: { tenantStore: store } },
+    err ? 503 : 200,
   );
 });
 
@@ -102,6 +60,9 @@ app.route("/v1/projects", projects);
 // Wrapped-key distribution (MIM-87) — ciphertext relay only
 app.route("/v1/keys", keys);
 
+// Blind sync + coordination (MIM-88) — envelopes in, envelopes out
+app.route("/v1/sync", sync);
+
 // MCP server for Claude Code tool injection
 app.route("/mcp", mcp);
 
@@ -111,18 +72,20 @@ let server: ReturnType<typeof Bun.serve> | null = null;
 async function boot() {
   log.info("starting server");
 
-  // Fatal by design: a server without its database is a zombie — every
+  // Fatal by design: a server without its store is a zombie — every
   // DB-backed route fails while the process looks healthy. Crashing the
   // boot instead makes the deploy fail loudly (Railway keeps the previous
-  // deployment serving) rather than shipping a brainless instance. Runtime
-  // blips are NOT affected — getDb reconnects per request and fails fast
-  // via the SURREAL_TIMEOUT_MS deadline (MIM-79).
-  const [dbErr] = await attempt(initSchema);
+  // deployment serving). SQLite open + schema apply is synchronous; the
+  // usual failure is an unwritable volume path.
+  const [dbErr] = attemptSync(() => getTenantDb());
   if (dbErr) {
-    log.fatal({ err: dbErr }, "failed to connect to SurrealDB — aborting boot");
+    log.fatal(
+      { err: dbErr, path: config.tenantDbPath },
+      "failed to open the tenant store — aborting boot",
+    );
     process.exit(1);
   }
-  log.info("SurrealDB connected");
+  log.info({ path: config.tenantDbPath }, "tenant store ready");
 
   // Better Auth (MIM-70) — fatal by the same zombie logic as the DB above:
   // an auth-enabled server whose auth layer can't initialise would 401
@@ -189,14 +152,7 @@ async function boot() {
   }
   server = bound;
 
-  log.info(
-    {
-      host: server.hostname,
-      port: server.port,
-      embedding: `${config.embedding.type}:${config.embedding.model}`,
-    },
-    "listening",
-  );
+  log.info({ host: server.hostname, port: server.port }, "listening");
 }
 
 // Graceful shutdown
@@ -208,13 +164,7 @@ async function shutdown(signal: string) {
     log.info("server stopped accepting new connections");
   }
 
-  const [dbErr] = await attempt(() => closeDb());
-  if (dbErr) {
-    log.warn({ err: dbErr }, "error closing SurrealDB");
-  } else {
-    log.info("SurrealDB connection closed");
-  }
-
+  // SQLite handles close with the process; nothing external to release.
   log.info("shutdown complete");
   process.exit(0);
 }

@@ -30,15 +30,16 @@ import {
 } from "@mimir/plugin-core/store/org-replica";
 import { mimirHome } from "@mimir/plugin-core/util";
 import { type RecordId, Surreal } from "surrealdb";
-import { config } from "../src/config";
 import { log } from "../src/util/logger";
 
+// Env-only source (MIM-88: the runtime lost config.surreal — this script
+// is the last Surreal speaker, kept as the MIM-92 migration bridge).
 const SOURCE = {
-  url: Bun.env.SOURCE_SURREAL_URL ?? config.surreal.url,
-  user: Bun.env.SOURCE_SURREAL_USER ?? config.surreal.user,
-  pass: Bun.env.SOURCE_SURREAL_PASS ?? config.surreal.pass,
-  namespace: Bun.env.SOURCE_SURREAL_NS ?? config.surreal.namespace,
-  database: Bun.env.SOURCE_SURREAL_DB ?? config.surreal.database,
+  url: Bun.env.SOURCE_SURREAL_URL ?? Bun.env.SURREAL_URL ?? "",
+  user: Bun.env.SOURCE_SURREAL_USER ?? Bun.env.SURREAL_USER ?? "root",
+  pass: Bun.env.SOURCE_SURREAL_PASS ?? Bun.env.SURREAL_PASS ?? "root",
+  namespace: Bun.env.SOURCE_SURREAL_NS ?? Bun.env.SURREAL_NS ?? "mimir",
+  database: Bun.env.SOURCE_SURREAL_DB ?? Bun.env.SURREAL_DB ?? "mimir",
 };
 
 const REPLICA_DB_PATH =

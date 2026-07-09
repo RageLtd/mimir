@@ -22,6 +22,7 @@
  */
 
 import { runKeysCommand } from "@mimir/plugin-core/keys/cli";
+import { runSyncCommand } from "@mimir/plugin-core/sync/cli";
 import { runBackfillCommand } from "./backfill-command";
 import {
   mergeUpdateOptions,
@@ -67,6 +68,8 @@ const USAGE = [
   "  embed-backfill          Vectorize org-replica memories that lack embeddings (MIM-85).",
   "  keys <command>          E2E key ceremonies (MIM-87): status, setup, adopt,",
   "                          rotate, recovery-setup, recover.",
+  "  sync                    Pull + push org memories through the blind sync",
+  "                          relay (MIM-88), including embedding backfill.",
 ].join("\n");
 
 const dispatch = async (argv: readonly string[]): Promise<number> => {
@@ -139,6 +142,9 @@ const dispatch = async (argv: readonly string[]): Promise<number> => {
       // Shared editor-agnostic implementation (plugin-core) — the same
       // ceremonies are reachable from mimir-acp and the oc wrapper.
       return runKeysCommand(rest);
+
+    case "sync":
+      return runSyncCommand();
 
     case undefined:
     case "":

@@ -1,5 +1,5 @@
 /**
- * Project entity store.
+ * Project entity store — SQLite edition (MIM-88; Surreal exits).
  *
  * A project is the canonical unit of code the agent works on. Identity is
  * anchored to the git remote when one exists (stable, globally unique,
@@ -8,14 +8,18 @@
  * that haven't been pushed yet.
  *
  * Callers resolve by posting `{ gitRemote?, localPath?, title? }`; the store
- * returns an existing record or creates one. Downstream tables (cart_file,
- * memory) store the project's id portion (after the "project:" prefix) in
- * their `project` field.
+ * returns an existing record or creates one. Ids stay the bare 20-char
+ * alphanumeric form clients already hold (Surreal-era ids are preserved by
+ * scripts/export-projects.ts, new ones are minted locally).
+ *
+ * Scope is a plain `{ orgId }` — the WHERE clause is the tenant boundary
+ * (the identity gate resolved the org; the DB connection is shared).
  */
 
-import { RecordId } from "surrealdb";
-import { type OrgScope, scopedQueryFirst } from "../db/scope";
+import { getTenantDb } from "../db/tenant";
 import { log } from "../util/logger";
+
+export type ProjectScope = { readonly orgId: string };
 
 export interface Project {
   readonly id: string;
@@ -39,37 +43,43 @@ export interface ResolveInput {
 }
 
 interface ProjectRow {
-  id: string | RecordId;
-  title: string;
-  description?: string | null;
-  git_remote?: string | null;
-  local_path?: string | null;
-  technologies?: string[];
-  purpose?: string | null;
+  id: string;
+  title: string | null;
+  description: string | null;
+  git_remote: string | null;
+  local_path: string | null;
+  technologies: string | null;
+  purpose: string | null;
   created_at: string;
   updated_at: string;
 }
 
-/** Strip the "project:" table prefix from a SurrealDB RecordId string. */
-const idString = (id: string | RecordId) => {
-  if (id instanceof RecordId) return String(id.id);
-  const colon = id.indexOf(":");
-  return colon >= 0 ? id.slice(colon + 1) : id;
+const ID_LENGTH = 20;
+const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+const generateProjectId = () => {
+  const bytes = crypto.getRandomValues(new Uint8Array(ID_LENGTH));
+  let id = "";
+  for (const b of bytes) id += ID_ALPHABET[b % ID_ALPHABET.length];
+  return id;
 };
 
-const toRid = (row: ProjectRow) =>
-  row.id instanceof RecordId
-    ? row.id
-    : new RecordId("project", idString(row.id));
+const parseTechnologies = (raw: string | null) => {
+  if (!raw) return [] as string[];
+  const parsed: unknown = JSON.parse(raw);
+  return Array.isArray(parsed) && parsed.every((t) => typeof t === "string")
+    ? parsed
+    : [];
+};
 
 const rowToProject = (row: ProjectRow) => ({
-  id: idString(row.id),
-  title: row.title,
-  description: row.description ?? null,
-  git_remote: row.git_remote ?? null,
-  local_path: row.local_path ?? null,
-  technologies: row.technologies ?? [],
-  purpose: row.purpose ?? null,
+  id: row.id,
+  title: row.title ?? "untitled project",
+  description: row.description,
+  git_remote: row.git_remote,
+  local_path: row.local_path,
+  technologies: parseTechnologies(row.technologies),
+  purpose: row.purpose,
   created_at: row.created_at,
   updated_at: row.updated_at,
 });
@@ -88,6 +98,31 @@ const deriveTitle = (input: ResolveInput) => {
   return "untitled project";
 };
 
+const selectBy = (
+  scope: ProjectScope,
+  column: "git_remote" | "local_path",
+  value: string,
+) =>
+  getTenantDb()
+    .query<ProjectRow, [string, string]>(
+      `SELECT * FROM project WHERE ${column} = ? AND org_id = ? LIMIT 1`,
+    )
+    .get(value, scope.orgId);
+
+const touchColumn = (
+  scope: ProjectScope,
+  id: string,
+  column: "git_remote" | "local_path",
+  value: string,
+) => {
+  getTenantDb()
+    .query(
+      `UPDATE project SET ${column} = ?, updated_at = datetime('now')
+       WHERE id = ? AND org_id = ?`,
+    )
+    .run(value, id, scope.orgId);
+};
+
 /**
  * Get-or-create a project by git remote (primary) or local path (fallback).
  *
@@ -96,114 +131,78 @@ const deriveTitle = (input: ResolveInput) => {
  *   2. local_path exact match (if provided)
  *   3. create new with derived title
  *
- * When a match is found on local_path but git_remote was provided, the
- * existing record is updated to record the newly-discovered remote — this
- * lets a project that gained a remote after creation upgrade its identity
- * without losing history.
- *
- * Returns null when neither gitRemote nor localPath is provided. Callers
- * should validate at the boundary (route layer) — this function trusts
- * its inputs.
+ * A local_path match that arrives with a git remote upgrades the record's
+ * identity (remote recorded); a git_remote match with a new path refreshes
+ * the recorded path. Returns null when neither identifier is provided —
+ * the route layer validates, this function trusts its inputs.
  */
-export async function resolveProject(scope: OrgScope, input: ResolveInput) {
+export async function resolveProject(scope: ProjectScope, input: ResolveInput) {
   if (!input.gitRemote && !input.localPath) return null;
 
   if (input.gitRemote) {
-    const existing = await scopedQueryFirst<ProjectRow>(
-      scope,
-      `SELECT * FROM project WHERE git_remote = $remote AND org_id = $scope_org LIMIT 1`,
-      { remote: input.gitRemote, scope_org: scope.orgId },
-    );
+    const existing = selectBy(scope, "git_remote", input.gitRemote);
     if (existing) {
       if (input.localPath && existing.local_path !== input.localPath) {
-        const updated = await scopedQueryFirst<ProjectRow>(
-          scope,
-          `UPDATE $id SET local_path = $path, updated_at = time::now() WHERE org_id = $scope_org RETURN AFTER`,
-          {
-            id: toRid(existing),
-            path: input.localPath,
-            scope_org: scope.orgId,
-          },
-        );
-        if (updated) return rowToProject(updated);
+        touchColumn(scope, existing.id, "local_path", input.localPath);
+        const refreshed = selectBy(scope, "git_remote", input.gitRemote);
+        if (refreshed) return rowToProject(refreshed);
       }
       return rowToProject(existing);
     }
   }
 
   if (input.localPath) {
-    const existing = await scopedQueryFirst<ProjectRow>(
-      scope,
-      `SELECT * FROM project WHERE local_path = $path AND org_id = $scope_org LIMIT 1`,
-      { path: input.localPath, scope_org: scope.orgId },
-    );
+    const existing = selectBy(scope, "local_path", input.localPath);
     if (existing) {
       if (input.gitRemote && !existing.git_remote) {
-        const updated = await scopedQueryFirst<ProjectRow>(
-          scope,
-          `UPDATE $id SET git_remote = $remote, updated_at = time::now() WHERE org_id = $scope_org RETURN AFTER`,
-          {
-            id: toRid(existing),
-            remote: input.gitRemote,
-            scope_org: scope.orgId,
-          },
-        );
-        if (updated) return rowToProject(updated);
+        touchColumn(scope, existing.id, "git_remote", input.gitRemote);
+        const refreshed = selectBy(scope, "local_path", input.localPath);
+        if (refreshed) return rowToProject(refreshed);
       }
       return rowToProject(existing);
     }
   }
 
-  // Optional fields are declared `option<string>` in the schema (see
-  // db/surreal.ts:222-226). SurrealDB's `option<T>` accepts T or NONE —
-  // literal `null` trips a coercion error ("Expected 'none | string'
-  // but found 'NULL'"), so we build the CONTENT payload with absent
-  // fields rather than sending null. `technologies` stays in because
-  // its schema is `array<string> DEFAULT []` — null would be wrong
-  // there too, but `[]` is the right default.
-  const fields: Record<string, unknown> = {
-    title: deriveTitle(input),
-    technologies: input.technologies ?? [],
-    org_id: scope.orgId,
-  };
-  if (input.description) fields.description = input.description;
-  if (input.gitRemote) fields.git_remote = input.gitRemote;
-  if (input.localPath) fields.local_path = input.localPath;
-  if (input.purpose) fields.purpose = input.purpose;
-
-  const created = await scopedQueryFirst<ProjectRow>(
-    scope,
-    `CREATE project CONTENT $fields RETURN AFTER`,
-    { fields },
-  );
+  const id = generateProjectId();
+  getTenantDb()
+    .query(
+      `INSERT INTO project (
+        id, org_id, git_remote, local_path, title, description,
+        technologies, purpose
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      scope.orgId,
+      input.gitRemote ?? null,
+      input.localPath ?? null,
+      deriveTitle(input) ?? null,
+      input.description ?? null,
+      JSON.stringify(input.technologies ?? []),
+      input.purpose ?? null,
+    );
+  const created = await getProject(scope, id);
   if (!created) return null;
   log.info(
     {
-      id: idString(created.id),
+      id,
       title: created.title,
       gitRemote: created.git_remote,
       localPath: created.local_path,
     },
     "project created",
   );
-  return rowToProject(created);
+  return created;
 }
 
 /**
  * Resolve any client-sent project identifier to the canonical project id,
- * creating the project record when the identifier is unknown. This is the
- * API-boundary funnel: downstream tables key exclusively on the id this
- * returns — no path string ever reaches storage.
- *
- * Identifier forms, in resolution order:
- *   1. A canonical id (no slash) — verified against the project table.
- *   2. A cwd-style path — get-or-create by local_path (resolveProject).
- *   3. A bare bucket name like "default" (no slash, no record) — treated
- *      as a pseudo-path so it get-or-creates a stable project record.
- *      A stale id from another machine lands here too: it becomes its
- *      own bucket rather than failing the request.
+ * creating the project record when the identifier is unknown. Identifier
+ * forms, in resolution order: a canonical id (no slash, verified), a
+ * cwd-style path (get-or-create by local_path), or a bare bucket name
+ * ("default") treated as a pseudo-path so it get-or-creates stably.
  */
-export async function ensureProjectId(scope: OrgScope, identifier: string) {
+export async function ensureProjectId(scope: ProjectScope, identifier: string) {
   if (!identifier.includes("/")) {
     const existing = await getProject(scope, identifier);
     if (existing) return existing.id;
@@ -212,17 +211,18 @@ export async function ensureProjectId(scope: OrgScope, identifier: string) {
   return project?.id ?? null;
 }
 
-/** Fetch a project by its id portion (no "project:" prefix). */
-export async function getProject(scope: OrgScope, id: string) {
-  const row = await scopedQueryFirst<ProjectRow>(
-    scope,
-    `SELECT * FROM $id WHERE org_id = $scope_org`,
-    { id: new RecordId("project", id), scope_org: scope.orgId },
-  );
+/** Fetch a project by id. */
+export async function getProject(scope: ProjectScope, id: string) {
+  const row = getTenantDb()
+    .query<ProjectRow, [string, string]>(
+      "SELECT * FROM project WHERE id = ? AND org_id = ?",
+    )
+    .get(id, scope.orgId);
   return row ? rowToProject(row) : null;
 }
 
-/** Partial update — null values clear fields that are nullable. */
+/** Partial update — null values clear fields that are nullable;
+ *  undefined skips the field entirely (preserve current value). */
 export interface UpdateInput {
   readonly title?: string;
   readonly description?: string | null;
@@ -231,57 +231,32 @@ export interface UpdateInput {
 }
 
 export async function updateProject(
-  scope: OrgScope,
+  scope: ProjectScope,
   id: string,
   patch: UpdateInput,
 ) {
-  // Build SET clauses dynamically so nullable option<string> fields can be
-  // CLEARED via `field = NONE` rather than `field = NULL`. The previous
-  // MERGE-with-fields-object approach passed literal `null` through to
-  // SurrealDB, which rejects it for `option<string>` schemas with the
-  // same coercion error that bit resolveProject's CREATE path:
-  //   "Expected `none | string` but found `NULL`"
-  //
-  // UpdateInput semantics:
-  //   undefined → skip the field entirely (preserve current value)
-  //   null      → clear (only valid for fields typed `string | null` in
-  //               UpdateInput, i.e. description and purpose today)
-  //   T         → set to T
-  const setParts: string[] = ["updated_at = time::now()"];
-  const params: Record<string, unknown> = {
-    id: new RecordId("project", id),
-    scope_org: scope.orgId,
-  };
-
+  const setParts: string[] = ["updated_at = datetime('now')"];
+  const params: (string | null)[] = [];
   if (patch.title !== undefined) {
-    setParts.push("title = $title");
-    params.title = patch.title;
+    setParts.push("title = ?");
+    params.push(patch.title);
   }
   if (patch.description !== undefined) {
-    if (patch.description === null) {
-      setParts.push("description = NONE");
-    } else {
-      setParts.push("description = $description");
-      params.description = patch.description;
-    }
+    setParts.push("description = ?");
+    params.push(patch.description);
   }
   if (patch.technologies !== undefined) {
-    setParts.push("technologies = $technologies");
-    params.technologies = patch.technologies;
+    setParts.push("technologies = ?");
+    params.push(JSON.stringify(patch.technologies));
   }
   if (patch.purpose !== undefined) {
-    if (patch.purpose === null) {
-      setParts.push("purpose = NONE");
-    } else {
-      setParts.push("purpose = $purpose");
-      params.purpose = patch.purpose;
-    }
+    setParts.push("purpose = ?");
+    params.push(patch.purpose);
   }
-
-  const row = await scopedQueryFirst<ProjectRow>(
-    scope,
-    `UPDATE $id SET ${setParts.join(", ")} WHERE org_id = $scope_org RETURN AFTER`,
-    params,
-  );
-  return row ? rowToProject(row) : null;
+  getTenantDb()
+    .query(
+      `UPDATE project SET ${setParts.join(", ")} WHERE id = ? AND org_id = ?`,
+    )
+    .run(...params, id, scope.orgId);
+  return getProject(scope, id);
 }

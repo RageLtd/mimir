@@ -25,6 +25,7 @@ import {
   patchProjectMetadata,
 } from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
+import { syncFromSharedConfig } from "@mimir/plugin-core/sync/cli";
 import { errMessage } from "@mimir/plugin-core/util";
 import { readConfig } from "./config";
 import { createLogger } from "./logger";
@@ -80,14 +81,19 @@ const runHook = async () => {
 
   const cwd = input.cwd ?? process.cwd();
 
-  // Silent key reconcile (MIM-87): fulfil pending wraps, surface owed
-  // ceremonies in the log. Bounded await — the hook process exits after
-  // dispatch, so a detached promise would be killed mid-flight; a missed
-  // deadline just retries on the next session start. Never mints secrets.
-  const RECONCILE_DEADLINE_MS = 10_000;
+  // Silent key reconcile (MIM-87) then blind sync (MIM-88): fulfil
+  // pending wraps, pull/push org memories (no embedder spawn at boot).
+  // Bounded await — the hook process exits after dispatch, so a detached
+  // promise would be killed mid-flight; a missed deadline just retries
+  // on the next session start. Never mints secrets.
+  const RECONCILE_DEADLINE_MS = 15_000;
   const [reconcileErr, reconciled] = await attempt(() =>
     Promise.race([
-      reconcileFromSharedConfig(),
+      (async () => {
+        const keys = await reconcileFromSharedConfig();
+        log.info("key reconcile", { ...keys });
+        return syncFromSharedConfig();
+      })(),
       new Promise<{ status: "deadline" }>((resolve) =>
         setTimeout(
           () => resolve({ status: "deadline" }),
@@ -97,9 +103,9 @@ const runHook = async () => {
     ]),
   );
   if (reconcileErr) {
-    log.warn("key reconcile failed", { error: reconcileErr.message });
+    log.warn("boot reconcile failed", { error: reconcileErr.message });
   } else {
-    log.info("key reconcile", { ...reconciled });
+    log.info("org sync", { ...reconciled });
   }
 
   const config = await readConfig();

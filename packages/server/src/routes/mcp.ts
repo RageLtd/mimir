@@ -17,16 +17,14 @@
 import { asSchema } from "ai";
 import { Hono } from "hono";
 import { buildMcpPublicTools } from "../agent/server-tools";
-import { type ScopedEnv, scopeMiddleware } from "../middleware/scope";
 import { log } from "../util/logger";
 
-export const mcp = new Hono<ScopedEnv>();
+export const mcp = new Hono();
 
 // ── Tool registry ──────────────────────────────────────────────────────────
-// Built per request via buildMcpPublicTools(scope) — add new tools there, not
-// here. Scope-bound so tool execute closes over the caller's org (MIM-69). In
-// slice 2 the scope is a RootScope on the owner sentinel; slice 3 derives it
-// from the gate-stashed identity.
+// Built via buildMcpPublicTools() — add new tools there, not here. Post
+// MIM-88 the surface is introspection only (read_mimir_logs): tenant
+// memory/playbooks live client-side and sync as ciphertext.
 
 type Tools = ReturnType<typeof buildMcpPublicTools>;
 
@@ -132,13 +130,11 @@ async function dispatch(req: JsonRpcRequest, TOOLS: Tools) {
  * - Notifications (no id): 202 Accepted, no body.
  * - Requests: 200 with application/json response.
  */
-mcp.post("/", scopeMiddleware, async (c) => {
+mcp.post("/", async (c) => {
   const body = (await c.req.json()) as JsonRpcRequest;
   log.info({ method: body.method }, "mcp request");
 
-  // Tool set is bound to the caller's scoped connection (supplied + closed by
-  // scopeMiddleware); dispatch awaits every tool result before returning.
-  const tools = buildMcpPublicTools(c.get("scope"));
+  const tools = buildMcpPublicTools();
   const response = await dispatch(body, tools);
 
   if (response === null) {

@@ -17,10 +17,10 @@
     "hono": "catalog:server",
     "pino": "catalog:server",
     "pino-pretty": "catalog:server",
-    "surrealdb": "catalog:server",
     "zod": "catalog:server"
   },
   "devDependencies": {
-    "@mimir/plugin-core": "workspace:*"
+    "@mimir/plugin-core": "workspace:*",
+    "surrealdb": "^2.0.4"
   }
 }

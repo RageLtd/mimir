@@ -1,13 +1,17 @@
 import * as acp from "@agentclientprotocol/sdk";
 import { runKeysCommand } from "@mimir/plugin-core/keys/cli";
+import { runSyncCommand } from "@mimir/plugin-core/sync/cli";
 import { createMimirAgent } from "./src/agent";
 
-// Pre-handshake argv dispatch: `mimir-acp keys …` runs the shared key
-// ceremonies (MIM-87) so Zed-only users have a working surface with the
-// binary they already installed. Anything else falls through to the ACP
-// stdio agent.
+// Pre-handshake argv dispatch: `mimir-acp keys …` / `mimir-acp sync` run
+// the shared ceremonies (MIM-87/88) so Zed-only users have a working
+// surface with the binary they already installed. Anything else falls
+// through to the ACP stdio agent.
 if (Bun.argv[2] === "keys") {
   process.exit(await runKeysCommand(Bun.argv.slice(3)));
+}
+if (Bun.argv[2] === "sync") {
+  process.exit(await runSyncCommand());
 }
 
 const input = Bun.stdin.stream();

@@ -33,11 +33,20 @@ CREATE TABLE IF NOT EXISTS memory (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   last_accessed TEXT,
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  embedding BLOB
+  embedding BLOB,
+  version INTEGER NOT NULL DEFAULT 1,
+  dirty INTEGER NOT NULL DEFAULT 1,
+  tombstone INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_memory_type ON memory(type);
 CREATE INDEX IF NOT EXISTS idx_memory_project ON memory(project_id);
+
+CREATE TABLE IF NOT EXISTS sync_state (
+  org_id TEXT PRIMARY KEY,
+  cursor INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
 CREATE TABLE IF NOT EXISTS relates_to (
   from_id TEXT NOT NULL,
@@ -68,6 +77,38 @@ CREATE TRIGGER IF NOT EXISTS memory_au AFTER UPDATE OF content ON memory BEGIN
   INSERT INTO memory_fts(rowid, content) VALUES (new.rowid, new.content);
 END;
 `;
+
+/**
+ * Idempotent sync-column migration for replicas created before MIM-88.
+ * SQLite CREATE TABLE IF NOT EXISTS never alters an existing table, so
+ * pre-sync databases need the three columns added in place. Existing
+ * rows land dirty=1 deliberately: the first sync pushes the whole
+ * replica — exactly the MIM-92 cutover semantics.
+ */
+export const migrateSyncSchema = (db: {
+  query: (sql: string) => { all: () => unknown[] };
+  run: (sql: string) => unknown;
+}) => {
+  const columns = new Set(
+    (
+      db.query("PRAGMA table_info(memory)").all() as Array<{ name: string }>
+    ).map((c) => c.name),
+  );
+  if (!columns.has("version")) {
+    db.run("ALTER TABLE memory ADD COLUMN version INTEGER NOT NULL DEFAULT 1");
+  }
+  if (!columns.has("dirty")) {
+    db.run("ALTER TABLE memory ADD COLUMN dirty INTEGER NOT NULL DEFAULT 1");
+  }
+  if (!columns.has("tombstone")) {
+    db.run(
+      "ALTER TABLE memory ADD COLUMN tombstone INTEGER NOT NULL DEFAULT 0",
+    );
+  }
+  // Index lives here, not in SCHEMA: on a legacy database the column
+  // does not exist until the ALTERs above have run.
+  db.run("CREATE INDEX IF NOT EXISTS idx_memory_dirty ON memory(dirty)");
+};
 
 const MEMORY_ID_PREFIX = "memory:";
 const MEMORY_ID_LENGTH = 20;

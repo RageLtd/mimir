@@ -27,8 +27,10 @@ import {
   embeddingToBlob,
   escapeFtsQuery,
   generateMemoryId,
+  migrateSyncSchema,
   SCHEMA,
 } from "./org-replica-support";
+import { createSyncApi } from "./org-replica-sync";
 
 // Re-exported so consumers keep a single import site for the replica API.
 export {
@@ -57,6 +59,10 @@ export type ReplicaMemory = {
   readonly created_at: string;
   readonly last_accessed: string | null;
   readonly updated_at: string;
+  /** MIM-88 sync spine: LWW counter, pending-push flag, soft delete. */
+  readonly version: number;
+  readonly dirty: number;
+  readonly tombstone: number;
 };
 
 type MemoryRow = ReplicaMemory & { readonly embedding: Uint8Array | null };
@@ -90,6 +96,9 @@ export const createOrgReplica = (dbPath: string) => {
   db.run("PRAGMA journal_mode=WAL");
   db.run("PRAGMA foreign_keys=ON");
   db.run(SCHEMA);
+  // Pre-MIM-88 replicas gain the sync columns in place (existing rows
+  // land dirty=1 — first sync pushes the whole store, by design).
+  migrateSyncSchema(db);
 
   const insertMemory = (id: string, memory: UpsertMemory, upsert: boolean) => {
     const conflict = upsert
@@ -106,6 +115,8 @@ export const createOrgReplica = (dbPath: string) => {
           access_count = excluded.access_count,
           last_accessed = excluded.last_accessed,
           embedding = excluded.embedding,
+          version = memory.version + 1,
+          dirty = 1,
           updated_at = datetime('now')`
       : "";
     db.query(
@@ -148,7 +159,9 @@ export const createOrgReplica = (dbPath: string) => {
 
   const getMemory = (id: string) => {
     const row = db
-      .query<MemoryRow, [string]>("SELECT * FROM memory WHERE id = ?")
+      .query<MemoryRow, [string]>(
+        "SELECT * FROM memory WHERE id = ? AND tombstone = 0",
+      )
       .get(id);
     return row ? stripEmbedding(row) : null;
   };
@@ -158,7 +171,9 @@ export const createOrgReplica = (dbPath: string) => {
   const searchByVector = (embedding: number[], limit = 30) => {
     const query = Float32Array.from(embedding);
     const rows = db
-      .query<MemoryRow, []>("SELECT * FROM memory WHERE embedding IS NOT NULL")
+      .query<MemoryRow, []>(
+        "SELECT * FROM memory WHERE embedding IS NOT NULL AND tombstone = 0",
+      )
       .all();
     return rows
       .map((row) => ({
@@ -178,7 +193,7 @@ export const createOrgReplica = (dbPath: string) => {
       .query<MemoryRow & { rank: number }, [string, number]>(
         `SELECT m.*, f.rank AS rank
          FROM memory m JOIN memory_fts f ON m.rowid = f.rowid
-         WHERE memory_fts MATCH ?
+         WHERE memory_fts MATCH ? AND m.tombstone = 0
          ORDER BY f.rank
          LIMIT ?`,
       )
@@ -235,11 +250,11 @@ export const createOrgReplica = (dbPath: string) => {
       >(
         `SELECT m.id AS id, m.content AS content, m.project_id AS project_id, r.weight AS weight
          FROM relates_to r JOIN memory m ON m.id = r.to_id
-         WHERE r.from_id IN (${placeholders})
+         WHERE r.from_id IN (${placeholders}) AND m.tombstone = 0
          UNION ALL
          SELECT m.id, m.content, m.project_id, r.weight
          FROM relates_to r JOIN memory m ON m.id = r.from_id
-         WHERE r.to_id IN (${placeholders})`,
+         WHERE r.to_id IN (${placeholders}) AND m.tombstone = 0`,
       )
       .all(...memoryIds, ...memoryIds);
     const seen = new Set<string>();
@@ -268,7 +283,7 @@ export const createOrgReplica = (dbPath: string) => {
   const listMemories = (limit = 20) =>
     db
       .query<MemoryRow, [number]>(
-        "SELECT * FROM memory ORDER BY created_at DESC LIMIT ?",
+        "SELECT * FROM memory WHERE tombstone = 0 ORDER BY created_at DESC LIMIT ?",
       )
       .all(limit)
       .map(stripEmbedding);
@@ -280,7 +295,7 @@ export const createOrgReplica = (dbPath: string) => {
         [number]
       >(
         `SELECT content, token_count, created_at
-         FROM memory WHERE type = 'summary'
+         FROM memory WHERE type = 'summary' AND tombstone = 0
          ORDER BY created_at DESC LIMIT ?`,
       )
       .all(count);
@@ -288,13 +303,14 @@ export const createOrgReplica = (dbPath: string) => {
   const listPlaybooks = () =>
     db
       .query<MemoryRow, []>(
-        "SELECT * FROM memory WHERE type = 'playbook' AND name IS NOT NULL ORDER BY created_at ASC",
+        "SELECT * FROM memory WHERE type = 'playbook' AND name IS NOT NULL AND tombstone = 0 ORDER BY created_at ASC",
       )
       .all()
       .map(stripEmbedding);
 
   /** Update content (+ optional re-embed); severs relations like the
-   *  server does — stale edges are worse than missing ones. */
+   *  server does — stale edges are worse than missing ones. Bumps the
+   *  LWW version and marks the row for push. */
   const updateMemory = (
     id: string,
     content: string,
@@ -307,8 +323,10 @@ export const createOrgReplica = (dbPath: string) => {
           embedding = COALESCE($embedding, embedding),
           last_accessed = datetime('now'),
           confidence = 1.0,
+          version = version + 1,
+          dirty = 1,
           updated_at = datetime('now')
-         WHERE id = $id`,
+         WHERE id = $id AND tombstone = 0`,
       )
       .run({
         $id: id,
@@ -323,12 +341,27 @@ export const createOrgReplica = (dbPath: string) => {
     return true;
   };
 
+  /**
+   * Soft delete (MIM-88): tombstone + dirty so the deletion syncs; the
+   * physical purge happens in markPushed once the envelope is on the
+   * server. Content/embedding are blanked immediately — deleted text
+   * should not linger locally, and the FTS UPDATE trigger clears the
+   * index entry.
+   */
   const deleteMemory = (id: string) => {
     db.query("DELETE FROM relates_to WHERE from_id = ? OR to_id = ?").run(
       id,
       id,
     );
-    const result = db.query("DELETE FROM memory WHERE id = ?").run(id);
+    const result = db
+      .query(
+        `UPDATE memory SET
+          tombstone = 1, dirty = 1, version = version + 1,
+          content = '', embedding = NULL, name = NULL, trigger = NULL,
+          updated_at = datetime('now')
+         WHERE id = ? AND tombstone = 0`,
+      )
+      .run(id);
     return result.changes > 0;
   };
 
@@ -346,7 +379,7 @@ export const createOrgReplica = (dbPath: string) => {
         [number]
       >(
         `SELECT id, content, type, name, trigger
-         FROM memory WHERE embedding IS NULL LIMIT ?`,
+         FROM memory WHERE embedding IS NULL AND tombstone = 0 LIMIT ?`,
       )
       .all(limit);
 
@@ -361,22 +394,31 @@ export const createOrgReplica = (dbPath: string) => {
    *  the sweep computes pairwise distances itself over the full set. */
   const listFactsWithEmbeddings = () =>
     db
-      .query<MemoryRow, []>("SELECT * FROM memory WHERE type = 'fact'")
+      .query<MemoryRow, []>(
+        "SELECT * FROM memory WHERE type = 'fact' AND tombstone = 0",
+      )
       .all()
       .map((row) => ({
         ...stripEmbedding(row),
         embedding: row.embedding ? blobToEmbedding(row.embedding) : null,
       }));
 
-  /** Hygiene surface (MIM-86): confidence decay + contradiction demotion. */
+  /** Hygiene surface (MIM-86): confidence decay + contradiction demotion.
+   *  Org-shared judgment, so it versions and syncs (unlike access noise). */
   const setConfidence = (id: string, confidence: number) =>
     db
-      .query("UPDATE memory SET confidence = ? WHERE id = ?")
+      .query(
+        `UPDATE memory SET confidence = ?, version = version + 1, dirty = 1,
+          updated_at = datetime('now')
+         WHERE id = ? AND tombstone = 0`,
+      )
       .run(confidence, id).changes > 0;
 
   const countMemories = () => {
     const row = db
-      .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM memory")
+      .query<{ n: number }, []>(
+        "SELECT COUNT(*) AS n FROM memory WHERE tombstone = 0",
+      )
       .get();
     return row?.n ?? 0;
   };
@@ -386,6 +428,8 @@ export const createOrgReplica = (dbPath: string) => {
   };
 
   return {
+    // MIM-88 sync spine: listDirty/applyRemote/markPushed + cursor state.
+    ...createSyncApi(db),
     storeMemory,
     upsertMemory,
     getMemory,

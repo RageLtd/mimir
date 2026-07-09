@@ -1,224 +1,141 @@
 /**
- * Tests for the project store — focused on the CREATE-shape regression.
- *
- * The May 2026 bug: resolveProject's CREATE payload sent `description: null`
- * for any unset optional field. SurrealDB's `option<string>` schema rejects
- * literal `null` ("Expected 'none | string' but found 'NULL'"), so every
- * resolve call from a Slice-2 plugin (which only sends gitRemote+localPath)
- * failed with a 500 and the plugin fell back to projectId: null on every
- * downstream call. Fix: build the CONTENT payload conditionally so
- * unset option<string> fields are absent rather than null.
- *
- * Mock-based pattern: a hand-built OrgScope
- * whose `db.query` is a mock intercepts the DB calls (reads and writes now
- * run on scope.db via scopedQueryFirst) so we can assert on the query
- * parameters without standing up a real SurrealDB.
+ * Project store tests — SQLite edition (MIM-88). Behavior-level against a
+ * real in-memory tenant db (the Surreal-era mock/NONE-coercion concerns
+ * died with Surreal): resolve lookup order + identity upgrades, id
+ * verification, update clear/skip semantics, and org isolation.
  */
 
-import { beforeEach, describe, expect, mock, test } from "bun:test";
-import type { Surreal } from "surrealdb";
-import type { OrgScope } from "../db/scope";
-import { resolveProject, updateProject } from "./store";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { _setTenantDbForTests, createTenantDb } from "../db/tenant";
+import {
+  ensureProjectId,
+  getProject,
+  resolveProject,
+  updateProject,
+} from "./store";
 
-const ORG = "test-org";
+const ORG = { orgId: "test-org" };
+const OTHER_ORG = { orgId: "other-org" };
+
+beforeEach(() => {
+  _setTenantDbForTests(createTenantDb(":memory:"));
+});
+
+afterEach(() => {
+  _setTenantDbForTests(null);
+});
 
 describe("resolveProject", () => {
-  let queryMock: ReturnType<typeof mock>;
-  let lastCreateFields: Record<string, unknown> | null;
-
-  const mkScope = (): OrgScope => ({
-    orgId: ORG,
-    db: { query: queryMock } as unknown as Surreal,
-    isRoot: true,
-  });
-
-  beforeEach(() => {
-    lastCreateFields = null;
-    queryMock = mock(
-      (query: string, params?: { fields?: Record<string, unknown> }) => {
-        // Capture the CREATE payload for later assertions. scopedQueryFirst
-        // unwraps SurrealDB's [[row]] envelope, so return the row nested.
-        if (query.includes("CREATE project") && params?.fields) {
-          lastCreateFields = params.fields;
-          return Promise.resolve([
-            [
-              {
-                id: "project:test-id",
-                title: lastCreateFields.title ?? "untitled",
-                description: lastCreateFields.description ?? null,
-                git_remote: lastCreateFields.git_remote ?? null,
-                local_path: lastCreateFields.local_path ?? null,
-                technologies: lastCreateFields.technologies ?? [],
-                purpose: lastCreateFields.purpose ?? null,
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-              },
-            ],
-          ]);
-        }
-        // SELECT WHERE git_remote / local_path → no existing project.
-        return Promise.resolve([[]]);
-      },
-    );
-  });
-
   test("returns null when neither gitRemote nor localPath is provided", async () => {
-    const result = await resolveProject(mkScope(), {});
-    expect(result).toBeNull();
+    expect(await resolveProject(ORG, {})).toBeNull();
   });
 
-  test("CREATE payload omits unset optional fields rather than sending null", async () => {
-    await resolveProject(mkScope(), {
-      gitRemote: "git@github.com:org/repo",
-      localPath: "/tmp/repo",
+  test("creates with derived title, then resolves the same record by remote", async () => {
+    const created = await resolveProject(ORG, {
+      gitRemote: "git@github.com:org/cool-repo.git",
+      localPath: "/tmp/cool-repo",
     });
+    expect(created?.title).toBe("org/cool-repo");
+    expect(created?.technologies).toEqual([]);
 
-    expect(lastCreateFields).not.toBeNull();
-    // The regression: any of these being literal null would trip the
-    // SurrealDB option<string> coercion error in production.
-    expect(lastCreateFields).not.toHaveProperty("description");
-    expect(lastCreateFields).not.toHaveProperty("purpose");
-    // Required-ish fields stay present.
-    expect(lastCreateFields?.git_remote).toBe("git@github.com:org/repo");
-    expect(lastCreateFields?.local_path).toBe("/tmp/repo");
-    // technologies defaults to [] (schema has DEFAULT [], but explicit
-    // is fine — and definitely not null).
-    expect(lastCreateFields?.technologies).toEqual([]);
-    // MIM-69: every CREATE stamps the caller's org so the row is scoped.
-    expect(lastCreateFields?.org_id).toBe(ORG);
+    const resolved = await resolveProject(ORG, {
+      gitRemote: "git@github.com:org/cool-repo.git",
+    });
+    expect(resolved?.id).toBe(created?.id ?? "");
   });
 
-  test("CREATE payload includes description and purpose when provided", async () => {
-    await resolveProject(mkScope(), {
+  test("git_remote match refreshes a moved local_path", async () => {
+    const created = await resolveProject(ORG, {
       gitRemote: "git@github.com:org/repo",
-      localPath: "/tmp/repo",
+      localPath: "/old/checkout",
+    });
+    const moved = await resolveProject(ORG, {
+      gitRemote: "git@github.com:org/repo",
+      localPath: "/new/checkout",
+    });
+    expect(moved?.id).toBe(created?.id ?? "");
+    expect(moved?.local_path).toBe("/new/checkout");
+  });
+
+  test("local_path match upgrades identity when a remote appears", async () => {
+    const created = await resolveProject(ORG, { localPath: "/tmp/greenfield" });
+    expect(created?.git_remote).toBeNull();
+    const upgraded = await resolveProject(ORG, {
+      localPath: "/tmp/greenfield",
+      gitRemote: "git@github.com:org/greenfield",
+    });
+    expect(upgraded?.id).toBe(created?.id ?? "");
+    expect(upgraded?.git_remote).toBe("git@github.com:org/greenfield");
+  });
+
+  test("optional fields persist on create", async () => {
+    const created = await resolveProject(ORG, {
+      localPath: "/tmp/described",
       description: "A cool app",
       purpose: "experimental",
+      technologies: ["bun", "typescript"],
     });
-
-    expect(lastCreateFields?.description).toBe("A cool app");
-    expect(lastCreateFields?.purpose).toBe("experimental");
+    expect(created?.description).toBe("A cool app");
+    expect(created?.purpose).toBe("experimental");
+    expect(created?.technologies).toEqual(["bun", "typescript"]);
   });
+});
 
-  test("CREATE payload omits localPath when only gitRemote is given", async () => {
-    await resolveProject(mkScope(), { gitRemote: "git@github.com:org/repo" });
-
-    expect(lastCreateFields).not.toHaveProperty("local_path");
-    expect(lastCreateFields?.git_remote).toBe("git@github.com:org/repo");
-  });
-
-  test("CREATE payload omits gitRemote when only localPath is given", async () => {
-    await resolveProject(mkScope(), { localPath: "/tmp/repo" });
-
-    expect(lastCreateFields).not.toHaveProperty("git_remote");
-    expect(lastCreateFields?.local_path).toBe("/tmp/repo");
-  });
-
-  test("derives a sensible title from localPath when none is given", async () => {
-    await resolveProject(mkScope(), { localPath: "/Users/x/Projects/cool-thing" });
-    expect(lastCreateFields?.title).toBeTruthy();
-    expect(typeof lastCreateFields?.title).toBe("string");
+describe("ensureProjectId", () => {
+  test("verifies a canonical id, buckets a bare name, resolves a path", async () => {
+    const created = await resolveProject(ORG, { localPath: "/tmp/known" });
+    if (!created) throw new Error("create failed");
+    expect(await ensureProjectId(ORG, created.id)).toBe(created.id);
+    // Path form get-or-creates.
+    expect(await ensureProjectId(ORG, "/tmp/known")).toBe(created.id);
+    // Bare bucket name becomes its own stable pseudo-path project.
+    const bucket = await ensureProjectId(ORG, "default");
+    expect(bucket).toBeTruthy();
+    expect(await ensureProjectId(ORG, "default")).toBe(bucket);
   });
 });
 
 describe("updateProject", () => {
-  let lastQuery: string;
-  let lastParams: Record<string, unknown>;
-  let queryMock: ReturnType<typeof mock>;
-
-  const mkScope = (): OrgScope => ({
-    orgId: ORG,
-    db: { query: queryMock } as unknown as Surreal,
-    isRoot: true,
-  });
-
-  beforeEach(() => {
-    lastQuery = "";
-    lastParams = {};
-    queryMock = mock((query: string, params: Record<string, unknown>) => {
-      lastQuery = query;
-      lastParams = params;
-      return Promise.resolve([
-        [
-          {
-            id: "project:test-id",
-            title: "x",
-            description: null,
-            git_remote: null,
-            local_path: null,
-            technologies: [],
-            purpose: null,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          },
-        ],
-      ]);
+  test("null clears nullable fields; undefined preserves them", async () => {
+    const created = await resolveProject(ORG, {
+      localPath: "/tmp/mutable",
+      description: "original",
+      purpose: "original purpose",
     });
-  });
+    if (!created) throw new Error("create failed");
 
-  test("always sets updated_at, scopes by org, and clamps to the caller's org", async () => {
-    await updateProject(mkScope(), "test-id", {});
-    expect(lastQuery).toContain("updated_at = time::now()");
-    // MIM-69: the UPDATE only touches rows in the caller's org.
-    expect(lastQuery).toContain("WHERE org_id = $scope_org");
-    expect(lastParams.scope_org).toBe(ORG);
-  });
+    const renamed = await updateProject(ORG, created.id, { title: "renamed" });
+    expect(renamed?.title).toBe("renamed");
+    expect(renamed?.description).toBe("original"); // undefined → preserved
 
-  test("description=null clears via NONE, not literal null", async () => {
-    // The May 2026 bug: passing null in a SurrealDB MERGE / SET value
-    // tripped "Expected 'none | string' but found 'NULL'" because
-    // option<T> rejects NULL. NONE is the correct sentinel.
-    await updateProject(mkScope(), "test-id", { description: null });
-    expect(lastQuery).toContain("description = NONE");
-    expect(lastParams).not.toHaveProperty("description");
-  });
-
-  test("description=string sets via parameter", async () => {
-    await updateProject(mkScope(), "test-id", { description: "new desc" });
-    expect(lastQuery).toContain("description = $description");
-    expect(lastParams.description).toBe("new desc");
-  });
-
-  test("purpose=null clears via NONE, purpose=string sets via parameter", async () => {
-    await updateProject(mkScope(), "test-id", { purpose: null });
-    expect(lastQuery).toContain("purpose = NONE");
-    expect(lastParams).not.toHaveProperty("purpose");
-
-    await updateProject(mkScope(), "test-id", { purpose: "alpha test" });
-    expect(lastQuery).toContain("purpose = $purpose");
-    expect(lastParams.purpose).toBe("alpha test");
-  });
-
-  test("undefined fields are skipped entirely (no SET clause, no param)", async () => {
-    await updateProject(mkScope(), "test-id", { title: "renamed" });
-    expect(lastQuery).toContain("title = $title");
-    expect(lastQuery).not.toContain("description");
-    expect(lastQuery).not.toContain("purpose");
-    expect(lastQuery).not.toContain("technologies");
-    expect(lastParams.title).toBe("renamed");
-    expect(lastParams).not.toHaveProperty("description");
-  });
-
-  test("technologies array is passed through verbatim", async () => {
-    await updateProject(mkScope(), "test-id", {
-      technologies: ["bun", "typescript"],
+    const cleared = await updateProject(ORG, created.id, {
+      description: null,
+      technologies: ["rust"],
     });
-    expect(lastQuery).toContain("technologies = $technologies");
-    expect(lastParams.technologies).toEqual(["bun", "typescript"]);
+    expect(cleared?.description).toBeNull();
+    expect(cleared?.purpose).toBe("original purpose");
+    expect(cleared?.technologies).toEqual(["rust"]);
   });
 
-  test("multiple fields land in a single UPDATE statement", async () => {
-    await updateProject(mkScope(), "test-id", {
-      title: "renamed",
-      description: "a new desc",
-      purpose: null,
+  test("unknown id returns null", async () => {
+    expect(await updateProject(ORG, "nope", { title: "x" })).toBeNull();
+  });
+});
+
+describe("org isolation", () => {
+  test("projects never bleed across orgs", async () => {
+    const mine = await resolveProject(ORG, {
+      gitRemote: "git@github.com:org/shared-name",
     });
-    // One UPDATE, four SET clauses (title + description + purpose + updated_at).
-    const updateCount = (lastQuery.match(/UPDATE/g) ?? []).length;
-    expect(updateCount).toBe(1);
-    expect(lastQuery).toContain("title = $title");
-    expect(lastQuery).toContain("description = $description");
-    expect(lastQuery).toContain("purpose = NONE");
-    expect(lastQuery).toContain("updated_at = time::now()");
+    if (!mine) throw new Error("create failed");
+    // Other org resolving the same remote gets its OWN record.
+    const theirs = await resolveProject(OTHER_ORG, {
+      gitRemote: "git@github.com:org/shared-name",
+    });
+    expect(theirs?.id).not.toBe(mine.id);
+    // Cross-org reads and writes miss.
+    expect(await getProject(OTHER_ORG, mine.id)).toBeNull();
+    expect(await updateProject(OTHER_ORG, mine.id, { title: "pwned" })).toBeNull();
+    expect((await getProject(ORG, mine.id))?.title).not.toBe("pwned");
   });
 });

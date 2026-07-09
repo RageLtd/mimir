@@ -95,11 +95,18 @@ export const deriveKey = (ikm: Uint8Array, info: string, salt?: Uint8Array) =>
 /**
  * AES-256-GCM seal: fresh random 96-bit nonce per call (THREAT_MODEL §6
  * nonce policy — never cached, never counter-derived). Returns
- * nonce ‖ ciphertext ‖ tag as one buffer.
+ * nonce ‖ ciphertext ‖ tag as one buffer. Optional AAD binds context —
+ * the envelope seam (sync) passes the §6 canonical field encoding so a
+ * transplanted ciphertext fails authentication.
  */
-export function aesGcmSeal(key: Uint8Array, plaintext: Uint8Array) {
+export function aesGcmSeal(
+  key: Uint8Array,
+  plaintext: Uint8Array,
+  aad?: Uint8Array,
+) {
   const nonce = randomBytes(GCM_NONCE_BYTES);
   const cipher = createCipheriv(AES_GCM, key, nonce);
+  if (aad) cipher.setAAD(aad);
   return Buffer.concat([
     nonce,
     cipher.update(plaintext),
@@ -108,8 +115,13 @@ export function aesGcmSeal(key: Uint8Array, plaintext: Uint8Array) {
   ]);
 }
 
-/** AES-256-GCM open — throws on truncation or auth failure. */
-export function aesGcmOpen(key: Uint8Array, sealed: Uint8Array) {
+/** AES-256-GCM open — throws on truncation, auth failure, or AAD
+ *  mismatch. */
+export function aesGcmOpen(
+  key: Uint8Array,
+  sealed: Uint8Array,
+  aad?: Uint8Array,
+) {
   if (sealed.length < GCM_NONCE_BYTES + GCM_TAG_BYTES) {
     throw new Error("sealed blob too short");
   }
@@ -121,6 +133,7 @@ export function aesGcmOpen(key: Uint8Array, sealed: Uint8Array) {
     buffer.length - GCM_TAG_BYTES,
   );
   const decipher = createDecipheriv(AES_GCM, key, nonce);
+  if (aad) decipher.setAAD(aad);
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
 }

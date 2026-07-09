@@ -29,6 +29,10 @@ import {
   createUserMemoryStore,
   type UserMemoryStore,
 } from "@mimir/plugin-core/store/user-memories";
+import {
+  runSyncCommand,
+  syncFromSharedConfig,
+} from "@mimir/plugin-core/sync/cli";
 import { errMessage, mimirHome } from "@mimir/plugin-core/util";
 import {
   type VoiceAnchor as Anchor,
@@ -345,30 +349,39 @@ export const MimirPlugin: Plugin = async (ctx) => {
         void runFullReindex(log, config, ctx.directory).catch((err) =>
           log.error("full reindex crashed", { error: errMessage(err) }),
         );
-        // Silent key reconcile (MIM-87): fulfil pending wraps, surface
-        // owed ceremonies in the log. Never blocks, never mints secrets.
+        // Silent key reconcile (MIM-87) then blind sync (MIM-88): fulfil
+        // pending wraps, pull/push org memories. Never blocks the session,
+        // never mints secrets; sync skips the embedder at boot.
         void reconcileFromSharedConfig()
           .then((result) => log.info("key reconcile", { ...result }))
+          .then(() => syncFromSharedConfig())
+          .then((result) => log.info("org sync", { ...result }))
           .catch((err) =>
-            log.error("key reconcile crashed", { error: errMessage(err) }),
+            log.error("boot reconcile crashed", { error: errMessage(err) }),
           );
         return;
       }
 
       if (event.type === "session.idle") {
         // Distill the session's new turns into the local replica
-        // (MIM-86). Fire-and-forget: errors are logged inside the
-        // function but never propagated. The per-session watermark
-        // makes repeat idles cheap; storeTyped dedupes.
+        // (MIM-86), then push them through the blind sync relay
+        // (MIM-88). Fire-and-forget: errors are logged, never
+        // propagated. The per-session watermark makes repeat idles
+        // cheap; storeTyped dedupes; sync skips the embedder.
         void persistSessionTranscript(
           event.properties.sessionID,
           ctx.directory,
           config,
           log,
           ctx.client,
-        ).catch((err) =>
-          log.error("transcript persist crashed", { error: errMessage(err) }),
-        );
+        )
+          .then(() => syncFromSharedConfig())
+          .then((result) => log.info("post-distill sync", { ...result }))
+          .catch((err) =>
+            log.error("transcript persist crashed", {
+              error: errMessage(err),
+            }),
+          );
         return;
       }
     },
@@ -377,11 +390,14 @@ export const MimirPlugin: Plugin = async (ctx) => {
 
 export default MimirPlugin;
 
-// Argv-program mode: the `mimir` wrapper dispatches `keys …` to this
-// bundle directly (`bun mimir-oc.ts keys …`). import.meta.main is false
-// when OpenCode imports the file as a plugin, so this path is inert in
-// normal operation — one artifact, two roles (MIM-87 editor-agnostic
-// key-ceremony rule).
+// Argv-program mode: the `mimir` wrapper dispatches `keys …` / `sync` to
+// this bundle directly (`bun mimir-oc.ts keys …`). import.meta.main is
+// false when OpenCode imports the file as a plugin, so this path is
+// inert in normal operation — one artifact, two roles (MIM-87/88
+// editor-agnostic ceremony rule).
 if (import.meta.main && Bun.argv[2] === "keys") {
   process.exit(await runKeysCommand(Bun.argv.slice(3)));
+}
+if (import.meta.main && Bun.argv[2] === "sync") {
+  process.exit(await runSyncCommand());
 }

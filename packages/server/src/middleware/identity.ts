@@ -23,9 +23,16 @@
 
 import type { Context, Next } from "hono";
 import { getAuth } from "../auth/instance";
-import { OWNER_ORG_SENTINEL, type ResolvedIdentity } from "../db/scope";
+import { OWNER_ORG_SENTINEL } from "../db/tenant";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
+
+/** A resolved request identity — the user and the org their request is
+ *  scoped to (relocated from db/scope.ts when Surreal exited, MIM-88). */
+export interface ResolvedIdentity {
+  readonly userId: string;
+  readonly orgId: string;
+}
 
 const BEARER_PREFIX = "Bearer ";
 const API_KEY_HEADER = "x-api-key";

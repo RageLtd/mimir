@@ -1,35 +1,9 @@
+# SurrealDB exited the stack in MIM-88 — the tenant store is SQLite on
+# the /data volume. The old surrealdb-data named volume is NOT deleted by
+# removing the service definition; keep it around until the export
+# scripts (export-projects / import-replica) have run and MIM-92 signs
+# off the cutover.
 services:
-  surrealdb:
-    image: surrealdb/surrealdb:latest-dev
-    restart: unless-stopped
-    user: root
-    ports:
-      - "8001:8000"
-    entrypoint:
-      - /surreal
-      - start
-      - --log
-      - info
-      - --user
-      - root
-      - --pass
-      - ${SURREAL_PASS:-changeme}
-      - rocksdb:/data/surreal.db
-    volumes:
-      - surrealdb-data:/data
-    labels:
-      caddy: http://surreal.conhost.lan
-      caddy.reverse_proxy: "192.168.1.160:8001"
-    networks:
-      - caddy
-      - mimir
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
-
   mimir:
     image: ghcr.io/rageltd/mimir-server:next
     restart: unless-stopped
@@ -46,12 +20,6 @@ services:
     labels:
       caddy: http://mimir.conhost.lan
       caddy.reverse_proxy: "192.168.1.160:8080"
-    depends_on:
-      surrealdb:
-        condition: service_healthy
-
-volumes:
-  surrealdb-data:
 
 networks:
   caddy:

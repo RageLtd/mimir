@@ -21,6 +21,7 @@ import {
   startProviderDataRefresh,
 } from "@mimir/plugin-core/engine/provider";
 import { reconcileFromSharedConfig } from "@mimir/plugin-core/keys/cli";
+import { syncFromSharedConfig } from "@mimir/plugin-core/sync/cli";
 import { errMessage } from "@mimir/plugin-core/util";
 import type { MimirConfig } from "./config";
 import { createChildLogger, log } from "./utils/log";
@@ -43,12 +44,15 @@ export const ensureEngineReady = () => {
     // without a restart — same wiring the server used.
     startProviderDataRefresh(() => initProviderRegistry());
     logger.info("provider engine initialized");
-    // Silent key reconcile (MIM-87): fulfil pending wraps, surface owed
-    // ceremonies in the log. Detached — the ACP process is long-lived,
-    // engine readiness never waits on the network. Never mints secrets.
+    // Silent key reconcile (MIM-87) then blind sync (MIM-88): fulfil
+    // pending wraps, pull/push org memories. Detached — the ACP process
+    // is long-lived, engine readiness never waits on the network. Never
+    // mints secrets; sync skips the embedder at boot.
     void reconcileFromSharedConfig()
       .then((result) => logger.info(`key reconcile: ${JSON.stringify(result)}`))
-      .catch((err) => logger.warn(`key reconcile failed: ${errMessage(err)}`));
+      .then(() => syncFromSharedConfig())
+      .then((result) => logger.info(`org sync: ${JSON.stringify(result)}`))
+      .catch((err) => logger.warn(`boot reconcile failed: ${errMessage(err)}`));
   })();
   return enginePromise;
 };
