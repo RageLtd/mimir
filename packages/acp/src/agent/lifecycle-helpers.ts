@@ -9,10 +9,9 @@
 
 import type * as acp from "@agentclientprotocol/sdk";
 import { formatLoadErrors, type LoadError } from "@mimir/plugin-core/rules";
-import type { ChatMessage } from "../server-client";
 import { createChildLogger, log } from "../utils/log";
 import { AVAILABLE_COMMANDS } from "./session";
-import type { AgentCore } from "./types";
+import type { AgentCore, ChatMessage } from "./types";
 
 const logger = createChildLogger(log, "lifecycle-helpers");
 

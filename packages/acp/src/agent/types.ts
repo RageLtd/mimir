@@ -6,10 +6,27 @@ import type * as acp from "@agentclientprotocol/sdk";
 import type { ResolvedProject } from "@mimir/plugin-core/project";
 import type { LoadError, RuleEntry } from "@mimir/plugin-core/rules";
 import type { ClientMcpManager } from "../client-mcp/manager";
-import type { ChatMessage } from "../server-client";
+import type { OpenAIContentPart } from "./content";
 
-/** Reasoning effort levels the server backend accepts. */
+/** Reasoning effort levels the local backend accepts. */
 export type ThoughtLevel = "none" | "low" | "medium" | "high";
+
+/**
+ * OpenAI chat-completions wire shape — the format sessions persist their
+ * message log in. Moved here from the deleted server-client (MIM-89); the
+ * engine's `normalizeMessages` converts it to ModelMessages at turn time.
+ */
+export type ChatMessage = {
+  readonly role: "system" | "user" | "assistant" | "tool";
+  readonly content: string | OpenAIContentPart[] | null;
+  readonly tool_calls?: readonly {
+    readonly id: string;
+    readonly type: "function";
+    readonly function: { readonly name: string; readonly arguments: string };
+  }[];
+  readonly tool_call_id?: string;
+  readonly name?: string;
+};
 
 export type SessionState = {
   sessionId: string;
@@ -72,7 +89,9 @@ export type AgentCore = {
   setThoughtLevel: (sessionId: string, level: string) => boolean;
   setTitle: (sessionId: string, title: string) => void;
   persistMessages: (sessionId: string) => void;
-  compact: (sessionId: string) => boolean;
+  compact: (
+    sessionId: string,
+  ) => Promise<{ found: boolean; summarized: boolean }>;
   prompt: (
     sessionId: string,
     promptText: string,

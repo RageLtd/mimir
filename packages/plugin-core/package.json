@@ -19,6 +19,10 @@
     "./brain/extract": "./src/brain/extract.ts",
     "./brain/summarize": "./src/brain/summarize.ts",
     "./brain/hygiene": "./src/brain/hygiene.ts",
+    "./engine/provider": "./src/engine/provider/index.ts",
+    "./engine/turn": "./src/engine/turn/index.ts",
+    "./engine/log": "./src/engine/log.ts",
+    "./engine/redact": "./src/engine/redact.ts",
     "./tools/user-memory": "./src/tools/user-memory.ts",
     "./tools/org-memory": "./src/tools/org-memory.ts",
     "./tools/cart-tools": "./src/tools/cart-tools.ts",
@@ -31,5 +35,16 @@
   },
   "scripts": {
     "test": "bun run ../../tests/run-tests.ts plugin-core"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "catalog:ai-sdk",
+    "@ai-sdk/cohere": "^3",
+    "@ai-sdk/google": "catalog:ai-sdk",
+    "@ai-sdk/moonshotai": "catalog:ai-sdk",
+    "@ai-sdk/openai": "catalog:ai-sdk",
+    "@ai-sdk/openai-compatible": "catalog:ai-sdk",
+    "@ai-sdk/provider": "catalog:ai-sdk",
+    "@openrouter/ai-sdk-provider": "catalog:ai-sdk",
+    "ai": "catalog:ai-sdk"
   }
 }

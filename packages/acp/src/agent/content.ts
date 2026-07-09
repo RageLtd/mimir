@@ -183,33 +183,3 @@ export const acpBlocksToOpenAIContent = (blocks: readonly acp.ContentBlock[]) =>
 /** True when any block in the array carries image data. */
 export const hasImageContent = (blocks: readonly acp.ContentBlock[]) =>
   blocks.some((b) => b.type === "image");
-
-/**
- * Build server request metadata for the server-backend path. Prefers the
- * canonical project UUID when available; falls back to the filesystem path
- * until the resolver completes (or when resolution failed entirely).
- *
- * `userContext` carries the `<user_context>` XML block from the local
- * sqlite store so mimir-server can inject it into the system prompt.
- * The server can't access the client-side profile/memories directly.
- *
- * `projectRules` carries the formatted project rules (from .claude/rules,
- * CLAUDE.md, AGENTS.md) so server-side models honour the project's coding
- * conventions.
- *
- * `smallModel` (MIM-74) designates the small/cheap model for the background
- * jobs a keyed turn spawns server-side (extraction, compaction). Empty or
- * absent → the server falls back to the turn's request model.
- */
-export const buildMetadata = (
-  projectPath: string,
-  projectId: string | null,
-  userContext?: string | null,
-  projectRules?: string | null,
-  smallModel?: string | null,
-) => ({
-  project: projectId ?? projectPath,
-  ...(userContext ? { user_context: userContext } : {}),
-  ...(projectRules ? { project_rules: projectRules } : {}),
-  ...(smallModel ? { small_model: smallModel } : {}),
-});

@@ -2,7 +2,8 @@
  * Configuration for mimir-acp.
  * Reads from environment variables with sensible defaults.
  *
- * Every model routes through mimir-server; there is no per-backend switch.
+ * Inference runs locally on the plugin-core engine (MIM-89); the server
+ * is only contacted for the boot-time system prompt and project registry.
  */
 
 const expandHome = (p: string) =>
@@ -35,7 +36,6 @@ export type MimirConfig = {
    */
   readonly acpLogPath: string;
   readonly autoApproveTools: boolean;
-  readonly systemPromptTtlMs: number;
   readonly cartographer: CartographerConfig;
 };
 
@@ -45,6 +45,26 @@ export type MimirConfig = {
  */
 const parseBool = (raw: string | undefined, defaultValue: boolean) =>
   raw === undefined ? defaultValue : raw === "true" || raw === "1";
+
+/**
+ * MIM-86/89 extraction endpoint — the user-chosen OpenAI-compatible model
+ * that distills memories and summarizes compaction windows locally. ACP
+ * is env-only (configured through the editor's env block — no config.json
+ * leg, unlike cc/oc): baseUrl ← MIMIR_EXTRACTION_BASE_URL, model ←
+ * MIMIR_EXTRACTION_MODEL → MIMIR_SMALL_MODEL, key ←
+ * MIMIR_EXTRACTION_API_KEY → MIMIR_PROVIDER_API_KEY (unset is fine —
+ * keyless local endpoints). Null when baseUrl or model can't resolve;
+ * callers skip and log.
+ */
+export const extractionConfig = () => {
+  const baseUrl = process.env.MIMIR_EXTRACTION_BASE_URL;
+  const model =
+    process.env.MIMIR_EXTRACTION_MODEL ?? process.env.MIMIR_SMALL_MODEL;
+  if (!baseUrl || !model) return null;
+  const apiKey =
+    process.env.MIMIR_EXTRACTION_API_KEY ?? process.env.MIMIR_PROVIDER_API_KEY;
+  return { baseUrl, model, ...(apiKey ? { apiKey } : {}) };
+};
 
 export const loadConfig = () => {
   const config: MimirConfig = {
@@ -71,10 +91,6 @@ export const loadConfig = () => {
       process.env.MIMIR_ACP_LOG_FILE ?? "~/.mimir/logs/acp.log",
     ),
     autoApproveTools: process.env.AUTO_APPROVE_TOOLS === "true",
-    systemPromptTtlMs: parseInt(
-      process.env.MIMIR_SYSTEM_PROMPT_TTL ?? "300000",
-      10,
-    ),
     cartographer: {
       enabled: parseBool(process.env.MIMIR_CARTOGRAPHER_ENABLED, true),
       binaryPath: process.env.MIMIR_CARTOGRAPHER_BIN ?? "cartographer",

@@ -1,59 +1,52 @@
 /**
- * Server backend prompt path.
+ * Local agent loop (MIM-89 inversion).
  *
- * Sends messages + tool manifest to mimir-server, streams text to the
- * editor, executes tool calls (local or editor-forwarded), and loops
- * until the model finishes without requesting tools.
+ * Assembles the turn context locally (replica retrieval + user profile +
+ * project rules as ONE synthetic injection pair), streams the model turn
+ * through the local backend, executes tool calls (org-memory over the
+ * replica, cartographer, user-memory, client-forwarded, client MCP,
+ * TodoWrite as a plan update), and loops until the model finishes
+ * without requesting tools.
  *
- * The conversation lives in `session.messages` on this side — the request
- * carries the full history every turn and the server persists nothing
- * (MIM-86: the transcript is a personal, per-machine artifact; the server's
- * message_log, compaction, and extraction all died with it). Cross-session
- * continuity and local extraction land with the MIM-89 inversion.
+ * The conversation lives in `session.messages` — the injection pair is
+ * rebuilt per prompt and NEVER persisted into it. No mimir-server calls
+ * remain on this path; the only server round-trips are the boot-time
+ * system prompt fetch and project resolution.
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
+import { retrieveLocalContext } from "@mimir/plugin-core/brain/retrieve";
 import { runAndFormat } from "@mimir/plugin-core/rules";
+import type { OrgReplica } from "@mimir/plugin-core/store/org-replica";
 import type { UserMemoryStore } from "@mimir/plugin-core/store/user-memories";
+import { cartToolDefs } from "@mimir/plugin-core/tools/cart-tools";
+import { orgMemoryToolDefs } from "@mimir/plugin-core/tools/org-memory";
 import {
   buildUserContext,
-  executeUserMemoryTool,
+  type ToolDefinition,
   userMemoryToolDefs,
-  userMemoryToolNames,
 } from "@mimir/plugin-core/tools/user-memory";
 import { errMessage } from "@mimir/plugin-core/util";
 import type { Backend } from "../backends/types";
 import type { CartographerManager } from "../cartographer/lifecycle";
-import {
-  isFileWriteTool,
-  isLocalCartographerTool,
-} from "../cartographer/lifecycle";
+import { isFileWriteTool } from "../cartographer/lifecycle";
 import type { MimirConfig } from "../config";
+import { ensureEngineReady, getSystemPrompt } from "../engine-boot";
 import { createRequestToolPermission } from "../permissions";
-import { getTools, type ToolDefinition } from "../server-client";
+import { assertNever } from "../utils/assert";
 import { createChildLogger, log } from "../utils/log";
-import {
-  clientToolDefs,
-  clientToolNames,
-  executeClientTool,
-} from "./client-tools";
-import {
-  acpBlocksToOpenAIContent,
-  buildMetadata,
-  hasImageContent,
-} from "./content";
+import { sharedEmbedQuery } from "./brain";
+import { clientToolDefs } from "./client-tools";
+import { acpBlocksToOpenAIContent, hasImageContent } from "./content";
 import { emitAgentText } from "./lifecycle-helpers";
-import {
-  completeObservedToolCall,
-  type ObservedCall,
-  renderObservedToolCall,
-} from "./observe-render";
+import { dispatchToolCall } from "./tool-dispatch";
 import {
   buildToolCallContent,
   extractLocations,
   toolKindFor,
   toolTitle,
 } from "./tool-reporting";
+import { buildLocalContextInjection, todoWriteToolDef } from "./turn-context";
 import type { SessionState } from "./types";
 
 const logger = createChildLogger(log, "prompt-server");
@@ -70,6 +63,8 @@ export type PromptViaServerOptions = {
   readonly memoryStore: UserMemoryStore;
   readonly cartographer?: CartographerManager | null;
   readonly promptBlocks?: readonly acp.ContentBlock[];
+  /** Local org replica for context retrieval + org-memory tools. */
+  readonly replica?: OrgReplica | null;
 };
 
 export const promptViaServer = async (opts: PromptViaServerOptions) => {
@@ -83,6 +78,7 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
     memoryStore,
     cartographer,
     promptBlocks,
+    replica,
   } = opts;
 
   // When the user's prompt includes images, send multipart content so the
@@ -98,30 +94,55 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
     session.sessionId,
   );
 
-  const [serverTools, clientMcpTools] = await Promise.all([
-    getTools(
-      { baseUrl: appConfig.serverUrl, apiKey: appConfig.apiKey },
-      abortController.signal,
-    ),
+  // Engine boot + system prompt were kicked off at agent creation —
+  // re-await here so the first turn never races the registry, and a boot
+  // failure surfaces on this turn rather than crashing the agent.
+  await ensureEngineReady().catch((err) =>
+    logger.error("engine boot failed:", errMessage(err)),
+  );
+  const [systemPrompt, clientMcpTools] = await Promise.all([
+    getSystemPrompt(appConfig),
     session.clientMcp?.getToolDefs() ?? Promise.resolve([] as ToolDefinition[]),
   ]);
+
+  // Fully local tool manifest (MIM-89): org memory + playbooks over the
+  // replica, cartographer, user memory, client-forwarded, client MCP,
+  // and the local TodoWrite plan tool.
   const allTools: ToolDefinition[] = [
-    ...serverTools,
+    ...(replica ? orgMemoryToolDefs : []),
+    ...(cartographer ? cartToolDefs : []),
     ...userMemoryToolDefs,
     ...clientToolDefs,
     ...clientMcpTools,
+    todoWriteToolDef,
   ];
-  const userContext = buildUserContext(memoryStore);
-  const metadata = buildMetadata(
-    session.projectPath,
-    session.projectId,
-    userContext,
+
+  // Per-turn local context assembly: replica retrieval (hybrid — the
+  // shared embedder supplies the vector leg, FTS-only when it's
+  // unavailable) + user profile + project rules, composed into ONE
+  // synthetic injection pair. Retrieval failure is non-fatal: the turn
+  // runs without memories.
+  const retrieved = replica
+    ? await retrieveLocalContext(replica, promptText, {
+        projectId: session.projectId ?? undefined,
+        embedQuery: sharedEmbedQuery(),
+      }).catch((err) => {
+        logger.warn("local context retrieval failed:", errMessage(err));
+        return { contextBlock: "", memoryCount: 0, summaryCount: 0 };
+      })
+    : { contextBlock: "", memoryCount: 0, summaryCount: 0 };
+  const contextInjection = buildLocalContextInjection(
+    retrieved.contextBlock,
+    buildUserContext(memoryStore),
     session.projectRules,
-    appConfig.smallModel,
   );
 
   let turnCount = 0;
   let filesModified = false;
+  // Last finish event's usage — returned to core.prompt so the post-turn
+  // brain work can decide whether compaction is due.
+  let lastPromptTokens: number | undefined;
+  let lastContextWindow: number | undefined;
 
   while (turnCount < MAX_TURNS) {
     turnCount++;
@@ -133,22 +154,17 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
     let contentBuffer = "";
     let hasContent = false;
 
-    // Observe-only tool calls from the server backend — rendered in the
-    // editor but not re-executed. Map call ID → { name, kind, title } so
-    // the paired tool_result can complete the card.
-    const observedCalls = new Map<string, ObservedCall>();
-
-    // Manually drive the backend stream — same pattern as prompt-cc.ts.
-    // `iter.next().catch(errMessage)` makes abort vs real error explicit
-    // without try/catch wrapping the whole loop.
+    // Manually drive the backend stream. `iter.next().catch(errMessage)`
+    // makes abort vs real error explicit without try/catch wrapping the
+    // whole loop. The injection pair rides ahead of the session history
+    // on every invocation without ever entering session.messages.
     const iter = backend
       .run({
         prompt: promptText,
-        systemPrompt: "",
-        messages: session.messages,
+        systemPrompt,
+        messages: [...contextInjection, ...session.messages],
         tools: allTools,
         projectPath: session.projectPath,
-        metadata,
         modelId: session.currentModelId,
         effort: session.currentThoughtLevel,
         signal: abortController.signal,
@@ -170,66 +186,64 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
       if (step.done) break;
       const event = step.value;
 
-      if (event.type === "text") {
-        hasContent = true;
-        contentBuffer += event.text;
-        await emitAgentText(conn, session.sessionId, event.text);
-      } else if (event.type === "thinking") {
-        await conn.sessionUpdate({
-          sessionId: session.sessionId,
-          update: {
-            sessionUpdate: "agent_thought_chunk",
-            content: { type: "text", text: event.text },
-          },
-        });
-      } else if (event.type === "tool_call" && !event.observeOnly) {
-        pendingToolCalls.push({
-          id: event.id,
-          name: event.name,
-          input: event.input,
-        });
-      } else if (event.type === "tool_call" && event.observeOnly) {
-        // Server-executed tool observed — render without re-executing.
-        // TodoWrite renders as a plan update; everything else as a card.
-        await renderObservedToolCall(
-          conn,
-          session.sessionId,
-          event,
-          observedCalls,
-        );
-      } else if (event.type === "tool_result" && event.observeOnly) {
-        await completeObservedToolCall(
-          conn,
-          session.sessionId,
-          event,
-          observedCalls,
-        );
-      } else if (event.type === "finish") {
-        // Emit a usage_update so Zed's progress bar updates per turn —
-        // mirrors prompt-cc.ts:248. The server backend now reports
-        // tokens + context window via the trailing usage chunk that
-        // backends/server.ts buffers into this finish event.
-        if (
-          typeof event.promptTokens === "number" &&
-          event.promptTokens > 0 &&
-          typeof event.contextWindow === "number" &&
-          event.contextWindow > 0
-        ) {
+      switch (event.type) {
+        case "text":
+          hasContent = true;
+          contentBuffer += event.text;
+          await emitAgentText(conn, session.sessionId, event.text);
+          break;
+        case "thinking":
           await conn.sessionUpdate({
             sessionId: session.sessionId,
             update: {
-              sessionUpdate: "usage_update",
-              used: event.promptTokens,
-              size: event.contextWindow,
+              sessionUpdate: "agent_thought_chunk",
+              content: { type: "text", text: event.text },
             },
           });
-        }
-      } else if (event.type === "error") {
-        logger.error("Backend error:", event.error);
-        await emitAgentText(conn, session.sessionId, `Error: ${event.error}`);
-        streamErrored = true;
-        break;
+          break;
+        case "tool_call":
+          pendingToolCalls.push({
+            id: event.id,
+            name: event.name,
+            input: event.input,
+          });
+          break;
+        case "finish":
+          if (typeof event.promptTokens === "number" && event.promptTokens > 0)
+            lastPromptTokens = event.promptTokens;
+          if (
+            typeof event.contextWindow === "number" &&
+            event.contextWindow > 0
+          )
+            lastContextWindow = event.contextWindow;
+          // Emit a usage_update so Zed's progress bar updates per turn.
+          // The local backend reports tokens from streamTurn's finish and
+          // the context window from the registry's model metadata.
+          if (
+            typeof event.promptTokens === "number" &&
+            event.promptTokens > 0 &&
+            typeof event.contextWindow === "number" &&
+            event.contextWindow > 0
+          ) {
+            await conn.sessionUpdate({
+              sessionId: session.sessionId,
+              update: {
+                sessionUpdate: "usage_update",
+                used: event.promptTokens,
+                size: event.contextWindow,
+              },
+            });
+          }
+          break;
+        case "error":
+          logger.error("Backend error:", event.error);
+          await emitAgentText(conn, session.sessionId, `Error: ${event.error}`);
+          streamErrored = true;
+          break;
+        default:
+          assertNever(event);
       }
+      if (streamErrored) break;
     }
     if (streamErrored) return { stopReason: "refusal" as const, filesModified };
 
@@ -237,7 +251,12 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
       if (hasContent) {
         session.messages.push({ role: "assistant", content: contentBuffer });
       }
-      return { stopReason: "end_turn" as const, filesModified };
+      return {
+        stopReason: "end_turn" as const,
+        filesModified,
+        promptTokens: lastPromptTokens,
+        contextWindow: lastContextWindow,
+      };
     }
 
     // Push assistant turn with tool_calls
@@ -349,69 +368,16 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
         projectPath: session.projectPath,
       });
 
-      let resultContent: string;
       const isFileWrite = isFileWriteTool(tc.name);
-
-      if (userMemoryToolNames.has(tc.name)) {
-        const result = executeUserMemoryTool(memoryStore, tc.name, tc.input);
-        resultContent = result.content;
-      } else if (cartographer && isLocalCartographerTool(tc.name)) {
-        // Two-arg .then() to preserve success-vs-error distinction without
-        // try/catch — errMessage() narrows thrown Errors to a string, and
-        // we wrap the success path in `{ ok: true }` so the caller can tell
-        // a real "" tool output apart from a raised exception.
-        const outcome = await cartographer.executeTool(tc.name, tc.input).then(
-          (data) => ({ ok: true as const, data }),
-          (err) => ({ ok: false as const, error: errMessage(err) }),
-        );
-        if (outcome.ok) {
-          resultContent = outcome.data;
-        } else {
-          logger.error("Cartographer tool error:", outcome.error);
-          resultContent = `Error executing ${tc.name}: ${outcome.error}`;
-        }
-      } else if (clientToolNames.has(tc.name)) {
-        const isTerminal =
-          tc.name === "create_terminal" || tc.name === "terminal";
-        resultContent = await executeClientTool(
-          tc.name,
-          tc.input,
-          session.sessionId,
-          conn,
-          {
-            abortSignal: abortController.signal,
-            onTerminalOutput:
-              isTerminal && supportsTerminalOutput
-                ? async (output) => {
-                    await conn.sessionUpdate({
-                      sessionId: session.sessionId,
-                      update: {
-                        _meta: {
-                          terminal_output: {
-                            terminal_id: tc.id,
-                            data: output,
-                          },
-                        },
-                        sessionUpdate: "tool_call_update",
-                        toolCallId: tc.id,
-                      },
-                    });
-                  }
-                : undefined,
-          },
-        );
-      } else if (session.clientMcp?.owns(tc.name)) {
-        resultContent = await session.clientMcp
-          .callTool(tc.name, tc.input)
-          .catch((err) => {
-            const msg = errMessage(err);
-            logger.error("Client MCP tool error:", msg);
-            return `Error executing ${tc.name}: ${msg}`;
-          });
-      } else {
-        logger.warn("Unknown tool call:", tc.name);
-        resultContent = `Tool ${tc.name} is not available in this adapter.`;
-      }
+      const resultContent = await dispatchToolCall(tc, {
+        session,
+        conn,
+        memoryStore,
+        replica,
+        cartographer,
+        abortSignal: abortController.signal,
+        supportsTerminalOutput,
+      });
 
       // Prepend any rule-violation nudge to the tool result so the
       // model reads it before the actual output. Separator keeps the

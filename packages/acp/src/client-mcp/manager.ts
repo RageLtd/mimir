@@ -26,12 +26,12 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
+import type { ToolDefinition } from "@mimir/plugin-core/tools/user-memory";
 import { errMessage } from "@mimir/plugin-core/util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { ToolDefinition } from "../server-client";
 import { createChildLogger, log } from "../utils/log";
 
 const logger = createChildLogger(log, "client-mcp");

@@ -9,6 +9,11 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
+import { backfillEmbeddings } from "@mimir/plugin-core/brain/backfill";
+import {
+  createOrgReplica,
+  defaultOrgReplicaPath,
+} from "@mimir/plugin-core/store/org-replica";
 import { createUserMemoryStore } from "@mimir/plugin-core/store/user-memories";
 import { createBackendRouter } from "../backends";
 import {
@@ -16,15 +21,40 @@ import {
   createCartographerManager,
 } from "../cartographer/lifecycle";
 import { config } from "../config";
+import { ensureEngineReady, getSystemPrompt } from "../engine-boot";
 import { createSessionStore } from "../store/sessions";
+import { createChildLogger, log } from "../utils/log";
 import { createAgentCore } from "./core";
 import type { HandlerDeps } from "./handlers";
 import * as handlers from "./handlers";
 
+const logger = createChildLogger(log, "agent");
+
 export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
   const memoryStore = createUserMemoryStore(config.userMemoryDbPath);
   const sessionStore = createSessionStore(config.sessionDbPath);
-  const router = createBackendRouter(config);
+  const router = createBackendRouter();
+  const replica = createOrgReplica(
+    process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
+  );
+
+  // Kick both boot legs eagerly so the first turn doesn't pay them; the
+  // prompt path re-awaits ensureEngineReady/getSystemPrompt, so failures
+  // here are logged and retried there rather than crashing the agent.
+  ensureEngineReady().catch((err) => logger.error("engine boot failed:", err));
+  getSystemPrompt(config).catch((err) =>
+    logger.error("system prompt prefetch failed:", err),
+  );
+
+  // Best-effort embed backfill (MIM-85 seam): vectorize any replica rows
+  // stored while the embedder was unavailable. Never blocks agent start.
+  backfillEmbeddings(replica, (msg) => logger.debug("backfill:", msg))
+    .then((result) => {
+      if (result.error) logger.warn("embed backfill:", result.error);
+      else if (result.embedded > 0)
+        logger.info(`embed backfill: ${result.embedded} memories vectorized`);
+    })
+    .catch((err) => logger.warn("embed backfill failed:", err));
 
   const cartographer: CartographerManager | null = config.cartographer.enabled
     ? createCartographerManager({
@@ -39,6 +69,7 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
     router,
     sessionStore,
     cartographer,
+    replica,
   );
 
   // Mutable state held in the factory closure and exposed to handlers via
@@ -53,6 +84,7 @@ export const createMimirAgent = (conn: acp.AgentSideConnection): acp.Agent => {
     router,
     memoryStore,
     cartographer,
+    replica,
     getClientCapabilities: () => clientCapabilities,
     setClientCapabilities: (caps) => {
       clientCapabilities = caps;

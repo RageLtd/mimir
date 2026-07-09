@@ -10,7 +10,7 @@
  */
 
 import { Database } from "bun:sqlite";
-import type { ChatMessage } from "../server-client";
+import type { ChatMessage } from "../agent/types";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (

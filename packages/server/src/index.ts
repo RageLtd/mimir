@@ -1,24 +1,13 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import {
-  initProviderRegistry,
-  loadProviderData,
-  startProviderDataRefresh,
-  stopProviderDataRefresh,
-} from "./agent/provider";
-import { closeMcpClients, initMcpTools } from "./agent/server-tools/mcp";
 import { countUsers, createClaimGuard, SIGNUP_PATH } from "./auth/claim";
 import { getAuth, getAuthDb, runAuthMigrations } from "./auth/instance";
-import { config, OPENROUTER_API_URL } from "./config";
+import { config } from "./config";
 import { closeDb, getDb, initSchema } from "./db/surreal";
 import { createIdentityGate, type IdentityEnv } from "./middleware/identity";
-import { completions } from "./routes/completions";
 import { mcp } from "./routes/mcp";
-import { messagesIngress } from "./routes/messages-ingress";
-import { models as modelsRoute } from "./routes/models";
 import { projects } from "./routes/projects";
 import { systemPrompt } from "./routes/system-prompt";
-import { tools } from "./routes/tools";
 import { log } from "./util/logger";
 import { attempt, attemptSync } from "./util/result";
 
@@ -59,52 +48,32 @@ async function pingService(url: string): Promise<HealthStatus> {
 }
 
 app.get("/health", async (c) => {
+  // Post-MIM-89 the server runs no inference — provider pings left with
+  // it. Surreal is the critical dependency; the embedding endpoint feeds
+  // /mcp memory retrieval and degrades the answer quality, not the server.
   const healthChecks = [
-    (async (): Promise<[string, HealthStatus]> => {
+    (async () => {
       const start = Date.now();
       const [err] = await attempt(async () => {
         const db = await getDb();
         await db.query("RETURN true");
       });
-      return [
+      const entry: [string, HealthStatus] = [
         "surrealdb",
         err
           ? { status: "down", error: err.message }
           : { status: "ok", latency: `${Date.now() - start}ms` },
       ];
+      return entry;
     })(),
-    pingService(`${config.ollama.baseUrl}/api/tags`).then(
-      (r) => ["ollama", r] as [string, HealthStatus],
-    ),
-    pingService(`${config.vllm.baseUrl}/health`).then(
-      (r) => ["vllm", r] as [string, HealthStatus],
-    ),
   ];
 
-  // Only check LM Studio if explicitly configured — opt-in local provider,
-  // not always running on every user's machine.
-  if (Bun.env.LMSTUDIO_BASE_URL) {
+  // Only the OpenAI-compatible embedding path has a pingable base URL;
+  // the Cohere path is a hosted API with its own availability story.
+  if (config.embedding.type === "openai") {
     healthChecks.push(
-      pingService(`${config.lmstudio.baseUrl}/v1/models`).then(
-        (r) => ["lmstudio", r] as [string, HealthStatus],
-      ),
-    );
-  }
-
-  // Only check Zen if configured
-  if (config.zen.apiKey) {
-    healthChecks.push(
-      pingService(`${config.zen.baseUrl}/models`).then(
-        (r) => ["zen", r] as [string, HealthStatus],
-      ),
-    );
-  }
-
-  // Only check OpenRouter if configured
-  if (config.openrouter.apiKey) {
-    healthChecks.push(
-      pingService(`${OPENROUTER_API_URL}/models`).then(
-        (r) => ["openrouter", r] as [string, HealthStatus],
+      pingService(`${config.embedding.baseUrl}/api/tags`).then(
+        (r) => ["embedding", r] as [string, HealthStatus],
       ),
     );
   }
@@ -114,9 +83,7 @@ app.get("/health", async (c) => {
   const allUp = Object.values(checks).every(
     (c) => (c as HealthStatus).status === "ok",
   );
-  const criticalDown =
-    (checks.surrealdb as HealthStatus)?.status === "down" ||
-    (checks.vllm as HealthStatus)?.status === "down";
+  const criticalDown = (checks.surrealdb as HealthStatus)?.status === "down";
   const status = allUp ? "ok" : criticalDown ? "degraded" : "partial";
 
   return c.json(
@@ -125,16 +92,8 @@ app.get("/health", async (c) => {
   );
 });
 
-// OpenAI-compatible API (primary interface)
-app.route("/", completions);
-app.route("/", modelsRoute);
-
-// Context provider API (for CC backend and external consumers)
+// System prompt (cc-plugin install + ACP boot fetch)
 app.route("/v1/system-prompt", systemPrompt);
-app.route("/v1/messages", messagesIngress);
-
-// Tool listing
-app.route("/v1/tools", tools);
 
 // Project registry
 app.route("/v1/projects", projects);
@@ -198,39 +157,9 @@ async function boot() {
     }
   }
 
-  // Provider metadata (models.dev) — in-memory with TTL refresh (MIM-65).
-  // Non-fatal: a failed fetch means remote providers sit out until the
-  // retry loop lands; local providers register regardless.
-  const providerDataLoaded = await loadProviderData();
-  if (!providerDataLoaded) {
-    log.warn(
-      "provider data unavailable — remote providers disabled until refresh",
-    );
-  }
-
-  // Initialize provider registry (models from endpoints + in-memory provider data)
-  const [registryErr] = await attempt(initProviderRegistry);
-  if (registryErr) {
-    log.warn(
-      { err: registryErr },
-      "model registry init failed — using vLLM fallback only",
-    );
-  }
-
-  // Keep provider data warm: 24h TTL, 15min retry while empty. Re-runs the
-  // registry init after each successful load (registration is additive).
-  startProviderDataRefresh(initProviderRegistry);
-
-  // Connect to external MCP servers (non-fatal). No name-set refresh
-  // needed — tool classification reads ctx.serverTools, which picks up
-  // MCP tools from getServerTools() on every request.
-  const [mcpErr] = await attempt(initMcpTools);
-  if (mcpErr) {
-    log.warn(
-      { err: mcpErr },
-      "MCP tools init failed — docs lookup unavailable",
-    );
-  }
+  // No provider registry, no MCP children — the inference path and its
+  // tooling live client-side since MIM-89. What boots here is exactly
+  // what the reduced server serves: auth, projects, /mcp, system prompt.
 
   // Fatal by the same zombie logic as the DB above — a server that boots
   // but never listens is the quietest zombie of all (MIM-80). Without this
@@ -260,10 +189,7 @@ async function boot() {
     {
       host: server.hostname,
       port: server.port,
-      vllm: config.vllm.baseUrl,
-      model: config.vllm.model,
-      zen: config.zen.apiKey ? config.zen.baseUrl : "not configured",
-      openrouter: config.openrouter.apiKey ? "configured" : "not configured",
+      embedding: `${config.embedding.type}:${config.embedding.model}`,
     },
     "listening",
   );
@@ -272,8 +198,6 @@ async function boot() {
 // Graceful shutdown
 async function shutdown(signal: string) {
   log.info({ signal }, "shutdown requested");
-
-  stopProviderDataRefresh();
 
   if (server) {
     server.stop(true); // graceful — finishes in-flight requests
@@ -286,9 +210,6 @@ async function shutdown(signal: string) {
   } else {
     log.info("SurrealDB connection closed");
   }
-
-  // Close MCP clients
-  await closeMcpClients();
 
   log.info("shutdown complete");
   process.exit(0);

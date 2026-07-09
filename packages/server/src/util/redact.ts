@@ -25,12 +25,8 @@ export const REDACT_PATHS = [
   "*.headers.authorization",
 ];
 
-export const REDACT_CENSOR = "[redacted]";
-
-/**
- * Value scrubbing for response surfaces. A provider SDK error can echo the
- * request's Authorization header mid-string; every error message leaving
- * the server on a BYOK request passes through this first.
- */
-export const redactSecret = (text: string, secret: string | undefined) =>
-  secret ? text.replaceAll(secret, REDACT_CENSOR) : text;
+// Value layer moved to the shared engine (MIM-89) — the client-side turn
+// loop scrubs provider errors with the same helper. Re-exported so the
+// server's response surfaces keep their import path until they die in the
+// reduction slice.
+export { REDACT_CENSOR, redactSecret } from "@mimir/plugin-core/engine/redact";

@@ -12,8 +12,8 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
+import type { ToolDefinition } from "@mimir/plugin-core/tools/user-memory";
 import { errMessage } from "@mimir/plugin-core/util";
-import type { ToolDefinition } from "../server-client";
 import { createChildLogger, log } from "../utils/log";
 
 const logger = createChildLogger(log, "client-tools");

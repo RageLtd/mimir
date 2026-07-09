@@ -9,6 +9,7 @@
 
 import * as path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
+import type { OrgReplica } from "@mimir/plugin-core/store/org-replica";
 import type { UserMemoryStore } from "@mimir/plugin-core/store/user-memories";
 import { assembleClientMcpServers } from "../mcp-config/assemble";
 import { authenticateServer } from "../mcp-config/auth-injector";
@@ -26,6 +27,8 @@ export type CommandDeps = {
   readonly core: AgentCore;
   readonly conn: acp.AgentSideConnection;
   readonly memoryStore: UserMemoryStore;
+  /** Local org replica — /hygiene sweeps it (MIM-89). */
+  readonly replica?: OrgReplica | null;
   readonly buildSessionConfigOptions: (
     session: SessionState,
   ) => acp.SessionConfigOption[];
@@ -113,8 +116,23 @@ const runMode = async (
 };
 
 const runCompact = async (deps: CommandDeps, sessionId: string) => {
-  deps.core.compact(sessionId);
-  await emitAgentText(deps.conn, sessionId, "Session history cleared.");
+  await emitAgentText(
+    deps.conn,
+    sessionId,
+    "Compacting — banking the session to memory…",
+  );
+  const result = await deps.core.compact(sessionId);
+  if (!result.found) {
+    await emitAgentText(deps.conn, sessionId, "Session not found.");
+    return END_TURN;
+  }
+  await emitAgentText(
+    deps.conn,
+    sessionId,
+    result.summarized
+      ? "Session summarized to memory and history cleared."
+      : "Session history cleared (no summary banked — extraction unconfigured or unreachable; see the ACP log).",
+  );
   return END_TURN;
 };
 

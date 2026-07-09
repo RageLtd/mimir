@@ -3,36 +3,36 @@
  *
  * Verifies that `buildModelsState` honours `preferredModelId` so the picker
  * in Zed reflects the session's actual current model rather than snapping
- * back to the env-var default. Server models are injected by stubbing the
- * `/v1/models` fetch — mimir-server isn't reachable from test runs.
+ * back to the env-var default. Models are injected by seeding the local
+ * provider registry's `providerModels` map (MIM-89 — the /v1/models fetch
+ * died with the inversion); engine boot is mocked out so tests never touch
+ * the network.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { providerModels } from "@mimir/plugin-core/engine/provider";
 import type { MimirConfig } from "../config";
+
+mock.module("../engine-boot", () => ({
+  ensureEngineReady: async () => {},
+  getSystemPrompt: async () => "",
+}));
+
 import { buildModelsState, type ModelResolutionDeps } from "./model-resolution";
 
-let originalFetch: typeof fetch;
-
-/** Stub `/v1/models` to return the given model ids as server entries. */
-const stubServerModels = (ids: readonly string[]) => {
-  globalThis.fetch = (async (
-    _url: string | URL | Request,
-    _init?: RequestInit,
-  ) =>
-    new Response(JSON.stringify({ data: ids.map((id) => ({ id })) }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    })) as typeof fetch;
+/** Seed the local registry with the given model ids under one provider. */
+const stubLocalModels = (ids: readonly string[]) => {
+  providerModels.clear();
+  if (ids.length > 0) providerModels.set("test-provider", [...ids]);
 };
 
 beforeEach(() => {
-  originalFetch = globalThis.fetch;
-  // Default: server returns no models. Tests that need entries override.
-  stubServerModels([]);
+  // Default: registry holds no models. Tests that need entries override.
+  stubLocalModels([]);
 });
 
 afterEach(() => {
-  globalThis.fetch = originalFetch;
+  providerModels.clear();
 });
 
 const mkConfig = (model: string) =>
@@ -46,7 +46,6 @@ const mkConfig = (model: string) =>
     logLevel: "warn",
     acpLogPath: "",
     autoApproveTools: false,
-    systemPromptTtlMs: 0,
     cartographer: { enabled: false, binaryPath: "cartographer" },
   }) satisfies MimirConfig;
 
@@ -58,7 +57,7 @@ const mkDeps = (config: MimirConfig) =>
 
 describe("buildModelsState — preferredModelId", () => {
   test("uses preferredModelId when it matches a discovered model", async () => {
-    stubServerModels([
+    stubLocalModels([
       "openrouter/opus",
       "openrouter/sonnet",
       "openrouter/haiku",
@@ -74,7 +73,7 @@ describe("buildModelsState — preferredModelId", () => {
     // The user-selected model (preferred) must take priority over MIMIR_MODEL,
     // otherwise the picker snaps back to the env-var default after every
     // setSessionConfigOption round-trip.
-    stubServerModels(["openrouter/opus", "openrouter/sonnet"]);
+    stubLocalModels(["openrouter/opus", "openrouter/sonnet"]);
     const deps = mkDeps(mkConfig("openrouter/opus"));
 
     const result = await buildModelsState(deps, "openrouter/sonnet");
@@ -84,7 +83,7 @@ describe("buildModelsState — preferredModelId", () => {
   });
 
   test("falls back to configured when preferred isn't in the list", async () => {
-    stubServerModels(["openrouter/opus", "openrouter/sonnet"]);
+    stubLocalModels(["openrouter/opus", "openrouter/sonnet"]);
     const deps = mkDeps(mkConfig("openrouter/opus"));
 
     const result = await buildModelsState(deps, "openrouter/nonexistent");
@@ -93,7 +92,7 @@ describe("buildModelsState — preferredModelId", () => {
   });
 
   test("falls back to first available when neither preferred nor configured matches", async () => {
-    stubServerModels(["openrouter/sonnet", "openrouter/haiku"]);
+    stubLocalModels(["openrouter/sonnet", "openrouter/haiku"]);
     const deps = mkDeps(mkConfig("openrouter/auto"));
 
     const result = await buildModelsState(deps, "openrouter/missing");
@@ -105,7 +104,7 @@ describe("buildModelsState — preferredModelId", () => {
     // MIMIR_MODEL unset → config.model is "". Resolution must skip the
     // configured lookup and select the first discovered model so Zed's
     // picker renders with a valid current selection rather than "".
-    stubServerModels(["claude-fable-5", "claude-opus-4-8"]);
+    stubLocalModels(["claude-fable-5", "claude-opus-4-8"]);
     const deps = mkDeps(mkConfig(""));
 
     const result = await buildModelsState(deps);
@@ -114,9 +113,10 @@ describe("buildModelsState — preferredModelId", () => {
   });
 
   test("preserves preferredModelId verbatim when no models discovered", async () => {
-    // Edge case: server discovery returns nothing. The session's persisted
-    // model id should still come back so it survives a transient failure.
-    stubServerModels([]);
+    // Edge case: discovery returns nothing (no env keys, no local
+    // providers). The session's persisted model id should still come back
+    // so it survives a transient failure.
+    stubLocalModels([]);
     const deps = mkDeps(mkConfig("openrouter/auto"));
 
     const result = await buildModelsState(deps, "openrouter/sonnet");
@@ -126,7 +126,7 @@ describe("buildModelsState — preferredModelId", () => {
   });
 
   test("omitting preferredModelId reverts to configured-default behaviour", async () => {
-    stubServerModels(["openrouter/opus", "openrouter/sonnet"]);
+    stubLocalModels(["openrouter/opus", "openrouter/sonnet"]);
     const deps = mkDeps(mkConfig("openrouter/opus"));
 
     const result = await buildModelsState(deps);

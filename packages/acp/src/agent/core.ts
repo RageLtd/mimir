@@ -14,6 +14,7 @@ import {
   resolveProjectForPath,
 } from "@mimir/plugin-core/project";
 import { type LoadError, loadRules } from "@mimir/plugin-core/rules";
+import type { OrgReplica } from "@mimir/plugin-core/store/org-replica";
 import type { UserMemoryStore } from "@mimir/plugin-core/store/user-memories";
 import { errMessage } from "@mimir/plugin-core/util";
 import type { BackendRouter } from "../backends";
@@ -23,6 +24,11 @@ import { createClientMcpManager } from "../client-mcp/manager";
 import type { MimirConfig } from "../config";
 import type { SessionStore } from "../store/sessions";
 import { createChildLogger, log } from "../utils/log";
+import {
+  bankSessionBeforeReset,
+  postTurnBrainWork,
+  resetWatermark,
+} from "./brain";
 import { emitAgentText } from "./lifecycle-helpers";
 import { promptViaServer } from "./prompt-server";
 import type { SessionState } from "./types";
@@ -119,6 +125,7 @@ export const createAgentCore = (
   router: BackendRouter,
   sessionStore: SessionStore,
   cartographer?: CartographerManager | null,
+  replica?: OrgReplica | null,
 ) => {
   const sessions = new Map<string, SessionState>();
 
@@ -278,16 +285,24 @@ export const createAgentCore = (
     return true;
   };
 
-  const compact = (sessionId: string) => {
+  /**
+   * `/compact` (MIM-89): bank the session into the replica — extraction
+   * of the un-distilled tail + a full-window summary — then wipe the
+   * transcript. The wipe happens regardless of banking success: /compact
+   * is an explicit user request, and the failure is loudly logged.
+   */
+  const compact = async (sessionId: string) => {
     const session = sessions.get(sessionId);
-    if (!session) return false;
-    // Wipe mimir's transcript record and reset the boot flag so the next
-    // prompt re-runs the boot sequence against whatever recent messages /
-    // summaries the server now provides.
+    if (!session) return { found: false, summarized: false };
+    const summarized =
+      replica && session.messages.length > 0
+        ? await bankSessionBeforeReset(session, replica)
+        : false;
     session.messages = [];
     sessionStore.updateMessages(sessionId, []);
     session.bootSequenceDone = false;
-    return true;
+    resetWatermark(sessionId);
+    return { found: true, summarized };
   };
 
   /**
@@ -387,12 +402,29 @@ export const createAgentCore = (
       memoryStore,
       cartographer,
       promptBlocks,
+      replica,
     });
 
     // Reindex after any turn that modified files so Cartographer queries
     // reflect the current state on the next prompt.
     if (result.filesModified && cartographer && session.projectPath) {
       cartographer.autoIndex(session.projectPath);
+    }
+
+    // Post-turn brain work (MIM-89 slice D): distill the new window into
+    // the replica, then compact when the turn's usage crossed the
+    // threshold. Fire-and-forget — a slow extraction model must not hold
+    // the editor's end_turn; failures log and retry on later turns.
+    if (result.stopReason === "end_turn" && replica) {
+      postTurnBrainWork({
+        session,
+        replica,
+        promptTokens: result.promptTokens,
+        contextWindow: result.contextWindow,
+        persist: () => persistMessages(sessionId),
+      }).catch((err) =>
+        logger.warn("post-turn brain work failed:", errMessage(err)),
+      );
     }
 
     return result;

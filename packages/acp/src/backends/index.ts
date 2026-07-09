@@ -1,14 +1,13 @@
 /**
  * Backend factory.
  *
- * Every model routes through mimir-server. The router exposes a
- * `forModel` lookup so the call sites stay backend-agnostic — additional
- * backends can be slotted in here later without touching the agent loop.
+ * Every model runs on the local backend (MIM-89 inversion). The router
+ * keeps its `forModel` lookup so the call sites stay backend-agnostic —
+ * additional backends can be slotted in here later without touching the
+ * agent loop.
  */
 
-import type { MimirConfig } from "../config";
-import type { ServerClientConfig } from "../server-client";
-import { createServerBackend } from "./server";
+import { createLocalBackend } from "./local";
 import type { Backend } from "./types";
 
 /**
@@ -23,19 +22,15 @@ export type RouteResult =
 export type BackendRouter = {
   /** Return the backend that should serve the given model id. */
   readonly forModel: (modelId: string) => RouteResult;
-  readonly server: Backend;
+  readonly local: Backend;
 };
 
-export const createBackendRouter = (config: MimirConfig) => {
-  const serverConfig: ServerClientConfig = {
-    baseUrl: config.serverUrl,
-    apiKey: config.apiKey,
-  };
-  const server = createServerBackend(serverConfig);
+export const createBackendRouter = () => {
+  const local = createLocalBackend();
 
   return {
-    forModel: (_modelId: string) => ({ ok: true as const, backend: server }),
-    server,
+    forModel: (_modelId: string) => ({ ok: true as const, backend: local }),
+    local,
   };
 };
 

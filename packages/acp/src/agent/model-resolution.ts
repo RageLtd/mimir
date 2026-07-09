@@ -8,8 +8,15 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
+import {
+  getModelDisplayName,
+  getModelMetadata,
+  getProviderDisplayName,
+  listModels,
+} from "@mimir/plugin-core/engine/provider";
+import { errMessage } from "@mimir/plugin-core/util";
 import type { MimirConfig } from "../config";
-import { fetchServerModels } from "../server-client";
+import { ensureEngineReady } from "../engine-boot";
 import { createChildLogger, log } from "../utils/log";
 import type { SessionState } from "./types";
 
@@ -18,12 +25,34 @@ const logger = createChildLogger(log, "model-resolution");
 export type ModelResolutionDeps = {
   readonly config: MimirConfig;
   /**
-   * Set of server-backend model IDs that support extended thinking /
-   * reasoning. Populated by `buildModelsState` from the server's
-   * `/v1/models` response; consumed by `buildSessionConfigOptions` to
-   * expose a thought-level selector for reasoning-capable models.
+   * Set of model IDs that support extended thinking / reasoning.
+   * Populated by `buildModelsState` from the local registry's model
+   * metadata; consumed by `buildSessionConfigOptions` to expose a
+   * thought-level selector for reasoning-capable models.
    */
   serverReasoningModels: Set<string>;
+};
+
+/**
+ * Build the picker's model list from the LOCAL provider registry
+ * (MIM-89 — the server /v1/models fetch died with the inversion).
+ * The registry only registers providers whose standard env key is set
+ * plus local providers (ollama/lmstudio), so "models the user can
+ * actually run" is inherent — no extra filtering. Exported for tests.
+ */
+export const buildLocalModels = () => {
+  const reasoningModels = new Set<string>();
+  const models = listModels().map(({ modelId, providerId }) => {
+    if (getModelMetadata(modelId)?.reasoning) reasoningModels.add(modelId);
+    const display = getModelDisplayName(modelId) ?? modelId;
+    const provider = getProviderDisplayName(providerId) ?? providerId;
+    return {
+      modelId,
+      name: `${display} (${provider})`,
+      description: `Provider: ${providerId}`,
+    };
+  });
+  return { models, reasoningModels };
 };
 
 /**
@@ -49,9 +78,14 @@ export const buildModelsState = async (
   preferredModelId?: string,
 ) => {
   const { config } = deps;
-  const serverResult = await fetchServerModels(config.serverUrl, config.apiKey);
-  const availableModels = serverResult.models;
-  deps.serverReasoningModels = serverResult.reasoningModels;
+  // The registry boots at agent creation; re-await so an early picker
+  // request never races it. Boot failure degrades to an empty list.
+  await ensureEngineReady().catch((err) =>
+    logger.warn("engine boot failed:", errMessage(err)),
+  );
+  const localResult = buildLocalModels();
+  const availableModels = localResult.models;
+  deps.serverReasoningModels = localResult.reasoningModels;
   const preferred = preferredModelId
     ? availableModels.find((m) => m.modelId === preferredModelId)
     : undefined;

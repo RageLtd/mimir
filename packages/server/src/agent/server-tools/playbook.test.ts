@@ -46,7 +46,7 @@ mock.module("../../goldfish/store", () => ({ deleteMemory: mockDeleteMemory }));
 
 // Import AFTER mocking
 import { testScope } from "../../testing/scope";
-import { buildMcpPublicTools, buildServerTools } from "./index";
+import { buildMcpPublicTools } from "./index";
 import {
   buildPlaybookTools,
   executePlaybookDelete,
@@ -175,21 +175,14 @@ describe("playbook delete", () => {
 });
 
 describe("registration", () => {
-  test("all playbook tools are offered as server tools, so the loop runs them server-side", () => {
-    // Membership in buildServerTools(scope) IS the classification — the loop
-    // classifies tool calls against ctx.serverTools directly.
-    const tools = buildServerTools(scope);
+  test("all playbook tools are exposed via /mcp for Claude Code parity", () => {
+    // /mcp is the only tool surface post-MIM-89 — the agent loop (and
+    // buildServerTools with it) left with the inversion.
+    const tools = buildMcpPublicTools(scope);
     const playbookTools = buildPlaybookTools(scope);
     for (const name of PLAYBOOK_TOOL_NAMES) {
       expect(name in tools).toBe(true);
       expect(name in playbookTools).toBe(true);
-    }
-  });
-
-  test("all playbook tools are exposed via /mcp for Claude Code parity", () => {
-    const tools = buildMcpPublicTools(scope);
-    for (const name of PLAYBOOK_TOOL_NAMES) {
-      expect(name in tools).toBe(true);
     }
   });
 });

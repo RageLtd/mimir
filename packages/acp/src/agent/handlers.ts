@@ -8,6 +8,7 @@
  */
 
 import * as acp from "@agentclientprotocol/sdk";
+import type { OrgReplica } from "@mimir/plugin-core/store/org-replica";
 import type { UserMemoryStore } from "@mimir/plugin-core/store/user-memories";
 import type { BackendRouter } from "../backends";
 import type { CartographerManager } from "../cartographer/lifecycle";
@@ -42,6 +43,8 @@ export type HandlerDeps = ModelResolutionDeps & {
   readonly router: BackendRouter;
   readonly memoryStore: UserMemoryStore;
   readonly cartographer: CartographerManager | null;
+  /** Local org replica — threaded into slash commands (MIM-89). */
+  readonly replica: OrgReplica | null;
   readonly getClientCapabilities: () => acp.ClientCapabilities;
   readonly setClientCapabilities: (caps: acp.ClientCapabilities) => void;
   /** Tracks which sessions have already received available_commands_update,
@@ -405,6 +408,7 @@ export const prompt = async (deps: HandlerDeps, params: acp.PromptRequest) => {
         core: deps.core,
         conn: deps.conn,
         memoryStore: deps.memoryStore,
+        replica: deps.replica,
         buildSessionConfigOptions: (s) => buildSessionConfigOptions(deps, s),
       },
       params.sessionId,

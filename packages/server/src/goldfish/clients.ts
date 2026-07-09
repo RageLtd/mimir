@@ -1,5 +1,5 @@
 import { embedMany } from "ai";
-import { resolveEmbeddingModel } from "../agent/provider/query";
+import { resolveEmbeddingModel } from "../agent/provider-legs";
 import { config } from "../config";
 import { assertNever } from "../util/assert";
 import { log } from "../util/logger";
