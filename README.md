@@ -2,34 +2,46 @@
 
 A coding agent with persistent memory and a personality, running inside the editor you already use — Claude Code, Zed (via ACP), or OpenCode. Everything that reads your data runs on your machine: memory extraction, embeddings, retrieval, and inference are all local. The server exists only to sync encrypted memory between your devices and teammates — and it can't read any of it.
 
+> [!IMPORTANT]
 > **Security:** Mimir is built so that the server operator can never read your data — memories, code, and conversations stay on your machine or leave it only as ciphertext. Read exactly what the server can and cannot see in [THREAT_MODEL.md](./THREAT_MODEL.md).
 
 ## Architecture
 
-```
-Your machine                                        mimir-server (blind)
-┌───────────────────────────────────────────┐       ┌─────────────────────────────┐
-│ Editor plugin                             │       │ /api/auth     accounts,     │
-│  ├ Claude Code   → @mimir/cc-plugin       │       │               orgs, invites │
-│  ├ Zed (ACP)     → @mimir/acp             │◄─────►│ /v1/keys      wrapped org   │
-│  └ OpenCode      → @RageLtd/mimir-oc      │ HTTPS │               keys only     │
-│              │                            │       │ /v1/sync      ciphertext    │
-│  @mimir/plugin-core (shared layer)        │       │               envelopes     │
-│  ├ memory brain — SQLite replica, local   │       │ /v1/projects  project       │
-│  │   embeddings, extraction, hygiene      │       │               registry      │
-│  ├ inference engine — BYOK providers      │       │ /v1/system-prompt           │
-│  ├ keys — X25519 keypair, org keyring,    │       │                             │
-│  │   device secret in the OS keychain     │       │ Storage: one SQLite file    │
-│  └ sync — encrypt-on-push,                │       │ of AEAD blobs the server    │
-│      decrypt-on-pull (the only            │       │ cannot decrypt              │
-│      crypto seam)                         │       └─────────────────────────────┘
-│                                           │
-│ Local state (~/.mimir/)                   │
-│  ├ org memory replica (SQLite + FTS)      │
-│  ├ user memories + profile (SQLite)       │
-│  ├ session logs, cartographer index       │
-│  └ device secret (OS keychain)            │
-└───────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  subgraph machine["Your machine"]
+    direction TB
+    plugins["Editor plugin<br/>Claude Code · @mimir/cc-plugin<br/>Zed ACP · @mimir/acp<br/>OpenCode · @RageLtd/mimir-oc"]
+    core["@mimir/plugin-core — shared layer"]
+    brain["Memory brain<br/>extraction · hygiene · compaction<br/>FTS + local embeddings"]
+    engine["Inference engine<br/>BYOK providers · local endpoints"]
+    keys["Keys<br/>X25519 keypair · org keyring<br/>device secret in the OS keychain"]
+    syncmod["Sync<br/>encrypt-on-push · decrypt-on-pull<br/>(the only crypto seam)"]
+    localstate[("~/.mimir<br/>org replica (SQLite + FTS)<br/>user memories · sessions<br/>cartographer index")]
+    plugins --> core
+    core --> brain
+    core --> engine
+    core --> keys
+    core --> syncmod
+    brain --> localstate
+    syncmod --> localstate
+  end
+
+  subgraph server["mimir-server (blind)"]
+    direction TB
+    auth["/api/auth<br/>accounts · orgs · invites"]
+    keyroutes["/v1/keys<br/>wrapped org keys only"]
+    syncroutes["/v1/sync<br/>ciphertext envelopes"]
+    coord["/v1/projects · /v1/system-prompt<br/>blind coordination"]
+    tenantdb[("one SQLite file of AEAD blobs<br/>the server cannot decrypt")]
+    syncroutes --> tenantdb
+  end
+
+  providers["AI providers<br/>Anthropic · OpenRouter · vLLM · Ollama · …"]
+
+  engine -->|"direct — your keys"| providers
+  keys <-->|HTTPS| keyroutes
+  syncmod <-->|HTTPS| syncroutes
 ```
 
 The server has exactly four jobs: **auth** (accounts, orgs, invites), **wrapped-key distribution** (it stores org keys encrypted to each member's public key, never the keys themselves), **ciphertext sync** (opaque envelopes with last-write-wins convergence), and **blind coordination** (project registry, system prompt, sync leases). It runs no models, computes no embeddings, and parses no memory content.
@@ -56,7 +68,10 @@ mimir keys rotate     # rotate the org key (revokes removed members)
 mimir keys recovery-setup / recover
 ```
 
-Store the device secret in your password manager — it is the only way onto a new device. Headless environments without a keychain can set `MIMIR_KEY_PASSPHRASE` to use an encrypted-file fallback.
+> [!WARNING]
+> The device secret is printed **exactly once**. Store it in your password manager immediately — it is the only way onto a new device or out of a lost keychain.
+
+Headless environments without a keychain can set `MIMIR_KEY_PASSPHRASE` to use an encrypted-file fallback.
 
 Self-hosting for yourself? With auth disabled the same sync protocol runs in plaintext mode — no keys, no ceremonies, one fewer moving part. The threat model doc covers what each mode guarantees.
 

@@ -4,27 +4,25 @@ ACP (Agent Client Protocol) agent for Mimir — connects editor agent panels (pr
 
 ## Architecture
 
-```
-Editor (Zed)           mimir-acp (this package)              mimir-server
-┌──────────┐          ┌───────────────────────────────┐      ┌───────────────────┐
-│ Agent    │◄─stdio──►│ ACP connection (NDJSON)       │      │ /v1/system-prompt │
-│ Panel    │          │                               │      │ /v1/projects      │
-│          │          │ Agent loop (prompt-server)    │─────►│ /v1/keys          │
-│ Model    │          │  ├ local backend — the        │ boot │ /v1/sync          │
-│ Selector │          │  │   plugin-core engine, BYOK │ +sync└───────────────────┘
-│          │          │  ├ tool execution (local +    │
-│ Terminal │          │  │   forwarded to the editor) │       Providers (direct)
-│ Output   │          │  └ compaction → local replica │      ┌───────────────────┐
-└──────────┘          │                               │─────►│ Anthropic, ORouter│
-                      │ Local brain (plugin-core)     │ BYOK │ vLLM, Ollama,     │
-                      │  ├ org replica (SQLite + FTS) │      │ LM Studio, …      │
-                      │  ├ local embeddings           │      └───────────────────┘
-                      │  ├ extraction + hygiene       │
-                      │  └ user memories, sessions    │
-                      │                               │
-                      │ Cartographer (optional,       │
-                      │   fully local index)          │
-                      └───────────────────────────────┘
+```mermaid
+flowchart LR
+  zed["Editor (Zed)<br/>agent panel · model picker · terminal"]
+
+  subgraph acp["mimir-acp (this package)"]
+    direction TB
+    loop["Agent loop (prompt-server)<br/>local backend on the plugin-core engine<br/>tool execution — local + forwarded to the editor<br/>compaction → local replica"]
+    brain["Local brain (plugin-core)<br/>org replica (SQLite + FTS) · local embeddings<br/>extraction + hygiene · user memories · sessions"]
+    cart["Cartographer<br/>(optional, fully local index)"]
+    loop --> brain
+    loop --> cart
+  end
+
+  server["mimir-server<br/>/v1/system-prompt · /v1/projects<br/>/v1/keys · /v1/sync"]
+  providers["Providers (direct, BYOK)<br/>Anthropic · OpenRouter · vLLM ·<br/>Ollama · LM Studio · …"]
+
+  zed <-->|"ACP (stdio)"| loop
+  loop <-->|"boot + sync"| server
+  loop -->|BYOK| providers
 ```
 
 Every model in the editor's picker resolves through the local provider registry — providers activate from your own env keys (BYOK) or local base URLs. No inference traffic ever transits mimir-server.
