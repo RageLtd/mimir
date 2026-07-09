@@ -1,338 +1,183 @@
 # Mimir
 
-A coding agent with persistent memory, personality, and multi-provider inference. Mimir runs as three components: a server that owns knowledge and context, an ACP adapter that connects ACP editors (Zed) to the server's inference, and a Claude Code plugin that runs Mimir inside Claude Code against that same server.
+A coding agent with persistent memory and a personality, running inside the editor you already use — Claude Code, Zed (via ACP), or OpenCode. Everything that reads your data runs on your machine: memory extraction, embeddings, retrieval, and inference are all local. The server exists only to sync encrypted memory between your devices and teammates — and it can't read any of it.
 
-> **Security:** Mimir is being built so that the server operator can never read your data — memories, code, and conversations stay on your machine or leave it only as ciphertext. Read exactly what the server can and cannot see in [THREAT_MODEL.md](./THREAT_MODEL.md).
+> **Security:** Mimir is built so that the server operator can never read your data — memories, code, and conversations stay on your machine or leave it only as ciphertext. Read exactly what the server can and cannot see in [THREAT_MODEL.md](./THREAT_MODEL.md).
 
 ## Architecture
 
 ```
-Editor (Zed) ──ACP (stdio)──▶ @mimir/acp
-                                  └── POST /v1/chat/completions ──▶ mimir-server
-                                        └── vLLM / LM Studio / Zen / OpenRouter / any OpenAI-compatible provider
-
-Claude Code ──plugin──▶ @mimir/cc-plugin
-                                  ├── MCP (HTTP) ──▶ mimir-server /mcp
-                                  │     └── Goldfish memory · Cartographer · web search
-                                  ├── lifecycle hooks: persona system prompt, boot context,
-                                  │     project rules, transcript persistence, cartographer reindex
-                                  └── inference: Claude Code's own Anthropic plan (no API key)
-
-mimir-server (shared by both paths):
-  ├── System prompt + persona
-  ├── Goldfish memories (vector search, SurrealDB)
-  ├── Memory hygiene (background consolidation · contradiction · forgetting)
-  ├── Conversation summaries (compaction) + persistence
-  └── Knowledge tools (web search, Context7, Cartographer)
-
-Local state (user's machine):
-  ├── User memories (bun:sqlite, ~/.mimir/user-memories.db)
-  └── Cartographer index (tree-sitter)
+Your machine                                        mimir-server (blind)
+┌───────────────────────────────────────────┐       ┌─────────────────────────────┐
+│ Editor plugin                             │       │ /api/auth     accounts,     │
+│  ├ Claude Code   → @mimir/cc-plugin       │       │               orgs, invites │
+│  ├ Zed (ACP)     → @mimir/acp             │◄─────►│ /v1/keys      wrapped org   │
+│  └ OpenCode      → @RageLtd/mimir-oc      │ HTTPS │               keys only     │
+│              │                            │       │ /v1/sync      ciphertext    │
+│  @mimir/plugin-core (shared layer)        │       │               envelopes     │
+│  ├ memory brain — SQLite replica, local   │       │ /v1/projects  project       │
+│  │   embeddings, extraction, hygiene      │       │               registry      │
+│  ├ inference engine — BYOK providers      │       │ /v1/system-prompt           │
+│  ├ keys — X25519 keypair, org keyring,    │       │                             │
+│  │   device secret in the OS keychain     │       │ Storage: one SQLite file    │
+│  └ sync — encrypt-on-push,                │       │ of AEAD blobs the server    │
+│      decrypt-on-pull (the only            │       │ cannot decrypt              │
+│      crypto seam)                         │       └─────────────────────────────┘
+│                                           │
+│ Local state (~/.mimir/)                   │
+│  ├ org memory replica (SQLite + FTS)      │
+│  ├ user memories + profile (SQLite)       │
+│  ├ session logs, cartographer index       │
+│  └ device secret (OS keychain)            │
+└───────────────────────────────────────────┘
 ```
 
-The two paths are independent. The ACP adapter routes **every** model through mimir-server's OpenAI-compatible API — there is no per-backend switch. The Claude Code plugin runs inside Claude Code (inference billed to your Anthropic plan) and reaches mimir-server only for memory, context, and knowledge tools over MCP.
+The server has exactly four jobs: **auth** (accounts, orgs, invites), **wrapped-key distribution** (it stores org keys encrypted to each member's public key, never the keys themselves), **ciphertext sync** (opaque envelopes with last-write-wins convergence), and **blind coordination** (project registry, system prompt, sync leases). It runs no models, computes no embeddings, and parses no memory content.
+
+## How It Works
+
+### Memory
+
+Every session is distilled into memories **on your machine**, by an extraction model you configure (`MIMIR_EXTRACTION_BASE_URL` / `MIMIR_EXTRACTION_MODEL` — an Ollama instance works fine). The transcript never leaves your machine. Memories land in a local SQLite replica with full-text search and local vector embeddings; retrieval on each turn is a hybrid FTS + cosine search over that replica. Memory hygiene — consolidating near-duplicates, resolving contradictions, forgetting stale facts — also runs locally on the same model.
+
+Two stores, two scopes: **org memory** (project decisions, conventions, session summaries — synced to your org, encrypted) and **user memory** (facts about you — profile, preferences — local only, never synced).
+
+### Sync and Encryption
+
+Encryption lives at exactly one seam: the sync module. The local replica is plaintext (it sits on the same disk as your code); on push, each memory is sealed into an AEAD envelope (AES-256-GCM, with authenticated data binding the envelope to its org and key generation so the server can't transplant ciphertexts); on pull, envelopes are opened locally. Convergence is last-write-wins with tombstoned deletes. Sync runs at session boot, after each turn's distillation, and on demand via `mimir sync`.
+
+Key material follows the 1Password shape: each user holds an X25519 keypair; the org data key is wrapped per member; a device secret — stored in the OS credential store (macOS Keychain / libsecret / Windows Credential Manager) — protects your keyset. Ceremonies run through the CLI:
+
+```bash
+mimir keys setup      # first device — prints your device secret EXACTLY ONCE
+mimir keys adopt      # bring a new device online with that secret
+mimir keys status     # what this device holds
+mimir keys rotate     # rotate the org key (revokes removed members)
+mimir keys recovery-setup / recover
+```
+
+Store the device secret in your password manager — it is the only way onto a new device. Headless environments without a keychain can set `MIMIR_KEY_PASSPHRASE` to use an encrypted-file fallback.
+
+Self-hosting for yourself? With auth disabled the same sync protocol runs in plaintext mode — no keys, no ceremonies, one fewer moving part. The threat model doc covers what each mode guarantees.
+
+### Inference
+
+No inference ever transits the server.
+
+- **Claude Code** — the plugin runs Mimir as a persona inside Claude Code itself; inference is billed to your Anthropic plan. No API key needed.
+- **Zed (ACP) and OpenCode** — a local engine calls providers directly with your own keys. Standard env vars activate providers (`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `OPENCODE_API_KEY`, and anything else in the [models.dev](https://models.dev) registry); local endpoints register via `VLLM_BASE_URL`, `OLLAMA_BASE_URL`, or `LMSTUDIO_BASE_URL`. Discovered models appear in the editor's model picker.
 
 ## Packages
 
 | Package | Description |
 |---------|-------------|
-| `packages/server` | Inference server, memory, context assembly, conversation persistence |
-| `packages/acp` | ACP agent adapter — connects ACP editors (Zed) to mimir-server |
-| `packages/cc-plugin` | Claude Code plugin — Mimir persona, MCP wiring, lifecycle hooks, and the `mimir` wrapper command |
+| `packages/plugin-core` | Shared layer: memory brain, inference engine, keys, sync, rules, cartographer |
+| `packages/cc-plugin` | Claude Code plugin — persona, hooks, MCP wiring, the `mimir` wrapper command |
+| `packages/acp` | ACP agent — full local agent for ACP editors (Zed) |
+| `packages/oc-plugin` | OpenCode plugin — persona, tools, hooks as a single bundled plugin |
+| `packages/server` | The blind sync server — auth, key distribution, ciphertext sync, coordination |
 
-## Prerequisites
+## Install
 
-- [Bun](https://bun.sh) v1.3+
-- [Docker](https://docs.docker.com/get-docker/) and Docker Compose (for the server)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (optional, to run the `cc-plugin`)
+Pick the editor you use. Each plugin needs a mimir-server URL (hosted or self-hosted — see below) and, for encrypted sync, an API key from that server.
 
-## Quick Start
+The Claude Code plugin ships as a precompiled binary — no runtime to install. The Zed (ACP) and OpenCode plugins run from source, so they need [Bun](https://bun.sh) v1.3+ on the machine (OpenCode also uses it for the `mimir keys` ceremonies).
 
-```bash
-git clone <repo-url> && cd mimir
-bun install
+### Claude Code
+
+Requires an authenticated `gh` CLI and `~/.local/bin` on your `PATH`. Inside Claude Code:
+
+```
+/plugin marketplace add RageLtd/claude-plugins
+/plugin install mimir-cc@rageltd
+/mimir-install
 ```
 
-### 1. Deploy the Server
+The installer downloads the prebuilt `mimir-cc` binary, writes the runtime under `~/.mimir/`, and lands a `mimir` wrapper that launches Claude Code as Mimir. Full walkthrough, from-source path, and troubleshooting in [`packages/cc-plugin/README.md`](packages/cc-plugin/README.md).
 
-The server runs in Docker alongside SurrealDB. Run from the repo root, where `docker-compose.yml` and `.env.example` live:
+### Zed (ACP)
 
-```bash
-# Configure environment
-cp .env.example .env
-# Edit .env — at minimum set SURREAL_PASS and your inference provider(s)
-
-# Start services
-docker compose up -d
-```
-
-The committed `docker-compose.yml` pulls the prebuilt server image (`ghcr.io/rageltd/mimir-server:next`) from GitHub Container Registry rather than building. The image is **private**, so the host needs a one-time GHCR login before that first `docker compose up` can pull — the read-only token setup lives in [`packages/server/README.md`](packages/server/README.md#pulling-the-published-image).
-
-The server exposes an OpenAI-compatible API at `http://localhost:8080` (or whatever `MIMIR_PORT` is set to), plus an Anthropic Messages-compatible ingress at `/v1/messages` for clients that speak that protocol. Caddy labels in the compose file expose it as `http://mimir.conhost.lan` if you're using caddy-docker-proxy.
-
-#### Building from source instead of pulling
-
-For local development — compiling your working tree instead of pulling `:next` — drop a `compose.override.yaml` next to `docker-compose.yml`. It's gitignored, and Compose auto-merges it on every command in that directory:
-
-```yaml
-services:
-  mimir:
-    build:
-      context: .
-      dockerfile: packages/server/Dockerfile
-```
-
-With `image:` (from the base file) and `build:` (from the override) both set, `docker compose up` builds locally and tags the result — no registry pull, no GHCR auth needed. A checkout without this file (a deploy host) pulls the published image untouched.
-
-#### Server Environment Variables
-
-`.env.example` is the canonical template — copy it and fill in the blanks. It covers the common variables; a few advanced knobs (the `CONTEXT_*`, `EMBED_*`, and full `SMALL_MODEL_*` sets) live in `packages/server/src/config.ts`. The critical ones:
-
-**Required:**
-- `SURREAL_PASS` — SurrealDB root password (must match between server and db)
-
-**Inference providers (configure at least one):**
-- `VLLM_BASE_URL` — local vLLM instance (e.g. `http://llm.spark.lan`)
-- `LMSTUDIO_BASE_URL` — LM Studio's OpenAI-compatible server (models discovered from `/v1/models`)
-- `OPENCODE_API_KEY` — OpenCode Zen gateway (the key name models.dev ships for the `opencode` provider). Set `ZEN_GO_ENABLED=true` to surface OpenCode Go subscription models
-- `OPENROUTER_API_KEY` — OpenRouter multi-provider gateway
-- `CHUTES_API_KEY` — Chutes gateway (activated via `provider-data.json`)
-
-**Knowledge tools:**
-- `EMBED_BASE_URL` / `EMBED_MODEL` — embedding endpoint and model (defaults to Ollama at `OLLAMA_BASE_URL`; required for Goldfish memory)
-- `TAVILY_API_KEY` — web search tool
-- `CONTEXT7_API_KEY` — documentation lookup (free tier works without key)
-
-**Context management:**
-- `SYSTEM_PROMPT_PATH` — path to the system prompt markdown (default: `./system-prompt.md`)
-
-#### Verifying the Server
-
-```bash
-# Health check — shows status of all backend services
-curl http://localhost:8080/health | jq
-
-# Model list — should show your configured providers
-curl http://localhost:8080/v1/models | jq '.data | length'
-```
-
-### 2. Configure the ACP Adapter
-
-The ACP adapter connects your editor to mimir. Register it in Zed's settings:
-
-**Zed → Settings → settings.json:**
+Register the agent in Zed's `settings.json`. Configuration is entirely through the env block — provider keys for inference, the extraction model for memory:
 
 ```json
 {
   "agent_servers": {
-    "mimir-acp": {
+    "mimir": {
       "type": "custom",
       "command": "bun",
       "args": ["run", "/path/to/mimir/packages/acp/index.ts"],
       "env": {
-        "MIMIR_SERVER_URL": "http://mimir.conhost.lan"
+        "MIMIR_SERVER_URL": "https://your-mimir-server",
+        "MIMIR_API_KEY": "...",
+        "OPENROUTER_API_KEY": "...",
+        "MIMIR_EXTRACTION_BASE_URL": "http://localhost:11434",
+        "MIMIR_EXTRACTION_MODEL": "qwen3:8b"
       }
     }
   }
 }
 ```
 
-Replace the path and server URL with your actual values.
+Any provider key the engine recognizes can replace or join `OPENROUTER_API_KEY`. The full env reference lives in [`packages/acp/README.md`](packages/acp/README.md).
 
-#### ACP Environment Variables
+### OpenCode
 
-- `MIMIR_SERVER_URL` — mimir-server address (default: `http://mimir.conhost.lan`; override per machine)
-- `MIMIR_API_KEY` — server API key (if you've configured auth)
-- `MIMIR_MODEL` — default model (default: `openrouter/auto`)
-- `MIMIR_USER_MEMORY_DB` — local user-memory SQLite path (default: `~/.mimir/user-memories.db`)
-- `MIMIR_SESSION_DB` — local session SQLite path (default: `~/.mimir/sessions.db`)
-- `MIMIR_ACP_LOG_FILE` — ACP log file; empty string disables file logging (default: `~/.mimir/logs/acp.log`)
-- `AUTO_APPROVE_TOOLS` — auto-approve read/search tool calls (default: `false`)
-- `MIMIR_SYSTEM_PROMPT_TTL` — system prompt cache TTL in ms (default: `300000` / 5 min)
-- `MIMIR_CARTOGRAPHER_ENABLED` — enable cartographer integration (default: `true`)
-- `MIMIR_CARTOGRAPHER_BIN` — cartographer binary path (default: `cartographer`, resolved on `PATH`)
-- `LOG_LEVEL` — `debug`, `info`, `warn`, `error` (default: `info`)
+The plugin ships via GitHub Packages. Add the scope to `~/.bunfig.toml` (needs a token with `read:packages`), install, then run the in-editor installer:
 
-### 3. Select a Model
-
-Open the agent panel in Zed and pick a model from the dropdown. Every entry
-resolves through mimir-server — your vLLM, Zen, and OpenRouter models appear
-by name. Reasoning-capable models also expose a **Thought Level** selector
-(none / low / medium / high).
-
-To run Mimir on Anthropic models (Opus, Sonnet, Haiku), use the Claude Code
-plugin below rather than the Zed dropdown.
-
-### 4. (Optional) Install the Claude Code Plugin
-
-`packages/cc-plugin` runs Mimir inside Claude Code. It installs the persona
-system prompt, wires mimir-server's MCP endpoint (Goldfish memory,
-Cartographer, web search) alongside the local user-memory store, registers
-the lifecycle hooks, and adds a `mimir` wrapper that launches Claude Code as
-Mimir. Inference is billed to your Anthropic plan — no API key needed.
-
-The repo ships a local plugin marketplace at `.claude-plugin/marketplace.json`
-(it resolves the `mimir-cc` plugin from `./packages/cc-plugin`). Add that
-marketplace from your clone in Claude Code, install the plugin, then run
-`/mimir-cc:mimir-install` to set up `~/.mimir/`, the wrapper, MCP servers, and
-hooks. Launch sessions with the `mimir` command.
-
-## Providers and Model Resolution
-
-### How Models Are Resolved
-
-When a request comes in with a model ID, the server resolves it through this chain:
-
-1. **Provider prefix** — if the model ID has a `/` (e.g., `opencode-go/glm-5`), the part before the slash is treated as a provider hint, the part after as the model name. The provider must be initialized.
-2. **Model index lookup** — the model ID is checked against the registry built at boot from `provider-data.json` plus dynamically discovered models from local endpoints.
-3. **vLLM fallback** — if no provider is found and vLLM is configured, the model ID is passed to vLLM as-is.
-
-### Provider Sources
-
-The server builds its model registry from three sources at boot:
-
-**1. Local providers (auto-discovered):**
-
-Local providers are configured via base URL env vars. At boot, the server queries their `/v1/models` endpoints to discover available models.
-
-| Provider | Env Var | Notes |
-|----------|---------|-------|
-| vLLM | `VLLM_BASE_URL` | Primary local inference. Models auto-discovered. |
-| LM Studio | `LMSTUDIO_BASE_URL` | OpenAI-compatible local server (default port 1234). Models discovered from `/v1/models`; restart the server to pick up newly loaded models. |
-| Ollama | `OLLAMA_BASE_URL` | Used for embeddings and the small utility model. |
-
-**2. Remote providers (from provider-data.json):**
-
-The server fetches `https://models.dev/api.json` at boot, which contains provider metadata, API endpoints, SDK types, and model lists with context window sizes. Providers are activated when their required env var contains an API key.
-
-The JSON structure per provider:
-```json
-{
-  "provider-id": {
-    "id": "provider-id",
-    "env": ["PROVIDER_API_KEY"],
-    "npm": "@ai-sdk/openai-compatible",
-    "api": "https://api.provider.com/v1",
-    "name": "Provider Name",
-    "models": {
-      "model-id": {
-        "id": "model-id",
-        "name": "Display Name",
-        "reasoning": true,
-        "tool_call": true,
-        "limit": { "context": 131072, "output": 8192 }
-      }
-    }
-  }
-}
+```toml
+[install.scopes]
+"RageLtd" = { url = "https://npm.pkg.github.com", token = "$GITHUB_TOKEN" }
 ```
-
-When the server finds an API key for a provider's `env` field, it initializes an SDK and registers all of that provider's models.
-
-**3. Gateway providers (cached model lists):**
-
-| Provider | Env Var | Endpoint |
-|----------|---------|----------|
-| OpenCode Zen | `OPENCODE_API_KEY` | `ZEN_BASE_URL` (default: `https://opencode.ai/zen/v1`). `ZEN_GO_ENABLED=true` surfaces OpenCode Go models. |
-| OpenRouter | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1` |
-
-These fetch their model lists from their `/models` endpoints and cache them for 5 minutes.
-
-### Adding a Custom Provider
-
-**Local OpenAI-compatible server (easiest):**
-
-If your provider exposes an OpenAI-compatible API, just set its base URL. For vLLM:
 
 ```bash
-VLLM_BASE_URL=http://your-server:8000
+opencode plugin @RageLtd/mimir-oc
+opencode           # then run /mimir-install inside
 ```
 
-Models are auto-discovered. Request them by the ID the server reports (e.g., `Qwen/Qwen3.5-122B-A10B`).
+Details in [`packages/oc-plugin/README.md`](packages/oc-plugin/README.md).
 
-**Local OpenAI-compatible server with a UI (LM Studio):**
+### Self-Hosting the Server
 
-Point mimir-server at a running LM Studio instance:
+The server is a single container with a SQLite file — no database service to run:
 
 ```bash
-LMSTUDIO_BASE_URL=http://localhost:1234
+git clone <repo-url> && cd mimir
+cp .env.example .env      # defaults work for a local single-user setup
+docker compose up -d
+curl http://localhost:8080/health
 ```
 
-Models are whatever you've loaded in the LM Studio UI, discovered from `/v1/models` at boot. Restart mimir-server after loading new models to refresh the list. For an arbitrary **authenticated** gateway, use the provider-data.json path below rather than a bespoke env var.
+The compose file pulls the prebuilt image (`ghcr.io/rageltd/mimir-server:next`); the package is private, so the host needs a one-time GHCR login — token setup in [`packages/server/README.md`](packages/server/README.md#pulling-the-published-image). To build from your working tree instead, drop a `compose.override.yaml` with a `build:` block (also documented there).
 
-**Provider from provider-data.json:**
+The entire config surface:
 
-If the provider is already in `models.dev`, just set its API key. Check the provider's `env` field in the JSON to see which env var it expects. For example, if the provider requires `DEEPSEEK_API_KEY`:
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MIMIR_PORT` / `MIMIR_HOST` | `8080` / `0.0.0.0` | Bind address |
+| `MIMIR_DB_PATH` | `./mimir.sqlite` | The tenant store — envelopes, cursors, leases, projects |
+| `SYSTEM_PROMPT_PATH` | `./system-prompt.md` | Mimir's persona |
+| `AUTH_ENABLED` | `false` | Off = single-user plaintext mode; on = accounts + E2E sync |
+| `AUTH_SECRET` / `AUTH_DB_PATH` / `AUTH_BASE_URL` / `AUTH_SETUP_TOKEN` | — | Required only when auth is enabled |
 
-```bash
-DEEPSEEK_API_KEY=your-key
-```
-
-All of that provider's models become available automatically.
-
-**Models with non-default SDKs:**
-
-Most providers use `@ai-sdk/openai-compatible`. Some require a specific SDK (Anthropic, Google, MoonshotAI, OpenAI, OpenRouter). The registry handles this through the `npm` field in `provider-data.json` — models can also override the provider's default SDK via a `provider.npm` field on the model entry. Supported SDKs: `@ai-sdk/anthropic`, `@ai-sdk/google` (and `@ai-sdk/google-vertex`), `@ai-sdk/moonshotai`, `@ai-sdk/openai`, `@openrouter/ai-sdk-provider`, `@ai-sdk/openai-compatible` (default).
-
-### Model ID Conventions
-
-When requesting a model, use one of these patterns:
-
-- **Bare model ID**: `glm-5` — resolved through the registry index
-- **Provider-prefixed**: `opencode-go/glm-5` — forces resolution through a specific provider
-- **HuggingFace-style**: `Qwen/Qwen3.5-122B-A10B` — the part after the slash is also registered as a bare name
-
-The model dropdown in Zed shows all registered models, every one resolved through mimir-server.
-
-## How It Works
-
-### ACP Adapter (Zed)
-
-The editor sends messages through ACP to mimir-acp, which forwards them to mimir-server's `/v1/chat/completions` endpoint. The server runs the full middleware pipeline: system prompt injection, Goldfish memory retrieval, context assembly with summaries, tool classification, and the agent loop. Tool calls come back to mimir-acp for execution (filesystem ops forwarded to the editor, memory queries run locally).
-
-### Claude Code Plugin
-
-The `cc-plugin` runs Mimir inside Claude Code itself rather than spawning a subprocess. It installs as a Claude Code plugin: lifecycle hooks inject the persona system prompt, boot context, and project rules; an MCP connection to mimir-server's `/mcp` endpoint exposes Goldfish memory, Cartographer, and web search; a local stdio server exposes the user-memory store; and post-session hooks persist the transcript back to mimir-server and trigger cartographer reindexing. Claude Code handles inference (billed to your Anthropic plan) and its own tool execution.
-
-The system prompt is converted from markdown to XML tags for Anthropic's models, with an additional model override block that suppresses Claude's default personality patterns.
-
-### Memory System
-
-**Goldfish** (server-side) — conversation-level memories stored in SurrealDB with vector embeddings, retrieved by relevance on each request. Extraction happens client-side (MIM-86): the plugin distills each turn into facts on the developer's own machine with their own extraction model — the server never runs memory intelligence over plaintext.
-
-**User memories** (local) — static profile facts and queryable entries stored in SQLite on the user's machine. Profile entries are injected into every request. Queryable memories are available as tools the model can call.
-
-**Memory hygiene** (client-side) — a triggered-only sweep keeps the local replica healthy. It runs three ordered passes on the developer's configured extraction model: consolidation fuses near-duplicate memories into one canonical record, contradiction resolution demotes the losing side of conflicting facts, and forgetting prunes low-value facts past an age and score floor. It defaults to dry-run; pass `--live` to apply. See `packages/server/docs/memory-hygiene.md` for the design.
-
-### Context Assembly
-
-Every request gets assembled context regardless of backend:
-1. System prompt (personality, rules, tool usage patterns)
-2. Recent conversation summaries
-3. Relevant memories (vector search against the current query)
-4. User profile (from local SQLite)
-5. Conversation history (carried by the request — the client owns the transcript)
+With auth off (the default), the server boots ungated for single-user self-hosting. With auth on, the first boot is claimed via `AUTH_SETUP_TOKEN`, and clients authenticate with API keys.
 
 ## Development
 
+Bun v1.3+ required; Docker only if you're running the server.
+
 ```bash
-# Run the ACP adapter in dev mode
-bun run acp:start
+bun install
 
-# Run the server in dev mode (outside Docker, with --watch)
-bun run server:dev
+bun run server:dev        # server outside Docker, with --watch
+bun run acp:start         # ACP adapter in dev mode
+bun run cc-plugin:build   # compile the Claude Code plugin binaries
 
-# Build the Claude Code plugin binaries
-bun run cc-plugin:build
+bun run check             # lint + format (biome)
+bun run typecheck
 
-# Lint + format (biome)
-bun run check
-
-# Run tests — always via the root harness, never `bun test <path>`
-bun run test            # all packages
-bun run test:server     # or a single package
-bun run test:acp
-bun run test:cc-plugin
+# Tests — always via the root harness, never `bun test <path>`
+bun run test              # all packages
+bun run test:server       # or one of: server, acp, cc-plugin, oc-plugin, plugin-core
 ```
 
 ## Project Structure
@@ -340,59 +185,32 @@ bun run test:cc-plugin
 ```
 mimir/
 ├── packages/
-│   ├── acp/                    # ACP agent adapter (server backend only)
-│   │   ├── src/
-│   │   │   ├── agent/          # Agent loop, session, model resolution, commands
-│   │   │   ├── backends/       # Backend abstraction — server only
-│   │   │   ├── cartographer/   # Cartographer parse client + local index sync
-│   │   │   ├── client-mcp/     # MCP servers exposed to the editor
-│   │   │   ├── mcp-config/     # MCP configuration assembly
-│   │   │   ├── project/        # Project resolution
-│   │   │   ├── rules/          # Project-rule loader + runner
-│   │   │   ├── store/          # Local user memory (bun:sqlite)
-│   │   │   ├── tools/          # User memory tools
-│   │   │   ├── types/          # Shared type declarations
-│   │   │   ├── utils/          # Helpers
-│   │   │   ├── config.ts       # Configuration (env vars)
-│   │   │   ├── context-client.ts # REST client for mimir-server context
-│   │   │   ├── permissions.ts  # Tool permission gating
-│   │   │   ├── server-client.ts  # HTTP client for mimir-server completions
-│   │   │   └── sse-parser.ts   # SSE stream parsing
-│   │   └── index.ts            # Entry point
+│   ├── plugin-core/            # Shared layer (@mimir/plugin-core)
+│   │   └── src/
+│   │       ├── brain/          # Extraction, retrieval, hygiene, summarization
+│   │       ├── engine/         # Inference: provider registry, turn streaming
+│   │       ├── keys/           # Crypto, keysets, keyrings, device secret, ceremonies
+│   │       ├── sync/           # Envelope seal/open, sync engine, CLI
+│   │       ├── store/          # SQLite replica + user-memory stores
+│   │       ├── cartographer/   # Tree-sitter index client (fully local)
+│   │       └── rules/ tools/ project/
 │   │
 │   ├── cc-plugin/              # Claude Code plugin (@mimir/cc-plugin)
-│   │   ├── .claude-plugin/     # plugin.json manifest
-│   │   ├── artifacts/          # mcp.json / settings.json / wrapper.sh templates
-│   │   ├── commands/           # Slash commands (mimir-install, mimir-update, switch-model)
-│   │   ├── src/
-│   │   │   ├── *-hook.ts       # Lifecycle hooks (session-start, persist, precompact, reindex, …)
-│   │   │   ├── boot-context.ts # Cross-session context snapshot
-│   │   │   ├── voice-anchor.ts # Persona voice enforcement
-│   │   │   ├── markdown-to-xml.ts # System-prompt markdown → XML
-│   │   │   ├── cartographer/   # Index sync client
-│   │   │   ├── project/ rules/ store/ tools/
-│   │   │   └── cli.ts          # `mimir` wrapper entry point
-│   │   └── build.sh            # Compiles per-platform binaries
+│   ├── acp/                    # ACP agent (@mimir/acp)
+│   ├── oc-plugin/              # OpenCode plugin (@RageLtd/mimir-oc)
 │   │
-│   └── server/                 # Inference server (@mimir/server)
+│   └── server/                 # Blind sync server (@mimir/server)
 │       ├── src/
-│       │   ├── agent/          # Provider registry, agent runner
-│       │   ├── agent-loop/     # Message log, compaction, providers, server tools
-│       │   ├── db/             # SurrealDB client
-│       │   ├── goldfish/       # Memory storage, retrieval, extraction, hygiene
-│       │   ├── middleware/     # System prompt, memories, context assembly
-│       │   ├── projects/       # Project registry
-│       │   ├── routes/         # HTTP + MCP endpoints
-│       │   └── util/           # Logging, result type
-│       ├── docs/               # Server docs (memory hygiene, …)
-│       ├── provider-data.json  # Provider + model registry (refreshed from models.dev)
+│       │   ├── auth/           # Better Auth: accounts, orgs, API keys
+│       │   ├── db/             # Tenant store (bun:sqlite)
+│       │   ├── routes/         # keys, sync, projects, system-prompt, mcp
+│       │   └── middleware/     # Identity gate, scoping
 │       ├── system-prompt.md    # Mimir's personality and rules
 │       └── Dockerfile
 │
 ├── tests/run-tests.ts          # Root test harness (bun run test[:pkg])
-├── docker-compose.yml          # Server + SurrealDB (pulls the published image)
+├── docker-compose.yml          # The server (pulls the published image)
 ├── .env.example                # Server environment template
-├── .claude-plugin/             # Local plugin marketplace (marketplace.json)
-├── mimir-mcp.json              # Sample MCP config (mimir + context7 servers)
+├── THREAT_MODEL.md             # What the server can and cannot see
 └── biome.json                  # Shared linting config
 ```
