@@ -14,7 +14,14 @@
 import { resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
-const PACKAGES = ["server", "plugin-core", "acp", "cc-plugin", "oc-plugin"];
+const PACKAGES = [
+  "server",
+  "plugin-core",
+  "acp",
+  "cc-plugin",
+  "oc-plugin",
+  "codex-plugin",
+];
 
 async function main() {
   const filter = Bun.argv[2];

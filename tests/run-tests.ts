@@ -12,7 +12,14 @@ import { resolve } from "node:path";
 import { Glob } from "bun";
 
 const ROOT = resolve(import.meta.dirname, "..");
-const PACKAGES = ["server", "acp", "cc-plugin", "plugin-core", "oc-plugin"];
+const PACKAGES = [
+  "server",
+  "acp",
+  "cc-plugin",
+  "plugin-core",
+  "oc-plugin",
+  "codex-plugin",
+];
 
 function discoverTests(pkg: string) {
   const pkgDir = resolve(ROOT, "packages", pkg);

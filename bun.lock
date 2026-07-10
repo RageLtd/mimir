@@ -25,9 +25,16 @@
         "@mimir/plugin-core": "workspace:*",
       },
     },
+    "packages/codex-plugin": {
+      "name": "@mimir/codex-plugin",
+      "dependencies": {
+        "@ai-sdk/provider-utils": "catalog:ai-sdk",
+        "@mimir/plugin-core": "workspace:*",
+      },
+    },
     "packages/oc-plugin": {
       "name": "@mimir/oc-plugin",
-      "version": "0.2.0",
+      "version": "1.0.0",
       "devDependencies": {
         "@mimir/plugin-core": "workspace:*",
         "@opencode-ai/plugin": "^1.17.13",
@@ -188,6 +195,8 @@
     "@mimir/acp": ["@mimir/acp@workspace:packages/acp"],
 
     "@mimir/cc-plugin": ["@mimir/cc-plugin@workspace:packages/cc-plugin"],
+
+    "@mimir/codex-plugin": ["@mimir/codex-plugin@workspace:packages/codex-plugin"],
 
     "@mimir/oc-plugin": ["@mimir/oc-plugin@workspace:packages/oc-plugin"],
 

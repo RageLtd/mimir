@@ -27,7 +27,7 @@
  * One line per call. Context is appended as compact JSON when present.
  */
 
-import { appendFile, mkdir, rename } from "node:fs/promises";
+import { appendFile, mkdir, rename, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { mimirHome } from "./util";
@@ -82,15 +82,35 @@ const formatLine = (
 ) =>
   `${new Date().toISOString()} [${level.toUpperCase()}] ${component}: ${message}${formatContext(context)}\n`;
 
+// Rotation policy: a log rotates when it was last written on a previous
+// calendar day (local time) or has grown past the size cap. Rotating on
+// every factory instantiation — the old behavior — meant every HOOK
+// PROCESS rotated the file, so only the last two hook invocations of a
+// session survived and post-hoc debugging of a multi-hook turn was blind.
+const MAX_LOG_BYTES = 5 * 1024 * 1024;
+
+const sameLocalDay = (a: Date, b: Date) =>
+  a.getFullYear() === b.getFullYear() &&
+  a.getMonth() === b.getMonth() &&
+  a.getDate() === b.getDate();
+
+/** Pure rotation decision — exported for tests. */
+export const shouldRotate = (
+  fileStats: { readonly mtimeMs: number; readonly size: number },
+  nowMs: number,
+  maxBytes: number = MAX_LOG_BYTES,
+) => {
+  if (fileStats.size >= maxBytes) return true;
+  return !sameLocalDay(new Date(fileStats.mtimeMs), new Date(nowMs));
+};
+
 /**
  * Create a logger bundle bound to a specific log file.
  *
- * Each factory instance owns its own rotation state and pending-write
- * chain, so multiple consumers in the same process (or the same
- * consumer running as several subprocesses that share a node_modules
- * cache) don't write to each other's files. The default prev file
- * name is `<fileName>.prev` — pass an explicit one if the consumer
- * wants a different suffix convention.
+ * Each factory instance owns its own pending-write chain, so multiple
+ * consumers in the same process don't interleave partially written
+ * lines. The default prev file name is `<fileName>.prev` — pass an
+ * explicit one if the consumer wants a different suffix convention.
  */
 export const createLoggerFactory = (
   fileName: string,
@@ -102,12 +122,18 @@ export const createLoggerFactory = (
   const prevPath = join(mimirHome(), "logs", prevName);
 
   // ── Pending-write chain ──
-  // Every writeLine call appends onto `pending`. The first link mkdir's the
-  // log directory, rotates the previous log, then subsequent links append
-  // text. Failures at any step are absorbed into a no-op so the chain
-  // never enters a rejected state.
+  // Every writeLine call appends onto `pending`. The first link mkdir's
+  // the log directory and rotates the previous log ONLY when the policy
+  // says so (new day / size cap) — a missing file, a concurrent
+  // process's racing rename, or any other failure is absorbed into a
+  // no-op so the chain never enters a rejected state.
   let pending: Promise<void> = mkdir(dirname(logPath), { recursive: true })
-    .then(() => rename(logPath, prevPath).catch(() => undefined))
+    .then(() => stat(logPath))
+    .then((stats) =>
+      shouldRotate(stats, Date.now())
+        ? rename(logPath, prevPath).catch(() => undefined)
+        : undefined,
+    )
     .then(() => undefined)
     .catch(() => undefined);
 

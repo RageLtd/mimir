@@ -44,15 +44,20 @@ test("hello world", () => {
 
 ## Repository Layout
 
-Bun workspace — the root `package.json` defines `workspaces` plus dependency catalogs. Three packages:
+Bun workspace — the root `package.json` defines `workspaces` plus dependency catalogs. Six packages:
 
-- `packages/server` — inference server, memory, context assembly, conversation persistence. Owns the OpenAI-compatible API and the `/mcp` endpoint.
-- `packages/acp` — ACP adapter connecting ACP editors (Zed) to mimir-server. **Server backend only** — every model routes through mimir-server; there is no per-backend switch.
-- `packages/cc-plugin` — Claude Code plugin: Mimir persona, MCP wiring, lifecycle hooks, and the `mimir` wrapper command that launches Claude Code as Mimir.
+- `packages/server` — mimir-server: inference API, auth, project registry, the `/mcp` endpoint (memory/playbook/web_search/introspection), and `/v1/system-prompt`. Memory extraction, hygiene, and conversation persistence moved client-side (MIM-86); the remaining inference surface is slated to move into plugin-core (MIM-89).
+- `packages/plugin-core` — backend-agnostic shared layer consumed by every editor adapter: brain (extraction, retrieval, summarization, hygiene, embedder), local stores (org replica, user memories, cart index), shared runtime config, keys/sync CLIs, stdio MCP servers, rules engine, voice anchors.
+- `packages/acp` — ACP adapter connecting ACP editors (Zed) to mimir-server. **Server backend only** — every model routes through mimir-server; there is no per-backend switch (inverts under MIM-89).
+- `packages/cc-plugin` — Claude Code distribution: Mimir persona, MCP wiring, lifecycle hooks, and the `mimir` wrapper command that launches Claude Code as Mimir.
+- `packages/oc-plugin` — OpenCode distribution: in-process plugin bundle mirroring the cc-plugin brain legs.
+- `packages/codex-plugin` — OpenAI Codex CLI distribution: lifecycle hooks + hook-trust ledger in a dedicated `CODEX_HOME` (`~/.mimir/codex`), AGENTS.md persona, and the `mimir-codex` wrapper. Codex hosts its own models; Mimir contributes the brain.
+
+Editor-agnostic logic ships once in plugin-core with thin per-distribution wiring — never duplicated into a plugin package.
 
 Tests run through the root harness, never `bun test <path>`:
 
 - `bun run test` — all packages
-- `bun run test:server` / `test:acp` / `test:cc-plugin` — a single package
+- `bun run test:server` / `test:plugin-core` / `test:acp` / `test:cc-plugin` / `test:oc-plugin` / `test:codex-plugin` — a single package
 
-Shared dependencies are elevated to the root `package.json` catalogs (`ai-sdk`, `protocol`, `server`); reference them with `catalog:<name>`.
+Shared dependencies are elevated to the root `package.json` catalogs (`ai-sdk`, `protocol`, `server`, `opencode`); reference them with `catalog:<name>`.

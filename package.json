@@ -14,11 +14,13 @@
     "test:cc-plugin": "bun run tests/run-tests.ts cc-plugin",
     "test:plugin-core": "bun run tests/run-tests.ts plugin-core",
     "test:oc-plugin": "bun run tests/run-tests.ts oc-plugin",
+    "test:codex-plugin": "bun run tests/run-tests.ts codex-plugin",
     "server:dev": "bun run --filter @mimir/server dev",
     "start": "bun run --filter @mimir/server start",
     "acp:start": "bun run --filter @mimir/acp start",
     "acp:build": "bun run --filter @mimir/acp build",
-    "cc-plugin:build": "bun run --filter @mimir/cc-plugin build"
+    "cc-plugin:build": "bun run --filter @mimir/cc-plugin build",
+    "codex-plugin:build": "bun run --filter @mimir/codex-plugin build"
   },
   "workspaces": {
     "packages": [

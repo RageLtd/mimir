@@ -172,3 +172,45 @@ describe("mergeUpdateOptions api key resolution", () => {
     });
   });
 });
+
+describe("extraction flags (dead-brain fix)", () => {
+  test("parses --extraction-base-url / --extraction-model", () => {
+    const parsed = parseInstallArgs([
+      SERVER_URL,
+      "--extraction-base-url",
+      "http://ollama.local/",
+      "--extraction-model",
+      "ornith:35b",
+    ]);
+    expect(parsed).toEqual({
+      serverUrl: SERVER_URL,
+      extractionBaseUrl: "http://ollama.local/",
+      extractionModel: "ornith:35b",
+    });
+  });
+
+  test("flags missing values error", () => {
+    expect(parseInstallArgs([SERVER_URL, "--extraction-base-url"])).toEqual({
+      error: "--extraction-base-url requires a value",
+    });
+    expect(parseInstallArgs([SERVER_URL, "--extraction-model"])).toEqual({
+      error: "--extraction-model requires a value",
+    });
+  });
+
+  test("mergeUpdateOptions preserves extraction fields from config.json", async () => {
+    await writeConfig({
+      serverUrl: SERVER_URL,
+      userMemoryDb: join(mimirHomeDir, "user-memories.db"),
+      extractionBaseUrl: "http://ollama.local/",
+      extractionModel: "ornith:35b",
+    });
+    const merged = await mergeUpdateOptions({});
+    expect(merged).toEqual({
+      serverUrl: SERVER_URL,
+      userMemoryDb: join(mimirHomeDir, "user-memories.db"),
+      extractionBaseUrl: "http://ollama.local/",
+      extractionModel: "ornith:35b",
+    });
+  });
+});

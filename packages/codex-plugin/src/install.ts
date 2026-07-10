@@ -1,19 +1,22 @@
 /**
- * Install subcommand — lands every Mimir runtime artifact on the user's
- * machine. After this runs, the plugin itself is no longer required; the
- * `mimir` wrapper script + ~/.mimir/ contents are self-sufficient.
+ * Install subcommand — lands every Mimir-for-Codex runtime artifact on
+ * the user's machine. After this runs, the repo clone is no longer
+ * required; the `mimir-codex` wrapper + ~/.mimir/codex/ contents are
+ * self-sufficient.
  *
  * Steps in order:
  *   1. Validate the mimir-server URL.
  *   2. Fetch the canonical system prompt from /v1/system-prompt.
- *   3. Convert it to Anthropic-optimised XML (toAnthropicXml).
- *   4. Materialise ~/.mimir/{system-prompt.md, mcp.json, settings.json,
- *      config.json}.
- *   5. Materialise ~/.local/bin/{mimir, mimir-cc}.
+ *   3. Convert it to XML (toAnthropicXml — the voice-anchor parser
+ *      requires the <voice_in_action> block that conversion produces).
+ *   4. Materialise ~/.mimir/codex/{AGENTS.md, config.toml} and the
+ *      shared ~/.mimir/config.json.
+ *   5. Trust the hooks via `codex app-server` hooks/list (Codex silently
+ *      skips untrusted hooks — see trust.ts).
+ *   6. Materialise ~/.local/bin/{mimir-codex, mimir-codex-bin}.
  *
  * Templates are bundled into the compiled binary as text imports so the
- * installer is a single self-contained executable — no sidecar files to
- * ship beside it.
+ * installer is a single self-contained executable.
  */
 
 import { chmod, copyFile, mkdir } from "node:fs/promises";
@@ -23,19 +26,22 @@ import { toAnthropicXml } from "@mimir/plugin-core/anthropic-xml";
 import { embedderDir } from "@mimir/plugin-core/brain/embedder";
 import { installEmbedderArtifacts } from "@mimir/plugin-core/brain/embedder-install";
 import { resolveCartographerBinary } from "@mimir/plugin-core/cartographer/resolve";
+import {
+  extractionConfig,
+  readConfig,
+  writeConfig,
+} from "@mimir/plugin-core/shared-config";
 import { defaultOrgReplicaPath } from "@mimir/plugin-core/store/org-replica";
 import { mimirHome } from "@mimir/plugin-core/util";
-import mcpTemplate from "../artifacts/mcp.json.template" with { type: "text" };
-import settingsTemplate from "../artifacts/settings.json.template" with {
+import configTemplate from "../artifacts/config.toml.template" with {
   type: "text",
 };
 import wrapperTemplate from "../artifacts/wrapper.sh.template" with {
   type: "text",
 };
-import ensureBinaryScript from "../scripts/ensure-binary.sh" with {
-  type: "text",
-};
-import { extractionConfig, readConfig, writeConfig } from "./config";
+import { spliceManagedConfig } from "./config-preserve";
+import { mimirCodexHome } from "./paths";
+import { trustMimirHooks } from "./trust";
 
 // `as const` keeps the discriminant literal so the ok/err union
 // discriminates without a return annotation blinding the compiler.
@@ -61,8 +67,6 @@ const validateUrl = (raw: string) => {
 };
 
 const fetchSystemPrompt = async (baseUrl: URL, apiKey?: string) => {
-  // Allow base URL with or without a trailing slash; /v1/system-prompt is
-  // always relative to the root of mimir-server.
   const endpoint = new URL("/v1/system-prompt", baseUrl);
 
   let response: Response;
@@ -114,9 +118,10 @@ const writeExecutable = async (path: string, contents: string) => {
 
 /**
  * In the compiled binary, process.execPath points at the binary itself —
- * exactly what needs landing at ~/.local/bin/mimir-cc. During `bun src/cli.ts`
- * dev runs, process.execPath is the bun runtime; copying that as mimir-cc
- * would be useless, so skip and tell the developer how to proceed.
+ * exactly what needs landing at ~/.local/bin/mimir-codex-bin. During
+ * `bun src/cli.ts` dev runs, process.execPath is the bun runtime;
+ * copying that would be useless, so skip and tell the developer how to
+ * proceed.
  */
 const installSelfBinary = async (destination: string) => {
   const source = process.execPath;
@@ -124,15 +129,14 @@ const installSelfBinary = async (destination: string) => {
 
   if (sourceBase === "bun" || sourceBase === "bun-debug") {
     return err(
-      `Running under bun (${source}) — refusing to copy the runtime as mimir-cc. ` +
+      `Running under bun (${source}) — refusing to copy the runtime as mimir-codex-bin. ` +
         `Build the binary with ./build.sh and run the compiled output instead.`,
     );
   }
 
-  // In the release-install flow, ensure-binary.sh has already downloaded the
-  // binary to the destination, so process.execPath IS the destination. Copying
-  // a file onto itself truncates it to zero — skip the copy and just confirm
-  // the mode.
+  // If a prior flow already downloaded the binary to the destination,
+  // process.execPath IS the destination. Copying a file onto itself
+  // truncates it to zero — skip the copy and just confirm the mode.
   if (resolve(source) === resolve(destination)) {
     await chmod(destination, 0o755);
     return ok(true);
@@ -153,11 +157,11 @@ export type InstallOptions = {
   /** Static bearer key for the interim API gate (MIM-77). Omit for
    *  ungated self-hosted servers. */
   readonly apiKey?: string;
-  /** BYOK provider key for persist-spawned background inference (MIM-74). */
+  /** BYOK provider key (MIM-74). */
   readonly providerApiKey?: string;
   /** Provider id (models.dev key) paired with providerApiKey. */
   readonly provider?: string;
-  /** Small/cheap model for the spawned background jobs. */
+  /** Small/cheap model for background jobs + extraction fallback. */
   readonly smallModel?: string;
   /** MIM-86 extraction endpoint — without it (or the MIMIR_EXTRACTION_*
    *  env) memory distillation is OFF. Key stays env-only (no-paste). */
@@ -165,42 +169,32 @@ export type InstallOptions = {
   readonly extractionModel?: string;
 };
 
-/**
- * Render the mcp.json template, conditionally injecting the cartographer
- * entry. We splice the JSON before serialising rather than running string
- * replacements on a template that would leave an orphan comma — the
- * template's placeholder gets replaced with either a valid block + trailing
- * comma or removed entirely.
- */
-const renderMcp = (opts: {
+const renderConfigToml = (opts: {
   readonly serverUrl: string;
   readonly userMemoryDb: string;
   readonly cartographerBinary?: string;
   readonly apiKey?: string;
   readonly selfPath: string;
 }) => {
-  const baseForMcp = opts.serverUrl.replace(/\/+$/, "");
+  const base = opts.serverUrl.replace(/\/+$/, "");
 
-  let rendered = mcpTemplate
-    .replaceAll("{{MIMIR_SERVER_URL}}", baseForMcp)
-    .replaceAll("{{MIMIR_CC_BIN}}", opts.selfPath)
+  let rendered = configTemplate
+    .replaceAll("{{MIMIR_SERVER_URL}}", base)
+    .replaceAll("{{MIMIR_CODEX_BIN}}", opts.selfPath)
     .replaceAll("{{USER_MEMORY_DB}}", opts.userMemoryDb)
-    // Org replica (MIM-84): fixed default path, env-overridable at runtime —
-    // no install flag until someone actually needs a custom location.
     .replaceAll("{{ORG_REPLICA_DB}}", defaultOrgReplicaPath())
-    // The mimir HTTP MCP entry needs the gate key on its connection
-    // (MIM-77) — CC's HTTP MCP config carries it as a headers block.
+    // HTTP MCP auth: bearer_token inline is rejected for streamable_http;
+    // bearer_token_env_var is the supported shape. The wrapper exports
+    // MIMIR_API_KEY from the shared config.
     .replace(
-      "{{MIMIR_AUTH_BLOCK}}",
-      opts.apiKey
-        ? `,\n      "headers": { "Authorization": "Bearer ${opts.apiKey}" }`
-        : "",
+      "{{MIMIR_BEARER_LINE}}",
+      opts.apiKey ? `bearer_token_env_var = "MIMIR_API_KEY"` : "",
     );
 
   if (opts.cartographerBinary) {
     rendered = rendered.replace(
       "{{CARTOGRAPHER_BLOCK}}",
-      `"cartographer": { "command": "${opts.cartographerBinary}", "args": ["--parse-only"] },\n    `,
+      `[mcp_servers.cartographer]\ncommand = "${opts.cartographerBinary}"\nargs = ["--parse-only"]\n`,
     );
   } else {
     rendered = rendered.replace("{{CARTOGRAPHER_BLOCK}}", "");
@@ -208,20 +202,6 @@ const renderMcp = (opts: {
 
   return rendered;
 };
-
-const renderSettings = (opts: { readonly selfPath: string }) =>
-  settingsTemplate.replaceAll("{{MIMIR_CC_BIN}}", opts.selfPath);
-
-const buildTemplates = (opts: {
-  readonly serverUrl: string;
-  readonly userMemoryDb: string;
-  readonly cartographerBinary?: string;
-  readonly apiKey?: string;
-  readonly selfPath: string;
-}) => ({
-  mcp: renderMcp(opts),
-  settings: renderSettings({ selfPath: opts.selfPath }),
-});
 
 export const runInstall = async (
   opts: InstallOptions,
@@ -247,38 +227,45 @@ export const runInstall = async (
   const xml = toAnthropicXml(promptResult.value.content);
 
   const home = mimirHome();
+  const codexHome = mimirCodexHome();
   const binDir = join(homedir(), ".local", "bin");
 
   const userMemoryDb = opts.userMemoryDb ?? join(home, "user-memories.db");
 
-  const promptPath = join(home, "system-prompt.md");
-  const mcpPath = join(home, "mcp.json");
-  const settingsPath = join(home, "settings.json");
-  const wrapperPath = join(binDir, "mimir");
-  const selfPath = join(binDir, "mimir-cc");
+  const personaPath = join(codexHome, "AGENTS.md");
+  const configTomlPath = join(codexHome, "config.toml");
+  const wrapperPath = join(binDir, "mimir-codex");
+  const selfPath = join(binDir, "mimir-codex-bin");
 
-  const templates = buildTemplates({
-    serverUrl: opts.serverUrl,
-    userMemoryDb,
-    cartographerBinary,
-    apiKey: opts.apiKey,
-    selfPath,
-  });
+  await writeText(personaPath, xml);
 
-  const ensureBinaryPath = join(home, "ensure-binary.sh");
-
-  await writeText(promptPath, xml);
-  await writeText(mcpPath, templates.mcp);
-  await writeText(settingsPath, templates.settings);
+  // Splice the regenerated mimir block into the existing config.toml so
+  // codex-written state (project trust_level entries, personality, …)
+  // survives an update — see config-preserve.ts.
+  const configFile = Bun.file(configTomlPath);
+  const existingToml = (await configFile.exists())
+    ? await configFile.text()
+    : null;
+  await writeText(
+    configTomlPath,
+    spliceManagedConfig(
+      existingToml,
+      renderConfigToml({
+        serverUrl: opts.serverUrl,
+        userMemoryDb,
+        cartographerBinary,
+        apiKey: opts.apiKey,
+        selfPath,
+      }),
+    ),
+  );
   await writeExecutable(wrapperPath, wrapperTemplate);
-  // The wrapper self-updates the binary on launch by running this from
-  // ~/.mimir, so it must not depend on the plugin clone still being present.
-  await writeExecutable(ensureBinaryPath, ensureBinaryScript);
 
-  // MERGE over the existing shared config rather than replacing it:
-  // fields this installer doesn't carry in InstallOptions (the MIM-86
-  // extraction trio, anything another distribution recorded) must
-  // survive an install/update — a blind overwrite silently dropped them.
+  // Shared runtime config (~/.mimir/config.json) — the same file every
+  // distribution writes. MERGE over the existing config rather than
+  // replacing it: another distribution's fields that this installer
+  // doesn't know about (e.g. the extraction trio a cc install recorded)
+  // must survive a codex install.
   const existingConfig = await readConfig();
   await writeConfig({
     ...(existingConfig ?? {}),
@@ -295,12 +282,24 @@ export const runInstall = async (
     ...(opts.extractionModel ? { extractionModel: opts.extractionModel } : {}),
   });
 
-  // MIM-85: embedder artifacts (pinned llama.cpp release + hash-verified
-  // GGUF, ~640MB on first run). A failure fails the WHOLE install — no
-  // silent text-only installs; re-run once the network/mirror recovers.
+  // Embedder artifacts (pinned llama.cpp release + hash-verified GGUF,
+  // ~640MB on first run). A failure fails the WHOLE install — no silent
+  // text-only installs; re-run once the network/mirror recovers.
   const embedderErr = await installEmbedderArtifacts(log);
   if (embedderErr) {
     return err(`Embedder install failed: ${embedderErr.message}`);
+  }
+
+  // Hook trust ledger — Codex silently skips untrusted hooks, so an
+  // install without this step looks healthy and does nothing. Codex
+  // being unreachable degrades to a loud warning: the artifacts are in
+  // place and a re-run of install/update completes the ceremony.
+  const trust = await trustMimirHooks(codexHome);
+  if (trust.error) {
+    log(`WARNING: hook trust failed (${trust.error}) — hooks will not run.`);
+    log(`         Re-run 'mimir-codex-bin update' with codex on PATH.`);
+  } else {
+    log(`Trusted ${trust.trusted} hooks via codex app-server.`);
   }
 
   const selfResult = await installSelfBinary(selfPath);
@@ -308,21 +307,23 @@ export const runInstall = async (
 
   return ok({
     home,
+    codexHome,
     binDir,
     version: promptResult.value.version,
+    hooksTrusted: trust.error ? 0 : trust.trusted,
     cartographerBinary,
   });
 };
 
 /**
- * CLI entry point — called from cli.ts. Prints user-facing output and
- * translates Result into a process exit code.
+ * CLI entry point — called from install-cli.ts. Prints user-facing
+ * output and translates Result into a process exit code.
  */
 export const runInstallCommand = async (opts: InstallOptions) => {
   if (!opts.serverUrl) {
     console.error(
-      "Usage: mimir-cc install <mimir-server-url> [--user-memory-db PATH] [--cartographer PATH]\n" +
-        "  e.g. mimir-cc install https://mimir.example.com",
+      "Usage: mimir-codex-bin install <mimir-server-url> [--user-memory-db PATH] [--cartographer PATH]\n" +
+        "  e.g. mimir-codex-bin install https://mimir.example.com",
     );
     return 1;
   }
@@ -333,7 +334,8 @@ export const runInstallCommand = async (opts: InstallOptions) => {
     return 1;
   }
 
-  const { home, binDir, version, cartographerBinary } = result.value;
+  const { codexHome, binDir, version, hooksTrusted, cartographerBinary } =
+    result.value;
   const carto = cartographerBinary
     ? `  Cartographer:   ${cartographerBinary}`
     : `  Cartographer:   (not configured — auto-reindex disabled)`;
@@ -351,24 +353,22 @@ export const runInstallCommand = async (opts: InstallOptions) => {
 
   console.log(
     [
-      `Mimir installed.`,
+      `Mimir for Codex installed.`,
       ``,
-      `  System prompt:  ${home}/system-prompt.md  (version ${version})`,
-      `  MCP config:     ${home}/mcp.json`,
-      `  Hook settings:  ${home}/settings.json`,
-      `  Runtime config: ${home}/config.json`,
-      `  User memories:  ${opts.userMemoryDb ?? join(home, "user-memories.db")}`,
+      `  Persona:        ${codexHome}/AGENTS.md  (version ${version})`,
+      `  Codex config:   ${codexHome}/config.toml  (${hooksTrusted} hooks trusted)`,
+      `  Runtime config: ${mimirHome()}/config.json`,
+      `  User memories:  ${opts.userMemoryDb ?? join(mimirHome(), "user-memories.db")}`,
       `  Embedder:       ${embedderDir()}  (llama.cpp + pinned GGUF)`,
       carto,
       extractionLine,
-      `  Wrapper:        ${binDir}/mimir`,
-      `  Binary:         ${binDir}/mimir-cc`,
-      `  Updater:        ${home}/ensure-binary.sh`,
-      `  Logs:           ${home}/logs/mimir-cc.log`,
+      `  Wrapper:        ${binDir}/mimir-codex`,
+      `  Binary:         ${binDir}/mimir-codex-bin`,
+      `  Logs:           ${mimirHome()}/logs/mimir-codex.log`,
       ``,
-      `Make sure ${binDir} is on your PATH, then exit Claude Code and run`,
-      `  mimir`,
-      `to start a Mimir session.`,
+      `Make sure ${binDir} is on your PATH, then run`,
+      `  mimir-codex`,
+      `to start a Mimir session in Codex.`,
     ].join("\n"),
   );
   return 0;

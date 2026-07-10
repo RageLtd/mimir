@@ -1,42 +1,17 @@
 /**
- * Argument parsing for the install/update subcommands, extracted from
- * cli.ts so tests can import it — cli.ts dispatches and calls
+ * Argument parsing + dispatch for the install/update subcommands,
+ * extracted from cli.ts so tests can import it — cli.ts calls
  * process.exit at module top level, which would kill the test runner.
- */
-
-import { join } from "node:path";
-import { mimirHome } from "@mimir/plugin-core/util";
-import { readConfig } from "./config";
-import type { InstallOptions } from "./install";
-
-type McpConfig = {
-  readonly mcpServers?: Record<string, { readonly url?: string }>;
-};
-
-/**
- * Recover the mimir-server base URL from a previously installed mcp.json.
  *
- * The MCP config stores the full endpoint URL (`<base>/mcp`); we strip the
- * `/mcp` suffix so `update` calls fetchSystemPrompt with the same base URL
- * the original install used.
+ * Same flag surface as cc-plugin's installer; `update` layers CLI args
+ * over the existing shared ~/.mimir/config.json so a bare update is a
+ * true refresh (re-fetch persona, re-render config.toml, re-trust
+ * hooks).
  */
-const readUrlFromExistingMcpConfig = async (): Promise<string | undefined> => {
-  const mcpPath = join(mimirHome(), "mcp.json");
-  const file = Bun.file(mcpPath);
-  if (!(await file.exists())) return undefined;
 
-  let parsed: McpConfig;
-  try {
-    parsed = (await file.json()) as McpConfig;
-  } catch {
-    return undefined;
-  }
-
-  const url = parsed.mcpServers?.mimir?.url;
-  if (typeof url !== "string") return undefined;
-
-  return url.replace(/\/mcp\/?$/, "");
-};
+import { readConfig } from "@mimir/plugin-core/shared-config";
+import type { InstallOptions } from "./install";
+import { runInstallCommand } from "./install";
 
 export type PartialOptions = {
   readonly serverUrl?: string;
@@ -52,9 +27,8 @@ export type PartialOptions = {
 
 /**
  * Parse the shared argv shape — optional positional URL plus optional
- * `--user-memory-db` / `--cartographer` flags. Used by both `install`
- * (which then requires serverUrl) and `update` (which layers the
- * partial over existing config.json).
+ * flags. Used by both `install` (which then requires serverUrl) and
+ * `update` (which layers the partial over existing config.json).
  */
 export const parsePartialOptions = (rest: readonly string[]) => {
   let serverUrl: string | undefined;
@@ -137,10 +111,8 @@ export const parsePartialOptions = (rest: readonly string[]) => {
     return { error: `unexpected argument: ${arg}` } as const;
   }
 
-  // Construct the result explicitly typed so the inferred return type
-  // of this function stays as `PartialOptions | { error: string }` —
-  // without this, TS infers the spread shape too loosely and
-  // downstream `"error" in result` narrowing breaks at call sites.
+  // Constructed explicitly typed so the inferred return stays
+  // `PartialOptions | { error: string }` for `"error" in` narrowing.
   const result: PartialOptions = {
     ...(serverUrl ? { serverUrl } : {}),
     ...(userMemoryDb ? { userMemoryDb } : {}),
@@ -156,29 +128,12 @@ export const parsePartialOptions = (rest: readonly string[]) => {
 };
 
 /**
- * The `--api-key` flag wins; the MIMIR_API_KEY env var is the no-paste
- * path the install skill steers users toward — the key reaches the
- * binary through the environment without ever entering the chat
- * transcript or the process argv.
+ * No-paste discipline: keys reach the binary through the environment
+ * without entering the chat transcript or process argv.
  */
-const envApiKey = () => {
-  const key = process.env.MIMIR_API_KEY;
-  return key ? key : undefined;
-};
+const envApiKey = () => process.env.MIMIR_API_KEY || undefined;
+const envProviderApiKey = () => process.env.MIMIR_PROVIDER_API_KEY || undefined;
 
-/** Same no-paste discipline as MIMIR_API_KEY for the BYOK provider key
- *  (MIM-74) — the key reaches the binary through the environment without
- *  entering the chat transcript or the process argv. */
-const envProviderApiKey = () => {
-  const key = process.env.MIMIR_PROVIDER_API_KEY;
-  return key ? key : undefined;
-};
-
-/**
- * Parse install args — same as the partial parser but with serverUrl
- * required. Install is the fresh-install path so there's nothing to
- * recover; the URL must be on the command line.
- */
 export const parseInstallArgs = (rest: readonly string[]) => {
   const partial = parsePartialOptions(rest);
   if ("error" in partial) return partial;
@@ -208,30 +163,19 @@ export const parseInstallArgs = (rest: readonly string[]) => {
 };
 
 /**
- * Build the InstallOptions for an `update` invocation by layering the
- * partial CLI args over the existing config.json. The result preserves
- * any field that wasn't explicitly overridden, so `update` with no
- * args is a true no-op refresh — same URL, same cartographer path,
- * same user-memory DB — and `update <url>` keeps the existing
- * cartographer and DB while only changing the URL.
- *
- * URL precedence: CLI flag > config.json > mcp.json (legacy fallback
- * for pre-config.json installs).
- *
- * API key precedence: CLI flag > MIMIR_API_KEY env > config.json —
- * env over config matches authHeaders(), so a key rotated via the
- * environment takes effect without editing config.json first.
+ * Layer partial CLI args over the existing shared config.json so
+ * `update` with no args is a true no-op refresh. URL precedence: CLI
+ * flag > config.json. Key precedence: CLI flag > env > config.json.
  */
 export const mergeUpdateOptions = async (partial: PartialOptions) => {
   const existing = await readConfig();
-  const legacyUrl = existing ? undefined : await readUrlFromExistingMcpConfig();
 
-  const serverUrl = partial.serverUrl ?? existing?.serverUrl ?? legacyUrl;
+  const serverUrl = partial.serverUrl ?? existing?.serverUrl;
   if (!serverUrl) {
     return {
       error:
         "No URL provided and no existing config to recover from.\n" +
-        "Run: mimir-cc update <mimir-server-url>",
+        "Run: mimir-codex-bin update <mimir-server-url>",
     } as const;
   }
 
@@ -259,4 +203,31 @@ export const mergeUpdateOptions = async (partial: PartialOptions) => {
     ...(extractionModel ? { extractionModel } : {}),
   };
   return merged;
+};
+
+/** Dispatch entry used by cli.ts for both install and update. */
+export const runInstallCli = async (
+  command: "install" | "update",
+  rest: readonly string[],
+) => {
+  if (command === "install") {
+    const parsed = parseInstallArgs(rest);
+    if ("error" in parsed) {
+      console.error(parsed.error);
+      return 1;
+    }
+    return runInstallCommand(parsed);
+  }
+
+  const partial = parsePartialOptions(rest);
+  if ("error" in partial) {
+    console.error(partial.error);
+    return 1;
+  }
+  const merged = await mergeUpdateOptions(partial);
+  if ("error" in merged) {
+    console.error(`Update failed: ${merged.error}`);
+    return 1;
+  }
+  return runInstallCommand(merged);
 };
