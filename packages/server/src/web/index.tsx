@@ -1,8 +1,10 @@
 import { Hono } from "hono";
+import { compress } from "hono/compress";
 import { jsxRenderer } from "hono/jsx-renderer";
 
 export const web = new Hono();
 
+web.use("*", compress({ threshold: 0 }));
 web.use(
   "*",
   jsxRenderer(({ children }) => (
