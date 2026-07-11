@@ -1,70 +1,12 @@
-import { Hono } from "hono";
-import { cors } from "hono/cors";
-import { countUsers, createClaimGuard, SIGNUP_PATH } from "./auth/claim";
-import { getAuth, getAuthDb, runAuthMigrations } from "./auth/instance";
+import { createApp } from "./app";
+import { countUsers } from "./auth/claim";
+import { getAuthDb, runAuthMigrations } from "./auth/instance";
 import { config } from "./config";
 import { getTenantDb } from "./db/tenant";
-import { createIdentityGate, type IdentityEnv } from "./middleware/identity";
-import { keys } from "./routes/keys";
-import { mcp } from "./routes/mcp";
-import { projects } from "./routes/projects";
-import { sync } from "./routes/sync";
-import { systemPrompt } from "./routes/system-prompt";
 import { log } from "./util/logger";
 import { attempt, attemptSync } from "./util/result";
 
-const app = new Hono<IdentityEnv>();
-
-// Middleware
-app.use("*", cors());
-
-// Better Auth (MIM-70) — the ONLY gating mechanism. Mount order matters:
-// the claim guard wraps the signup endpoint, the auth handler self-gates
-// its own routes, and the identity gate covers everything else (with
-// /health exempt). Lazy getAuth(): an auth-disabled boot never constructs
-// the instance or touches the SQLite file.
-if (config.auth.enabled) {
-  app.use(SIGNUP_PATH, createClaimGuard());
-  app.on(["POST", "GET"], "/api/auth/*", (c) => getAuth().handler(c.req.raw));
-  app.use("*", createIdentityGate());
-  log.info("better-auth identity gate active");
-} else {
-  log.warn(
-    "AUTH_ENABLED=false — API is UNAUTHENTICATED; enable auth before exposing this server publicly",
-  );
-}
-
-// Health check — post-MIM-88 the only backing service is the tenant
-// SQLite store (in-process); a trivial read proves the handle is alive.
-type HealthStatus = { status: string; latency?: string; error?: string };
-
-app.get("/health", (c) => {
-  const start = Date.now();
-  const [err] = attemptSync(() => getTenantDb().query("SELECT 1").get());
-  const store: HealthStatus = err
-    ? { status: "down", error: err.message }
-    : { status: "ok", latency: `${Date.now() - start}ms` };
-  const status = err ? "degraded" : "ok";
-  return c.json(
-    { status, version: "0.3.0", services: { tenantStore: store } },
-    err ? 503 : 200,
-  );
-});
-
-// System prompt (cc-plugin install + ACP boot fetch)
-app.route("/v1/system-prompt", systemPrompt);
-
-// Project registry
-app.route("/v1/projects", projects);
-
-// Wrapped-key distribution (MIM-87) — ciphertext relay only
-app.route("/v1/keys", keys);
-
-// Blind sync + coordination (MIM-88) — envelopes in, envelopes out
-app.route("/v1/sync", sync);
-
-// MCP server for Claude Code tool injection
-app.route("/mcp", mcp);
+const app = createApp();
 
 // Boot sequence
 let server: ReturnType<typeof Bun.serve> | null = null;
