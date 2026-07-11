@@ -2,17 +2,16 @@ name: oc-plugin Release
 
 # Auto-versioned release for packages/oc-plugin, driven by conventional
 # commits — no manual tagging. On a push to main that touches the
-# package, packages/oc-plugin/scripts/release.sh analyzes commits, bumps
+# package, the shared scripts/release-package.sh analyzes commits, bumps
 # the version in package.json, commits chore(release), and tags
 # oc-plugin/v<version>. The build job then builds the bundle and the
 # publish job renames the package for npm scope, `bun publish`es to
 # GitHub Packages, and creates a GitHub Release on the new tag.
 #
-# The conventional-commit rules match the cc-plugin's release.sh
-# verbatim — feat!:/BREAKING CHANGE → major, feat: → minor,
+# The conventional-commit rules are shared with the cc/codex plugin
+# workflows — feat!:/BREAKING CHANGE → major, feat: → minor,
 # fix|refactor|perf|revert|build: → patch, docs:|chore:|test:|style:|ci:
-# → no release. See packages/oc-plugin/scripts/release.sh for the
-# details.
+# → no release. See scripts/release-package.sh for the details.
 #
 # To cut a release:
 #   1. Commit changes to packages/oc-plugin/ with conventional-commit
@@ -48,6 +47,11 @@ jobs:
     name: Analyze & Bump Version
     needs: [test]
     runs-on: ubuntu-latest
+    # Serialized across the plugin release workflows (shared group with the
+    # cc/codex release workflows): one push can fire several, and concurrent
+    # chore(release) pushes to main would race to a non-fast-forward failure.
+    concurrency:
+      group: mimir-release-version-bump
     # Avoid the release commit re-triggering the workflow.
     if: "!startsWith(github.event.head_commit.message, 'chore(release): oc-plugin')"
     outputs:
@@ -67,7 +71,7 @@ jobs:
       - name: Analyze commits (dry run)
         id: dry-run
         run: |
-          OUTPUT=$(sh packages/oc-plugin/scripts/release.sh --dry-run 2>&1)
+          OUTPUT=$(sh scripts/release-package.sh oc-plugin packages/oc-plugin/package.json --dry-run 2>&1)
           echo "$OUTPUT"
           if echo "$OUTPUT" | grep -q "Nothing to do"; then
             echo "should_release=false" >> "$GITHUB_OUTPUT"
@@ -79,11 +83,17 @@ jobs:
 
       - name: Bump, commit, tag
         if: steps.dry-run.outputs.should_release == 'true'
-        run: sh packages/oc-plugin/scripts/release.sh
+        run: sh scripts/release-package.sh oc-plugin packages/oc-plugin/package.json
 
       - name: Push changes and tags
         if: steps.dry-run.outputs.should_release == 'true'
-        run: git push --follow-tags
+        # Checkout pinned the trigger SHA; another plugin's serialized bump job
+        # may have already landed its release commit on main. Rebase ours on
+        # top (disjoint files — release commits only touch their own package's
+        # manifest) so the push fast-forwards.
+        run: |
+          git pull --rebase origin main
+          git push --follow-tags
 
   build:
     name: Build Bundle

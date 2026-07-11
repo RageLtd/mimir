@@ -26,6 +26,11 @@ jobs:
     name: Analyze & Bump Version
     needs: [test]
     runs-on: ubuntu-latest
+    # Serialized across the plugin release workflows (shared group with
+    # cc-plugin-release.yml): one push can fire both, and concurrent
+    # chore(release) pushes to main would race to a non-fast-forward failure.
+    concurrency:
+      group: mimir-release-version-bump
     # Avoid the release commit re-triggering the workflow.
     if: "!startsWith(github.event.head_commit.message, 'chore(release): codex-plugin')"
     outputs:
@@ -61,7 +66,13 @@ jobs:
 
       - name: Push changes and tags
         if: steps.dry-run.outputs.should_release == 'true'
-        run: git push --follow-tags
+        # Checkout pinned the trigger SHA; another plugin's serialized bump job
+        # may have already landed its release commit on main. Rebase ours on
+        # top (disjoint files — release commits only touch their own package's
+        # manifest) so the push fast-forwards.
+        run: |
+          git pull --rebase origin main
+          git push --follow-tags
 
   release:
     name: Build & Publish

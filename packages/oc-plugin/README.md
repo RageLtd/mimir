@@ -82,7 +82,7 @@ The bundled output is at `packages/oc-plugin/dist/mimir-oc.ts` — that's the ar
 
 ## Release
 
-Releases are automated. Conventional commits on `packages/oc-plugin/**` drive a semver bump via `packages/oc-plugin/scripts/release.sh`:
+Releases are automated. Conventional commits on `packages/oc-plugin/**` drive a semver bump via the shared `scripts/release-package.sh` at the repo root:
 
 - `feat!:` or `BREAKING CHANGE` → major
 - `feat:` → minor
