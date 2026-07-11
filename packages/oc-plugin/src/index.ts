@@ -26,6 +26,11 @@ import { createLoggerFactory } from "@mimir/plugin-core/logger";
 import { markdownToXml } from "@mimir/plugin-core/markdown-to-xml";
 import { loadRules, runAndFormat } from "@mimir/plugin-core/rules";
 import {
+  createOrgReplica,
+  defaultOrgReplicaPath,
+  type OrgReplica,
+} from "@mimir/plugin-core/store/org-replica";
+import {
   createUserMemoryStore,
   type UserMemoryStore,
 } from "@mimir/plugin-core/store/user-memories";
@@ -51,6 +56,7 @@ import {
   injectLeadingContext,
   lastUserMessage,
 } from "./message-inject";
+import { orgMemoryTools } from "./org-memory-tools";
 import { runFullReindex, runReindexWorker } from "./reindex";
 import {
   cartographerTools,
@@ -115,13 +121,22 @@ export const MimirPlugin: Plugin = async (ctx) => {
     "mimir-oc.prev.log",
   ).createLogger("mimir-oc");
 
-  // 3. Open user-memory store. The DB lives at the path the install
-  //    flow wrote — usually ~/.mimir/user-memories.db.
+  // 3. Open the local memory stores: developer facts in user-memories.db,
+  //    project memories and playbooks in the org replica.
   let userMemoryStore: UserMemoryStore | null = null;
   try {
     userMemoryStore = createUserMemoryStore(config.userMemoryDb);
   } catch (err) {
     log.warn("user-memory store open failed", { error: errMessage(err) });
+  }
+
+  let orgReplica: OrgReplica | null = null;
+  try {
+    orgReplica = createOrgReplica(
+      process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
+    );
+  } catch (err) {
+    log.warn("org replica open failed", { error: errMessage(err) });
   }
 
   // 4. Load the persona system prompt and parse voice anchors. The
@@ -149,19 +164,19 @@ export const MimirPlugin: Plugin = async (ctx) => {
     Number.isFinite(anchorInterval) && anchorInterval > 0 ? anchorInterval : 5;
 
   return {
-    // ─── User-memory + install tools ───
+    // ─── Memory + install tools ───
     //
-    // In-process custom tools (no MCP round-trip). The seven user-memory
-    // tools match what the cc-plugin exposes via stdio MCP. The install
-    // tool is the runtime half of the slash command at
+    // In-process custom tools (no MCP round-trip). User memory, project
+    // memory, and playbooks match what the cc-plugin exposes via stdio MCP.
+    // The install tool is the runtime half of the slash command at
     // `commands/mimir-install.md` — the model calls it with the user's
     // chosen parameters and the tool writes the config files.
     //
-    // Both graceful-degrade when the store is null (uninitialised) —
-    // user-memory tools report "store not initialised" and the install
+    // Memory tools graceful-degrade when a store is unavailable; the install
     // tool checks for the plugin bundle + MIMIR_API_KEY first.
     tool: {
       ...userMemoryTools(userMemoryStore),
+      ...orgMemoryTools(orgReplica),
       ...cartographerTools(ctx.directory),
       mimir_install: installTool(),
       mimir_hygiene: hygieneTool(),
