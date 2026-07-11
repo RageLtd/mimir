@@ -4,18 +4,18 @@ description: Re-fetch the Mimir system prompt from the server and update the loc
 
 You are helping the user update Mimir to pick up the latest server-side changes.
 
-The update is the same operation as `/mimir-install`, just scoped to the runtime state. The plugin bundle at `~/.config/opencode/plugins/mimir-oc.ts` is **not** touched — that's a separate update the user does manually by downloading a new release.
+The update is the same operation as `/mimir-install`, just scoped to the runtime state. The npm package registration in OpenCode's config is not touched; update the package separately with `opencode plugin --global --force @RageLtd/mimir-oc`.
 
 ## Before you start
 
 The same prerequisites as `/mimir-install` apply:
 
 1. **MIMIR_API_KEY** must be in the environment. The cloud server's `/v1/system-prompt` endpoint requires a bearer token.
-2. The plugin bundle must still be at `~/.config/opencode/plugins/mimir-oc.ts`.
+2. The `@RageLtd/mimir-oc` package must still be registered in OpenCode.
 
 ## Run the update
 
-Read the existing config at `~/.mimir/config.json` to get the current `serverUrl`, `userMemoryDb`, `cartographerBinary`, and `apiKey` (if any). Then call the `mimir_install` tool with those values.
+Read the existing config at `~/.mimir/config.json` to get the current `serverUrl`, `userMemoryDb`, `cartographerBinary`, and `apiKey` (if any). Then call the `mimir_install` tool with those values. If `cartographerBinary` is absent, omit it: the tool auto-detects from `PATH` and `~/.local/bin/cartographer`.
 
 The install is idempotent — it overwrites the existing files with whatever the server returns now. Re-fetching the system prompt is the whole point of this command.
 

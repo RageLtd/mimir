@@ -7,14 +7,13 @@
  *   ~/.mimir/system-prompt.md        — fetched from <server>/v1/system-prompt
  *   ~/.mimir/config.json             — the user's input (server, db, etc.)
  *   ~/.mimir/logs/                   — created
- *   ~/.config/opencode/opencode.json — OpenCode config (plugin ref, MCP)
  *   ~/.config/opencode/agents/mimir.md — the Mimir custom agent
+ *   ~/.mimir/mimir-oc.ts             — stable CLI copy of this bundle
  *   ~/.local/bin/mimir               — wrapper script (chmod 755)
  *
- * The plugin bundle at `~/.config/opencode/plugins/mimir-oc.ts` is the
- * user's responsibility to download — the install verifies it exists
- * and refuses to proceed if not. Restarting OpenCode after the install
- * is also the user's responsibility.
+ * The npm plugin package is installed separately by OpenCode. This
+ * installer must not rewrite OpenCode's config: `opencode plugin`
+ * already registered the package and owns that concern.
  *
  * The cloud server requires `MIMIR_API_KEY` in the environment. The
  * install checks the env var first; absent that, the user can pass
@@ -25,11 +24,9 @@
 import { chmod, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+import { resolveCartographerBinary } from "@mimir/plugin-core/cartographer/resolve";
 import { errMessage, mimirHome } from "@mimir/plugin-core/util";
 import agentTemplate from "../artifacts/agent-mimir.md.template" with {
-  type: "text",
-};
-import opencodeTemplate from "../artifacts/opencode.json.template" with {
   type: "text",
 };
 import wrapperTemplate from "../artifacts/wrapper.sh.template" with {
@@ -37,9 +34,12 @@ import wrapperTemplate from "../artifacts/wrapper.sh.template" with {
 };
 import installCommand from "../commands/mimir-install.md" with { type: "text" };
 import updateCommand from "../commands/mimir-update.md" with { type: "text" };
-import { type MimirConfig, writeConfig } from "./config";
+import { type MimirConfig, readConfig, writeConfig } from "./config";
 
 const SYSTEM_PROMPT_ROUTE = "/v1/system-prompt";
+
+const defaultInstallDependencies = { resolveCartographerBinary };
+const skipInteractiveCartographerPrompt = async () => null;
 
 type SystemPromptResponse = {
   readonly content?: unknown;
@@ -112,13 +112,13 @@ const renderTemplate = (
  * written, or `ok: false` and an actionable error message.
  *
  * Idempotent: re-running on a populated directory overwrites the
- * files with the new options. The plugin bundle is the user's
- * responsibility to install (via `opencode plugin @RageLtd/mimir-oc`);
- * this function runs in-process inside the loaded plugin, so the bundle
- * is necessarily already present by the time we're called.
+ * files with the new options. The package is installed separately via
+ * `opencode plugin --global @RageLtd/mimir-oc`; this function runs
+ * in-process inside that loaded package.
  */
 export const installMimir = async (
   opts: InstallOptions,
+  dependencies = defaultInstallDependencies,
 ): Promise<InstallResult> => {
   const written: string[] = [];
 
@@ -141,7 +141,26 @@ export const installMimir = async (
     };
   }
 
-  // 2. Resolve and check the API key. Cloud server requires it; some
+  // 2. Resolve Cartographer before network or filesystem writes. Preserve a
+  //    valid path another Mimir distribution already recorded; otherwise
+  //    auto-detect from PATH or ~/.local/bin for editor-launched OpenCode
+  //    processes with a reduced environment.
+  const existingConfig = await readConfig();
+  const requestedCartographer =
+    opts.cartographerBinary ?? existingConfig?.cartographerBinary;
+  const carto = await dependencies.resolveCartographerBinary({
+    ...(requestedCartographer ? { requested: requestedCartographer } : {}),
+    // OpenCode invokes this in-process from a tool call. The shared CLI
+    // resolver's terminal prompt would block the agent loop here; users can
+    // pass an explicit override through the tool when auto-detection misses.
+    promptForPath: skipInteractiveCartographerPrompt,
+  });
+  if (!carto.ok) {
+    return { ok: false, message: carto.error, written };
+  }
+  const cartographerBinary = carto.binary ?? undefined;
+
+  // 3. Resolve and check the API key. Cloud server requires it; some
   //    self-hosted servers don't. We pass it through regardless; a
   //    401/403 surfaces as a fetch failure.
   const apiKey = resolveApiKey(opts);
@@ -154,7 +173,7 @@ export const installMimir = async (
     };
   }
 
-  // 3. Fetch the system prompt.
+  // 4. Fetch the system prompt.
   let promptContent: string;
   let promptVersion: string;
   try {
@@ -168,7 +187,7 @@ export const installMimir = async (
       written,
     };
   }
-  // 4. Write the Mimir state directory.
+  // 5. Write the Mimir state directory.
   const home = mimirHome();
   const userMemoryDb = opts.userMemoryDb ?? join(home, "user-memories.db");
 
@@ -188,11 +207,10 @@ export const installMimir = async (
   }
 
   const mimirConfig: MimirConfig = {
+    ...(existingConfig ?? {}),
     serverUrl: opts.serverUrl.replace(/\/+$/, ""),
     userMemoryDb,
-    ...(opts.cartographerBinary
-      ? { cartographerBinary: opts.cartographerBinary }
-      : {}),
+    ...(cartographerBinary ? { cartographerBinary } : {}),
     ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
   };
   try {
@@ -217,13 +235,10 @@ export const installMimir = async (
     };
   }
 
-  // 5. Write the OpenCode config.
-  const opencodeConfigPath = join(
-    process.env.HOME ?? "~",
-    ".config",
-    "opencode",
-    "opencode.json",
-  );
+  // 6. Write OpenCode-owned runtime artifacts. The package registration
+  //    in opencode.json/jsonc is deliberately untouched: OpenCode's
+  //    `plugin --global` command already wrote it and preserves the
+  //    user's existing config.
   const agentPath = join(
     process.env.HOME ?? "~",
     ".config",
@@ -232,6 +247,7 @@ export const installMimir = async (
     "mimir.md",
   );
   const wrapperPath = join(process.env.HOME ?? "~", ".local", "bin", "mimir");
+  const runtimePath = join(home, "mimir-oc.ts");
   const installCommandPath = join(
     process.env.HOME ?? "~",
     ".config",
@@ -250,18 +266,16 @@ export const installMimir = async (
   const tplVars = {
     SERVER_URL: mimirConfig.serverUrl,
     USER_MEMORY_DB: mimirConfig.userMemoryDb,
+    MIMIR_OC_RUNTIME: runtimePath,
   };
 
   try {
-    await writeText(
-      opencodeConfigPath,
-      renderTemplate(opencodeTemplate, tplVars),
-    );
-    written.push(opencodeConfigPath);
+    await Bun.write(runtimePath, Bun.file(import.meta.path));
+    written.push(runtimePath);
   } catch (err) {
     return {
       ok: false,
-      message: `Failed to write opencode config: ${errMessage(err)}`,
+      message: `Failed to write stable plugin runtime: ${errMessage(err)}`,
       written,
     };
   }
@@ -277,7 +291,7 @@ export const installMimir = async (
     };
   }
 
-  // 6. Write the wrapper script and make it executable.
+  // 7. Write the wrapper script and make it executable.
   try {
     await writeText(wrapperPath, renderTemplate(wrapperTemplate, tplVars));
     await chmod(wrapperPath, 0o755);
@@ -290,7 +304,7 @@ export const installMimir = async (
     };
   }
 
-  // 7. Write the slash commands so the user can trigger the install
+  // 8. Write the slash commands so the user can trigger the install
   //    and update from inside OpenCode.
   try {
     await writeText(installCommandPath, installCommand);
@@ -318,6 +332,7 @@ export const installMimir = async (
     ok: true,
     message: [
       `Mimir installed (system prompt version ${promptVersion}).`,
+      `Cartographer: ${cartographerBinary ?? "not found — code indexing disabled"}`,
       "",
       "Wrote:",
       ...written.map((p) => `  ${p}`),

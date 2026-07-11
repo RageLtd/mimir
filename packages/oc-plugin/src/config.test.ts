@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { readConfig } from "./config";
+import { readConfig, writeConfig } from "./config";
 
 // config.ts resolves its path via mimirHome(), which honours MIMIR_HOME.
 // Point it at a throwaway dir per test so we exercise the real file read.
@@ -50,6 +50,22 @@ describe("readConfig", () => {
       serverUrl: "http://localhost:8080",
       userMemoryDb: "/db.sqlite",
     });
+  });
+
+  test("normalizes a home-relative memory database path", async () => {
+    await writeConfig({
+      serverUrl: "http://localhost:8080",
+      userMemoryDb: "~/.mimir/user-memories.db",
+    });
+
+    const expected = join(
+      process.env.HOME ?? homedir(),
+      ".mimir",
+      "user-memories.db",
+    );
+    expect((await readConfig())?.userMemoryDb).toBe(expected);
+    const persisted = await Bun.file(join(home, "config.json")).json();
+    expect(persisted.userMemoryDb).toBe(expected);
   });
 
   test("includes optional fields only when present and non-empty", async () => {

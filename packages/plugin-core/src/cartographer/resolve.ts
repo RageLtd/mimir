@@ -7,15 +7,19 @@
  *      FAILS LOUDLY when missing or not executable — a typo'd path used
  *      to install "successfully" and leave the index legs dark forever.
  *   2. No request → look for `cartographer` on $PATH (Bun.which).
- *   3. Not on $PATH → prompt the user for a path (interactive TTY only;
+ *   3. Not on $PATH → check the standard ~/.local/bin install location.
+ *      GUI/editor-launched processes frequently inherit a reduced $PATH.
+ *   4. Still absent → prompt the user for a path (interactive TTY only;
  *      non-TTY runs skip the prompt).
- *   4. Blank/absent answer → code indexing disabled, stated explicitly.
+ *   5. Blank/absent answer → code indexing disabled, stated explicitly.
  *
- * The prompt and which lookups are injectable so tests never touch the
- * real $PATH or a terminal.
+ * The prompt, fallback paths, and which lookup are injectable so tests
+ * never touch the real $PATH, home directory, or a terminal.
  */
 
 import { statSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { attemptSync } from "../result";
 
 /** True when the path names an existing regular file with any execute bit. */
@@ -54,6 +58,8 @@ export type ResolveCartographerOptions = {
   readonly requested?: string;
   /** Injectable $PATH lookup — defaults to Bun.which. */
   readonly which?: (command: string) => string | null;
+  /** Injectable well-known paths — defaults to ~/.local/bin/cartographer. */
+  readonly fallbackPaths?: readonly string[];
   /** Injectable interactive fallback — defaults to a TTY-gated prompt. */
   readonly promptForPath?: () => Promise<string | null>;
 };
@@ -62,6 +68,9 @@ export const resolveCartographerBinary = async (
   opts: ResolveCartographerOptions = {},
 ) => {
   const which = opts.which ?? ((command: string) => Bun.which(command));
+  const fallbackPaths = opts.fallbackPaths ?? [
+    join(process.env.HOME ?? homedir(), ".local", "bin", "cartographer"),
+  ];
   const promptForPath = opts.promptForPath ?? defaultPromptForPath;
 
   // 1. Explicit request — the one case that must fail loudly on a bad
@@ -84,7 +93,15 @@ export const resolveCartographerBinary = async (
     return { ok: true as const, binary: found };
   }
 
-  // 3. Interactive fallback.
+  // 3. Well-known user install locations. GUI/editor processes may not
+  //    inherit the shell PATH that contains ~/.local/bin.
+  for (const path of fallbackPaths) {
+    if (isExecutableFile(path)) {
+      return { ok: true as const, binary: path };
+    }
+  }
+
+  // 4. Interactive fallback.
   const entered = await promptForPath();
   if (entered === null || entered.length === 0) {
     return {
@@ -96,7 +113,7 @@ export const resolveCartographerBinary = async (
   if (isExecutableFile(entered)) {
     return { ok: true as const, binary: entered };
   }
-  // 4. A hand-entered path that doesn't validate is an explicit
+  // 5. A hand-entered path that doesn't validate is an explicit
   //    assertion again — fail loudly, don't quietly disable.
   return {
     ok: false as const,

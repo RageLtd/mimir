@@ -14,9 +14,10 @@
     "@opencode-ai/sdk": "^1.17.13"
   },
   "exports": {
-    ".": "./dist/mimir-oc.ts"
+    ".": "./dist/mimir-oc.ts",
+    "./server": "./dist/mimir-oc.ts"
   },
-  "description": "Mimir persona and runtime for OpenCode. Bundled into a single self-contained TS file at dist/mimir-oc.ts and distributed via GitHub Packages as @RageLtd/mimir-oc — `opencode plugin @RageLtd/mimir-oc` handles the install.",
+  "description": "Mimir persona and runtime for OpenCode. Bundled into a single self-contained TS file at dist/mimir-oc.ts and distributed via GitHub Packages as @RageLtd/mimir-oc — `opencode plugin --global @RageLtd/mimir-oc` handles the package install.",
   "files": [
     "dist"
   ],

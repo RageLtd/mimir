@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { readConfig, writeConfig } from "./shared-config";
 
@@ -51,6 +51,22 @@ describe("shared config round-trip", () => {
       extractionModel: "ornith:35b",
       extractionApiKey: "extract-key",
     });
+  });
+
+  test("normalizes a home-relative memory database path", async () => {
+    await writeConfig({
+      serverUrl: "https://mimir.example.com",
+      userMemoryDb: "~/.mimir/user-memories.db",
+    });
+
+    const expected = join(
+      process.env.HOME ?? homedir(),
+      ".mimir",
+      "user-memories.db",
+    );
+    expect((await readConfig())?.userMemoryDb).toBe(expected);
+    const persisted = await Bun.file(join(sandbox, "config.json")).json();
+    expect(persisted.userMemoryDb).toBe(expected);
   });
 
   test("installer merge pattern preserves fields the installer doesn't carry", async () => {

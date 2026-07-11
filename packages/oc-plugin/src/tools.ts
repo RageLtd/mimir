@@ -183,7 +183,7 @@ export const userMemoryTools = (store: UserMemoryStore | null) => ({
 export const installTool = () =>
   tool({
     description:
-      "Install Mimir for OpenCode. Writes the system prompt, Mimir config, OpenCode config, custom agent, and wrapper script to the user's home directory. The Mimir plugin bundle must already be at ~/.config/opencode/plugins/mimir-oc.ts — the install verifies this and refuses to proceed if missing. The cloud server requires MIMIR_API_KEY in the environment; check that first before calling.",
+      "Install Mimir for OpenCode. Writes the system prompt, shared Mimir config, custom agent, wrapper script, and reusable slash commands to the user's home directory. Auto-detects Cartographer when no override is passed. The npm plugin package must already be installed through OpenCode. The cloud server requires MIMIR_API_KEY in the environment; check that first before calling.",
     args: {
       serverUrl: tool.schema
         .string()
@@ -194,13 +194,13 @@ export const installTool = () =>
         .string()
         .optional()
         .describe(
-          "Filesystem path for the SQLite user-memory store. Defaults to ~/.mimir/user-memories.db.",
+          "Optional filesystem path for the SQLite user-memory store. Omit to use the default absolute path under ~/.mimir; home-relative paths are expanded before use.",
         ),
       cartographerBinary: tool.schema
         .string()
         .optional()
         .describe(
-          "Absolute path to the cartographer Rust binary. Omit to disable auto-reindex.",
+          "Optional absolute path to the cartographer Rust binary. Omit to auto-detect it from PATH or ~/.local/bin/cartographer.",
         ),
       apiKey: tool.schema
         .string()

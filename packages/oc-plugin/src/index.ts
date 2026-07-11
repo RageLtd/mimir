@@ -98,11 +98,14 @@ const getSession = (sessionId: string, libSize: number): SessionState => {
 // ── Plugin entry ──
 
 export const MimirPlugin: Plugin = async (ctx) => {
-  // 1. Read config. If absent, the plugin no-ops — OpenCode runs
-  //    normally and the user is expected to run /mimir-install.
+  // 1. Read config. The install tool must exist before config does:
+  //    first-run installation is initiated by asking OpenCode to call
+  //    `mimir_install`; that tool creates the runtime config and the
+  //    reusable slash commands. Returning an empty plugin here made the
+  //    documented install path impossible on a clean machine.
   const config = await readConfig();
   if (!config) {
-    return {};
+    return { tool: { mimir_install: installTool() } };
   }
 
   // 2. Set up logger. Writes to ~/.mimir/logs/mimir-oc.log with the

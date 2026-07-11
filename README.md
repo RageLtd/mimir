@@ -151,17 +151,20 @@ Any provider key the engine recognizes can replace or join `OPENROUTER_API_KEY`.
 
 ### OpenCode
 
-The plugin ships via GitHub Packages. Add the scope to `~/.bunfig.toml` (needs a token with `read:packages`), install, then run the in-editor installer:
+The plugin ships via GitHub Packages. OpenCode 1.17.15's plugin installer uses npm configuration, so add the scope to `~/.npmrc` using a classic personal access token with `read:packages`; GitHub Packages does not support fine-grained tokens. The token's account must also have read access to the private `RageLtd/mimir` repository:
 
-```toml
-[install.scopes]
-"RageLtd" = { url = "https://npm.pkg.github.com", token = "$GITHUB_TOKEN" }
+```ini
+@RageLtd:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_PACKAGES_TOKEN}
 ```
 
 ```bash
-opencode plugin @RageLtd/mimir-oc
-opencode           # then run /mimir-install inside
+export GITHUB_PACKAGES_TOKEN=ghp_...
+opencode plugin --global @RageLtd/mimir-oc
+opencode           # then ask it to call mimir_install
 ```
+
+The `--global` flag writes the plugin to the user-level OpenCode configuration; without it, OpenCode installs into the current project's configuration. OpenCode supports both `~/.config/opencode/opencode.json` and `opencode.jsonc`, but avoid defining `plugin` in both because one array can override the other. The Mimir runtime installer edits neither file. When upgrading from `1.1.0`, replace any legacy `file://~/.config/opencode/plugins/mimir-oc.ts` plugin entry with `@RageLtd/mimir-oc`; a visible slash command does not prove the plugin loaded. OpenCode's `Package has no TUI target` notice is expected because Mimir is a server/agent plugin. On the first run, ask OpenCode to call `mimir_install`; that tool auto-detects Cartographer, writes the runtime state, and creates `/mimir-install` and `/mimir-update` for later use. Restart OpenCode after it succeeds.
 
 Details in [`packages/oc-plugin/README.md`](packages/oc-plugin/README.md).
 

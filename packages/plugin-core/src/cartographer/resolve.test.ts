@@ -15,6 +15,7 @@ const neverPrompt = async () => {
   throw new Error("prompt must not be called in this scenario");
 };
 const noWhich = () => null;
+const noFallbacks: readonly string[] = [];
 
 beforeAll(() => {
   sandbox = mkdtempSync(join(tmpdir(), "mimir-carto-resolve-test-"));
@@ -79,9 +80,19 @@ describe("resolveCartographerBinary", () => {
     expect(result).toEqual({ ok: true, binary: executablePath });
   });
 
+  test("auto-detects from a well-known path when $PATH is incomplete", async () => {
+    const result = await resolveCartographerBinary({
+      which: noWhich,
+      fallbackPaths: [executablePath],
+      promptForPath: neverPrompt,
+    });
+    expect(result).toEqual({ ok: true, binary: executablePath });
+  });
+
   test("stale $PATH hit falls through to the prompt instead of erroring", async () => {
     const result = await resolveCartographerBinary({
       which: () => join(sandbox, "broken-shim"),
+      fallbackPaths: noFallbacks,
       promptForPath: async () => executablePath,
     });
     expect(result).toEqual({ ok: true, binary: executablePath });
@@ -90,6 +101,7 @@ describe("resolveCartographerBinary", () => {
   test("prompted path is validated — garbage fails loudly", async () => {
     const result = await resolveCartographerBinary({
       which: noWhich,
+      fallbackPaths: noFallbacks,
       promptForPath: async () => join(sandbox, "fat-fingered"),
     });
     expect(result.ok).toBe(false);
@@ -98,6 +110,7 @@ describe("resolveCartographerBinary", () => {
   test("blank prompt answer disables indexing explicitly", async () => {
     const result = await resolveCartographerBinary({
       which: noWhich,
+      fallbackPaths: noFallbacks,
       promptForPath: async () => null,
     });
     expect(result.ok).toBe(true);

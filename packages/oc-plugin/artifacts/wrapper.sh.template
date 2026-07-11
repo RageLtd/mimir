@@ -15,7 +15,7 @@ export MIMIR_ACTIVE=1
 if [[ "${1:-}" == "keys" || "${1:-}" == "sync" ]]; then
   CMD="$1"
   shift
-  exec bun "$HOME/.config/opencode/plugins/mimir-oc.ts" "$CMD" "$@"
+  exec bun "{{MIMIR_OC_RUNTIME}}" "$CMD" "$@"
 fi
 
 exec opencode "$@"

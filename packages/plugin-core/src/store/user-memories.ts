@@ -9,6 +9,7 @@
  */
 
 import { Database } from "bun:sqlite";
+import { expandHomePath } from "../util";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS user_profile (
@@ -76,7 +77,7 @@ export type UserMemoryStore = {
 };
 
 export const createUserMemoryStore = (dbPath: string) => {
-  const db = new Database(dbPath);
+  const db = new Database(expandHomePath(dbPath));
   db.run("PRAGMA journal_mode=WAL");
   db.run("PRAGMA foreign_keys=ON");
   db.run(SCHEMA);

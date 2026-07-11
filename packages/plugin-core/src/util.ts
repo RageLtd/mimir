@@ -26,6 +26,16 @@ export const errMessage = (err: unknown) =>
  */
 export const parseJSON = <T>(text: string) => JSON.parse(text) as T;
 
+/** Expand a shell-style home prefix without invoking a shell. SQLite,
+ *  Bun.file, and other filesystem APIs treat `~` literally. */
+export const expandHomePath = (
+  path: string,
+  home = process.env.HOME ?? homedir(),
+) => {
+  if (path === "~") return home;
+  return path.startsWith("~/") ? join(home, path.slice(2)) : path;
+};
+
 /**
  * Resolve the `~/.mimir/` directory root for every state file the
  * adapters touch (logs, config, persist-state, retrieve-state,

@@ -18,7 +18,7 @@
 import { join } from "node:path";
 
 import { attempt } from "./result";
-import { mimirHome } from "./util";
+import { expandHomePath, mimirHome } from "./util";
 
 export type MimirConfig = {
   readonly serverUrl: string;
@@ -51,7 +51,14 @@ const optionalString = (value: unknown) =>
 const configPath = () => join(mimirHome(), "config.json");
 
 export const writeConfig = async (config: MimirConfig) => {
-  await Bun.write(configPath(), `${JSON.stringify(config, null, 2)}\n`);
+  await Bun.write(
+    configPath(),
+    `${JSON.stringify(
+      { ...config, userMemoryDb: expandHomePath(config.userMemoryDb) },
+      null,
+      2,
+    )}\n`,
+  );
 };
 
 export const readConfig = async () => {
@@ -78,7 +85,7 @@ export const readConfig = async () => {
   const extractionApiKey = optionalString(parsed.extractionApiKey);
   return {
     serverUrl: parsed.serverUrl,
-    userMemoryDb: parsed.userMemoryDb,
+    userMemoryDb: expandHomePath(parsed.userMemoryDb),
     ...(typeof parsed.cartographerBinary === "string"
       ? { cartographerBinary: parsed.cartographerBinary }
       : {}),
