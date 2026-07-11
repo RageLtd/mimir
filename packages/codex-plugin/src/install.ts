@@ -13,7 +13,8 @@
  *      shared ~/.mimir/config.json.
  *   5. Trust the hooks via `codex app-server` hooks/list (Codex silently
  *      skips untrusted hooks — see trust.ts).
- *   6. Materialise ~/.local/bin/{mimir-codex, mimir-codex-bin}.
+ *   6. Materialise ~/.local/bin/{mimir-codex, mimir-codex-acp,
+ *      mimir-codex-bin}.
  *
  * Templates are bundled into the compiled binary as text imports so the
  * installer is a single self-contained executable.
@@ -37,6 +38,9 @@ import { mimirHome } from "@mimir/plugin-core/util";
 // and materialised at ~/.mimir/ensure-binary.sh; the wrapper runs it with the
 // `codex` flavor on every launch to track codex-plugin/v* releases.
 import ensureBinaryScript from "../../plugin-core/scripts/ensure-binary.sh" with {
+  type: "text",
+};
+import acpWrapperTemplate from "../artifacts/acp-wrapper.sh.template" with {
   type: "text",
 };
 import configTemplate from "../artifacts/config.toml.template" with {
@@ -241,6 +245,7 @@ export const runInstall = async (
   const personaPath = join(codexHome, "AGENTS.md");
   const configTomlPath = join(codexHome, "config.toml");
   const wrapperPath = join(binDir, "mimir-codex");
+  const acpWrapperPath = join(binDir, "mimir-codex-acp");
   const selfPath = join(binDir, "mimir-codex-bin");
 
   await writeText(personaPath, xml);
@@ -266,6 +271,7 @@ export const runInstall = async (
     ),
   );
   await writeExecutable(wrapperPath, wrapperTemplate);
+  await writeExecutable(acpWrapperPath, acpWrapperTemplate);
   // Self-updater — the wrapper runs this from ~/.mimir on every launch, so it
   // must not depend on any checkout still being present. Identical content to
   // what the cc installer writes (single canonical script, flavor argument).
@@ -373,6 +379,7 @@ export const runInstallCommand = async (opts: InstallOptions) => {
       carto,
       extractionLine,
       `  Wrapper:        ${binDir}/mimir-codex`,
+      `  ACP wrapper:    ${binDir}/mimir-codex-acp`,
       `  Binary:         ${binDir}/mimir-codex-bin`,
       `  Updater:        ${mimirHome()}/ensure-binary.sh`,
       `  Logs:           ${mimirHome()}/logs/mimir-codex.log`,

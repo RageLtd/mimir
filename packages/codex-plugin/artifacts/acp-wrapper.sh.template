@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+#
+# mimir-codex-acp — launch codex-acp (Zed agent-panel ACP adapter for
+# Codex) with the same Mimir rig as the mimir-codex TUI wrapper: the
+# persona, MCP servers, and lifecycle hooks installed in the dedicated
+# CODEX_HOME, leaving the user's own ~/.codex setup untouched.
+# MIMIR_ACTIVE lets hooks distinguish a real Mimir session from any
+# other codex process that might load the same config.
+#
+# ACP speaks over stdio — everything this wrapper prints goes to
+# stderr so the protocol channel stays clean.
+
+set -eo pipefail
+export MIMIR_ACTIVE=1
+export CODEX_HOME="$HOME/.mimir/codex"
+
+# Keep ~/.local/bin/mimir-codex-bin current before launching — the
+# hooks and stdio MCP servers in config.toml invoke it. Same semantics
+# as mimir-codex: never block a routine launch on the network, and a
+# hard failure is surfaced but not fatal.
+ENSURE_BINARY="$HOME/.mimir/ensure-binary.sh"
+if [[ -x "$ENSURE_BINARY" ]]; then
+  "$ENSURE_BINARY" codex || echo "mimir-codex-acp: binary update check failed — continuing with the installed binary." >&2
+fi
+
+# Shared login: codex core reads auth.json from CODEX_HOME. Link the
+# vanilla ~/.codex credential in; refuse to create a dangling link —
+# codex writes auth.json via atomic rename, which would replace the
+# symlink and silently fork the two credential stores.
+if [[ ! -e "$CODEX_HOME/auth.json" ]]; then
+  if [[ -f "$HOME/.codex/auth.json" ]]; then
+    ln -sf "$HOME/.codex/auth.json" "$CODEX_HOME/auth.json"
+  else
+    echo "mimir-codex-acp: no ~/.codex/auth.json found — run 'codex login' once with vanilla codex first." >&2
+    exit 1
+  fi
+fi
+
+# The mimir MCP HTTP entry authenticates via bearer_token_env_var —
+# export the gate key from the shared config when the env doesn't
+# already carry one (env wins, same rotation discipline as the hooks).
+if [[ -z "${MIMIR_API_KEY:-}" ]] && command -v jq >/dev/null 2>&1; then
+  MIMIR_KEY_FROM_CONFIG=$(jq -r '.apiKey // empty' "$HOME/.mimir/config.json" 2>/dev/null || true)
+  if [[ -n "$MIMIR_KEY_FROM_CONFIG" ]]; then
+    export MIMIR_API_KEY="$MIMIR_KEY_FROM_CONFIG"
+  fi
+fi
+
+# @agentclientprotocol/codex-acp is the live line (OpenAI/JetBrains/Zed
+# under the ACP org) — the old @zed-industries package froze at 0.16.0.
+exec bunx @agentclientprotocol/codex-acp "$@"

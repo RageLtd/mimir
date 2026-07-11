@@ -30,9 +30,10 @@ gh release download --repo RageLtd/mimir -p "mimir-codex-bin-<platform>" \
 mimir-codex-bin install <mimir-server-url>
 ```
 
-Self-update: the `mimir-codex` wrapper runs `~/.mimir/ensure-binary.sh
-codex` on every launch, so new `codex-plugin/v*` releases land on their
-own. `codex plugin marketplace upgrade` refreshes the bootstrap skill
+Self-update: the `mimir-codex` and `mimir-codex-acp` wrappers run
+`~/.mimir/ensure-binary.sh codex` on every launch, so new
+`codex-plugin/v*` releases land on their own. `codex plugin marketplace
+upgrade` refreshes the bootstrap skill
 itself. Releases are auto-versioned from conventional commits by
 `.github/workflows/codex-plugin-release.yml` (bumps
 `.codex-plugin/plugin.json`, tags `codex-plugin/v<version>`, publishes
@@ -55,6 +56,9 @@ canonical copy in plugin-core.
   `MIMIR_ACTIVE`, links `auth.json` from `~/.codex` (login is shared),
   exports `MIMIR_API_KEY` from config for the HTTP MCP entry, dispatches
   `keys`/`sync` to the binary, then `exec codex "$@"`.
+- `~/.local/bin/mimir-codex-acp` — Zed agent-panel ACP wrapper: uses the
+  same isolated Codex home, login, MCP configuration, hooks, and updater,
+  then launches `@agentclientprotocol/codex-acp` through `bunx`.
 - `~/.local/bin/mimir-codex-bin` — this package's compiled binary.
 
 ### Hook trust
