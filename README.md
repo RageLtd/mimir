@@ -1,6 +1,6 @@
 # Mimir
 
-A coding agent with persistent memory and a personality, running inside the editor you already use — Claude Code, Zed (via ACP), or OpenCode. Everything that reads your data runs on your machine: memory extraction, embeddings, retrieval, and inference are all local. The server exists only to sync encrypted memory between your devices and teammates — and it can't read any of it.
+A coding agent with persistent memory and a personality, running inside the editor you already use — Claude Code, Zed (via ACP), OpenCode, or OpenAI Codex CLI. Everything that reads your data runs on your machine: memory extraction, embeddings, retrieval, and inference are all local. The server exists only to sync encrypted memory between your devices and teammates — and it can't read any of it.
 
 > [!IMPORTANT]
 > **Security:** Mimir is built so that the server operator can never read your data — memories, code, and conversations stay on your machine or leave it only as ciphertext. Read exactly what the server can and cannot see in [THREAT_MODEL.md](./THREAT_MODEL.md).
@@ -11,7 +11,7 @@ A coding agent with persistent memory and a personality, running inside the edit
 flowchart LR
   subgraph machine["Your machine"]
     direction TB
-    plugins["Editor plugin<br/>Claude Code · @mimir/cc-plugin<br/>Zed ACP · @mimir/acp<br/>OpenCode · @RageLtd/mimir-oc"]
+    plugins["Editor plugin<br/>Claude Code · @mimir/cc-plugin<br/>Zed ACP · @mimir/acp<br/>OpenCode · @RageLtd/mimir-oc<br/>Codex CLI · @mimir/codex-plugin"]
     core["@mimir/plugin-core — shared layer"]
     brain["Memory brain<br/>extraction · hygiene · compaction<br/>FTS + local embeddings"]
     engine["Inference engine<br/>BYOK providers · local endpoints"]
@@ -80,6 +80,7 @@ Self-hosting for yourself? With auth disabled the same sync protocol runs in pla
 No inference ever transits the server.
 
 - **Claude Code** — the plugin runs Mimir as a persona inside Claude Code itself; inference is billed to your Anthropic plan. No API key needed.
+- **OpenAI Codex CLI** — same shape: Codex hosts its own models on your OpenAI plan; Mimir contributes the persona and memory brain through Codex's lifecycle hooks.
 - **Zed (ACP) and OpenCode** — a local engine calls providers directly with your own keys. Standard env vars activate providers (`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `OPENCODE_API_KEY`, and anything else in the [models.dev](https://models.dev) registry); local endpoints register via `VLLM_BASE_URL`, `OLLAMA_BASE_URL`, or `LMSTUDIO_BASE_URL`. Discovered models appear in the editor's model picker.
 
 ## Packages
@@ -90,13 +91,14 @@ No inference ever transits the server.
 | `packages/cc-plugin` | Claude Code plugin — persona, hooks, MCP wiring, the `mimir` wrapper command |
 | `packages/acp` | ACP agent — full local agent for ACP editors (Zed) |
 | `packages/oc-plugin` | OpenCode plugin — persona, tools, hooks as a single bundled plugin |
+| `packages/codex-plugin` | OpenAI Codex CLI plugin — persona, lifecycle hooks in a dedicated `CODEX_HOME`, the `mimir-codex` wrapper |
 | `packages/server` | The blind sync server — auth, key distribution, ciphertext sync, coordination |
 
 ## Install
 
 Pick the editor you use. Each plugin needs a mimir-server URL (hosted or self-hosted — see below) and, for encrypted sync, an API key from that server.
 
-The Claude Code plugin ships as a precompiled binary — no runtime to install. The Zed (ACP) and OpenCode plugins run from source, so they need [Bun](https://bun.sh) v1.3+ on the machine (OpenCode also uses it for the `mimir keys` ceremonies).
+The Claude Code and Codex CLI plugins ship as precompiled binaries — no runtime to install. The Zed (ACP) and OpenCode plugins run from source, so they need [Bun](https://bun.sh) v1.3+ on the machine (OpenCode also uses it for the `mimir keys` ceremonies).
 
 ### Claude Code
 
@@ -109,6 +111,18 @@ Requires an authenticated `gh` CLI and `~/.local/bin` on your `PATH`. Inside Cla
 ```
 
 The installer downloads the prebuilt `mimir-cc` binary, writes the runtime under `~/.mimir/`, and lands a `mimir` wrapper that launches Claude Code as Mimir. Full walkthrough, from-source path, and troubleshooting in [`packages/cc-plugin/README.md`](packages/cc-plugin/README.md).
+
+### OpenAI Codex CLI
+
+Requires an authenticated `gh` CLI (the repo is private, and the binary download uses your own auth) and `~/.local/bin` on your `PATH`:
+
+```bash
+codex plugin marketplace add RageLtd/mimir
+codex plugin add mimir@mimir
+codex            # then ask it to "install mimir"
+```
+
+The bootstrap skill downloads the prebuilt `mimir-codex-bin` binary and runs its installer, which lands everything in a dedicated `CODEX_HOME` (`~/.mimir/codex`) — your own `~/.codex` setup is never touched, and login is shared. Launch Mimir sessions with `mimir-codex`; the wrapper self-updates the binary on each launch. Fallback path without the plugin system, plus troubleshooting, in [`packages/codex-plugin/README.md`](packages/codex-plugin/README.md).
 
 ### Zed (ACP)
 
@@ -192,7 +206,7 @@ bun run typecheck
 
 # Tests — always via the root harness, never `bun test <path>`
 bun run test              # all packages
-bun run test:server       # or one of: server, acp, cc-plugin, oc-plugin, plugin-core
+bun run test:server       # or one of: server, acp, cc-plugin, oc-plugin, codex-plugin, plugin-core
 ```
 
 ## Project Structure
@@ -213,6 +227,7 @@ mimir/
 │   ├── cc-plugin/              # Claude Code plugin (@mimir/cc-plugin)
 │   ├── acp/                    # ACP agent (@mimir/acp)
 │   ├── oc-plugin/              # OpenCode plugin (@RageLtd/mimir-oc)
+│   ├── codex-plugin/           # OpenAI Codex CLI plugin (@mimir/codex-plugin)
 │   │
 │   └── server/                 # Blind sync server (@mimir/server)
 │       ├── src/
