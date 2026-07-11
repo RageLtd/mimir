@@ -10,6 +10,9 @@ on:
     branches: [main]
     paths:
       - "packages/cc-plugin/**"
+      # The shipped binary bundles plugin-core, so core changes must release
+      # this package too. release-package.sh scans the same two paths.
+      - "packages/plugin-core/**"
   workflow_dispatch:
 
 permissions:

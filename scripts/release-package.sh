@@ -46,6 +46,16 @@ cd "$ROOT"
 PKG_PATH="packages/${PKG_NAME}"
 TAG_PREFIX="${PKG_NAME}/v"
 
+# Every released plugin package compiles @mimir/plugin-core into its shipped
+# artifact (bun build --compile inlines the workspace dep), so a plugin-core
+# commit changes what ships even though it never touches packages/<pkg>/**.
+# Scan both paths when deciding whether to release. Deliberately coarse: a
+# plugin-core change releases every plugin that bundles it rather than
+# import-graph-precise subsets — over-releasing is a cheap tag, under-releasing
+# is a stale bug in the field. (Word splitting on WATCH_PATHS is intended;
+# neither path contains spaces.)
+WATCH_PATHS="${PKG_PATH} packages/plugin-core"
+
 if [ ! -d "$PKG_PATH" ]; then
   echo "[release] No package at ${PKG_PATH}." >&2
   exit 1
@@ -68,10 +78,11 @@ if [ -z "$LAST_TAG" ]; then
   echo "[release] Version: $CURRENT_VERSION → $NEW_VERSION"
 else
   RANGE="${LAST_TAG}..HEAD"
-  COMMITS="$(git log "$RANGE" --format='%s' -- "$PKG_PATH" 2>/dev/null || echo '')"
+  # shellcheck disable=SC2086 — WATCH_PATHS is a deliberate space-separated list
+  COMMITS="$(git log "$RANGE" --format='%s' -- $WATCH_PATHS 2>/dev/null || echo '')"
 
   if [ -z "$COMMITS" ]; then
-    echo "[release] No commits touching ${PKG_PATH} since ${LAST_TAG}. Nothing to do."
+    echo "[release] No commits touching ${WATCH_PATHS} since ${LAST_TAG}. Nothing to do."
     exit 0
   fi
 
@@ -99,7 +110,7 @@ EOF
   elif $HAS_PATCH; then
     BUMP_TYPE="patch"
   else
-    echo "[release] No version-bumping commits touching ${PKG_PATH}. Nothing to do."
+    echo "[release] No version-bumping commits touching ${WATCH_PATHS}. Nothing to do."
     exit 0
   fi
 
