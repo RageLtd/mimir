@@ -115,31 +115,45 @@ export const shouldRotate = (
 export const createLoggerFactory = (
   fileName: string,
   prevFileName?: string,
-): LoggerBundle => {
+) => {
   const prevName = prevFileName ?? `${fileName}.prev`;
 
-  const logPath = join(mimirHome(), "logs", fileName);
-  const prevPath = join(mimirHome(), "logs", prevName);
+  // ── Lazy sink + pending-write chain ──
+  // Path resolution and the mkdir/rotate init are deferred to the FIRST
+  // write, not factory creation. Factories are created at module import
+  // time (each hook module does `createLogger(...)` at top level), which
+  // runs before test suites can point MIMIR_HOME at a sandbox — eager
+  // paths made test-suite log lines land in the developer's real
+  // ~/.mimir/logs. Every writeLine appends onto the sink's `pending`
+  // chain; the first link mkdir's the log directory and rotates ONLY
+  // when the policy says so (new day / size cap). Failures anywhere are
+  // absorbed into a no-op so the chain never enters a rejected state.
+  type LogSink = { readonly logPath: string; pending: Promise<void> };
+  let sink: LogSink | null = null;
 
-  // ── Pending-write chain ──
-  // Every writeLine call appends onto `pending`. The first link mkdir's
-  // the log directory and rotates the previous log ONLY when the policy
-  // says so (new day / size cap) — a missing file, a concurrent
-  // process's racing rename, or any other failure is absorbed into a
-  // no-op so the chain never enters a rejected state.
-  let pending: Promise<void> = mkdir(dirname(logPath), { recursive: true })
-    .then(() => stat(logPath))
-    .then((stats) =>
-      shouldRotate(stats, Date.now())
-        ? rename(logPath, prevPath).catch(() => undefined)
-        : undefined,
-    )
-    .then(() => undefined)
-    .catch(() => undefined);
+  const ensureSink = () => {
+    if (sink) return sink;
+    const logPath = join(mimirHome(), "logs", fileName);
+    const prevPath = join(mimirHome(), "logs", prevName);
+    const pending: Promise<void> = mkdir(dirname(logPath), {
+      recursive: true,
+    })
+      .then(() => stat(logPath))
+      .then((stats) =>
+        shouldRotate(stats, Date.now())
+          ? rename(logPath, prevPath).catch(() => undefined)
+          : undefined,
+      )
+      .then(() => undefined)
+      .catch(() => undefined);
+    sink = { logPath, pending };
+    return sink;
+  };
 
   const writeLine = (line: string) => {
-    pending = pending
-      .then(() => appendFile(logPath, line))
+    const active = ensureSink();
+    active.pending = active.pending
+      .then(() => appendFile(active.logPath, line))
       .catch(() => undefined);
   };
 
@@ -159,6 +173,8 @@ export const createLoggerFactory = (
 
   return {
     createLogger,
-    flushLogs: () => pending,
+    // Nothing written yet → nothing to flush; don't create the sink
+    // (and its mkdir) just to await it.
+    flushLogs: () => sink?.pending ?? Promise.resolve(),
   };
 };

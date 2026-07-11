@@ -33,6 +33,12 @@ import {
 } from "@mimir/plugin-core/shared-config";
 import { defaultOrgReplicaPath } from "@mimir/plugin-core/store/org-replica";
 import { mimirHome } from "@mimir/plugin-core/util";
+// Canonical shared updater (plugin-core) — bundled into the compiled binary
+// and materialised at ~/.mimir/ensure-binary.sh; the wrapper runs it with the
+// `codex` flavor on every launch to track codex-plugin/v* releases.
+import ensureBinaryScript from "../../plugin-core/scripts/ensure-binary.sh" with {
+  type: "text",
+};
 import configTemplate from "../artifacts/config.toml.template" with {
   type: "text",
 };
@@ -260,6 +266,10 @@ export const runInstall = async (
     ),
   );
   await writeExecutable(wrapperPath, wrapperTemplate);
+  // Self-updater — the wrapper runs this from ~/.mimir on every launch, so it
+  // must not depend on any checkout still being present. Identical content to
+  // what the cc installer writes (single canonical script, flavor argument).
+  await writeExecutable(join(home, "ensure-binary.sh"), ensureBinaryScript);
 
   // Shared runtime config (~/.mimir/config.json) — the same file every
   // distribution writes. MERGE over the existing config rather than
@@ -364,6 +374,7 @@ export const runInstallCommand = async (opts: InstallOptions) => {
       extractionLine,
       `  Wrapper:        ${binDir}/mimir-codex`,
       `  Binary:         ${binDir}/mimir-codex-bin`,
+      `  Updater:        ${mimirHome()}/ensure-binary.sh`,
       `  Logs:           ${mimirHome()}/logs/mimir-codex.log`,
       ``,
       `Make sure ${binDir} is on your PATH, then run`,

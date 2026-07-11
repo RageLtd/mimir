@@ -10,6 +10,17 @@ set -eo pipefail
 export MIMIR_ACTIVE=1
 export CODEX_HOME="$HOME/.mimir/codex"
 
+# Keep ~/.local/bin/mimir-codex-bin current before launching. ensure-binary.sh
+# exits 0 when the binary is already up to date or when it's present but the
+# release check can't reach GitHub, so a routine launch never blocks on the
+# network; it only downloads when a newer codex-plugin release exists. A hard
+# failure (no binary and no way to fetch one) is surfaced but not fatal —
+# codex still launches.
+ENSURE_BINARY="$HOME/.mimir/ensure-binary.sh"
+if [[ -x "$ENSURE_BINARY" ]]; then
+  "$ENSURE_BINARY" codex || echo "mimir-codex: binary update check failed — continuing with the installed binary." >&2
+fi
+
 # `mimir-codex keys …` / `sync` / `status` — ceremonies and health
 # checks dispatched to mimir-codex-bin; never launches codex.
 if [[ "${1:-}" == "keys" || "${1:-}" == "sync" || "${1:-}" == "status" ]]; then

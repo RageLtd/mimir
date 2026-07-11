@@ -36,6 +36,17 @@ rm -f "$HOME/.local/bin/mimir-codex-bin"
 cp "dist/$PLATFORM/mimir-codex-bin" "$HOME/.local/bin/mimir-codex-bin"
 chmod +x "$HOME/.local/bin/mimir-codex-bin"
 
+# Keep the materialized updater in sync with source (so its dev-pin logic is
+# live), then pin dev mode so ensure-binary.sh won't overwrite this build.
+# The canonical script lives in plugin-core; scripts/ensure-binary.sh here is
+# a drift-tested mirror.
+mkdir -p "$HOME/.mimir"
+cp "$(pwd)/scripts/ensure-binary.sh" "$HOME/.mimir/ensure-binary.sh"
+chmod +x "$HOME/.mimir/ensure-binary.sh"
+touch "$HOME/.mimir/.codex-dev"
+echo "dev-install: dev build pinned (~/.mimir/.codex-dev) — resume tracking releases with:"
+echo "    rm ~/.mimir/.codex-dev && ~/.mimir/ensure-binary.sh codex"
+
 if [[ $# -ge 1 ]]; then
   exec "$HOME/.local/bin/mimir-codex-bin" install "$1"
 else

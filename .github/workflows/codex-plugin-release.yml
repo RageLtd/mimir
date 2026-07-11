@@ -1,15 +1,17 @@
-name: cc-plugin Release
+name: codex-plugin Release
 
-# Auto-versioned release for packages/cc-plugin, driven by conventional
+# Auto-versioned release for packages/codex-plugin, driven by conventional
 # commits — no manual tagging. On a push to main that touches the package,
-# release.sh analyzes commits, bumps plugin.json, commits chore(release),
-# and tags cc-plugin/v<version>. The release job then builds the binaries,
-# publishes a GitHub Release on that tag, and notifies the marketplace.
+# release-package.sh analyzes commits, bumps .codex-plugin/plugin.json,
+# commits chore(release), and tags codex-plugin/v<version>. The release job
+# then builds the binaries and publishes a GitHub Release on that tag.
+# Unlike cc-plugin there is no marketplace-notify step: the codex bootstrap
+# plugin is served straight from this repo via `codex plugin marketplace add`.
 on:
   push:
     branches: [main]
     paths:
-      - "packages/cc-plugin/**"
+      - "packages/codex-plugin/**"
   workflow_dispatch:
 
 permissions:
@@ -25,7 +27,7 @@ jobs:
     needs: [test]
     runs-on: ubuntu-latest
     # Avoid the release commit re-triggering the workflow.
-    if: "!startsWith(github.event.head_commit.message, 'chore(release): cc-plugin')"
+    if: "!startsWith(github.event.head_commit.message, 'chore(release): codex-plugin')"
     outputs:
       should_release: ${{ steps.dry-run.outputs.should_release }}
       new_version: ${{ steps.dry-run.outputs.new_version }}
@@ -43,7 +45,7 @@ jobs:
       - name: Analyze commits (dry run)
         id: dry-run
         run: |
-          OUTPUT=$(sh scripts/release-package.sh cc-plugin packages/cc-plugin/.claude-plugin/plugin.json --dry-run 2>&1)
+          OUTPUT=$(sh scripts/release-package.sh codex-plugin packages/codex-plugin/.codex-plugin/plugin.json --dry-run 2>&1)
           echo "$OUTPUT"
           if echo "$OUTPUT" | grep -q "Nothing to do"; then
             echo "should_release=false" >> "$GITHUB_OUTPUT"
@@ -55,7 +57,7 @@ jobs:
 
       - name: Bump, commit, tag
         if: steps.dry-run.outputs.should_release == 'true'
-        run: sh scripts/release-package.sh cc-plugin packages/cc-plugin/.claude-plugin/plugin.json
+        run: sh scripts/release-package.sh codex-plugin packages/codex-plugin/.codex-plugin/plugin.json
 
       - name: Push changes and tags
         if: steps.dry-run.outputs.should_release == 'true'
@@ -82,7 +84,7 @@ jobs:
           bun-version: latest
 
       # Fresh runner — without this, `bun build` can't resolve the
-      # @mimir/plugin-core workspace imports the CLI bundles (MIM-87/88).
+      # @mimir/plugin-core workspace imports the CLI bundles.
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
@@ -91,33 +93,23 @@ jobs:
       # re-signs on the user's Mac after download. No macOS runner or signing
       # secrets needed here.
       - name: Build binaries
-        working-directory: packages/cc-plugin
+        working-directory: packages/codex-plugin
         run: ./build.sh
 
       - name: Stage release assets
-        working-directory: packages/cc-plugin
+        working-directory: packages/codex-plugin
         run: |
-          cp dist/darwin-arm64/mimir-cc mimir-cc-darwin-arm64
-          cp dist/linux-x64/mimir-cc mimir-cc-linux-x64
+          cp dist/darwin-arm64/mimir-codex-bin mimir-codex-bin-darwin-arm64
+          cp dist/linux-x64/mimir-codex-bin mimir-codex-bin-linux-x64
 
       - name: Publish GitHub Release
-        working-directory: packages/cc-plugin
+        working-directory: packages/codex-plugin
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "cc-plugin/v${NEW_VERSION}" \
-            mimir-cc-darwin-arm64 \
-            mimir-cc-linux-x64 \
+          gh release create "codex-plugin/v${NEW_VERSION}" \
+            mimir-codex-bin-darwin-arm64 \
+            mimir-codex-bin-linux-x64 \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "cc-plugin v${NEW_VERSION}" \
+            --title "codex-plugin v${NEW_VERSION}" \
             --generate-notes
-
-      - name: Notify marketplace
-        env:
-          GH_TOKEN: ${{ secrets.MARKETPLACE_PAT }}
-        run: |
-          gh api repos/RageLtd/claude-plugins/dispatches \
-            -f event_type=plugin-release \
-            -f "client_payload[plugin_name]=mimir-cc" \
-            -f "client_payload[version]=${NEW_VERSION}" \
-            -f "client_payload[ref]=cc-plugin/v${NEW_VERSION}"

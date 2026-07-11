@@ -1,15 +1,18 @@
 #!/bin/sh
-# Automatic semantic versioning for the cc-plugin package inside the mimir
-# monorepo, driven by conventional commits.
+# Automatic semantic versioning for a plugin package inside the mimir
+# monorepo, driven by conventional commits. Shared by the per-package
+# release workflows (cc-plugin, codex-plugin) — one script, parameterized.
 #
-# Usage: scripts/release.sh [--dry-run] [--no-tag] [--no-commit]
+# Usage: scripts/release-package.sh <pkg-name> <manifest-relpath> [--dry-run] [--no-tag] [--no-commit]
+#   e.g. scripts/release-package.sh cc-plugin packages/cc-plugin/.claude-plugin/plugin.json --dry-run
+#        scripts/release-package.sh codex-plugin packages/codex-plugin/.codex-plugin/plugin.json
 #
-# Monorepo-scoped, unlike the standalone cartographer/goldfish scripts:
-#   - the last tag is looked up in the `cc-plugin/v*` namespace only
-#   - only commits touching packages/cc-plugin/** count toward the bump
-#   - the bumped manifest is packages/cc-plugin/.claude-plugin/plugin.json
-#   - the tag created is `cc-plugin/v<version>`
-# so a server- or acp-only change never triggers a cc-plugin release.
+# Monorepo-scoped:
+#   - the last tag is looked up in the `<pkg-name>/v*` namespace only
+#   - only commits touching packages/<pkg-name>/** count toward the bump
+#   - the bumped manifest is the given JSON file (its .version field)
+#   - the tag created is `<pkg-name>/v<version>`
+# so a server- or acp-only change never triggers a release for this package.
 #
 # Bump rules (conventional commits):
 #   feat!:, fix!:, BREAKING CHANGE  → major
@@ -17,6 +20,14 @@
 #   fix|refactor|perf|revert|build  → patch
 #   docs:, chore:, test:, style:, ci: → no release
 set -e
+
+PKG_NAME="${1:-}"
+MANIFEST="${2:-}"
+if [ -z "$PKG_NAME" ] || [ -z "$MANIFEST" ]; then
+  echo "Usage: scripts/release-package.sh <pkg-name> <manifest-relpath> [--dry-run] [--no-tag] [--no-commit]" >&2
+  exit 1
+fi
+shift 2
 
 DRY_RUN=false
 NO_TAG=false
@@ -32,11 +43,19 @@ done
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-PKG_PATH="packages/cc-plugin"
-PLUGIN_JSON="${PKG_PATH}/.claude-plugin/plugin.json"
-TAG_PREFIX="cc-plugin/v"
+PKG_PATH="packages/${PKG_NAME}"
+TAG_PREFIX="${PKG_NAME}/v"
 
-CURRENT_VERSION="$(jq -r '.version' "$PLUGIN_JSON")"
+if [ ! -d "$PKG_PATH" ]; then
+  echo "[release] No package at ${PKG_PATH}." >&2
+  exit 1
+fi
+if [ ! -f "$MANIFEST" ]; then
+  echo "[release] No manifest at ${MANIFEST}." >&2
+  exit 1
+fi
+
+CURRENT_VERSION="$(jq -r '.version' "$MANIFEST")"
 LAST_TAG="$(git tag --list "${TAG_PREFIX}*" --sort=-v:refname | head -1)"
 
 # First release: tag the current manifest version as-is, no bump. Subsequent
@@ -109,16 +128,16 @@ NEW_TAG="${TAG_PREFIX}${NEW_VERSION}"
 # Bump the manifest only when the version actually changed (skip on initial).
 if [ "$NEW_VERSION" != "$CURRENT_VERSION" ]; then
   tmp="$(mktemp)"
-  jq --arg v "$NEW_VERSION" '.version = $v' "$PLUGIN_JSON" > "$tmp" && mv "$tmp" "$PLUGIN_JSON"
+  jq --arg v "$NEW_VERSION" '.version = $v' "$MANIFEST" > "$tmp" && mv "$tmp" "$MANIFEST"
   if ! $NO_COMMIT; then
-    git add "$PLUGIN_JSON"
-    git commit -m "chore(release): cc-plugin v${NEW_VERSION}"
+    git add "$MANIFEST"
+    git commit -m "chore(release): ${PKG_NAME} v${NEW_VERSION}"
   fi
 fi
 
 if ! $NO_TAG; then
-  git tag -a "$NEW_TAG" -m "cc-plugin v${NEW_VERSION}"
+  git tag -a "$NEW_TAG" -m "${PKG_NAME} v${NEW_VERSION}"
   echo "[release] Tagged ${NEW_TAG}"
 fi
 
-echo "[release] Released cc-plugin v${NEW_VERSION}"
+echo "[release] Released ${PKG_NAME} v${NEW_VERSION}"
