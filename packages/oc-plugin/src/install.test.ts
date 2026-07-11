@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import opencodeTemplate from "../artifacts/opencode.json.template" with {
+  type: "text",
+};
 import { readConfig, writeConfig } from "./config";
 import { MimirPlugin } from "./index";
 import { installMimir } from "./install";
@@ -89,8 +92,18 @@ describe("installMimir", () => {
     expect(
       await Bun.file(join(opencodeDir, "agents", "mimir.md")).exists(),
     ).toBe(true);
-    expect(await Bun.file(join(root, ".local", "bin", "mimir")).text()).toContain(
-      runtime,
+    expect(
+      await Bun.file(join(root, ".local", "bin", "mimir-opencode")).text(),
+    ).toContain(runtime);
+    expect(await Bun.file(join(root, ".local", "bin", "mimir")).exists()).toBe(
+      false,
+    );
+  });
+
+  test("uses environment-backed bearer authentication in the MCP template", () => {
+    expect(opencodeTemplate).toContain('"oauth": false');
+    expect(opencodeTemplate).toContain(
+      '"Authorization": "Bearer {env:MIMIR_API_KEY}"',
     );
   });
 

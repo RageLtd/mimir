@@ -56,7 +56,7 @@ Two stores, two scopes: **org memory** (project decisions, conventions, session 
 
 ### Sync and Encryption
 
-Encryption lives at exactly one seam: the sync module. The local replica is plaintext (it sits on the same disk as your code); on push, each memory is sealed into an AEAD envelope (AES-256-GCM, with authenticated data binding the envelope to its org and key generation so the server can't transplant ciphertexts); on pull, envelopes are opened locally. Convergence is last-write-wins with tombstoned deletes. Sync runs at session boot, after each turn's distillation, and on demand via `mimir sync`.
+Encryption lives at exactly one seam: the sync module. The local replica is plaintext (it sits on the same disk as your code); on push, each memory is sealed into an AEAD envelope (AES-256-GCM, with authenticated data binding the envelope to its org and key generation so the server can't transplant ciphertexts); on pull, envelopes are opened locally. Convergence is last-write-wins with tombstoned deletes. Sync runs at session boot, after each turn's distillation, and on demand via `mimir sync` (`mimir-opencode sync` under OpenCode).
 
 Key material follows the 1Password shape: each user holds an X25519 keypair; the org data key is wrapped per member; a device secret — stored in the OS credential store (macOS Keychain / libsecret / Windows Credential Manager) — protects your keyset. Ceremonies run through the CLI:
 
@@ -67,6 +67,8 @@ mimir keys status     # what this device holds
 mimir keys rotate     # rotate the org key (revokes removed members)
 mimir keys recovery-setup / recover
 ```
+
+OpenCode exposes the same commands through `mimir-opencode keys ...`; its launcher has a distinct name so it can coexist with Claude Code's `mimir` wrapper.
 
 > [!WARNING]
 > The device secret is printed **exactly once**. Store it in your password manager immediately — it is the only way onto a new device or out of a lost keychain.
@@ -90,7 +92,7 @@ No inference ever transits the server.
 | `packages/plugin-core` | Shared layer: memory brain, inference engine, keys, sync, rules, cartographer |
 | `packages/cc-plugin` | Claude Code plugin — persona, hooks, MCP wiring, the `mimir` wrapper command |
 | `packages/acp` | ACP agent — full local agent for ACP editors (Zed) |
-| `packages/oc-plugin` | OpenCode plugin — persona, tools, hooks as a single bundled plugin |
+| `packages/oc-plugin` | OpenCode plugin — persona, tools, hooks, and the `mimir-opencode` wrapper |
 | `packages/codex-plugin` | OpenAI Codex CLI plugin — persona, lifecycle hooks in a dedicated `CODEX_HOME`, the `mimir-codex` wrapper |
 | `packages/server` | The blind sync server — auth, key distribution, ciphertext sync, coordination |
 
@@ -98,7 +100,7 @@ No inference ever transits the server.
 
 Pick the editor you use. Each plugin needs a mimir-server URL (hosted or self-hosted — see below) and, for encrypted sync, an API key from that server.
 
-The Claude Code and Codex CLI plugins ship as precompiled binaries — no runtime to install. The Zed (ACP) and OpenCode plugins run from source, so they need [Bun](https://bun.sh) v1.3+ on the machine (OpenCode also uses it for the `mimir keys` ceremonies).
+The Claude Code and Codex CLI plugins ship as precompiled binaries — no runtime to install. The Zed (ACP) and OpenCode plugins run from source, so they need [Bun](https://bun.sh) v1.3+ on the machine (OpenCode also uses it for the `mimir-opencode keys` ceremonies).
 
 ### Claude Code
 
@@ -164,7 +166,9 @@ opencode plugin --global @RageLtd/mimir-oc
 opencode           # then ask it to call mimir_install
 ```
 
-The `--global` flag writes the plugin to the user-level OpenCode configuration; without it, OpenCode installs into the current project's configuration. OpenCode supports both `~/.config/opencode/opencode.json` and `opencode.jsonc`, but avoid defining `plugin` in both because one array can override the other. The Mimir runtime installer edits neither file. When upgrading from `1.1.0`, replace any legacy `file://~/.config/opencode/plugins/mimir-oc.ts` plugin entry with `@RageLtd/mimir-oc`; a visible slash command does not prove the plugin loaded. OpenCode's `Package has no TUI target` notice is expected because Mimir is a server/agent plugin. On the first run, ask OpenCode to call `mimir_install`; that tool auto-detects Cartographer, writes the runtime state, and creates `/mimir-install` and `/mimir-update` for later use. Restart OpenCode after it succeeds.
+The `--global` flag writes the plugin to the user-level OpenCode configuration; without it, OpenCode installs into the current project's configuration. OpenCode supports both `~/.config/opencode/opencode.json` and `opencode.jsonc`, but avoid defining `plugin` in both because one array can override the other. The Mimir runtime installer edits neither file. When upgrading from `1.1.0`, replace any legacy `file://~/.config/opencode/plugins/mimir-oc.ts` plugin entry with `@RageLtd/mimir-oc`; a visible slash command does not prove the plugin loaded. OpenCode's `Package has no TUI target` notice is expected because Mimir is a server/agent plugin. On the first run, ask OpenCode to call `mimir_install`; that tool auto-detects Cartographer, writes the runtime state, creates `/mimir-install` and `/mimir-update`, and installs the `mimir-opencode` launcher. Restart OpenCode after it succeeds.
+
+OpenCode `1.1.0` used `~/.local/bin/mimir` for its launcher and could overwrite Claude Code's wrapper. Current installs leave that path to Claude Code and use `~/.local/bin/mimir-opencode`; if the collision already happened, run `mimir-cc update` once to restore the Claude launcher.
 
 Details in [`packages/oc-plugin/README.md`](packages/oc-plugin/README.md).
 

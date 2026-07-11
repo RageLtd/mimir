@@ -9,7 +9,7 @@
  *   ~/.mimir/logs/                   — created
  *   ~/.config/opencode/agents/mimir.md — the Mimir custom agent
  *   ~/.mimir/mimir-oc.ts             — stable CLI copy of this bundle
- *   ~/.local/bin/mimir               — wrapper script (chmod 755)
+ *   ~/.local/bin/mimir-opencode      — wrapper script (chmod 755)
  *
  * The npm plugin package is installed separately by OpenCode. This
  * installer must not rewrite OpenCode's config: `opencode plugin`
@@ -246,7 +246,12 @@ export const installMimir = async (
     "agents",
     "mimir.md",
   );
-  const wrapperPath = join(process.env.HOME ?? "~", ".local", "bin", "mimir");
+  const wrapperPath = join(
+    process.env.HOME ?? "~",
+    ".local",
+    "bin",
+    "mimir-opencode",
+  );
   const runtimePath = join(home, "mimir-oc.ts");
   const installCommandPath = join(
     process.env.HOME ?? "~",
@@ -336,6 +341,8 @@ export const installMimir = async (
       "",
       "Wrote:",
       ...written.map((p) => `  ${p}`),
+      "",
+      "If OpenCode 1.1.0 previously replaced ~/.local/bin/mimir, run `mimir-cc update` once to restore the Claude Code launcher.",
       "",
       "Next: restart OpenCode so it loads the plugin and the new config.",
     ].join("\n"),

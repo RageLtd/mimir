@@ -64,7 +64,9 @@ opencode
 > Call the mimir_install tool using the default server URL.
 ```
 
-The `mimir_install` tool writes the runtime state: the system prompt fetched from the server, `~/.mimir/config.json`, a stable CLI copy of the package at `~/.mimir/mimir-oc.ts`, the OpenCode custom agent at `~/.config/opencode/agents/mimir.md`, the wrapper script at `~/.local/bin/mimir`, and the slash commands at `~/.config/opencode/commands/`. It auto-detects Cartographer from `PATH` or `~/.local/bin/cartographer`, preserving an existing configured path when present. It does not rewrite OpenCode's config; `opencode plugin --global` owns the package registration.
+The `mimir_install` tool writes the runtime state: the system prompt fetched from the server, `~/.mimir/config.json`, a stable CLI copy of the package at `~/.mimir/mimir-oc.ts`, the OpenCode custom agent at `~/.config/opencode/agents/mimir.md`, the wrapper script at `~/.local/bin/mimir-opencode`, and the slash commands at `~/.config/opencode/commands/`. It auto-detects Cartographer from `PATH` or `~/.local/bin/cartographer`, preserving an existing configured path when present. It does not rewrite OpenCode's config; `opencode plugin --global` owns the package registration.
+
+OpenCode versions through `1.1.0` wrote their wrapper to `~/.local/bin/mimir`, colliding with the Claude Code launcher. The corrected installer leaves that shared path untouched. If `1.1.0` already replaced it, run `mimir-cc update` once after installing this version to restore the Claude Code wrapper.
 
 After a successful first install, restart OpenCode so the slash commands and the new agent are picked up. `/mimir-install` is then available for repeat installs.
 
@@ -77,14 +79,14 @@ The first successful install writes two slash commands to `~/.config/opencode/co
 
 ## Wrapper script
 
-`~/.local/bin/mimir` sets `MIMIR_ACTIVE=1` and execs `opencode` so any state checks in the plugin can distinguish a real Mimir session from a nested `opencode` subprocess.
+`~/.local/bin/mimir-opencode` sets `MIMIR_ACTIVE=1` and execs `opencode` so any state checks in the plugin can distinguish a real Mimir session from a nested `opencode` subprocess.
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
-mimir   # equivalent to `MIMIR_ACTIVE=1 opencode`
+mimir-opencode   # equivalent to `MIMIR_ACTIVE=1 opencode`
 ```
 
-The wrapper also dispatches the E2E key ceremonies and manual sync without entering the editor — `mimir keys <status|setup|adopt|rotate|recovery-setup|recover>` and `mimir sync` run the plugin bundle directly via `bun` (the same shared plugin-core implementation as the Claude Code and ACP wrappers).
+The wrapper also dispatches the E2E key ceremonies and manual sync without entering the editor — `mimir-opencode keys <status|setup|adopt|rotate|recovery-setup|recover>` and `mimir-opencode sync` run the plugin bundle directly via `bun` (the same shared plugin-core implementation as the Claude Code and ACP wrappers).
 
 ## Development
 

@@ -3,7 +3,11 @@
   "mcp": {
     "mimir": {
       "type": "remote",
-      "url": "{{SERVER_URL}}/mcp"
+      "url": "{{SERVER_URL}}/mcp",
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer {env:MIMIR_API_KEY}"
+      }
     }
   },
   "instructions": ["~/.mimir/system-prompt.md"]
