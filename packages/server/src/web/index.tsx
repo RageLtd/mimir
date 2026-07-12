@@ -1,37 +1,65 @@
 import { Hono } from "hono";
 import { compress } from "hono/compress";
+import type { IdentityEnv } from "../middleware/identity";
 import { PageFrame, pageRenderer } from "./chrome";
+import { safeReturnTo } from "./paths";
 
-export const web = new Hono();
+export const web = new Hono<IdentityEnv>();
 
 web.use("*", compress({ threshold: 0 }));
 web.use("*", pageRenderer);
 
-web.get("/", (c) =>
-  c.render(
-    <PageFrame actions={<a href="/app">Dashboard</a>}>
-      <section class="hero" aria-labelledby="welcome-title">
-        <p class="kicker">Persistent context</p>
-        <h1 id="welcome-title">Your agents remember.</h1>
+web.get("/sign-in", (c) => {
+  const returnTo = safeReturnTo(c.req.query("returnTo"));
+  const signUpHref = `/sign-up?${new URLSearchParams({ returnTo })}`;
+  return c.render(
+    <PageFrame actions={<a href={signUpHref}>Create account</a>}>
+      <section class="hero" aria-labelledby="sign-in-title">
+        <p class="kicker">Welcome back</p>
+        <h1 id="sign-in-title">Sign in to Mimir.</h1>
         <p class="lede">
-          Mimir gives coding agents private, durable context across projects and
-          editors—without surrendering your data to the operator.
+          Your private agent memory and project context are waiting. Sign-in
+          controls arrive in the next dashboard slice.
         </p>
-        <a class="button" href="/app">
-          Open dashboard
+        <a class="button" href={signUpHref}>
+          Create account
         </a>
       </section>
     </PageFrame>,
     {
-      title: "Mimir — Private agent memory",
-      description:
-        "Private, durable memory and project context for your coding agents.",
+      title: "Sign in — Mimir",
+      description: "Sign in to your Mimir dashboard.",
     },
-  ),
-);
+  );
+});
 
-web.get("/app", (c) =>
-  c.render(
+web.get("/sign-up", (c) => {
+  const returnTo = safeReturnTo(c.req.query("returnTo"));
+  const signInHref = `/sign-in?${new URLSearchParams({ returnTo })}`;
+  return c.render(
+    <PageFrame actions={<a href={signInHref}>Sign in</a>}>
+      <section class="hero" aria-labelledby="sign-up-title">
+        <p class="kicker">Get started</p>
+        <h1 id="sign-up-title">Create your account.</h1>
+        <p class="lede">
+          Join an invited organization or claim a new Mimir instance. Account
+          controls arrive in the next dashboard slice.
+        </p>
+        <a class="button" href={signInHref}>
+          Sign in instead
+        </a>
+      </section>
+    </PageFrame>,
+    {
+      title: "Create account — Mimir",
+      description: "Create a Mimir dashboard account.",
+    },
+  );
+});
+
+web.get("/app", (c) => {
+  const identity = c.get("identity");
+  return c.render(
     <PageFrame
       actions={<a href="/">Home</a>}
       navigation={
@@ -42,7 +70,11 @@ web.get("/app", (c) =>
         </nav>
       }
     >
-      <section aria-labelledby="dashboard-title">
+      <section
+        aria-labelledby="dashboard-title"
+        data-user-id={identity?.userId}
+        data-organization-id={identity?.orgId}
+      >
         <p class="kicker">Workspace</p>
         <h1 id="dashboard-title">Dashboard</h1>
         <p class="lede">
@@ -64,5 +96,5 @@ web.get("/app", (c) =>
       title: "Dashboard — Mimir",
       description: "Manage your Mimir account, devices, and agent context.",
     },
-  ),
-);
+  );
+});

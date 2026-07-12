@@ -18,7 +18,8 @@
  *
  * 401/403s are detail-free (MIM-77 discipline). /health stays exempt for
  * credential-less healthchecks; /api/auth/* self-gates (and the signup path
- * carries its own claim guard).
+ * carries its own claim guard). Browser exemptions are supplied by app.ts so
+ * this API-oriented module does not own the web route policy.
  */
 
 import type { Context, Next } from "hono";
@@ -117,64 +118,105 @@ export function pickSoleOrg(orgs: unknown) {
 
 /** Session/org lookups the gate depends on — injectable so tests never touch
  *  the config-driven singleton (which would create a SQLite file). */
-type SessionLookup = (headers: Headers) => Promise<unknown>;
-type OrgLister = (headers: Headers) => Promise<unknown>;
+export type SessionLookup = (headers: Headers) => Promise<unknown>;
+export type OrgLister = (headers: Headers) => Promise<unknown>;
+export type PathExemption = (path: string) => boolean;
+
+type IdentityResolution =
+  | { identity: ResolvedIdentity; status: null }
+  | { identity: null; status: 401 }
+  | { identity: null; status: 403; userId: string };
 
 const defaultLookup: SessionLookup = (headers) =>
   getAuth().api.getSession({ headers });
 const defaultListOrgs: OrgLister = (headers) =>
   getAuth().api.listOrganizations({ headers });
 
+export function requestAuthHeaders(c: Context) {
+  return toAuthHeaders({
+    cookie: c.req.header("cookie"),
+    authorization: c.req.header("authorization"),
+    apiKey: c.req.header(API_KEY_HEADER),
+  });
+}
+
+export async function lookupIdentity(
+  headers: Headers,
+  lookup: SessionLookup = defaultLookup,
+) {
+  const [err, session] = await attempt(() => lookup(headers));
+  if (err) return null;
+  return readIdentity(session);
+}
+
+export async function resolveIdentity(
+  headers: Headers,
+  lookup: SessionLookup = defaultLookup,
+  listOrgs: OrgLister = defaultListOrgs,
+) {
+  const identity = await lookupIdentity(headers, lookup);
+  if (!identity) {
+    return { identity: null, status: 401 } satisfies IdentityResolution;
+  }
+
+  let orgId = identity.orgId;
+  if (!orgId) {
+    const [orgErr, orgs] = await attempt(() => listOrgs(headers));
+    const sole = orgErr ? null : pickSoleOrg(orgs);
+    if (!sole) {
+      return {
+        identity: null,
+        status: 403,
+        userId: identity.userId,
+      } satisfies IdentityResolution;
+    }
+    orgId = sole;
+  }
+
+  return {
+    identity: { userId: identity.userId, orgId },
+    status: null,
+  } satisfies IdentityResolution;
+}
+
 /**
- * Build the gate middleware. Mounted app-wide (after the auth handler routes)
- * only when config.auth.enabled — index.ts owns that decision.
+ * Build the API gate middleware. Mounted app-wide after the browser boundary
+ * only when config.auth.enabled — app.ts owns that composition decision.
  */
 export const createIdentityGate =
   (
     lookup: SessionLookup = defaultLookup,
     listOrgs: OrgLister = defaultListOrgs,
+    isExempt: PathExemption = () => false,
   ) =>
   async (c: Context<IdentityEnv>, next: Next) => {
     const path = c.req.path;
-    if (EXEMPT_PATHS.has(path) || path.startsWith(AUTH_PATH_PREFIX)) {
+    if (
+      EXEMPT_PATHS.has(path) ||
+      path.startsWith(AUTH_PATH_PREFIX) ||
+      isExempt(path) ||
+      c.get("identity")
+    ) {
       return next();
     }
 
-    const headers = toAuthHeaders({
-      cookie: c.req.header("cookie"),
-      authorization: c.req.header("authorization"),
-      apiKey: c.req.header(API_KEY_HEADER),
-    });
-
-    // Invalid/expired keys can reject rather than resolve null — either
-    // way the answer is the same detail-free 401.
-    const [err, session] = await attempt(() => lookup(headers));
-    if (err || !session) {
-      return c.json({ error: { message: "Unauthorized" } }, 401);
-    }
-
-    const identity = readIdentity(session);
-    if (!identity) {
-      return c.json({ error: { message: "Unauthorized" } }, 401);
-    }
-
-    let orgId = identity.orgId;
-    if (!orgId) {
-      // No active org on the session — fall back to a sole membership, else
-      // reject: we won't guess which of several orgs a request belongs to.
-      const [orgErr, orgs] = await attempt(() => listOrgs(headers));
-      const sole = orgErr ? null : pickSoleOrg(orgs);
-      if (!sole) {
+    const resolution = await resolveIdentity(
+      requestAuthHeaders(c),
+      lookup,
+      listOrgs,
+    );
+    if (!resolution.identity) {
+      if (resolution.status === 403) {
         log.warn(
-          { userId: identity.userId },
+          { userId: resolution.userId },
           "identity gate: no active organization and no sole membership — rejecting",
         );
-        return c.json({ error: { message: "Forbidden" } }, 403);
       }
-      orgId = sole;
+      const message = resolution.status === 401 ? "Unauthorized" : "Forbidden";
+      return c.json({ error: { message } }, resolution.status);
     }
 
-    c.set("identity", { userId: identity.userId, orgId });
+    c.set("identity", resolution.identity);
     return next();
   };
 

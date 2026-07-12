@@ -3,11 +3,11 @@ import { web } from ".";
 
 describe("dashboard chrome", () => {
   test("renders the public shell as semantic, zero-runtime HTML", async () => {
-    const response = await web.request("/");
+    const response = await web.request("/sign-in");
     const html = await response.text();
 
     expect(response.status).toBe(200);
-    expect(html).toContain("<title>Mimir — Private agent memory</title>");
+    expect(html).toContain("<title>Sign in — Mimir</title>");
     expect(html).toContain('<meta name="description"');
     expect(html).toContain('<a class="skip" href="#main">');
     expect(html).toContain('<header class="site-head">');
@@ -19,6 +19,17 @@ describe("dashboard chrome", () => {
     expect(html).toContain("@media(min-width:48rem)");
     expect(html).not.toContain("<script");
     expect(html).not.toContain('rel="stylesheet"');
+  });
+
+  test("normalizes unsafe return targets before rendering auth links", async () => {
+    const response = await web.request(
+      "/sign-in?returnTo=https%3A%2F%2Fexample.com%2Fsteal",
+    );
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain("returnTo=%2Fapp");
+    expect(html).not.toContain("example.com");
   });
 
   test("renders the application shell with labelled navigation", async () => {

@@ -8,8 +8,10 @@ import {
 
 const fetcher = (path: string, init?: RequestInit) => web.request(path, init);
 const reports = [
-  await measureFirstLoad(fetcher, "/", "identity"),
-  await measureFirstLoad(fetcher, "/", "gzip"),
+  await measureFirstLoad(fetcher, "/sign-in", "identity"),
+  await measureFirstLoad(fetcher, "/sign-in", "gzip"),
+  await measureFirstLoad(fetcher, "/sign-up", "identity"),
+  await measureFirstLoad(fetcher, "/sign-up", "gzip"),
   await measureFirstLoad(fetcher, "/app", "identity"),
   await measureFirstLoad(fetcher, "/app", "gzip"),
 ];

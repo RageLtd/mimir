@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Hono } from "hono";
+import { type Env, Hono } from "hono";
 import { web } from ".";
 import {
   assertTransferBudget,
@@ -8,8 +8,9 @@ import {
   measureFirstLoad,
 } from "./transfer-budget";
 
-const fetchWith = (app: Hono) => (path: string, init?: RequestInit) =>
-  app.request(path, init);
+const fetchWith = <E extends Env>(app: Hono<E>) =>
+  (path: string, init?: RequestInit) =>
+    app.request(path, init);
 
 describe("critical resource discovery", () => {
   test("finds same-origin initial assets and rejects third-party paths", () => {
@@ -42,7 +43,7 @@ describe("critical resource discovery", () => {
 describe("first-load measurement", () => {
   test("enforces the current SSR route under identity and gzip", async () => {
     const fetcher = fetchWith(web);
-    for (const route of ["/", "/app"]) {
+    for (const route of ["/sign-in", "/sign-up", "/app"]) {
       const identity = await measureFirstLoad(fetcher, route, "identity");
       const gzip = await measureFirstLoad(fetcher, route, "gzip");
 

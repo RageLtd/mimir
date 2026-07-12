@@ -4,7 +4,16 @@ import { createClaimGuard, SIGNUP_PATH } from "./auth/claim";
 import { getAuth } from "./auth/instance";
 import { config } from "./config";
 import { getTenantDb } from "./db/tenant";
-import { createIdentityGate, type IdentityEnv } from "./middleware/identity";
+import {
+  createIdentityGate,
+  type IdentityEnv,
+  type OrgLister,
+  type SessionLookup,
+} from "./middleware/identity";
+import {
+  createRootRedirect,
+  createWebAccessGate,
+} from "./middleware/web-access";
 import { keys } from "./routes/keys";
 import { mcp } from "./routes/mcp";
 import { projects } from "./routes/projects";
@@ -13,9 +22,12 @@ import { systemPrompt } from "./routes/system-prompt";
 import { log } from "./util/logger";
 import { attemptSync } from "./util/result";
 import { web } from "./web";
+import { isPublicWebPath } from "./web/paths";
 
 interface AppOptions {
   authEnabled?: boolean;
+  sessionLookup?: SessionLookup;
+  orgLister?: OrgLister;
 }
 
 export function createApp(options: AppOptions = {}) {
@@ -26,15 +38,28 @@ export function createApp(options: AppOptions = {}) {
 
   // Better Auth (MIM-70) — the ONLY gating mechanism. Mount order matters:
   // the claim guard wraps the signup endpoint, the auth handler self-gates
-  // its own routes, and the identity gate covers everything else (with
-  // /health exempt). Lazy getAuth(): an auth-disabled app never constructs
-  // the instance or touches the SQLite file.
+  // its own routes, browser routes get redirect semantics, and the API gate
+  // remains the secure default for everything else. Lazy getAuth(): an
+  // auth-disabled app never constructs the instance or touches SQLite.
   if (authEnabled) {
     app.use(SIGNUP_PATH, createClaimGuard());
     app.on(["POST", "GET"], "/api/auth/*", (c) => getAuth().handler(c.req.raw));
-    app.use("*", createIdentityGate());
+    app.get("/", createRootRedirect(options.sessionLookup));
+    app.use(
+      "/app/*",
+      createWebAccessGate(options.sessionLookup, options.orgLister),
+    );
+    app.use(
+      "*",
+      createIdentityGate(
+        options.sessionLookup,
+        options.orgLister,
+        isPublicWebPath,
+      ),
+    );
     log.info("better-auth identity gate active");
   } else {
+    app.get("/", (c) => c.redirect("/app"));
     log.warn(
       "AUTH_ENABLED=false — API is UNAUTHENTICATED; enable auth before exposing this server publicly",
     );
