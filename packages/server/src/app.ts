@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { createClaimGuard, SIGNUP_PATH } from "./auth/claim";
+import { createClaimGuard } from "./auth/claim";
 import { getAuth } from "./auth/instance";
+import { SIGNUP_PATH } from "./auth/paths";
 import { config } from "./config";
 import { getTenantDb } from "./db/tenant";
 import {
@@ -21,11 +22,13 @@ import { sync } from "./routes/sync";
 import { systemPrompt } from "./routes/system-prompt";
 import { log } from "./util/logger";
 import { attemptSync } from "./util/result";
-import { web } from "./web";
+import { createWeb } from "./web";
 import { isPublicWebPath } from "./web/paths";
 
 interface AppOptions {
   authEnabled?: boolean;
+  authHandler?: ReturnType<typeof getAuth>["handler"];
+  claimGuard?: ReturnType<typeof createClaimGuard>;
   sessionLookup?: SessionLookup;
   orgLister?: OrgLister;
 }
@@ -42,8 +45,11 @@ export function createApp(options: AppOptions = {}) {
   // remains the secure default for everything else. Lazy getAuth(): an
   // auth-disabled app never constructs the instance or touches SQLite.
   if (authEnabled) {
-    app.use(SIGNUP_PATH, createClaimGuard());
-    app.on(["POST", "GET"], "/api/auth/*", (c) => getAuth().handler(c.req.raw));
+    const claimGuard = options.claimGuard ?? createClaimGuard();
+    const authHandler =
+      options.authHandler ?? ((request) => getAuth().handler(request));
+    app.use(SIGNUP_PATH, claimGuard);
+    app.on(["POST", "GET"], "/api/auth/*", (c) => authHandler(c.req.raw));
     app.get("/", createRootRedirect(options.sessionLookup));
     app.use(
       "/app/*",
@@ -85,7 +91,17 @@ export function createApp(options: AppOptions = {}) {
   app.route("/v1/keys", keys);
   app.route("/v1/sync", sync);
   app.route("/mcp", mcp);
-  app.route("/", web);
+  app.route(
+    "/",
+    createWeb({
+      authForms: authEnabled
+        ? {
+            origin: new URL(config.auth.baseUrl).origin,
+            request: (path, init) => app.request(path, init),
+          }
+        : undefined,
+    }),
+  );
 
   return app;
 }

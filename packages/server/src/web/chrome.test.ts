@@ -17,6 +17,10 @@ describe("dashboard chrome", () => {
     expect(html).toContain("system-ui");
     expect(html).toContain(":focus-visible");
     expect(html).toContain("@media(min-width:48rem)");
+    expect(html).toContain('<form class="auth-form" method="post" action="/sign-in">');
+    expect(html).toContain('autocomplete="email"');
+    expect(html).toContain('autocomplete="current-password"');
+    expect(html).toContain("required");
     expect(html).not.toContain("<script");
     expect(html).not.toContain('rel="stylesheet"');
   });
@@ -30,6 +34,18 @@ describe("dashboard chrome", () => {
     expect(response.status).toBe(200);
     expect(html).toContain("returnTo=%2Fapp");
     expect(html).not.toContain("example.com");
+  });
+
+  test("renders a semantic first-claim and invited-user sign-up form", async () => {
+    const response = await web.request("/sign-up");
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain('<form class="auth-form" method="post" action="/sign-up">');
+    expect(html).toContain('<label for="sign-up-name">');
+    expect(html).toContain('autocomplete="new-password"');
+    expect(html).toContain('name="setupToken"');
+    expect(html).not.toContain("<script");
   });
 
   test("renders the application shell with labelled navigation", async () => {

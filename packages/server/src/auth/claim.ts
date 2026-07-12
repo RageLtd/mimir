@@ -21,9 +21,8 @@ import { config } from "../config";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 import { getAuth, getAuthDb } from "./instance";
+import { SETUP_TOKEN_HEADER } from "./paths";
 
-export const SETUP_TOKEN_HEADER = "x-setup-token";
-export const SIGNUP_PATH = "/api/auth/sign-up/email";
 const CLOSED_MESSAGE = "Sign-up is closed";
 
 /** Constant-time token comparison via fixed-length SHA-256 digests —
@@ -110,9 +109,10 @@ export function setCookiesToCookieHeader(setCookies: string[]) {
  * active org. Failure is logged, not fatal — the claim itself succeeded and
  * an org can be created through the normal API afterward.
  */
-async function bootstrapOwnerOrg(signupResponse: {
-  headers: { getSetCookie(): string[] };
-}) {
+export async function bootstrapOwnerOrg(
+  signupResponse: { headers: { getSetCookie(): string[] } },
+  auth = getAuth(),
+) {
   const cookie = setCookiesToCookieHeader(
     signupResponse.headers.getSetCookie(),
   );
@@ -123,8 +123,6 @@ async function bootstrapOwnerOrg(signupResponse: {
     return;
   }
   const headers = new Headers({ cookie });
-  const auth = getAuth();
-
   const [createErr, org] = await attempt(() =>
     auth.api.createOrganization({
       body: { name: "Owner", slug: "owner" },
@@ -150,44 +148,53 @@ async function bootstrapOwnerOrg(signupResponse: {
 
 /**
  * Hono middleware guarding the email signup endpoint. Mounted on
- * SIGNUP_PATH before the better-auth handler; everything except POST passes
- * through untouched.
+ * The sign-up API path before the better-auth handler; everything except POST
+ * passes through untouched.
  */
-export const createClaimGuard = () => async (c: Context, next: Next) => {
-  if (c.req.method !== "POST") return next();
+interface ClaimGuardOptions {
+  db?: Database;
+  setupToken?: string;
+  bootstrap?: typeof bootstrapOwnerOrg;
+}
 
-  const db = getAuthDb();
-  const users = countUsers(db);
+export const createClaimGuard =
+  (options: ClaimGuardOptions = {}) =>
+  async (c: Context, next: Next) => {
+    if (c.req.method !== "POST") return next();
 
-  // Body email only matters for the invite check — a clone() read so the
-  // real handler still gets an unconsumed stream. Unparseable body → no
-  // email → no invite match; better-auth 400s it properly downstream.
-  let email = "";
-  if (users > 0) {
-    const [, body] = await attempt(
-      () => c.req.raw.clone().json() as Promise<{ email?: string }>,
-    );
-    email = typeof body?.email === "string" ? body.email : "";
-  }
+    const db = options.db ?? getAuthDb();
+    const setupToken = options.setupToken ?? config.auth.setupToken;
+    const users = countUsers(db);
 
-  const decision = signupDecision({
-    userCount: users,
-    hasPendingInvite: users > 0 && pendingInviteExists(db, email),
-    tokenConfigured: config.auth.setupToken.length > 0,
-    tokenValid: tokenMatches(
-      c.req.header(SETUP_TOKEN_HEADER) ?? "",
-      config.auth.setupToken,
-    ),
-  });
+    // Body email only matters for the invite check — a clone() read so the
+    // real handler still gets an unconsumed stream. Unparseable body → no
+    // email → no invite match; better-auth 400s it properly downstream.
+    let email = "";
+    if (users > 0) {
+      const [, body] = await attempt(
+        () => c.req.raw.clone().json() as Promise<{ email?: string }>,
+      );
+      email = typeof body?.email === "string" ? body.email : "";
+    }
 
-  if (!decision.allow) {
-    log.warn({ reason: decision.reason }, "signup rejected");
-    return c.json({ error: { message: CLOSED_MESSAGE } }, 403);
-  }
+    const decision = signupDecision({
+      userCount: users,
+      hasPendingInvite: users > 0 && pendingInviteExists(db, email),
+      tokenConfigured: setupToken.length > 0,
+      tokenValid: tokenMatches(
+        c.req.header(SETUP_TOKEN_HEADER) ?? "",
+        setupToken,
+      ),
+    });
 
-  await next();
+    if (!decision.allow) {
+      log.warn({ reason: decision.reason }, "signup rejected");
+      return c.json({ error: { message: CLOSED_MESSAGE } }, 403);
+    }
 
-  if (decision.claim && c.res.status === 200) {
-    await bootstrapOwnerOrg(c.res.clone());
-  }
-};
+    await next();
+
+    if (decision.claim && c.res.status === 200) {
+      await (options.bootstrap ?? bootstrapOwnerOrg)(c.res.clone());
+    }
+  };
