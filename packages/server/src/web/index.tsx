@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { compress } from "hono/compress";
 import type { IdentityEnv } from "../middleware/identity";
 import {
   type AuthFormOptions,
@@ -8,22 +7,62 @@ import {
   renderSignIn,
   renderSignUp,
 } from "./auth-forms";
-import { PageFrame, pageRenderer } from "./chrome";
+import { DashboardNavigation, PageFrame, pageRenderer } from "./chrome";
+import { webCompression } from "./compression";
+import {
+  createApiKeyAction,
+  createPasswordAction,
+  createRenamePasskeyAction,
+  createRevokeApiKeyAction,
+  createRevokeOtherSessionsAction,
+  createRevokePasskeyAction,
+  createRevokeSessionAction,
+} from "./credential-actions";
+import { type CredentialOptions, renderCredentials } from "./credentials";
+import { credentialIslandResponse } from "./islands";
 
 interface WebOptions {
   authForms?: AuthFormOptions;
+  credentials?: CredentialOptions;
 }
 
 export function createWeb(options: WebOptions = {}) {
   const web = new Hono<IdentityEnv>();
-  web.use("*", compress({ threshold: 0 }));
+  web.use("*", webCompression);
   web.use("*", pageRenderer);
 
   web.get("/sign-in", (c) => renderSignIn(c));
   web.get("/sign-up", (c) => renderSignUp(c));
+  web.get("/assets/credentials.js", credentialIslandResponse);
   if (options.authForms) {
     web.post("/sign-in", createSignInAction(options.authForms));
     web.post("/sign-up", createSignUpAction(options.authForms));
+  }
+  if (options.credentials) {
+    const credentials = options.credentials;
+    web.get("/app/credentials", (c) => renderCredentials(c, credentials));
+    web.post("/app/credentials/password", createPasswordAction(credentials));
+    web.post("/app/credentials/api-keys", createApiKeyAction(credentials));
+    web.post(
+      "/app/credentials/api-keys/revoke",
+      createRevokeApiKeyAction(credentials),
+    );
+    web.post(
+      "/app/credentials/sessions/revoke",
+      createRevokeSessionAction(credentials),
+    );
+    web.post(
+      "/app/credentials/sessions/revoke-others",
+      createRevokeOtherSessionsAction(credentials),
+    );
+    web.post(
+      "/app/credentials/passkeys/revoke",
+      createRevokePasskeyAction(credentials),
+    );
+    web.post(
+      "/app/credentials/passkeys/rename",
+      createRenamePasskeyAction(credentials),
+    );
   }
 
   web.get("/app", (c) => {
@@ -31,13 +70,7 @@ export function createWeb(options: WebOptions = {}) {
     return c.render(
       <PageFrame
         actions={<a href="/">Home</a>}
-        navigation={
-          <nav aria-label="Dashboard">
-            <a href="/app" aria-current="page">
-              Overview
-            </a>
-          </nav>
-        }
+        navigation={<DashboardNavigation current="overview" />}
       >
         <section
           aria-labelledby="dashboard-title"

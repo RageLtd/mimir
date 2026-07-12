@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "bun run --watch src/index.ts",
+    "check:web-transport": "bun run scripts/check-web-transport.ts",
     "measure:web": "bun run scripts/measure-web.ts",
     "start": "bun run src/index.ts",
     "test": "bun run ../../tests/run-tests.ts server"

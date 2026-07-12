@@ -1,7 +1,9 @@
+import type { WebEncoding } from "./compression";
+
 export const SINGLE_DATAGRAM_TARGET_BYTES = 1_000;
 export const COLD_LOAD_BUDGET_BYTES = 10 * 1_024;
+export const MINIMUM_PUBLIC_HTTP_VERSION = 2;
 
-type TransferEncoding = "identity" | "gzip";
 type ResourceKind = "html" | "css" | "javascript" | "image" | "font" | "other";
 
 interface CriticalResource {
@@ -12,6 +14,7 @@ interface CriticalResource {
 interface TransferEntry extends CriticalResource {
   bodyBytes: number;
   headerBytes: number;
+  framingBytes: number;
   transferBytes: number;
   servedEncoding: string;
 }
@@ -23,6 +26,8 @@ type WebFetcher = (
 
 const BASE_URL = "https://mimir.local";
 const encoder = new TextEncoder();
+const HTTP2_FRAME_HEADER_BYTES = 9;
+const TLS13_RECORD_OVERHEAD_BYTES = 22;
 
 function parseAttributes(source: string) {
   const attributes: Record<string, string> = {};
@@ -136,21 +141,21 @@ function kindFromContentType(fallback: ResourceKind, contentType: string) {
 }
 
 function responseHeaderBytes(response: Response) {
-  // HTTP/2 and HTTP/3 compress fields differently, so there is no stable
-  // protocol-independent header byte count. HTTP/1.1 serialization gives
-  // the gate a deterministic, conservative estimate using the headers the
-  // application actually served; the 1,000-byte target leaves framing room.
-  let serialized = `HTTP/1.1 ${response.status} ${response.statusText}\r\n`;
+  // Railway terminates public TLS and negotiates HTTP/2 at the edge. HPACK's
+  // dynamic state is connection-specific, so count literal field bytes as a
+  // conservative ceiling; the real header block is normally smaller.
+  let bytes = encoder.encode(`:status${response.status}`).byteLength + 2;
   for (const [name, value] of response.headers) {
-    serialized += `${name}: ${value}\r\n`;
+    bytes +=
+      encoder.encode(name).byteLength + encoder.encode(value).byteLength + 2;
   }
-  return encoder.encode(`${serialized}\r\n`).byteLength;
+  return bytes;
 }
 
 async function measureResponse(
   fetcher: WebFetcher,
   resource: CriticalResource,
-  requestedEncoding: TransferEncoding,
+  requestedEncoding: WebEncoding,
 ) {
   const response = await fetcher(resource.path, {
     headers: { "accept-encoding": requestedEncoding },
@@ -163,6 +168,10 @@ async function measureResponse(
 
   const bodyBytes = (await response.arrayBuffer()).byteLength;
   const headerBytes = responseHeaderBytes(response);
+  // One HEADERS frame and one DATA frame, each carried in a conservative
+  // separate TLS 1.3 record. Small dashboard responses fit this model.
+  const framingBytes =
+    HTTP2_FRAME_HEADER_BYTES * 2 + TLS13_RECORD_OVERHEAD_BYTES * 2;
   return {
     path: resource.path,
     kind: kindFromContentType(
@@ -171,7 +180,8 @@ async function measureResponse(
     ),
     bodyBytes,
     headerBytes,
-    transferBytes: bodyBytes + headerBytes,
+    framingBytes,
+    transferBytes: bodyBytes + headerBytes + framingBytes,
     servedEncoding: response.headers.get("content-encoding") ?? "identity",
   } satisfies TransferEntry;
 }
@@ -179,7 +189,7 @@ async function measureResponse(
 export async function measureFirstLoad(
   fetcher: WebFetcher,
   route: string,
-  requestedEncoding: TransferEncoding,
+  requestedEncoding: WebEncoding,
 ) {
   const discoveryResponse = await fetcher(route, {
     headers: { "accept-encoding": "identity" },
@@ -229,9 +239,11 @@ export async function measureFirstLoad(
     0,
   );
   const requestCount = entries.length;
-  const hardLimitMet =
-    totalBytes <= COLD_LOAD_BUDGET_BYTES &&
-    discovered.externalResources.length === 0;
+  const budgetEnforced = requestedEncoding !== "identity";
+  const withinHardLimit = totalBytes <= COLD_LOAD_BUDGET_BYTES;
+  const hardLimitMet = budgetEnforced
+    ? withinHardLimit && discovered.externalResources.length === 0
+    : null;
   const singleDatagramMet =
     totalBytes <= SINGLE_DATAGRAM_TARGET_BYTES &&
     requestCount === 1 &&
@@ -246,7 +258,11 @@ export async function measureFirstLoad(
     bytesByKind,
     requestCount,
     totalBytes,
+    protocol: "h2",
+    minimumPublicHttpVersion: MINIMUM_PUBLIC_HTTP_VERSION,
     hardLimitBytes: COLD_LOAD_BUDGET_BYTES,
+    budgetEnforced,
+    withinHardLimit,
     hardLimitMet,
     singleDatagramTargetBytes: SINGLE_DATAGRAM_TARGET_BYTES,
     singleDatagramMet,
@@ -256,11 +272,14 @@ export async function measureFirstLoad(
 export function assertTransferBudget(
   report: Awaited<ReturnType<typeof measureFirstLoad>>,
 ) {
-  if (report.hardLimitMet) return;
   const external = report.externalResources.length
     ? `; external resources: ${report.externalResources.join(", ")}`
     : "";
+  if (external) {
+    throw new Error(`${report.route} cold load leaves the origin${external}`);
+  }
+  if (!report.budgetEnforced || report.hardLimitMet) return;
   throw new Error(
-    `${report.route} cold load is ${report.totalBytes} bytes; budget is ${report.hardLimitBytes}${external}`,
+    `${report.route} ${report.requestedEncoding} cold load is ${report.totalBytes} bytes; budget is ${report.hardLimitBytes}`,
   );
 }

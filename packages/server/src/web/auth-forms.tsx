@@ -3,10 +3,9 @@ import { SETUP_TOKEN_HEADER, SIGNIN_PATH, SIGNUP_PATH } from "../auth/paths";
 import type { IdentityEnv } from "../middleware/identity";
 import { attempt } from "../util/result";
 import { PageFrame } from "./chrome";
+import { EMPTY_FORM, formValue, hasTrustedOrigin, readForm } from "./forms";
 import { safeReturnTo } from "./paths";
 
-const FORM_CONTENT_TYPE = "application/x-www-form-urlencoded";
-const MAX_FORM_BYTES = 16_384;
 const MAX_NAME_LENGTH = 100;
 const MAX_EMAIL_LENGTH = 320;
 const MAX_PASSWORD_LENGTH = 1_024;
@@ -26,26 +25,6 @@ type AuthPageState = {
   status?: 400 | 401 | 403 | 502;
 };
 
-const EMPTY_FORM = { get: () => null };
-
-function formValue(form: { get(name: string): unknown }, name: string) {
-  const value = form.get(name);
-  return typeof value === "string" ? value : "";
-}
-
-async function readForm(c: Context<IdentityEnv>) {
-  const contentType = c.req.header("content-type")?.split(";", 1)[0]?.trim();
-  const contentLength = Number(c.req.header("content-length") ?? "0");
-  if (
-    contentType !== FORM_CONTENT_TYPE ||
-    (Number.isFinite(contentLength) && contentLength > MAX_FORM_BYTES)
-  ) {
-    return null;
-  }
-  const [error, form] = await attempt(() => c.req.raw.formData());
-  return error ? null : form;
-}
-
 function validEmail(email: string) {
   return email.length > 0 && email.length <= MAX_EMAIL_LENGTH;
 }
@@ -58,10 +37,6 @@ function errorStatus(status: number) {
   if (status === 401) return 401;
   if (status === 403) return 403;
   return 400;
-}
-
-function hasTrustedOrigin(c: Context<IdentityEnv>, options: AuthFormOptions) {
-  return c.req.header("origin") === options.origin;
 }
 
 async function submitToBetterAuth(

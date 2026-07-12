@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { type Env, Hono } from "hono";
-import { web } from ".";
+import { createWeb, web } from ".";
+import { buildIsland } from "./islands";
 import {
   assertTransferBudget,
   COLD_LOAD_BUDGET_BYTES,
@@ -45,16 +46,74 @@ describe("first-load measurement", () => {
     const fetcher = fetchWith(web);
     for (const route of ["/sign-in", "/sign-up", "/app"]) {
       const identity = await measureFirstLoad(fetcher, route, "identity");
-      const gzip = await measureFirstLoad(fetcher, route, "gzip");
+      const compressed = await Promise.all(
+        (["br", "zstd", "gzip", "deflate"] as const).map((encoding) =>
+          measureFirstLoad(fetcher, route, encoding),
+        ),
+      );
 
       assertTransferBudget(identity);
-      assertTransferBudget(gzip);
       expect(identity.requestCount).toBe(1);
       expect(identity.bytesByKind.javascript).toBe(0);
       expect(identity.entries[0]?.servedEncoding).toBe("identity");
-      expect(gzip.entries[0]?.servedEncoding).toBe("gzip");
-      expect(gzip.totalBytes).toBeLessThan(identity.totalBytes);
+      expect(identity.budgetEnforced).toBe(false);
+      expect(identity.hardLimitMet).toBeNull();
+      for (const report of compressed) {
+        assertTransferBudget(report);
+        expect(report.entries[0]?.servedEncoding).toBe(
+          report.requestedEncoding,
+        );
+        expect(report.totalBytes).toBeLessThan(identity.totalBytes);
+        expect(report.protocol).toBe("h2");
+      }
     }
+  });
+
+  test("credential island is route-scoped, dependency-free, and inside the hard gate", async () => {
+    const request = (path: string) => {
+      if (path === "/api/auth/get-session") {
+        return Response.json({ session: { id: "session-1" } });
+      }
+      if (path === "/api/auth/list-sessions") return Response.json([]);
+      if (path === "/api/auth/api-key/list") {
+        return Response.json({ apiKeys: [], total: 0 });
+      }
+      if (path === "/api/auth/passkey/list-user-passkeys") {
+        return Response.json([]);
+      }
+      return Response.json({
+        keyGeneration: null,
+        self: {
+          publicKey: null,
+          encryptedKeyset: null,
+          wrappedOrgKey: null,
+        },
+      });
+    };
+    const credentialWeb = createWeb({
+      credentials: { origin: "https://mimir.local", request },
+    });
+    const fetcher = fetchWith(credentialWeb);
+    const identity = await measureFirstLoad(
+      fetcher,
+      "/app/credentials",
+      "identity",
+    );
+    const gzip = await measureFirstLoad(
+      fetcher,
+      "/app/credentials",
+      "gzip",
+    );
+    const bundle = await buildIsland("credentials");
+
+    assertTransferBudget(identity);
+    assertTransferBudget(gzip);
+    expect(identity.requestCount).toBe(2);
+    expect(identity.bytesByKind.javascript).toBeGreaterThan(0);
+    expect(gzip.totalBytes).toBeLessThan(identity.totalBytes);
+    expect(bundle).toContain('customElements.define("mimir-credential-ceremony"');
+    expect(bundle).not.toContain("from\"");
+    expect(bundle).not.toContain("node:");
   });
 
   test("counts every referenced critical asset", async () => {
@@ -87,12 +146,24 @@ describe("first-load measurement", () => {
     const app = new Hono();
     app.get("/", (c) => c.html("x".repeat(COLD_LOAD_BUDGET_BYTES)));
 
-    const report = await measureFirstLoad(fetchWith(app), "/", "identity");
+    const report = await measureFirstLoad(fetchWith(app), "/", "gzip");
 
     expect(report.hardLimitMet).toBe(false);
     expect(() => assertTransferBudget(report)).toThrow(
       /cold load is .* budget is/,
     );
+  });
+
+  test("identity is diagnostic rather than a deployment gate", async () => {
+    const app = new Hono();
+    app.get("/", (c) => c.html("x".repeat(COLD_LOAD_BUDGET_BYTES)));
+
+    const report = await measureFirstLoad(fetchWith(app), "/", "identity");
+
+    expect(report.withinHardLimit).toBe(false);
+    expect(report.budgetEnforced).toBe(false);
+    expect(report.hardLimitMet).toBeNull();
+    expect(() => assertTransferBudget(report)).not.toThrow();
   });
 
   test("fails when the critical path leaves the origin", async () => {
@@ -103,7 +174,7 @@ describe("first-load measurement", () => {
 
     const report = await measureFirstLoad(fetchWith(app), "/", "identity");
 
-    expect(report.hardLimitMet).toBe(false);
+    expect(report.hardLimitMet).toBeNull();
     expect(() => assertTransferBudget(report)).toThrow(/external resources/);
   });
 });

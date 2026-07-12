@@ -15,7 +15,7 @@ import {
   createRootRedirect,
   createWebAccessGate,
 } from "./middleware/web-access";
-import { keys } from "./routes/keys";
+import { type createKeysRoutes, keys } from "./routes/keys";
 import { mcp } from "./routes/mcp";
 import { projects } from "./routes/projects";
 import { sync } from "./routes/sync";
@@ -31,6 +31,7 @@ interface AppOptions {
   claimGuard?: ReturnType<typeof createClaimGuard>;
   sessionLookup?: SessionLookup;
   orgLister?: OrgLister;
+  keyRoutes?: ReturnType<typeof createKeysRoutes>;
 }
 
 export function createApp(options: AppOptions = {}) {
@@ -88,18 +89,26 @@ export function createApp(options: AppOptions = {}) {
 
   app.route("/v1/system-prompt", systemPrompt);
   app.route("/v1/projects", projects);
-  app.route("/v1/keys", keys);
+  app.route("/v1/keys", options.keyRoutes ?? keys);
   app.route("/v1/sync", sync);
   app.route("/mcp", mcp);
   app.route(
     "/",
     createWeb({
-      authForms: authEnabled
+      ...(authEnabled
         ? {
-            origin: new URL(config.auth.baseUrl).origin,
-            request: (path, init) => app.request(path, init),
+            authForms: {
+              origin: new URL(config.auth.baseUrl).origin,
+              request: (path: string, init: RequestInit) =>
+                app.request(path, init),
+            },
+            credentials: {
+              origin: new URL(config.auth.baseUrl).origin,
+              request: (path: string, init: RequestInit) =>
+                app.request(path, init),
+            },
           }
-        : undefined,
+        : {}),
     }),
   );
 
