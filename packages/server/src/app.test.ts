@@ -10,7 +10,7 @@ test("renders the web surface without booting the server or auth stores", async 
   expect(html).toStartWith("<!DOCTYPE html>");
   expect(html).toContain('<html lang="en">');
   expect(html).toContain('<meta charset="utf-8"/>');
-  expect(html).toContain("<title>Mimir</title>");
-  expect(html).toContain("<main><h1>Mimir</h1></main>");
+  expect(html).toContain("<title>Mimir — Private agent memory</title>");
+  expect(html).toContain('<main id="main" class="content">');
   expect(html).not.toContain("<script");
 });

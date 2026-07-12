@@ -7,11 +7,14 @@ import {
 } from "../src/web/transfer-budget";
 
 const fetcher = (path: string, init?: RequestInit) => web.request(path, init);
-const identity = await measureFirstLoad(fetcher, "/", "identity");
-const gzip = await measureFirstLoad(fetcher, "/", "gzip");
+const reports = [
+  await measureFirstLoad(fetcher, "/", "identity"),
+  await measureFirstLoad(fetcher, "/", "gzip"),
+  await measureFirstLoad(fetcher, "/app", "identity"),
+  await measureFirstLoad(fetcher, "/app", "gzip"),
+];
 
-assertTransferBudget(identity);
-assertTransferBudget(gzip);
+for (const report of reports) assertTransferBudget(report);
 
 process.stdout.write(
   `${JSON.stringify(
@@ -20,7 +23,7 @@ process.stdout.write(
         singleDatagramTargetBytes: SINGLE_DATAGRAM_TARGET_BYTES,
         coldLoadHardLimitBytes: COLD_LOAD_BUDGET_BYTES,
       },
-      reports: [identity, gzip],
+      reports,
     },
     null,
     2,

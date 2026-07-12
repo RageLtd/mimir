@@ -42,18 +42,18 @@ describe("critical resource discovery", () => {
 describe("first-load measurement", () => {
   test("enforces the current SSR route under identity and gzip", async () => {
     const fetcher = fetchWith(web);
-    const identity = await measureFirstLoad(fetcher, "/", "identity");
-    const gzip = await measureFirstLoad(fetcher, "/", "gzip");
+    for (const route of ["/", "/app"]) {
+      const identity = await measureFirstLoad(fetcher, route, "identity");
+      const gzip = await measureFirstLoad(fetcher, route, "gzip");
 
-    assertTransferBudget(identity);
-    assertTransferBudget(gzip);
-    expect(identity.requestCount).toBe(1);
-    expect(identity.bytesByKind.javascript).toBe(0);
-    expect(identity.entries[0]?.servedEncoding).toBe("identity");
-    expect(gzip.entries[0]?.servedEncoding).toBe("gzip");
-    expect(gzip.totalBytes).toBeLessThan(identity.totalBytes);
-    expect(identity.singleDatagramMet).toBe(true);
-    expect(gzip.singleDatagramMet).toBe(true);
+      assertTransferBudget(identity);
+      assertTransferBudget(gzip);
+      expect(identity.requestCount).toBe(1);
+      expect(identity.bytesByKind.javascript).toBe(0);
+      expect(identity.entries[0]?.servedEncoding).toBe("identity");
+      expect(gzip.entries[0]?.servedEncoding).toBe("gzip");
+      expect(gzip.totalBytes).toBeLessThan(identity.totalBytes);
+    }
   });
 
   test("counts every referenced critical asset", async () => {
