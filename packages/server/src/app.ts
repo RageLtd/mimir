@@ -13,6 +13,11 @@ import {
 } from "./middleware/identity";
 import { createOperatorGate, isOperatorPath } from "./middleware/operator";
 import {
+  type ActiveMemberLookup,
+  createOrganizationAdminGate,
+  createOrganizationRoleEnrichment,
+} from "./middleware/organization-admin";
+import {
   createRootRedirect,
   createWebAccessGate,
 } from "./middleware/web-access";
@@ -31,6 +36,7 @@ interface AppOptions {
   claimGuard?: ReturnType<typeof createClaimGuard>;
   sessionLookup?: SessionLookup;
   orgLister?: OrgLister;
+  activeMemberLookup?: ActiveMemberLookup;
   keyRoutes?: ReturnType<typeof createKeysRoutes>;
   operatorToken?: string;
 }
@@ -58,6 +64,16 @@ export function createApp(options: AppOptions = {}) {
       "/app/*",
       createWebAccessGate(options.sessionLookup, options.orgLister),
     );
+    app.use(
+      "/app/*",
+      createOrganizationRoleEnrichment(options.activeMemberLookup),
+    );
+    const organizationAdminGate = createOrganizationAdminGate(
+      options.sessionLookup,
+      options.activeMemberLookup,
+    );
+    app.use("/admin", organizationAdminGate);
+    app.use("/admin/*", organizationAdminGate);
     app.use(
       "*",
       createIdentityGate(
@@ -96,6 +112,7 @@ export function createApp(options: AppOptions = {}) {
   app.route(
     "/",
     createWeb({
+      organizationAdmin: authEnabled,
       ...(authEnabled
         ? {
             authForms: {

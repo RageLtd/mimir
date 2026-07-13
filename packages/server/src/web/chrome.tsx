@@ -76,7 +76,13 @@ export function PageFrame(props: PageFrameProps) {
   );
 }
 
-export function DashboardNavigation({ current }: { current: string }) {
+export function DashboardNavigation({
+  current,
+  organizationAdmin = false,
+}: {
+  current: string;
+  organizationAdmin?: boolean;
+}) {
   return (
     <nav aria-label="Dashboard">
       <a href="/app" aria-current={current === "overview" ? "page" : undefined}>
@@ -94,6 +100,14 @@ export function DashboardNavigation({ current }: { current: string }) {
       >
         Credentials
       </a>
+      {organizationAdmin ? (
+        <a
+          href="/admin"
+          aria-current={current === "admin" ? "page" : undefined}
+        >
+          Organization
+        </a>
+      ) : null}
     </nav>
   );
 }

@@ -9,6 +9,9 @@ import {
 } from "../src/web/transfer-budget";
 
 const fetcher = (path: string, init?: RequestInit) => web.request(path, init);
+const adminWeb = createWeb({ organizationAdmin: true });
+const adminFetcher = (path: string, init?: RequestInit) =>
+  adminWeb.request(path, init);
 const credentialWeb = createWeb({
   credentials: {
     origin: "https://mimir.local",
@@ -44,6 +47,7 @@ for (const route of ["/sign-in", "/sign-up", "/app"]) {
   }
 }
 for (const encoding of encodings) {
+  reports.push(await measureFirstLoad(adminFetcher, "/admin", encoding));
   reports.push(
     await measureFirstLoad(credentialFetcher, "/app/credentials", encoding),
   );

@@ -33,6 +33,7 @@ async function formApp() {
     }),
     sessionLookup: (headers) => auth.api.getSession({ headers }),
     orgLister: (headers) => auth.api.listOrganizations({ headers }),
+    activeMemberLookup: (headers) => auth.api.getActiveMember({ headers }),
   });
   return { app, auth, db };
 }
@@ -79,6 +80,15 @@ describe("Better Auth HTML forms", () => {
     expect(
       (await app.request("/app", { headers: { cookie: signupCookie } })).status,
     ).toBe(200);
+    expect(
+      (await app.request("/admin", { headers: { cookie: signupCookie } }))
+        .status,
+    ).toBe(200);
+    db.run("UPDATE member SET role = 'member'");
+    expect(
+      (await app.request("/admin", { headers: { cookie: signupCookie } }))
+        .status,
+    ).toBe(403);
 
     const signin = await postForm(app, "/sign-in", {
       email: "owner@example.test",

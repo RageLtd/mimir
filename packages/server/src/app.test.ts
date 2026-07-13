@@ -7,6 +7,13 @@ const allowSession = () =>
     user: { id: "user-1" },
     session: { activeOrganizationId: "org-1" },
   });
+const browserSession = { cookie: "better-auth.session_token=session-1" };
+const memberWithRole = (role: string | string[]) => () =>
+  Promise.resolve({
+    userId: "user-1",
+    organizationId: "org-1",
+    role,
+  });
 
 describe("web route boundary", () => {
   test("auth-off root enters the local dashboard without touching auth stores", async () => {
@@ -98,6 +105,151 @@ describe("web route boundary", () => {
     expect(forbiddenPage.status).toBe(403);
     expect(await forbiddenPage.text()).toBe("Forbidden");
     expect(forbiddenPage.headers.get("location")).toBeNull();
+  });
+});
+
+describe("organization admin boundary", () => {
+  test("owner and admin browser sessions receive the scoped zero-runtime shell", async () => {
+    for (const role of ["owner", "admin"]) {
+      const response = await createApp({
+        authEnabled: true,
+        sessionLookup: allowSession,
+        activeMemberLookup: memberWithRole(role),
+      }).request("/admin", { headers: browserSession });
+      const html = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(html).toContain("Organization administration — Mimir");
+      expect(html).toContain('data-user-id="user-1"');
+      expect(html).toContain('data-organization-id="org-1"');
+      expect(html).toContain(`data-organization-role="${role}"`);
+      expect(html).not.toContain("<script");
+      expect(html).not.toContain("Server settings");
+    }
+  });
+
+  test("ordinary members and mismatched membership records fail closed", async () => {
+    const member = await createApp({
+      authEnabled: true,
+      sessionLookup: allowSession,
+      activeMemberLookup: memberWithRole("member"),
+    }).request("/admin", { headers: browserSession });
+    const wrongOrganization = await createApp({
+      authEnabled: true,
+      sessionLookup: allowSession,
+      activeMemberLookup: () =>
+        Promise.resolve({
+          userId: "user-1",
+          organizationId: "other-org",
+          role: "owner",
+        }),
+    }).request("/admin", { headers: browserSession });
+
+    expect(member.status).toBe(403);
+    expect(await member.text()).toBe("Forbidden");
+    expect(wrongOrganization.status).toBe(403);
+    expect(await wrongOrganization.text()).toBe("Forbidden");
+  });
+
+  test("signed-out browsers redirect while API keys and auth-off deployments cannot enter", async () => {
+    let memberLookups = 0;
+    const activeMemberLookup = () => {
+      memberLookups += 1;
+      return memberWithRole("owner")();
+    };
+    const signedOut = await createApp({
+      authEnabled: true,
+      sessionLookup: denySession,
+      activeMemberLookup,
+    }).request("/admin?from=direct");
+    const apiKey = await createApp({
+      authEnabled: true,
+      sessionLookup: allowSession,
+      activeMemberLookup,
+    }).request("/admin", {
+      headers: { authorization: "Bearer tenant-api-key" },
+    });
+    const authOff = await createApp({ authEnabled: false }).request("/admin");
+
+    expect(signedOut.status).toBe(302);
+    expect(signedOut.headers.get("location")).toBe(
+      "/sign-in?returnTo=%2Fadmin%3Ffrom%3Ddirect",
+    );
+    expect(apiKey.status).toBe(403);
+    expect(await apiKey.text()).toBe("Forbidden");
+    expect(authOff.status).toBe(404);
+    expect(memberLookups).toBe(0);
+  });
+
+  test("active organization and role are resolved again for every request", async () => {
+    const sessionLookup = (headers: Headers) => {
+      const orgId = headers.get("cookie")?.includes("org-2")
+        ? "org-2"
+        : "org-1";
+      return Promise.resolve({
+        user: { id: "user-1" },
+        session: { activeOrganizationId: orgId },
+      });
+    };
+    const activeMemberLookup = (headers: Headers) => {
+      const second = headers.get("cookie")?.includes("org-2");
+      return Promise.resolve({
+        userId: "user-1",
+        organizationId: second ? "org-2" : "org-1",
+        role: second ? "member" : "owner",
+      });
+    };
+    const app = createApp({
+      authEnabled: true,
+      sessionLookup,
+      activeMemberLookup,
+    });
+
+    expect(
+      (
+        await app.request("/admin", {
+          headers: { cookie: "active=org-1" },
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await app.request("/admin", {
+          headers: { cookie: "active=org-2" },
+        })
+      ).status,
+    ).toBe(403);
+  });
+
+  test("route near-misses stay conservative and representative APIs are unchanged", async () => {
+    const app = createApp({
+      authEnabled: true,
+      sessionLookup: denySession,
+      activeMemberLookup: memberWithRole("owner"),
+    });
+
+    expect((await app.request("/admin/")).status).toBe(302);
+    expect((await app.request("/admin/settings")).status).toBe(302);
+    expect((await app.request("/ADMIN")).status).toBe(401);
+    expect((await app.request("/administer")).status).toBe(401);
+    expect((await app.request("/v1/system-prompt")).status).toBe(401);
+  });
+
+  test("organization navigation appears only after eligible role enrichment", async () => {
+    const owner = await createApp({
+      authEnabled: true,
+      sessionLookup: allowSession,
+      activeMemberLookup: memberWithRole("owner"),
+    }).request("/app", { headers: browserSession });
+    const member = await createApp({
+      authEnabled: true,
+      sessionLookup: allowSession,
+      activeMemberLookup: memberWithRole("member"),
+    }).request("/app", { headers: browserSession });
+
+    expect(await owner.text()).toContain('href="/admin"');
+    expect(await member.text()).not.toContain('href="/admin"');
   });
 });
 

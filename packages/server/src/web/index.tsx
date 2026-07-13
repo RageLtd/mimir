@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import type { IdentityEnv } from "../middleware/identity";
+import { canManageOrganization } from "../middleware/organization-admin";
+import { renderOrganizationAdmin } from "./admin";
 import {
   type AuthFormOptions,
   createSignInAction,
@@ -25,6 +27,7 @@ import { renderMemories } from "./memories";
 interface WebOptions {
   authForms?: AuthFormOptions;
   credentials?: CredentialOptions;
+  organizationAdmin?: boolean;
 }
 
 export function createWeb(options: WebOptions = {}) {
@@ -68,13 +71,21 @@ export function createWeb(options: WebOptions = {}) {
   }
 
   web.get("/app/memories", (c) => renderMemories(c));
+  if (options.organizationAdmin) {
+    web.get("/admin", (c) => renderOrganizationAdmin(c));
+  }
 
   web.get("/app", (c) => {
     const identity = c.get("identity");
     return c.render(
       <PageFrame
         actions={<a href="/">Home</a>}
-        navigation={<DashboardNavigation current="overview" />}
+        navigation={
+          <DashboardNavigation
+            current="overview"
+            organizationAdmin={canManageOrganization(identity)}
+          />
+        }
       >
         <section
           aria-labelledby="dashboard-title"

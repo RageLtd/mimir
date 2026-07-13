@@ -33,6 +33,7 @@ import { attempt } from "../util/result";
 export interface ResolvedIdentity {
   readonly userId: string;
   readonly orgId: string;
+  readonly organizationRoles?: readonly string[];
 }
 
 const BEARER_PREFIX = "Bearer ";

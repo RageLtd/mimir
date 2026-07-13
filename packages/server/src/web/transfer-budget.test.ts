@@ -43,8 +43,8 @@ describe("critical resource discovery", () => {
 
 describe("first-load measurement", () => {
   test("enforces the current SSR route under identity and gzip", async () => {
-    const fetcher = fetchWith(web);
-    for (const route of ["/sign-in", "/sign-up", "/app"]) {
+    const fetcher = fetchWith(createWeb({ organizationAdmin: true }));
+    for (const route of ["/sign-in", "/sign-up", "/app", "/admin"]) {
       const identity = await measureFirstLoad(fetcher, route, "identity");
       const compressed = await Promise.all(
         (["br", "zstd", "gzip", "deflate"] as const).map((encoding) =>
