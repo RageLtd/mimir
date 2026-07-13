@@ -47,6 +47,7 @@ for (const encoding of encodings) {
   reports.push(
     await measureFirstLoad(credentialFetcher, "/app/credentials", encoding),
   );
+  reports.push(await measureFirstLoad(fetcher, "/app/memories", encoding));
 }
 
 for (const report of reports) assertTransferBudget(report);

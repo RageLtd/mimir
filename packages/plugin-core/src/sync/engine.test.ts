@@ -124,7 +124,7 @@ function fakeWorld() {
         for (const envelope of incoming) {
           const key = `${orgId}:${envelope.id}`;
           const stored = envelopes.get(key);
-          if (stored && stored.version > Number(envelope.version)) {
+          if (stored && stored.version >= Number(envelope.version)) {
             stale.push(String(envelope.id));
             continue;
           }
@@ -185,6 +185,7 @@ const deviceFor = (world: ReturnType<typeof fakeWorld>, userId: string) => ({
   fetcher: world.fetcherFor(userId),
   store: memoryStore(),
   replica: freshReplica(),
+  projectAliases: {},
 });
 
 /** Register + unlock the org key for a device (founding or invited). */
@@ -283,7 +284,8 @@ describe("encrypted two-client convergence", () => {
     deviceA.replica.updateMemory(id, "A's take");
     deviceB.replica.updateMemory(id, "B's take");
     await syncOrg(deviceA); // A lands version 2 first
-    await syncOrg(deviceB); // B's equal version lands later → LWW winner
+    await syncOrg(deviceB); // equal version rejected; B rebases to version 3
+    await syncOrg(deviceB); // rebased edit lands strictly above A
     await syncOrg(deviceA); // A pulls the winner
 
     expect(deviceA.replica.getMemory(id)?.content).toBe("B's take");

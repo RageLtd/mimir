@@ -1,252 +1,309 @@
-# Mimir Threat Model & Ciphertext Envelope Specification
+# Mimir Threat Model and Ciphertext Specification
 
-**Version:** 1 (envelope format frozen)
-**Status:** MIM-83 deliverable, under the MIM-82 operator-blind epic
-**Beta gate:** users connect to the cloud server when MIM-82 completes
+**Document version:** 2
+**Envelope write version:** 2
+**Scope:** cloud server, editor clients, browser dashboard, local replicas, key distribution, and ciphertext sync
+**Status:** repository-grounded security contract
 
----
+## Executive summary
 
-## 1. The Guarantee
+Mimir's cloud design keeps tenant content and project metadata outside the
+operator's trust boundary. Conversations, source code, Cartographer indexes,
+embeddings, inference, and project discovery remain local. Memories and
+playbooks leave a device only as AES-256-GCM envelopes encrypted with an org
+key that the server never receives unwrapped.
 
-**The operator of a Mimir cloud server can never read tenant content. No asterisks.**
+Envelope v2 authenticates the record id, org, kind, key generation, record
+version, and tombstone bit. A server cannot turn a live record into a delete,
+rewrite its version, or transplant its ciphertext without client-side
+authentication failure. Accepted server updates are strictly monotonic by
+version; equal versions cannot replace authenticated history.
 
-"Content" means: extracted memories, playbooks, conversation transcripts, source
-code, code-derived indexes, embeddings of any of these, and inference traffic
-(prompts and completions). The guarantee is achieved by architecture, not
-policy: content either never leaves the developer's machine, or leaves it only
-as ciphertext the server holds no key for.
+Cryptography cannot prove availability. A malicious server can withhold
+records, and a completely fresh or recovered device cannot distinguish the
+newest valid snapshot from an older valid snapshot unless it has an
+independent checkpoint. An established device rejects lower versions because
+its local replica is that checkpoint. Recovery restores decryption keys, not
+lost synchronization history.
 
-This is 1Password's model taken seriously: the server is blind because nothing
-intelligent happens there. All memory intelligence — retrieval, embedding,
-extraction, compaction, hygiene — runs client-side over locally decrypted data.
-The server's entire tenant surface is four jobs: **auth, wrapped-key
-distribution, ciphertext sync, and blind coordination** (sync cursors,
-tombstones, content-free leases).
+The remaining deployment caveat is explicit: old server databases may still
+contain plaintext rows in the retired `project` table. Current clients derive
+project identity locally and the server no longer mounts `/v1/projects`, but
+the operator-blind claim is not fully true for an upgraded deployment until
+those legacy rows are purged.
 
-## 2. Adversary Model
+## Scope and assumptions
 
-### In scope (the guarantee holds against)
+This model assumes the hosted service is reachable from the public internet,
+organizations are mutually untrusted tenants, TLS terminates at infrastructure
+controlled by the operator, and authenticated org members are allowed to read
+their org's shared memory. Auth-disabled plaintext sync is restricted to a
+private, single-operator self-hosted deployment.
 
-| Adversary | Why the guarantee holds |
-|---|---|
-| Honest-but-curious operator | Server stores only ciphertext envelopes and content-free metadata; no decryption keys exist server-side. |
-| Fully compromised server infrastructure | Same as above — an attacker with root on the server obtains what the operator has: ciphertext, key-wrapping ciphertext, and metadata. |
-| Legal compulsion (subpoena) of the operator | The operator can only produce what it holds. Content is not among it. |
-| Cross-tenant access | Org data keys are per-org; a member of org A holds no key material for org B. (Defense in depth: DB-level row scoping from MIM-69 remains.) |
+The operator and a server attacker are treated as able to read and modify the
+server database, process memory, logs, responses, and stored ciphertext. They
+do not control an uncompromised client, its OS credential store, or the
+independent model provider chosen by the user. A malicious client release is a
+separate supply-chain threat; release verification is not yet strong enough
+to remove it from the critical-risk list.
 
-### Out of scope (explicitly not defended)
+The model covers confidentiality, tenant isolation, integrity of accepted
+encrypted record state, key distribution, and the operator diagnostics
+boundary. It does not promise service availability, traffic-analysis
+resistance, protection from a compromised developer device, or secrecy from a
+current org member who legitimately holds the org key.
 
-| Threat | Posture |
-|---|---|
-| Compromised developer device | The local replica is plaintext (§4). A compromised device also holds the source code, provider API keys, and an authenticated session — memory is not the crown jewel on that machine. Device security is the developer's/OS's job. |
-| Malicious org member | Any member holds the org data key by design — sharing is the feature. Removal = key rotation (§5). |
-| Malicious client update | Universal E2E caveat: the operator ships the client. Mitigations: the clients are open source; releases are signed. A user who cannot trust the client binary cannot be helped by any E2E design. |
-| Inference/embedding provider visibility | Users send prompts to their chosen model provider on their own keys (BYOK). Trusting the provider is inherent to using it. Embeddings are computed locally (§6) and are not exposed to any third party. |
-| Traffic metadata | See §7 — accepted residual. |
+## System model
 
-## 3. Data Classification
+```mermaid
+flowchart LR
+  subgraph device[Developer device]
+    editor[Editor client]
+    brain[Local memory brain]
+    replica[(Plaintext local replica)]
+    keys[OS credential store and org keyring]
+    project[Local deterministic project identity]
+    editor --> brain
+    brain <--> replica
+    keys --> brain
+    project --> brain
+  end
 
-| Class | Examples | Where it lives | Server sees |
-|---|---|---|---|
-| **Synced content** | Extracted memories, playbooks | Plaintext in the local replica; AEAD envelopes on the server | Ciphertext + envelope metadata only |
-| **Never leaves the machine** | Conversation transcripts, message logs, source code, Cartographer indexes, embedding vectors | Local only | Nothing |
-| **Content-free coordination** | Sync cursors, tombstones, version counters, hygiene leases | Server | Everything (it is content-free by construction) |
-| **Identity** | Better Auth users, org membership, wrapped keys | Server | Identities and membership graph (accepted residual, §7); key material only in wrapped (ciphertext) form |
+  subgraph server[Mimir server trust boundary]
+    auth[Better Auth]
+    keyrelay[Wrapped-key relay]
+    sync[Ciphertext sync and leases]
+    operator[Operator-only MCP logs]
+    db[(Auth rows, wrapped keys, ciphertext envelopes)]
+    auth --> db
+    keyrelay --> db
+    sync --> db
+    operator --> db
+  end
 
-Two classifications deserve their reasoning stated:
+  provider[User-selected model provider]
 
-**Conversations are not synced content — they are deleted from the server
-model, not encrypted.** A conversation is a personal, per-machine artifact. The
-org-shared artifact is the *extracted memory*, never the transcript it came
-from. Compaction runs locally over a local log.
-
-**Cartographer indexes never sync.** The index is a derived cache of files
-already on the developer's disk; a new machine rebuilds it. The most sensitive
-data category (code) exits the server with zero cryptography.
-
-## 4. The Plaintext-Local Replica
-
-The local replica (SQLite, per org) stores memories and playbooks **in
-plaintext** with ordinary FTS and vector indexes. This is a deliberate,
-coherent choice, not a compromise:
-
-- The developer's source code — strictly more sensitive than anything extracted
-  from it — sits unencrypted on the same disk.
-- It confines all cryptography to **exactly one seam**: the sync module
-  encrypts on push and decrypts on pull. Brain code (retrieval, FTS,
-  extraction, hygiene) never touches a cipher. No searchable encryption, no
-  encrypted-index schemes, no key material threaded through query paths.
-- The seam is small, auditable, and testable; it is also where the self-hosted
-  plaintext toggle lives (§9).
-
-## 5. Key Hierarchy
-
-All asymmetric material is X25519 (natively supported by Bun's `node:crypto`
-— verified: keygen + `diffieHellman` on Bun 1.3.14). All symmetric material
-is 256-bit. Schema columns already exist (Better Auth `additionalFields`,
-`packages/server/src/auth/instance.ts`).
-
-```
-device secret (per user, held per device in the OS credential store)
-  └─ HKDF → keyset-encryption key → decrypts the ENCRYPTED KEYSET
-       user.encryptedKeyset ─────────────── stored on user record (server, ciphertext)
-       keyset = user X25519 private key; public half on user record (server, public)
-  └─ private key unwraps → org KEYRING (all live key generations)
-       wrapped per member to their public key ── member.wrappedOrgKey (server, ciphertext)
-  └─ current-generation org key encrypts → envelope payloads (§6)
-
-org recovery keyset (opt-in; default ON multi-member, OFF solo)
-  organization.recoveryPublicKey (server, public)
-  organization.wrappedRecoveryKey (server, ciphertext — keyring wrapped to recovery key)
+  editor -->|BYOK inference| provider
+  keys <-->|public keys and wrapped keyrings| keyrelay
+  brain <-->|AEAD envelopes only| sync
+  editor -->|system prompt only| server
 ```
 
-**The encrypted keyset is stored server-side** — the direct analog of
-1Password's encrypted keyset. The server holds it but cannot open it (the
-device secret never leaves the client), and a new device needs only the
-password-manager copy of the device secret: pull the encrypted keyset,
-decrypt locally, done. **Wraps carry the whole keyring** — every live key
-generation — so one unwrap reads a mixed-generation store during rotation
-rollover; the re-encrypt push (sync ticket) prunes retired generations.
+The principal data flows are:
 
-**Device secret storage:** `Bun.secrets` — the OS credential store (macOS
-Keychain Services, Linux libsecret, Windows Credential Manager). Encrypted at
-rest under the user's login credentials: a stolen disk or copied home
-directory yields nothing. This closes the gap to 1Password's two-secret key
-derivation to a documented divergence (§8). The API is experimental, so it is
-wrapped in a thin device-secret provider module, which also hosts the
-**fallback: a passphrase-encrypted keyfile** for keychain-less environments
-(headless Linux without a secret-service daemon). On generation, the client
-actively prompts the user to persist a copy to their password manager.
+1. The client derives project identity from a normalized git remote, falling
+   back to an absolute local path when no remote exists. Project metadata is
+   never sent to the server.
+2. Local extraction writes plaintext memories to the local SQLite replica.
+3. Sync seals dirty rows with the current org key and sends only wire
+   envelopes. Pull decrypts and validates them before applying them locally.
+4. Key ceremonies generate user X25519 material locally. The server stores
+   public keys, encrypted user keysets, and org keyrings wrapped per member.
+5. Inference and embeddings run locally or go directly to a provider under
+   user-supplied credentials.
+6. `/mcp` exposes process logs only after a separate operator bearer token.
+   Better Auth tenant sessions and API keys never authorize it.
 
-**Wrapping construction:** X25519 ECDH → HKDF-SHA-256 → AEAD (suite of §6).
-Ephemeral sender keys for invite wrapping (sealed-box shape). All wrapping and
-unwrapping happens client-side; the server stores and relays ciphertext only.
+## Assets and data classification
 
-**Invites:** the invitee's client generates a keypair and posts the public
-half; an existing member's client wraps the org data key to it. Accepted
-latency: the new member cannot decrypt until an existing member's client comes
-online. 1Password has the same property.
-
-**Revocation = rotation:** removing a member rotates the org data key to a new
-**key generation**; a client re-encrypts the org store under the new
-generation and pushes (thousands of blobs — seconds of client work). Envelopes
-carry their generation (§6), so mixed-generation stores read cleanly during
-rollover. Rotation is routine, not an emergency procedure.
-
-**Recovery:** the recovery keyset is an additional wrap target under the same
-construction. Opt-in; solo orgs default to none — a solo developer who loses
-the device secret and the password-manager copy loses the synced store (the
-local replica survives and can re-seed after re-keying).
-
-## 6. Ciphertext Envelope — Format v1 (frozen)
-
-The envelope is the only shape the server ever stores for tenant content. The
-server may index **envelope fields**; it never indexes, parses, or logs the
-payload.
-
-| Field | Type | Server may index | Notes |
-|---|---|---|---|
-| `id` | string (record id) | yes | Client-generated, stable across edits |
-| `org_id` | string | yes | Tenant scope; matches row-level PERMISSIONS |
-| `kind` | uint8 | yes | 0x01 memory, 0x02 playbook (closed set; extend by spec revision) |
-| `envelope_v` | uint8 | yes | Format version; this document defines `1` |
-| `suite` | uint8 | yes | Cipher suite. `0x01` = AES-256-GCM. `0x02` reserved (XChaCha20-Poly1305), `0x03` reserved (AEGIS-256) |
-| `key_gen` | uint32 | yes | Org key generation that encrypted this payload |
-| `version` | uint64 | yes | LWW conflict counter (client Lamport-ish; ties broken by `updated_at`, then `id`) |
-| `tombstone` | bool | yes | Deletion marker; payload empty when set |
-| `updated_at` | timestamp | yes | Server-assigned on accept (client clocks untrusted) |
-| `nonce` | bytes(12) | opaque | Fresh `randomBytes(12)` per encryption, never reused, never derived |
-| `payload` | bytes | **never** | AEAD ciphertext ‖ 16-byte tag |
-
-**Suite 0x01 — AES-256-GCM** via Bun-native `node:crypto` (BoringSSL,
-hardware-accelerated, zero dependencies). Chosen after probing the runtime:
-Bun 1.3.14 exposes no ChaCha20-Poly1305, GCM-SIV, or AEGIS through
-`node:crypto`, and a pure-TS or WASM cipher dependency is not justified when
-the native cipher is sufficient (see nonce analysis below). The `suite` byte
-plus routine rotation (§5) makes migrating to a stronger AEAD a
-re-encryption, not a format break.
-
-**AAD binding (mandatory):** the AEAD's additional authenticated data is the
-canonical encoding of `envelope_v ‖ suite ‖ kind ‖ id ‖ org_id ‖ key_gen`.
-Consequence: a server (or any middlebox) that transplants a ciphertext onto a
-different record, org, kind, or generation produces an authentication failure
-on the client. The server cannot undetectably reshuffle what it stores.
-
-**Nonce policy:** 96-bit random nonce per encryption, generated inside the
-sync seam, never cached, never counter-derived. Collision analysis at our
-scale: 10⁷ encryptions under one key generation gives collision probability
-≈ 2⁻⁵⁰; NIST's 2³² random-nonce bound is orders of magnitude above per-org
-volumes (thousands of records), and every rotation resets the count. The sync
-seam carries a regression test asserting nonce freshness per call — the
-implementation-bug risk, not the math, is the real exposure, and it is
-confined to one audited module.
-
-**LWW semantics:** highest `version` wins; deletes are tombstones and win like
-writes; hygiene merges express as delete + delete + create (no special merge
-records). Tombstones are GC'd server-side after every org member's cursor has
-passed them.
-
-## 7. Residual Exposure (accepted, stated plainly)
-
-The operator, and anyone who compromises or compels the operator, can observe:
-
-- account identities (emails) and the org membership graph
-- per-org record counts, envelope sizes, and `kind` distribution
-- write/sync timing and frequency patterns
-- client IP addresses
-- key-generation bumps (i.e., *that* a rotation/revocation happened, not why)
-
-This is metadata, not content. 1Password lives with the equivalent set and
-says so; so do we. **Blind to content, not to metadata.** No padding or
-size-bucketing scheme is attempted in v1 — envelope sizes are small and
-low-variance (memory-sized text), and the added complexity buys little against
-the realistic adversary.
-
-## 8. Divergences from 1Password (honest accounting)
-
-| 1Password | Mimir | Assessment |
+| Asset | Required property | Server visibility |
 |---|---|---|
-| Two-secret key derivation (memorized password × Secret Key) — a stolen device file alone opens nothing | Single device secret in the OS credential store, encrypted under OS login credentials | Same protection *class* delivered by the OS instead of a custom KDF ceremony. A stolen disk yields nothing in either model. Weaker only if the OS account itself is compromised — at which point the plaintext replica (§4) is exposed anyway, so the marginal loss is nil. |
-| SRP authentication (password never transits) | Better Auth sessions/API keys | Acceptable: Mimir's data confidentiality never depends on an auth secret. Auth compromise yields ciphertext. |
-| Closed-source clients, audited | Open-source clients, signed releases | Stronger on inspectability; the malicious-update caveat (§2) is shared by both. |
+| Memories and playbooks | Confidentiality and authenticated state | Ciphertext, size, kind, version, timing |
+| Conversation transcripts | Confidentiality | Never sent |
+| Source code and Cartographer indexes | Confidentiality | Never sent |
+| Embeddings | Confidentiality | Never sent |
+| Project remote, path, description, and stack | Confidentiality | Never sent by current clients; legacy rows require purge |
+| Org data keys and user private keys | Confidentiality | Wrapped or encrypted only |
+| Account and org membership | Tenant isolation | Plaintext operational metadata |
+| Record versions and sync cursors | Integrity and convergence | Plaintext coordination metadata |
+| Operator logs | Operator-only authorization | Process-wide plaintext diagnostics |
+| Client release artifacts | Authenticity | Published through the release channel |
 
-## 9. Self-Hosted Mode
+The local replica is plaintext by design. It sits on the same device as the
+source code and keeps cryptography at one auditable boundary: the sync seam.
+Brain, retrieval, FTS, embedding, and hygiene code do not operate on
+ciphertext.
 
-One codebase, one brain, one seam. The client brain runs identically against a
-cloud server or a self-hosted one. The **only** divergence is a toggle at the
-sync seam: encrypted envelopes (cloud, default) or plaintext envelopes
-(self-hosted opt-in, for people who own their server and want debuggability).
-Self-hosted single-user skips key ceremony entirely. Forking brain behavior
-per deployment mode is forbidden — it is how a project ends up maintaining two
-products.
+## Attacker capabilities
 
-## 10. Implementation Constraints
+An in-scope server attacker can enumerate tenants and record metadata, replay
+or omit stored envelopes, alter any unauthenticated database field, deny
+requests, inspect logs, and attempt cross-tenant API access. A malicious org
+member can decrypt org content while a member and can race legitimate writes.
+An internet attacker can exercise public routes and resource limits.
 
-- Crypto lives **only** in the sync seam module. Nothing else imports cipher
-  primitives. (Enforceable by lint/grep; violations are architecture bugs.)
-- Primitives are Bun-native `node:crypto` only (AES-256-GCM, X25519, HKDF,
-  `randomBytes`). No native-compiled dependencies; no WASM crypto in v1.
-- `Bun.secrets` is accessed only through the device-secret provider module
-  (experimental-API churn containment + fallback host). The keychain-less
-  fallback is a passphrase-encrypted file (`~/.mimir/device-secret.enc`,
-  scrypt → AES-256-GCM) with the passphrase supplied via
-  `MIMIR_KEY_PASSPHRASE`.
-- Secrets a human must hold (device secret at generation, recovery private
-  key at setup) are printed exactly once by the explicit `mimir keys`
-  ceremonies and never logged; silent boot reconciliation never mints them.
-- The seam ships with: nonce-freshness test, AAD-tamper test (transplanted
-  ciphertext must fail), key-generation rollover test, LWW convergence test.
-- macOS note for the install story: keychain ACLs bind to the `bun` binary;
-  a Bun upgrade re-prompts once.
+The attacker cannot derive an org key from the wrapped-key rows without a
+member private key, cannot forge an envelope-v2 field without invalidating its
+AEAD tag, and cannot authorize the operator MCP with a tenant credential.
 
-## 11. Migration & Format Evolution
+## Entry points and trust boundaries
 
-Alpha-era plaintext server data migrates via one final sanctioned read: a
-member's client pulls plaintext, encrypts under the org key, re-embeds locally
-(the local embedder replaces Cohere vectors regardless), pushes envelopes;
-the server then drops plaintext tenant tables (MIM-92). Migration cost scales
-with org count — **flip before orgs multiply.**
+| Entry point | Boundary | Primary controls |
+|---|---|---|
+| `/api/auth/*` | Internet to identity store | Better Auth, claim/invitation policy, session/API-key validation |
+| `/v1/keys/*` | Member to wrapped-key relay | Resolved user/org identity, client-side wrapping, rotation CAS |
+| `/v1/sync/push` | Member to ciphertext store | Org scope, strict envelope validation, monotonic versions, downgrade prevention |
+| `/v1/sync/pull` | Ciphertext store to client | Org scope, client AEAD verification, local version checkpoint |
+| `/v1/sync/lease` | Member to blind coordination | Org scope, bounded TTL |
+| `/v1/system-prompt` | Server to client boot | Authentication in cloud mode; content is operator-published |
+| `/mcp` | Operator to global diagnostics | Dedicated `MIMIR_OPERATOR_TOKEN`; disabled when unset |
+| Dashboard forms and Custom Elements | Browser to same-origin APIs | Session gate, origin checks, local WebAuthn PRF ceremony, text-only rendering |
+| Client release/update channel | Publisher to developer device | Private repository transport today; publisher verification remains incomplete |
 
-Format evolution: `envelope_v` governs structure; `suite` governs the AEAD;
-`key_gen` + routine rotation make either migration a background re-encrypt.
-No flag day is ever required.
+## Key hierarchy and recovery
+
+```text
+device secret (OS credential store, copied once to a password manager)
+  └─ HKDF-SHA-256 → decrypts the server-stored encrypted user keyset
+       └─ user X25519 private key
+            └─ unwraps the per-member org keyring
+                 └─ current org key seals envelope payloads
+
+recovery private key (held outside the server)
+  └─ unwraps organization.wrappedRecoveryKey
+       └─ restores the same org keyring
+```
+
+All private-key and wrapping operations happen client-side. Wraps contain all
+live key generations so rotated and current envelopes can coexist during
+rollover. Removing a member requires rotation; the removed member can retain
+content and old generations already received, but cannot decrypt subsequent
+generations.
+
+Recovery remains functional under envelope v2. It restores the keyring needed
+to decrypt records. It does not restore a wiped device's remembered
+high-water versions, so rollback detection after total local-state loss still
+needs an independent checkpoint.
+
+The fallback for a host without an OS secret service is a
+passphrase-encrypted device-secret file using scrypt and AES-256-GCM. Human-held
+secrets are minted only by explicit ceremonies and printed once; background
+reconciliation never creates a secret that cannot be shown safely.
+
+## Ciphertext envelope v2
+
+| Field | Type | Authenticated in cloud mode | Notes |
+|---|---|---|---|
+| `id` | bounded string | yes | Client-generated stable record id |
+| `org_id` | string | yes | Supplied as client decryption context, not inside wire JSON |
+| `kind` | uint8 | yes | `0x01` memory, `0x02` playbook |
+| `envelope_v` | uint8 | yes | Current writes use `2` |
+| `suite` | uint8 | yes | `0x01` AES-256-GCM; `0x00` trusted plaintext self-hosting |
+| `key_gen` | uint32 | yes | Org key generation |
+| `version` | positive safe integer encoded uint64BE in AAD | yes | Must increase strictly for an accepted replacement |
+| `tombstone` | bool | yes | Encrypted tombstones seal an empty plaintext |
+| `updated_at` | server timestamp | no | Operational only; never decides authenticated state |
+| `nonce` | 12 random bytes | carried with ciphertext | Fresh for every AES-GCM seal |
+| `payload` | ciphertext and 16-byte tag | AEAD output | Never parsed or logged by the server |
+
+The canonical AAD encoding is:
+
+```text
+uint8(envelope_v) || uint8(suite) || uint8(kind) ||
+uint32BE(key_gen) || uint64BE(version) || uint8(tombstone) ||
+utf8(id) || 0x00 || utf8(org_id)
+```
+
+This binds every field that changes record meaning or convergence. Encrypted
+tombstones have a fresh nonce and an AEAD tag over zero plaintext bytes.
+Changing the tombstone bit, version, id, org, kind, suite, or generation makes
+decryption fail.
+
+AES-256-GCM uses Bun's native `node:crypto` implementation. Nonces are random
+96-bit values generated inside the seam. A key generation is rotated long
+before expected per-org write volume approaches a meaningful random-nonce
+collision probability.
+
+Only a version strictly greater than the stored version replaces a record.
+Equal versions are rejected. A losing dirty client increments its local
+version before retrying, preserving convergence without allowing an equal
+version to rewrite authenticated history. Clients also refuse an equal-version
+remote record from replacing local clean state.
+
+New clients reject envelope v1 because v1 did not authenticate `version` or
+`tombstone`. On first upgraded sync, an established replica marks all retained
+rows dirty once and reseals them as v2. The server accepts v1 only as a
+temporary old-client transport and will not allow v1 to replace a stored v2
+record. Deployment must upgrade at least one established client per org before
+depending on a fresh-device recovery from the server copy.
+
+## Top abuse paths
+
+1. **Server forges a delete.** It flips `tombstone` on a live envelope. The
+   v2 AEAD check fails; the client records an open failure and does not apply
+   the deletion.
+2. **Server rewrites a version.** It raises an old ciphertext's outer version
+   to defeat local LWW. Version is in AAD, so authentication fails.
+3. **Server replays an older valid envelope.** An established device rejects
+   the lower version. A fresh device without a checkpoint cannot prove a newer
+   envelope existed; this is a residual, not a cryptographic claim.
+4. **Tenant reads global logs.** A tenant credential reaches `/mcp`. The
+   dedicated operator gate rejects it before Better Auth tenant resolution.
+5. **Operator inventories repositories.** Current clients never call a
+   project route; identity is locally derived. An upgraded database remains
+   exposed until its legacy project rows are purged.
+6. **Old client downgrades an authenticated record.** The server refuses any
+   lower envelope format once v2 exists for that id; v2 clients reject v1.
+7. **Malicious client update steals plaintext and keys.** A compromised
+   published binary runs inside the trusted client boundary. Artifact
+   attestation and updater verification remain required mitigations.
+
+## Threat register
+
+| ID | Threat | Impact | Existing mitigation | Residual / required action |
+|---|---|---|---|---|
+| TM-001 | Operator or server compromise reads synced content | Critical | Per-org AES-GCM; keys never unwrapped server-side | Size, timing, kind, and membership metadata remain visible |
+| TM-002 | Cross-tenant API or database access | Critical | Better Auth identity gate, org-scoped rows, independent org keys | Compromised member credentials expose that member's org |
+| TM-003 | Server forges deletion or rewrites record meaning | High | Envelope-v2 AAD binds version and tombstone; encrypted tombstones | Auth-disabled plaintext mode trusts its private server |
+| TM-004 | Server replays or withholds valid state | High | Local high-water versions; strict monotonic acceptance; equal-state refusal | Fresh/wiped devices require an external transparency or peer checkpoint for proof of newest state |
+| TM-005 | Tenant reads process-wide logs | High | Dedicated operator token; endpoint disabled when unset | Token rotation and operator secret management remain operational duties |
+| TM-006 | Server reads project metadata | High | Deterministic local project identity; `/v1/projects` unmounted | Purge legacy `project` rows before claiming an upgraded deployment is fully operator-blind |
+| TM-007 | Malicious or substituted client release | Critical | Open-source review, authenticated private repository transport | Add attestations/digests and verify before binary replacement |
+| TM-008 | Compromised developer device reads local data | High | OS device protections and credential store | Plaintext replica and source code are intentionally available to the local user |
+| TM-009 | Oversized authenticated input exhausts server resources | Medium | Batch, field, integer, closed-set, nonce, and payload bounds | Add route-wide body limits, quotas, and bounded connection timeouts |
+| TM-010 | Removed member reads future content | High | Rotation and per-member wraps | Removed member retains already received plaintext and old key generations |
+| TM-011 | Traffic analysis reveals activity | Medium | TLS | Counts, sizes, timing, IPs, and rotations are accepted metadata exposure |
+| TM-012 | Public deployment accidentally uses plaintext suite | Critical | Authenticated clients require a keyring; browser rejects plaintext | Keep auth-disabled mode private and single-operator |
+
+## Criticality calibration
+
+Critical threats expose plaintext tenant content or key material across the
+service boundary. High threats violate tenant authorization, authenticated
+record state, or future confidentiality after revocation. Medium threats leak
+operational metadata or create bounded denial-of-service risk. Low threats are
+hardening gaps without a direct path to tenant content under the stated
+assumptions.
+
+The highest-priority unfinished control is client release authenticity
+(TM-007). The operator-blind project change is code-complete for new traffic,
+but an existing deployment does not close TM-006 until its old rows are
+purged. Availability and fresh-device rollback proof require a separate
+transparency design rather than more fields in the same server-controlled
+database.
+
+## Focus paths for future reviews
+
+Security reviews should begin at these ownership seams:
+
+- `packages/plugin-core/src/sync/envelope.ts` and `sync/engine.ts` for
+  authenticated wire state and migration behavior.
+- `packages/plugin-core/src/keys/` for device secrets, recovery, wrapping,
+  rotation, and key zeroization.
+- `packages/server/src/routes/sync.ts` and `db/tenant.ts` for validation,
+  strict versions, org isolation, cursors, and garbage collection.
+- `packages/server/src/middleware/operator.ts` and `routes/mcp.ts` for the
+  operator/tenant diagnostics boundary.
+- `packages/plugin-core/src/project/` for local project identity and legacy-id
+  migration.
+- `packages/server/src/web/browser/memory-*` for browser validation,
+  zeroization, and byte compatibility with the canonical seam.
+- `.github/workflows/*release*` and updater scripts for the unresolved client
+  authenticity boundary.
+
+## Self-hosted mode
+
+Auth-disabled self-hosting uses suite `0x00` and trusts the private server. It
+provides protocol compatibility and debuggability, not operator-blind
+confidentiality or authenticated deletion. It must not be exposed as a
+multi-tenant public service. Brain behavior stays identical; only the sync
+seam changes cipher mode.

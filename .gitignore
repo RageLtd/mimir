@@ -5,6 +5,7 @@ node_modules
 out
 dist
 *.tgz
+output/playwright/
 
 # compiled binaries
 packages/acp/mimir-acp

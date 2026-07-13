@@ -8,7 +8,8 @@
     "check:web-transport": "bun run scripts/check-web-transport.ts",
     "measure:web": "bun run scripts/measure-web.ts",
     "start": "bun run src/index.ts",
-    "test": "bun run ../../tests/run-tests.ts server"
+    "test": "bun test --parallel src",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@ai-sdk/provider-utils": "catalog:ai-sdk",
@@ -23,6 +24,7 @@
   },
   "devDependencies": {
     "@mimir/plugin-core": "workspace:*",
+    "@playwright/test": "^1.61.1",
     "surrealdb": "^2.0.4"
   }
 }

@@ -13,7 +13,7 @@ The plugin's only job is to land files. Once `/mimir-install` has run, the runti
 
 ~/.mimir/
   system-prompt.md       ← fetched from mimir-server, XML-converted at install
-  mcp.json               ← MCP server config (mimir-local + mimir-logs stdio, mimir HTTP, optional cartographer)
+  mcp.json               ← MCP server config (mimir-local + mimir-logs stdio, optional cartographer)
   settings.json          ← hook config (voice-anchor, rules, reindex)
   config.json            ← runtime config consumed by the binary (server URL, DB path, cartographer path)
   user-memories.db       ← SQLite store backing the user-memory stdio MCP
@@ -125,7 +125,6 @@ All three hooks are scoped to `MIMIR_ACTIVE=1` sessions and no-op silently in ne
 
 - **`mimir-local`** (stdio, always present). The `mimir-cc user-memory-mcp` subcommand. Exposes the local memory brain: developer-scoped memory + profile tools (`user_memory_*`, `user_profile_*`) over `~/.mimir/user-memories.db`, and project memory + playbook tools (`project_memory_*`, `project_playbook_*`) over the local org replica. Tools arrive prefixed as `mcp__mimir-local__*`.
 - **`mimir-logs`** (stdio, always present). The `mimir-cc log-mcp` subcommand — reads the local plugin logs for self-debugging. Tools arrive prefixed as `mcp__mimir-logs__*`.
-- **`mimir`** (HTTP, always present). Connects to mimir-server's `/mcp` endpoint — introspection only (server logs, self-hosted). Tools arrive prefixed as `mcp__mimir__*`.
 - **`cartographer`** (stdio, optional). The cartographer binary in `--parse-only` mode. Enabled when `--cartographer PATH` was passed at install time. Tools arrive prefixed as `mcp__cartographer__*`.
 
 ## Rules engine

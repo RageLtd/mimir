@@ -32,7 +32,7 @@ flowchart LR
     auth["/api/auth<br/>accounts · orgs · invites"]
     keyroutes["/v1/keys<br/>wrapped org keys only"]
     syncroutes["/v1/sync<br/>ciphertext envelopes"]
-    coord["/v1/projects · /v1/system-prompt<br/>blind coordination"]
+    coord["/v1/system-prompt<br/>blind coordination"]
     tenantdb[("one SQLite file of AEAD blobs<br/>the server cannot decrypt")]
     syncroutes --> tenantdb
   end
@@ -44,7 +44,7 @@ flowchart LR
   syncmod <-->|HTTPS| syncroutes
 ```
 
-The server has exactly four jobs: **auth** (accounts, orgs, invites), **wrapped-key distribution** (it stores org keys encrypted to each member's public key, never the keys themselves), **ciphertext sync** (opaque envelopes with last-write-wins convergence), and **blind coordination** (project registry, system prompt, sync leases). It runs no models, computes no embeddings, and parses no memory content.
+The server has exactly four jobs: **auth** (accounts, orgs, invites), **wrapped-key distribution** (it stores org keys encrypted to each member's public key, never the keys themselves), **ciphertext sync** (opaque envelopes with last-write-wins convergence), and **blind coordination** (system prompt and sync leases). Project identity is derived locally and travels only inside encrypted memory payloads. The server runs no models, computes no embeddings, and parses no memory content.
 
 ## How It Works
 
@@ -245,7 +245,6 @@ mimir/
 │       ├── system-prompt.md    # Mimir's personality and rules
 │       └── Dockerfile
 │
-├── tests/run-tests.ts          # Root test harness (bun run test[:pkg])
 ├── docker-compose.yml          # The server (pulls the published image)
 ├── .env.example                # Server environment template
 ├── THREAT_MODEL.md             # What the server can and cannot see

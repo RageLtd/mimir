@@ -33,7 +33,7 @@
   },
   "scripts": {
     "build": "bun build src/index.ts --outfile dist/mimir-oc.ts --target bun --minify",
-    "test": "bun run ../../tests/run-tests.ts oc-plugin"
+    "test": "bun test --parallel src"
   },
   "type": "module"
 }

@@ -63,6 +63,39 @@ describe("dirty lifecycle", () => {
     replica.setEmbedding(id, [0.1, 0.2, 0.3]);
     expect(replica.listDirty()).toHaveLength(0);
   });
+
+  test("project identity migration is versioned and syncable", () => {
+    const replica = freshReplica();
+    const id = replica.storeMemory({
+      content: "project-scoped fact",
+      project_id: "legacy-server-id",
+    });
+    replica.markPushed([id]);
+
+    expect(replica.replaceProjectId("legacy-server-id", "project:local")).toBe(
+      1,
+    );
+    expect(replica.getMemory(id)?.project_id).toBe("project:local");
+    expect(replica.listDirty()[0]?.version).toBe(2);
+    expect(replica.replaceProjectId("legacy-server-id", "project:local")).toBe(
+      0,
+    );
+  });
+
+  test("v2 envelope migration dirties retained rows exactly once", () => {
+    const replica = freshReplica();
+    const first = replica.storeMemory({ content: "first" });
+    const second = replica.storeMemory({ content: "second" });
+    replica.markPushed([first, second]);
+
+    expect(replica.prepareEnvelopeUpgrade("sync.example")).toBe(2);
+    expect(replica.listDirty().map((row) => row.id).sort()).toEqual(
+      [first, second].sort(),
+    );
+    replica.markPushed([first, second]);
+    expect(replica.prepareEnvelopeUpgrade("sync.example")).toBe(0);
+    expect(replica.listDirty()).toHaveLength(0);
+  });
 });
 
 describe("tombstones", () => {
@@ -141,15 +174,23 @@ describe("applyRemote LWW matrix", () => {
     expect(replica.listDirty()).toHaveLength(1);
   });
 
-  test("equal version + clean local: remote wins (echo/tie replay)", () => {
+  test("equal version + clean local cannot replace authenticated state", () => {
     const replica = freshReplica();
     const id = replica.storeMemory({ content: "pushed content" });
     replica.markPushed([id]);
     const result = replica.applyRemote(
       remote({ id, version: 1, content: "tie winner from elsewhere" }),
     );
-    expect(result.applied).toBe(true);
-    expect(replica.getMemory(id)?.content).toBe("tie winner from elsewhere");
+    expect(result.applied).toBe(false);
+    expect(result.reason).toBe("same-version");
+    expect(replica.getMemory(id)?.content).toBe("pushed content");
+  });
+
+  test("stale dirty rows rebase above the accepted version", () => {
+    const replica = freshReplica();
+    const id = replica.storeMemory({ content: "losing edit" });
+    replica.rebaseStale([id]);
+    expect(replica.listDirty()[0]?.version).toBe(2);
   });
 
   test("remote tombstone deletes locally", () => {

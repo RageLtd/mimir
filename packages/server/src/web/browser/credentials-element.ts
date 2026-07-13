@@ -1,5 +1,3 @@
-import { registerCredentialElement } from "./credential-ceremony";
-
 type RegistrationOptionsJSON = {
   challenge: string;
   rp: PublicKeyCredentialRpEntity;
@@ -28,7 +26,7 @@ const KEYSET_INFO = "mimir/keyset/v1";
 const DEVICE_INFO = "mimir/browser-device/v1";
 const SEALED_BOX_INFO = "mimir/sealed-box/v1";
 
-function toB64u(value: ArrayBuffer | Uint8Array) {
+export function toB64u(value: ArrayBuffer | Uint8Array) {
   const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -38,7 +36,7 @@ function toB64u(value: ArrayBuffer | Uint8Array) {
     .replace(/=+$/, "");
 }
 
-function fromB64u(value: string) {
+export function fromB64u(value: string) {
   const padded = value
     .replaceAll("-", "+")
     .replaceAll("_", "/")
@@ -47,7 +45,7 @@ function fromB64u(value: string) {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
-function concat(...values: Uint8Array[]) {
+export function concat(...values: Uint8Array[]) {
   const joined = new Uint8Array(
     values.reduce((length, value) => length + value.length, 0),
   );
@@ -59,9 +57,9 @@ function concat(...values: Uint8Array[]) {
   return joined;
 }
 
-const buffer = (value: Uint8Array) => Uint8Array.from(value).buffer;
+export const buffer = (value: Uint8Array) => Uint8Array.from(value).buffer;
 
-async function json(path: string, init?: RequestInit) {
+export async function json(path: string, init?: RequestInit) {
   const response = await fetch(path, {
     credentials: "same-origin",
     ...init,
@@ -74,10 +72,10 @@ async function json(path: string, init?: RequestInit) {
   return response.json();
 }
 
-const post = (path: string, body: unknown) =>
+export const post = (path: string, body: unknown) =>
   json(path, { method: "POST", body: JSON.stringify(body) });
 
-async function hkdfKey(
+export async function hkdfKey(
   material: Uint8Array,
   info: string,
   salt = new Uint8Array(),
@@ -103,28 +101,44 @@ async function hkdfKey(
   );
 }
 
-async function seal(key: CryptoKey, plaintext: Uint8Array) {
+export async function seal(
+  key: CryptoKey,
+  plaintext: Uint8Array,
+  additionalData?: Uint8Array,
+) {
   const nonce = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: buffer(nonce) },
+    {
+      name: "AES-GCM",
+      iv: buffer(nonce),
+      ...(additionalData ? { additionalData: buffer(additionalData) } : {}),
+    },
     key,
     buffer(plaintext),
   );
   return concat(nonce, new Uint8Array(ciphertext));
 }
 
-async function open(key: CryptoKey, sealed: Uint8Array) {
+export async function open(
+  key: CryptoKey,
+  sealed: Uint8Array,
+  additionalData?: Uint8Array,
+) {
   if (sealed.length < 29) throw new Error("Encrypted value is malformed");
   return new Uint8Array(
     await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: buffer(sealed.slice(0, 12)) },
+      {
+        name: "AES-GCM",
+        iv: buffer(sealed.slice(0, 12)),
+        ...(additionalData ? { additionalData: buffer(additionalData) } : {}),
+      },
       key,
       buffer(sealed.slice(12)),
     ),
   );
 }
 
-async function generateKeyset() {
+export async function generateKeyset() {
   const pair = await crypto.subtle.generateKey({ name: "X25519" }, true, [
     "deriveBits",
   ]);
@@ -137,7 +151,7 @@ async function generateKeyset() {
   return { v: 1, privateKey: privateJwk.d, publicKey: publicJwk.x };
 }
 
-async function encryptKeyset(
+export async function encryptKeyset(
   deviceSecret: Uint8Array,
   keyset: Awaited<ReturnType<typeof generateKeyset>>,
 ) {
@@ -145,7 +159,10 @@ async function encryptKeyset(
   return toB64u(await seal(key, encoder.encode(JSON.stringify(keyset))));
 }
 
-async function decryptKeyset(deviceSecret: Uint8Array, encrypted: string) {
+export async function decryptKeyset(
+  deviceSecret: Uint8Array,
+  encrypted: string,
+) {
   const key = await hkdfKey(deviceSecret, KEYSET_INFO);
   const value: unknown = JSON.parse(
     decoder.decode(await open(key, fromB64u(encrypted))),
@@ -166,7 +183,7 @@ async function decryptKeyset(deviceSecret: Uint8Array, encrypted: string) {
   };
 }
 
-async function unwrapKeyring(
+export async function unwrapKeyring(
   keyset: Awaited<ReturnType<typeof decryptKeyset>>,
   wrapped: string,
 ) {
@@ -221,7 +238,10 @@ async function unwrapKeyring(
   return keyring;
 }
 
-async function wrapKeyring(recipientPublicKey: string, keyring: unknown) {
+export async function wrapKeyring(
+  recipientPublicKey: string,
+  keyring: unknown,
+) {
   const pair = await crypto.subtle.generateKey({ name: "X25519" }, true, [
     "deriveBits",
   ]);
@@ -306,7 +326,7 @@ function prfOutput(credential: PublicKeyCredential) {
   return first instanceof ArrayBuffer ? new Uint8Array(first) : null;
 }
 
-async function registerPasskey(
+export async function registerPasskey(
   name: string,
   salt: Uint8Array,
   requirePrf = false,
@@ -340,7 +360,7 @@ async function registerPasskey(
   return { credentialId: credential.id, output };
 }
 
-async function authenticate(credentialId: string, salt: Uint8Array) {
+export async function authenticate(credentialId: string, salt: Uint8Array) {
   const raw = (await json(
     "/api/auth/passkey/generate-authenticate-options",
   )) as AuthenticationOptionsJSON;
@@ -364,26 +384,10 @@ async function authenticate(credentialId: string, salt: Uint8Array) {
   return output;
 }
 
-async function wrapDeviceSecret(prf: Uint8Array, secret: Uint8Array) {
+export async function wrapDeviceSecret(prf: Uint8Array, secret: Uint8Array) {
   return toB64u(await seal(await hkdfKey(prf, DEVICE_INFO), secret));
 }
 
-async function unwrapDeviceSecret(prf: Uint8Array, wrapped: string) {
+export async function unwrapDeviceSecret(prf: Uint8Array, wrapped: string) {
   return open(await hkdfKey(prf, DEVICE_INFO), fromB64u(wrapped));
 }
-
-registerCredentialElement({
-  json,
-  post,
-  toB64u,
-  fromB64u,
-  generateKeyset,
-  encryptKeyset,
-  decryptKeyset,
-  wrapKeyring,
-  unwrapKeyring,
-  registerPasskey,
-  authenticate,
-  wrapDeviceSecret,
-  unwrapDeviceSecret,
-});

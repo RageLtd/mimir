@@ -19,7 +19,8 @@ import {
   createRevokeSessionAction,
 } from "./credential-actions";
 import { type CredentialOptions, renderCredentials } from "./credentials";
-import { credentialIslandResponse } from "./islands";
+import { credentialIslandResponse, memoryIslandResponse } from "./islands";
+import { renderMemories } from "./memories";
 
 interface WebOptions {
   authForms?: AuthFormOptions;
@@ -34,6 +35,7 @@ export function createWeb(options: WebOptions = {}) {
   web.get("/sign-in", (c) => renderSignIn(c));
   web.get("/sign-up", (c) => renderSignUp(c));
   web.get("/assets/credentials.js", credentialIslandResponse);
+  web.get("/assets/memories.js", memoryIslandResponse);
   if (options.authForms) {
     web.post("/sign-in", createSignInAction(options.authForms));
     web.post("/sign-up", createSignUpAction(options.authForms));
@@ -64,6 +66,8 @@ export function createWeb(options: WebOptions = {}) {
       createRenamePasskeyAction(credentials),
     );
   }
+
+  web.get("/app/memories", (c) => renderMemories(c));
 
   web.get("/app", (c) => {
     const identity = c.get("identity");

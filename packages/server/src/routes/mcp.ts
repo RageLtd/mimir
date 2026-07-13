@@ -10,8 +10,8 @@
  *                needed for stateless tool calls)
  *   GET  /mcp  — returns 405; no server-to-client notification stream
  *
- * Configure in mimir-mcp.json:
- *   { "mcpServers": { "mimir": { "type": "http", "url": "http://localhost:8080/mcp" } } }
+ * Operators configure this endpoint manually with an Authorization bearer
+ * carrying MIMIR_OPERATOR_TOKEN. Tenant installers never add it.
  */
 
 import { asSchema } from "ai";

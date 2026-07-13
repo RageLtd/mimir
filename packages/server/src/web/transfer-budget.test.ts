@@ -114,6 +114,33 @@ describe("first-load measurement", () => {
     expect(bundle).toContain('customElements.define("mimir-credential-ceremony"');
     expect(bundle).not.toContain("from\"");
     expect(bundle).not.toContain("node:");
+    expect(bundle).not.toContain("playwright");
+  });
+
+  test("memory island is route-scoped, dependency-free, and inside the hard gate", async () => {
+    const fetcher = fetchWith(web);
+    const identity = await measureFirstLoad(
+      fetcher,
+      "/app/memories",
+      "identity",
+    );
+    const compressed = await Promise.all(
+      (["br", "zstd", "gzip", "deflate"] as const).map((encoding) =>
+        measureFirstLoad(fetcher, "/app/memories", encoding),
+      ),
+    );
+    const bundle = await buildIsland("memories");
+
+    assertTransferBudget(identity);
+    expect(identity.requestCount).toBe(2);
+    expect(identity.bytesByKind.javascript).toBeGreaterThan(0);
+    expect(bundle).toContain('customElements.define("mimir-memory-manager"');
+    expect(bundle).not.toContain("from\"");
+    expect(bundle).not.toContain("node:");
+    for (const report of compressed) {
+      assertTransferBudget(report);
+      expect(report.totalBytes).toBeLessThan(identity.totalBytes);
+    }
   });
 
   test("counts every referenced critical asset", async () => {

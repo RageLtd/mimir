@@ -11,10 +11,6 @@
     "mimir-logs": {
       "command": "{{MIMIR_CC_BIN}}",
       "args": ["log-mcp"]
-    },
-    "mimir": {
-      "type": "http",
-      "url": "{{MIMIR_SERVER_URL}}/mcp"{{MIMIR_AUTH_BLOCK}}
     }
   }
 }

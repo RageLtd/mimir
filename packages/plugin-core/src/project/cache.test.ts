@@ -17,7 +17,9 @@ import { join } from "node:path";
 import {
   getCachedProjectId,
   readCache,
+  readProjectIdAliases,
   setCachedProjectId,
+  setProjectIdAlias,
   writeCache,
 } from "./cache";
 
@@ -88,5 +90,16 @@ describe("setCachedProjectId / getCachedProjectId", () => {
     await setCachedProjectId("/repo/x", "old-uuid");
     await setCachedProjectId("/repo/x", "new-uuid");
     expect(await getCachedProjectId("/repo/x")).toBe("new-uuid");
+  });
+});
+
+describe("project id aliases", () => {
+  test("persists legacy-to-local mappings without clobbering earlier migrations", async () => {
+    await setProjectIdAlias("legacy-a", "project:a");
+    await setProjectIdAlias("legacy-b", "project:b");
+    expect(await readProjectIdAliases()).toEqual({
+      "legacy-a": "project:a",
+      "legacy-b": "project:b",
+    });
   });
 });

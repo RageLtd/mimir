@@ -179,23 +179,12 @@ const renderMcp = (opts: {
   readonly apiKey?: string;
   readonly selfPath: string;
 }) => {
-  const baseForMcp = opts.serverUrl.replace(/\/+$/, "");
-
   let rendered = mcpTemplate
-    .replaceAll("{{MIMIR_SERVER_URL}}", baseForMcp)
     .replaceAll("{{MIMIR_CC_BIN}}", opts.selfPath)
     .replaceAll("{{USER_MEMORY_DB}}", opts.userMemoryDb)
     // Org replica (MIM-84): fixed default path, env-overridable at runtime —
     // no install flag until someone actually needs a custom location.
-    .replaceAll("{{ORG_REPLICA_DB}}", defaultOrgReplicaPath())
-    // The mimir HTTP MCP entry needs the gate key on its connection
-    // (MIM-77) — CC's HTTP MCP config carries it as a headers block.
-    .replace(
-      "{{MIMIR_AUTH_BLOCK}}",
-      opts.apiKey
-        ? `,\n      "headers": { "Authorization": "Bearer ${opts.apiKey}" }`
-        : "",
-    );
+    .replaceAll("{{ORG_REPLICA_DB}}", defaultOrgReplicaPath());
 
   if (opts.cartographerBinary) {
     rendered = rendered.replace(

@@ -2,8 +2,8 @@
  * Configuration for mimir-acp.
  * Reads from environment variables with sensible defaults.
  *
- * Inference runs locally on the plugin-core engine (MIM-89); the server
- * is only contacted for the boot-time system prompt and project registry.
+ * Inference and project identity run locally on plugin-core; the server is
+ * contacted only for the boot-time system prompt, keys, and encrypted sync.
  */
 
 const expandHome = (p: string) =>

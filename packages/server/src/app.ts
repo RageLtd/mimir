@@ -11,13 +11,13 @@ import {
   type OrgLister,
   type SessionLookup,
 } from "./middleware/identity";
+import { createOperatorGate, isOperatorPath } from "./middleware/operator";
 import {
   createRootRedirect,
   createWebAccessGate,
 } from "./middleware/web-access";
 import { type createKeysRoutes, keys } from "./routes/keys";
 import { mcp } from "./routes/mcp";
-import { projects } from "./routes/projects";
 import { sync } from "./routes/sync";
 import { systemPrompt } from "./routes/system-prompt";
 import { log } from "./util/logger";
@@ -32,6 +32,7 @@ interface AppOptions {
   sessionLookup?: SessionLookup;
   orgLister?: OrgLister;
   keyRoutes?: ReturnType<typeof createKeysRoutes>;
+  operatorToken?: string;
 }
 
 export function createApp(options: AppOptions = {}) {
@@ -39,6 +40,7 @@ export function createApp(options: AppOptions = {}) {
   const authEnabled = options.authEnabled ?? config.auth.enabled;
 
   app.use("*", cors());
+  app.use("*", createOperatorGate(options.operatorToken));
 
   // Better Auth (MIM-70) — the ONLY gating mechanism. Mount order matters:
   // the claim guard wraps the signup endpoint, the auth handler self-gates
@@ -61,7 +63,7 @@ export function createApp(options: AppOptions = {}) {
       createIdentityGate(
         options.sessionLookup,
         options.orgLister,
-        isPublicWebPath,
+        (path) => isOperatorPath(path) || isPublicWebPath(path),
       ),
     );
     log.info("better-auth identity gate active");
@@ -88,7 +90,6 @@ export function createApp(options: AppOptions = {}) {
   });
 
   app.route("/v1/system-prompt", systemPrompt);
-  app.route("/v1/projects", projects);
   app.route("/v1/keys", options.keyRoutes ?? keys);
   app.route("/v1/sync", sync);
   app.route("/mcp", mcp);

@@ -21,6 +21,7 @@
 import type { Fetcher } from "../keys/client";
 import type { SecretStore } from "../keys/device-secret";
 import { getOrgKeyring } from "../keys/flows";
+import { readProjectIdAliases } from "../project/cache";
 import { attempt } from "../result";
 import type { OrgReplica } from "../store/org-replica";
 import type { RemoteMemory } from "../store/org-replica-sync";
@@ -36,6 +37,7 @@ import {
 
 const PULL_PAGE_LIMIT = 500;
 const MAX_PULL_PAGES = 40;
+const EMPTY_PROJECT_ALIASES: Readonly<Record<string, string>> = {};
 
 export type SyncEngineConfig = {
   readonly serverUrl: string;
@@ -47,6 +49,8 @@ export type SyncEngineConfig = {
   /** Re-embed pulled rows when an embedder is reachable. Injectable so
    *  tests (and embedder-less hosts) skip the network. */
   readonly backfill?: (replica: OrgReplica) => Promise<unknown>;
+  /** Test seam; runtime loads persisted aliases from MIMIR_HOME. */
+  readonly projectAliases?: Readonly<Record<string, string>>;
 };
 
 type PullResponse = {
@@ -183,6 +187,10 @@ export async function syncOrg(cfg: SyncEngineConfig) {
   }
   const { cipher } = mode;
   const cursorKey = new URL(cfg.serverUrl).host;
+  cfg.replica.prepareEnvelopeUpgrade(cursorKey);
+  const projectAliases =
+    cfg.projectAliases ??
+    (await readProjectIdAliases().catch(() => EMPTY_PROJECT_ALIASES));
 
   // ── Pull ────────────────────────────────────────────────────────────
   let cursor = cfg.replica.getSyncCursor(cursorKey);
@@ -213,6 +221,13 @@ export async function syncOrg(cfg: SyncEngineConfig) {
       }
       const result = cfg.replica.applyRemote(record);
       if (result.applied) {
+        const legacyProjectId = record.project_id;
+        const currentProjectId = legacyProjectId
+          ? projectAliases[legacyProjectId]
+          : undefined;
+        if (legacyProjectId && currentProjectId) {
+          cfg.replica.replaceProjectId(legacyProjectId, currentProjectId);
+        }
         applied += 1;
         if (!record.tombstone) appliedIds.push(record.id);
       }
@@ -261,6 +276,7 @@ export async function syncOrg(cfg: SyncEngineConfig) {
       pushRaw,
     );
     stale = pushResponse.stale;
+    cfg.replica.rebaseStale(stale);
     const staleSet = new Set(stale);
     pushedIds = dirty.map((r) => r.id).filter((id) => !staleSet.has(id));
     cfg.replica.markPushed(pushedIds);

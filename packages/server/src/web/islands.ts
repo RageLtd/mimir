@@ -2,7 +2,10 @@ import { fileURLToPath } from "node:url";
 
 const entries = {
   credentials: fileURLToPath(
-    new URL("./browser/credentials-element.ts", import.meta.url),
+    new URL("./browser/credential-entry.ts", import.meta.url),
+  ),
+  memories: fileURLToPath(
+    new URL("./browser/memories-element.ts", import.meta.url),
   ),
 };
 
@@ -29,6 +32,16 @@ export function buildIsland(name: keyof typeof entries) {
 
 export async function credentialIslandResponse() {
   return new Response(await buildIsland("credentials"), {
+    headers: {
+      "cache-control": "public, max-age=300",
+      "content-type": "text/javascript; charset=UTF-8",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+export async function memoryIslandResponse() {
+  return new Response(await buildIsland("memories"), {
     headers: {
       "cache-control": "public, max-age=300",
       "content-type": "text/javascript; charset=UTF-8",

@@ -29,11 +29,17 @@ export const config = {
     setupToken: Bun.env.AUTH_SETUP_TOKEN ?? "",
   },
 
+  /** Service-operator credential. This is deliberately separate from
+   * Better Auth tenant credentials: organization owners are not operators. */
+  operator: {
+    token: Bun.env.MIMIR_OPERATOR_TOKEN ?? "",
+  },
+
   /** System prompt — loaded from markdown file */
   systemPromptPath: Bun.env.SYSTEM_PROMPT_PATH ?? "./system-prompt.md",
 
   /** MIM-88 tenant store — SQLite holding ciphertext envelopes, sync
-   *  cursors, leases, and the project registry. Railway points this at
+   *  cursors, leases, and the legacy project registry. Railway points this at
    *  the mounted volume (/data/mimir.sqlite); local default stays
    *  cwd-relative like auth.dbPath. */
   tenantDbPath: Bun.env.MIMIR_DB_PATH ?? "./mimir.sqlite",

@@ -24,20 +24,26 @@ import { attempt } from "@mimir/plugin-core/result";
 import { mimirHome } from "@mimir/plugin-core/util";
 
 export type ProjectPathCache = Record<string, string>;
+export type ProjectIdAliases = Record<string, string>;
 
 const cachePath = () => join(mimirHome(), "project-paths.json");
+const aliasesPath = () => join(mimirHome(), "project-id-aliases.json");
 
-export const readCache = async () => {
-  const file = Bun.file(cachePath());
-  if (!(await file.exists())) return {} as ProjectPathCache;
+const readMap = async (path: string) => {
+  const file = Bun.file(path);
+  if (!(await file.exists())) return {} as Record<string, string>;
   const [err, parsed] = await attempt(
-    async () => (await file.json()) as ProjectPathCache,
+    async () => (await file.json()) as Record<string, string>,
   );
   if (err || !parsed || typeof parsed !== "object") {
-    return {} as ProjectPathCache;
+    return {} as Record<string, string>;
   }
   return parsed;
 };
+
+export const readCache = async () => readMap(cachePath());
+
+export const readProjectIdAliases = async () => readMap(aliasesPath());
 
 export const writeCache = async (cache: ProjectPathCache) => {
   const path = cachePath();
@@ -58,4 +64,16 @@ export const setCachedProjectId = async (
   const cache = await readCache();
   cache[projectPath] = projectId;
   await writeCache(cache);
+};
+
+export const setProjectIdAlias = async (
+  legacyId: string,
+  currentId: string,
+) => {
+  if (!legacyId || legacyId === currentId) return;
+  const aliases = await readProjectIdAliases();
+  aliases[legacyId] = currentId;
+  const path = aliasesPath();
+  await mkdir(dirname(path), { recursive: true }).catch(() => undefined);
+  await Bun.write(path, `${JSON.stringify(aliases, null, 2)}\n`);
 };

@@ -1,6 +1,6 @@
 # @mimir/server
 
-The blind sync server. It has exactly four jobs — **auth** (accounts, orgs, invites, API keys), **wrapped-key distribution** (org keys encrypted to each member's public key), **ciphertext sync** (opaque AEAD envelopes with last-write-wins convergence), and **blind coordination** (project registry, system prompt distribution, sync leases). It runs no models, computes no embeddings, and never parses memory content — what it can and cannot see is specified in [THREAT_MODEL.md](../../THREAT_MODEL.md).
+The blind sync server. It has exactly four jobs — **auth** (accounts, orgs, invites, API keys), **wrapped-key distribution** (org keys encrypted to each member's public key), **ciphertext sync** (opaque AEAD envelopes with last-write-wins convergence), and **blind coordination** (system prompt distribution and sync leases). It runs no models, computes no embeddings, and never parses memory content or project metadata — what it can and cannot see is specified in [THREAT_MODEL.md](../../THREAT_MODEL.md).
 
 ## Surface
 
@@ -10,11 +10,10 @@ The blind sync server. It has exactly four jobs — **auth** (accounts, orgs, in
 | `/api/auth/*` | Better Auth — accounts, orgs, invites, passkeys, API keys |
 | `/v1/keys/*` | Wrapped org-key distribution: init, wrap, rotate, recovery |
 | `/v1/sync/*` | Envelope push/pull, cursors, leases |
-| `/v1/projects` | Project registry |
 | `/v1/system-prompt` | Persona markdown for client boot |
-| `/mcp` | Introspection only (`read_mimir_logs`) |
+| `/mcp` | Operator-only introspection (`read_mimir_logs`); disabled unless `MIMIR_OPERATOR_TOKEN` is set |
 
-Storage is two SQLite files: the tenant store (`MIMIR_DB_PATH` — envelopes, sync cursors, leases, projects) and the auth store (`AUTH_DB_PATH`). There is no database service to operate.
+Storage is two SQLite files: the tenant store (`MIMIR_DB_PATH` — envelopes, sync cursors, and leases) and the auth store (`AUTH_DB_PATH`). There is no database service to operate.
 
 ## Configuration
 
@@ -22,6 +21,7 @@ Storage is two SQLite files: the tenant store (`MIMIR_DB_PATH` — envelopes, sy
 |----------|---------|---------|
 | `MIMIR_PORT` / `MIMIR_HOST` | `8080` / `0.0.0.0` | Bind address |
 | `MIMIR_DB_PATH` | `./mimir.sqlite` | Tenant store — point at a persistent volume in deployments |
+| `MIMIR_OPERATOR_TOKEN` | — | Dedicated bearer token for operator log introspection; tenant API keys are never accepted |
 | `SYSTEM_PROMPT_PATH` | `./system-prompt.md` | Persona markdown served to clients |
 | `AUTH_ENABLED` | `false` | Off = single-user self-hosted mode (ungated, plaintext sync); on = accounts + E2E-encrypted sync |
 | `AUTH_SECRET` | — | better-auth signing secret. Required when auth is enabled; boot fails loudly without it |

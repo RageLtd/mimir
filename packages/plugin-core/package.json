@@ -47,7 +47,7 @@
     "./voice-anchor": "./src/voice-anchor.ts"
   },
   "scripts": {
-    "test": "bun run ../../tests/run-tests.ts plugin-core"
+    "test": "bun test --parallel src"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "catalog:ai-sdk",

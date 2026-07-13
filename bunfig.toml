@@ -1,0 +1,2 @@
+[test]
+pathIgnorePatterns = ["packages/server/e2e/**"]

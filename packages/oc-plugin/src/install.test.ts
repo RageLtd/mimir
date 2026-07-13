@@ -100,11 +100,9 @@ describe("installMimir", () => {
     );
   });
 
-  test("uses environment-backed bearer authentication in the MCP template", () => {
-    expect(opencodeTemplate).toContain('"oauth": false');
-    expect(opencodeTemplate).toContain(
-      '"Authorization": "Bearer {env:MIMIR_API_KEY}"',
-    );
+  test("does not install the operator-only server MCP for tenants", () => {
+    expect(opencodeTemplate).not.toContain("/mcp");
+    expect(opencodeTemplate).not.toContain("MIMIR_API_KEY");
   });
 
   test("persists the Cartographer path returned by automatic resolution", async () => {

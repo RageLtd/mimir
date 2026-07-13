@@ -19,11 +19,7 @@
 
 import { spawn } from "node:child_process";
 import { reconcileFromSharedConfig } from "@mimir/plugin-core/keys/cli";
-import {
-  collectProjectMetadata,
-  getOrResolveProjectId,
-  patchProjectMetadata,
-} from "@mimir/plugin-core/project";
+import { getOrResolveProjectId } from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
 import { readConfig } from "@mimir/plugin-core/shared-config";
 import { syncFromSharedConfig } from "@mimir/plugin-core/sync/cli";
@@ -197,32 +193,13 @@ const runWorker = async (projectPath: string) => {
     return 0;
   }
 
-  // Project-registry metadata refresh (stays server-side — the registry
-  // holds no code content): resolve the UUID, scan manifest files, PATCH
-  // the project record. Fire-and-forget; never gates the local sync.
+  // Deterministic local project identity; no path, remote, or manifest
+  // metadata crosses the server boundary.
   const projectId = await getOrResolveProjectId(
     config.serverUrl,
     projectPath,
     config.apiKey,
   ).catch(() => null);
-  if (projectId) {
-    collectProjectMetadata(projectPath)
-      .then((metadata) =>
-        patchProjectMetadata(
-          config.serverUrl,
-          config.apiKey,
-          projectId,
-          metadata,
-        ),
-      )
-      .catch((err) =>
-        log.warn("metadata refresh failed", {
-          projectId,
-          error: errMessage(err),
-        }),
-      );
-  }
-
   // Local write (MIM-91): full-scan replace drops deleted/moved files.
   const result = await syncIndex(projectPath, parsed, "replace").catch(
     (err) => {

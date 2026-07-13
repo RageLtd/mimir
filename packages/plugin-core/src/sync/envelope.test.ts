@@ -95,6 +95,22 @@ describe("encrypted envelopes (suite 0x01)", () => {
     expect(() => openEnvelope(rewritten, { orgId: ORG, cipher })).toThrow();
   });
 
+  test("rewritten record version fails authentication", () => {
+    const cipher = keyringCipher();
+    const envelope = seal({ cipher });
+    expect(() =>
+      openEnvelope({ ...envelope, version: 999 }, { orgId: ORG, cipher }),
+    ).toThrow();
+  });
+
+  test("forged tombstone fails authentication", () => {
+    const cipher = keyringCipher();
+    const envelope = seal({ cipher });
+    expect(() =>
+      openEnvelope({ ...envelope, tombstone: true }, { orgId: ORG, cipher }),
+    ).toThrow();
+  });
+
   test("tampered payload fails authentication", () => {
     const cipher = keyringCipher();
     const envelope = seal({ cipher });
@@ -152,23 +168,31 @@ describe("plaintext toggle (suite 0x00, self-hosted)", () => {
 });
 
 describe("tombstones", () => {
-  test("carry an empty payload in both suites", () => {
-    for (const cipher of [
-      keyringCipher(),
-      { mode: "plaintext" } as const,
-    ]) {
-      const envelope = seal({ tombstone: true, cipher });
-      expect(envelope.payload).toBe("");
-      const opened = openEnvelope(envelope, { orgId: ORG, cipher });
-      expect(opened.tombstone).toBe(true);
-      expect(opened.payload).toBeNull();
-    }
+  test("encrypted deletion intent is authenticated", () => {
+    const cipher = keyringCipher();
+    const envelope = seal({ tombstone: true, cipher });
+    expect(envelope.nonce).not.toBe("");
+    expect(envelope.payload).not.toBe("");
+    const opened = openEnvelope(envelope, { orgId: ORG, cipher });
+    expect(opened.tombstone).toBe(true);
+    expect(opened.payload).toBeNull();
+  });
+
+  test("trusted plaintext self-hosting keeps empty tombstones", () => {
+    const cipher = { mode: "plaintext" } as const;
+    const envelope = seal({ tombstone: true, cipher });
+    expect(envelope.payload).toBe("");
+    expect(openEnvelope(envelope, { orgId: ORG, cipher }).payload).toBeNull();
   });
 });
 
 describe("shape guards", () => {
-  test("unknown version and suite are rejected", () => {
+  test("legacy, unknown version, and unknown suite are rejected", () => {
     const envelope = seal({ cipher: { mode: "plaintext" } });
+    const legacy: WireEnvelope = { ...envelope, v: 1 };
+    expect(() =>
+      openEnvelope(legacy, { orgId: ORG, cipher: { mode: "plaintext" } }),
+    ).toThrow("version");
     const wrongVersion: WireEnvelope = { ...envelope, v: ENVELOPE_VERSION + 1 };
     expect(() =>
       openEnvelope(wrongVersion, { orgId: ORG, cipher: { mode: "plaintext" } }),

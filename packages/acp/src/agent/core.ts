@@ -7,9 +7,7 @@
 
 import type * as acp from "@agentclientprotocol/sdk";
 import {
-  collectProjectMetadata,
   detectGitRemote,
-  patchProjectMetadata,
   type ResolvedProject,
   resolveProjectForPath,
 } from "@mimir/plugin-core/project";
@@ -93,7 +91,7 @@ const kickOffSessionInit = (
     .then((gitRemote) =>
       resolveProjectForPath(serverUrl, apiKey, projectPath, gitRemote),
     )
-    .then(async (project) => {
+    .then((project) => {
       if (!project) {
         // Resolution returned nothing — settle so any consumer awaiting
         // the project id (memory attribution, metadata) gets its answer.
@@ -101,17 +99,7 @@ const kickOffSessionInit = (
         return;
       }
       onResolved(project);
-      // Settle before the metadata PATCH so a slow second round-trip never
-      // delays the index sync.
       settleProjectId(project.id);
-
-      // Collect metadata from manifest files and PATCH unconditionally —
-      // the project entity is the source of truth and should reflect the
-      // current state of the filesystem on every session start.
-      const metadata = await collectProjectMetadata(projectPath);
-      if (metadata.technologies.length > 0 || metadata.description) {
-        await patchProjectMetadata(serverUrl, apiKey, project.id, metadata);
-      }
     })
     .catch((err) => {
       settleProjectId(null);

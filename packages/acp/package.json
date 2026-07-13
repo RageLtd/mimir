@@ -6,7 +6,7 @@
   "scripts": {
     "start": "bun run index.ts",
     "build": "bun build --compile ./index.ts --outfile mimir-acp",
-    "test": "bun run ../../tests/run-tests.ts acp"
+    "test": "bun test --parallel src"
   },
   "dependencies": {
     "@mimir/plugin-core": "workspace:*",

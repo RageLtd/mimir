@@ -62,11 +62,9 @@ export const createSyncApi = (db: Database) => {
    * Land a pulled record under LWW. Local version higher → local wins
    * (skipped; a later push propagates it). Equal version with a DIRTY
    * local row → local wins the tie: the engine pulls before pushing, so
-   * applying here would silently destroy unpushed work — instead the
-   * local edit pushes and becomes the server's tie winner (last push
-   * wins), and every other client converges on it. Equal-and-clean →
-   * remote wins (own push echo replay, or a tie another client already
-   * won server-side). Lower → remote wins outright.
+   * applying here would silently destroy unpushed work. Equal-and-clean
+   * is a harmless echo or a server equivocation; either way it cannot
+   * replace local state. Lower → remote wins outright.
    */
   const applyRemote = (record: RemoteMemory) => {
     const local = db
@@ -77,8 +75,11 @@ export const createSyncApi = (db: Database) => {
     if (local && local.version > record.version) {
       return { applied: false, reason: "local-newer" } as const;
     }
-    if (local && local.version === record.version && local.dirty === 1) {
-      return { applied: false, reason: "local-dirty-tie" } as const;
+    if (local && local.version === record.version) {
+      return {
+        applied: false,
+        reason: local.dirty === 1 ? "local-dirty-tie" : "same-version",
+      } as const;
     }
     if (record.tombstone) {
       db.query("DELETE FROM relates_to WHERE from_id = ? OR to_id = ?").run(
@@ -170,6 +171,53 @@ export const createSyncApi = (db: Database) => {
     ).run(orgId, cursor);
   };
 
+  /** One-time migration from opaque server project ids to deterministic
+   * local ids. The project id is encrypted payload content, so changing it
+   * is a normal versioned write that must sync to every other client. */
+  const replaceProjectId = (fromId: string, toId: string) => {
+    if (fromId === toId) return 0;
+    const result = db
+      .query(
+        `UPDATE memory SET project_id = ?, version = version + 1, dirty = 1,
+          updated_at = datetime('now') WHERE project_id = ?`,
+      )
+      .run(toId, fromId);
+    return result.changes;
+  };
+
+  /** Queue every retained row for one v2 reseal. The marker and dirtying
+   * happen atomically; a failed network push leaves the rows dirty for retry. */
+  const prepareEnvelopeUpgrade = (serverKey: string) => {
+    const marker = `migration:envelope-v2:${serverKey}`;
+    const alreadyPrepared = db
+      .query<{ cursor: number }, [string]>(
+        "SELECT cursor FROM sync_state WHERE org_id = ?",
+      )
+      .get(marker);
+    if (alreadyPrepared) return 0;
+    return db.transaction(() => {
+      const result = db
+        .query("UPDATE memory SET dirty = 1 WHERE tombstone = 0")
+        .run();
+      db.query(
+        `INSERT INTO sync_state (org_id, cursor, updated_at)
+         VALUES (?, 1, datetime('now'))`,
+      ).run(marker);
+      return result.changes;
+    })();
+  };
+
+  /** A strict-monotonic server rejected these dirty versions. Rebase the
+   * local edits so the next sync retries above the accepted winner. */
+  const rebaseStale = (ids: string[]) => {
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => "?").join(",");
+    db.query(
+      `UPDATE memory SET version = version + 1, updated_at = datetime('now')
+       WHERE dirty = 1 AND id IN (${placeholders})`,
+    ).run(...ids);
+  };
+
   return {
     listDirty,
     applyRemote,
@@ -177,5 +225,8 @@ export const createSyncApi = (db: Database) => {
     getEmbedding,
     getSyncCursor,
     setSyncCursor,
+    replaceProjectId,
+    prepareEnvelopeUpgrade,
+    rebaseStale,
   };
 };

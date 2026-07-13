@@ -12,10 +12,6 @@ code_mode_host = false
 
 # ── MCP servers ─────────────────────────────────────────────────────────
 
-[mcp_servers.mimir]
-url = "{{MIMIR_SERVER_URL}}/mcp"
-{{MIMIR_BEARER_LINE}}
-
 [mcp_servers.mimir-local]
 command = "{{MIMIR_CODEX_BIN}}"
 args = ["user-memory-mcp"]

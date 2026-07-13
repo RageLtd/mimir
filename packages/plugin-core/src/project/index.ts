@@ -1,12 +1,9 @@
 /**
- * Top-level project resolution helper.
+ * Top-level local project identity helper.
  *
- * One entry point hooks reach for: `getOrResolveProjectId(serverUrl, cwd, apiKey?)`.
- * Returns the canonical UUID for a given working directory, going through
- * the disk cache first and only hitting the resolver on a miss. Failures
- * (network down, git missing, cache corrupt) return null — callers fall
- * back to the existing cwd-as-project behaviour rather than aborting the
- * hook.
+ * The public signature stays compatible with installed adapters, but the
+ * server URL and API key are no longer used. Identity is derived locally
+ * from the normalized git remote, or the absolute path when no remote exists.
  *
  * Why null instead of throwing: the existing hooks all guarantee exit 0
  * regardless of internal errors. A resolver outage during, say, a flaky
@@ -17,7 +14,12 @@
  * free of filesystem-path config coupling.
  */
 
-import { getCachedProjectId, setCachedProjectId } from "./cache";
+import { createOrgReplica, defaultOrgReplicaPath } from "../store/org-replica";
+import {
+  getCachedProjectId,
+  setCachedProjectId,
+  setProjectIdAlias,
+} from "./cache";
 import { detectGitRemote } from "./git";
 import { resolveProjectForPath } from "./resolver";
 
@@ -25,15 +27,15 @@ export type { ProjectPathCache } from "./cache";
 export {
   getCachedProjectId,
   readCache,
+  readProjectIdAliases,
   setCachedProjectId,
+  setProjectIdAlias,
   writeCache,
 } from "./cache";
 export { detectGitRemote } from "./git";
-export type { ProjectMetadata } from "./metadata";
-export { collectProjectMetadata } from "./metadata";
 export { toProjectRelative } from "./paths";
 export type { ResolvedProject } from "./resolver";
-export { patchProjectMetadata, resolveProjectForPath } from "./resolver";
+export { normalizeGitRemote, resolveProjectForPath } from "./resolver";
 
 export const getOrResolveProjectId = async (
   serverUrl: string,
@@ -41,7 +43,7 @@ export const getOrResolveProjectId = async (
   apiKey?: string,
 ) => {
   const cached = await getCachedProjectId(projectPath).catch(() => null);
-  if (cached) return cached;
+  if (cached?.startsWith("project:")) return cached;
 
   const gitRemote = await detectGitRemote(projectPath);
   const resolved = await resolveProjectForPath(
@@ -50,7 +52,17 @@ export const getOrResolveProjectId = async (
     projectPath,
     gitRemote,
   );
-  if (!resolved) return null;
+  if (cached && cached !== resolved.id) {
+    const replicaPath =
+      process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath();
+    const replica = createOrgReplica(replicaPath);
+    try {
+      replica.replaceProjectId(cached, resolved.id);
+    } finally {
+      replica.close();
+    }
+    await setProjectIdAlias(cached, resolved.id).catch(() => undefined);
+  }
 
   await setCachedProjectId(projectPath, resolved.id).catch(() => undefined);
   return resolved.id;

@@ -1,0 +1,21 @@
+# pattern,tag,weight
+packages/server/src/auth/**,auth,1.0
+packages/server/src/middleware/**,authorization,1.0
+packages/server/src/routes/keys.ts,key-management,1.0
+packages/server/src/routes/sync.ts,tenant-sync,1.0
+packages/server/src/routes/mcp.ts,introspection,1.0
+packages/server/src/agent/server-tools/**,introspection,1.0
+packages/server/src/db/**,tenant-storage,1.0
+packages/server/src/util/redact.ts,secrets,1.0
+packages/server/src/web/auth-forms.tsx,auth,1.0
+packages/server/src/web/credential-actions.ts,auth,1.0
+packages/server/src/web/browser/credential*.ts,client-keys,1.0
+packages/server/src/web/browser/memory-crypto.ts,crypto,1.0
+packages/plugin-core/src/keys/**,crypto,1.0
+packages/plugin-core/src/sync/**,crypto,1.0
+packages/plugin-core/src/store/**,plaintext-data,0.8
+packages/*/src/config.ts,secrets,0.5
+packages/*/scripts/ensure-binary.sh,supply-chain,1.0
+.github/workflows/**,supply-chain,1.0
+packages/server/Dockerfile,supply-chain,1.0
+THREAT_MODEL.md,security-design,1.0

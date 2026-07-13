@@ -32,13 +32,13 @@ const world = (memberCount = 1) => {
 const envelope = (id: string, version = 1, overrides?: Record<string, unknown>) => ({
   id,
   kind: 1,
-  v: 1,
+  v: 2,
   suite: 1,
   keyGen: 1,
   version,
   tombstone: false,
-  nonce: "bm9uY2U",
-  payload: "b3BhcXVlLWJ5dGVz",
+  nonce: "AAECAwQFBgcICQoL",
+  payload: "AAECAwQFBgcICQoLDA0ODw",
   ...overrides,
 });
 
@@ -71,7 +71,9 @@ describe("push/pull round-trip", () => {
     const app = appFor(A);
     const first = await json(await push(app, [envelope("memory:one")]));
     expect(first.accepted).toBe(1);
-    await push(app, [envelope("memory:two", 1, { suite: 0, nonce: "" })]);
+    await push(app, [
+      envelope("memory:two", 1, { suite: 0, keyGen: 0, nonce: "" }),
+    ]);
 
     const pulled = await pull(app);
     expect(pulled.orgId).toBe("org-1");
@@ -80,7 +82,7 @@ describe("push/pull round-trip", () => {
       "memory:two",
     ]);
     // Verbatim: every field survives, payload untouched.
-    expect(pulled.envelopes[0]?.payload).toBe("b3BhcXVlLWJ5dGVz");
+    expect(pulled.envelopes[0]?.payload).toBe("AAECAwQFBgcICQoLDA0ODw");
     expect(pulled.envelopes[1]?.suite).toBe(0);
     expect(pulled.nextCursor).toBeGreaterThan(0);
   });
@@ -95,15 +97,13 @@ describe("push/pull round-trip", () => {
     expect(delta.envelopes.map((e) => e.id)).toEqual(["memory:new"]);
   });
 
-  test("payload is opaque — arbitrary bytes are stored happily", async () => {
+  test("payload is opaque but must stay within the wire encoding contract", async () => {
     const { appFor } = world();
     const app = appFor(A);
     const res = await push(app, [
       envelope("memory:garbage", 1, { payload: "!!!not-even-base64url!!!" }),
     ]);
-    expect(res.status).toBe(200);
-    const pulled = await pull(app);
-    expect(pulled.envelopes[0]?.payload).toBe("!!!not-even-base64url!!!");
+    expect(res.status).toBe(400);
   });
 });
 
@@ -122,18 +122,23 @@ describe("LWW", () => {
     expect(pulled.envelopes[0]?.version).toBe(3);
   });
 
-  test("equal version: last push wins (server-assigned time breaks the tie)", async () => {
+  test("equal version is rejected instead of replacing authenticated history", async () => {
     const { appFor } = world();
     const app = appFor(A);
     await push(app, [
-      envelope("memory:tie", 2, { payload: "Zmlyc3Q" }),
+      envelope("memory:tie", 2, { payload: "Zmlyc3QtY2lwaGVydGV4dA" }),
     ]);
     const second = await json(
-      await push(appFor(B), [envelope("memory:tie", 2, { payload: "c2Vjb25k" })]),
+      await push(appFor(B), [
+        envelope("memory:tie", 2, {
+          payload: "c2Vjb25kLWNpcGhlcnRleHQ",
+        }),
+      ]),
     );
-    expect(second.accepted).toBe(1);
+    expect(second.accepted).toBe(0);
+    expect(second.stale).toEqual(["memory:tie"]);
     const pulled = await pull(app);
-    expect(pulled.envelopes[0]?.payload).toBe("c2Vjb25k");
+    expect(pulled.envelopes[0]?.payload).toBe("Zmlyc3QtY2lwaGVydGV4dA");
   });
 
   test("replacement gets a fresh seq so laggards see the update", async () => {
@@ -145,6 +150,18 @@ describe("LWW", () => {
     const delta = await pull(app, nextCursor);
     expect(delta.envelopes.map((e) => e.id)).toEqual(["memory:evolving"]);
     expect(delta.envelopes[0]?.version).toBe(2);
+  });
+
+  test("an older client cannot downgrade an authenticated v2 record", async () => {
+    const { appFor } = world();
+    const app = appFor(A);
+    await push(app, [envelope("memory:secure", 2)]);
+    const downgrade = await json(
+      await push(app, [envelope("memory:secure", 3, { v: 1 })]),
+    );
+    expect(downgrade.accepted).toBe(0);
+    expect(downgrade.stale).toEqual(["memory:secure"]);
+    expect((await pull(app)).envelopes[0]?.v).toBe(2);
   });
 });
 
@@ -164,7 +181,13 @@ describe("auth-off (self-hosted) mode", () => {
   test("no identity → owner sentinel scope, single local user", async () => {
     const { appFor } = world();
     const app = appFor(null);
-    await push(app, [envelope("memory:selfhosted", 1, { suite: 0 })]);
+    await push(app, [
+      envelope("memory:selfhosted", 1, {
+        suite: 0,
+        keyGen: 0,
+        nonce: "",
+      }),
+    ]);
     const pulled = await pull(app);
     expect(pulled.orgId).toBe("owner");
     expect(pulled.envelopes).toHaveLength(1);
@@ -178,7 +201,7 @@ describe("tombstone GC", () => {
     const appB = appFor(B);
     await push(appA, [envelope("memory:doomed", 1)]);
     await push(appA, [
-      envelope("memory:doomed", 2, { tombstone: true, payload: "", nonce: "" }),
+      envelope("memory:doomed", 2, { tombstone: true }),
     ]);
 
     // Only A has pulled past the tombstone; B lags at 0 → no GC.

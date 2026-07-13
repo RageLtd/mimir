@@ -9,10 +9,9 @@
  *
  * The server validates envelope FIELD shapes only; the payload is an
  * opaque string stored and served verbatim — never parsed, never logged.
- * LWW rule: incoming.version > stored → accept; == → accept (the server
- * assigns updated_at, so the later push wins the tie — that is what
- * last-write-wins means); < → skip, reported as stale so the client
- * knows to pull the winner.
+ * LWW rule: only incoming.version > stored is accepted. Equal versions are
+ * conflicts, not an invitation to replace authenticated history; clients
+ * rebase a losing local edit to the next version before retrying.
  *
  * Works in both deployment modes: auth-on scopes by the identity gate's
  * org; auth-off (self-hosted) scopes to the owner sentinel with a single
@@ -32,6 +31,16 @@ const DEFAULT_PULL_LIMIT = 500;
 const MAX_PULL_LIMIT = 2000;
 const MAX_PUSH_BATCH = 1000;
 const MAX_LEASE_TTL_SECONDS = 3600;
+const MAX_ID_LENGTH = 256;
+const MAX_NONCE_LENGTH = 128;
+const MAX_PAYLOAD_LENGTH = 1_500_000;
+const MAX_KEY_GENERATION = 0xffff_ffff;
+const ENVELOPE_V1 = 1;
+const ENVELOPE_V2 = 2;
+const SUITE_PLAINTEXT = 0;
+const SUITE_AES_256_GCM = 1;
+const KINDS = new Set([1, 2]);
+const BASE64URL = /^[A-Za-z0-9_-]*$/;
 
 type EnvelopeRow = {
   seq: number;
@@ -53,15 +62,52 @@ function readEnvelope(raw: unknown) {
   if (
     typeof e.id !== "string" ||
     e.id.length === 0 ||
+    e.id.length > MAX_ID_LENGTH ||
     typeof e.kind !== "number" ||
+    !KINDS.has(e.kind) ||
     typeof e.v !== "number" ||
+    (e.v !== ENVELOPE_V1 && e.v !== ENVELOPE_V2) ||
     typeof e.suite !== "number" ||
+    (e.suite !== SUITE_PLAINTEXT && e.suite !== SUITE_AES_256_GCM) ||
     typeof e.keyGen !== "number" ||
+    !Number.isSafeInteger(e.keyGen) ||
+    e.keyGen < 0 ||
+    e.keyGen > MAX_KEY_GENERATION ||
     typeof e.version !== "number" ||
+    !Number.isSafeInteger(e.version) ||
     e.version < 1 ||
     typeof e.tombstone !== "boolean" ||
     typeof e.nonce !== "string" ||
-    typeof e.payload !== "string"
+    e.nonce.length > MAX_NONCE_LENGTH ||
+    !BASE64URL.test(e.nonce) ||
+    typeof e.payload !== "string" ||
+    e.payload.length > MAX_PAYLOAD_LENGTH ||
+    !BASE64URL.test(e.payload)
+  ) {
+    return null;
+  }
+  if (e.suite === SUITE_PLAINTEXT && (e.keyGen !== 0 || e.nonce !== "")) {
+    return null;
+  }
+  if (
+    e.suite === SUITE_AES_256_GCM &&
+    !(e.v === ENVELOPE_V1 && e.tombstone) &&
+    (e.keyGen < 1 || e.nonce.length !== 16 || e.payload.length < 22)
+  ) {
+    return null;
+  }
+  if (
+    e.v === ENVELOPE_V1 &&
+    e.tombstone &&
+    (e.nonce !== "" || e.payload !== "")
+  ) {
+    return null;
+  }
+  if (
+    e.v === ENVELOPE_V2 &&
+    e.suite === SUITE_PLAINTEXT &&
+    e.tombstone &&
+    e.payload !== ""
   ) {
     return null;
   }
@@ -149,11 +195,14 @@ export function createSyncRoutes(
     db.transaction(() => {
       for (const envelope of envelopes) {
         const stored = db
-          .query<{ version: number }, [string, string]>(
-            "SELECT version FROM envelope WHERE org_id = ? AND id = ?",
+          .query<{ version: number; envelope_v: number }, [string, string]>(
+            "SELECT version, envelope_v FROM envelope WHERE org_id = ? AND id = ?",
           )
           .get(orgId, envelope.id);
-        if (stored && stored.version > envelope.version) {
+        if (
+          stored &&
+          (stored.version >= envelope.version || stored.envelope_v > envelope.v)
+        ) {
           stale.push(envelope.id);
           continue;
         }

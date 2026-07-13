@@ -5,6 +5,7 @@
     "module": "Preserve",
     "moduleDetection": "force",
     "jsx": "react-jsx",
+    "jsxImportSource": "hono/jsx",
     "allowJs": true,
     "types": ["bun"],
 

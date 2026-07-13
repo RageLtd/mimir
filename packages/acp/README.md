@@ -1,6 +1,6 @@
 # @mimir/acp
 
-ACP (Agent Client Protocol) agent for Mimir — connects editor agent panels (primarily Zed) to a **fully local** agent. Inference, the agent loop, tool execution, memory retrieval, extraction, and compaction all run in this process on plugin-core; the server is contacted only for the boot-time system prompt, the project registry, key distribution, and encrypted memory sync.
+ACP (Agent Client Protocol) agent for Mimir — connects editor agent panels (primarily Zed) to a **fully local** agent. Inference, the agent loop, tool execution, memory retrieval, extraction, compaction, and project identity all run in this process on plugin-core; the server is contacted only for the boot-time system prompt, key distribution, and encrypted memory sync.
 
 ## Architecture
 
@@ -17,7 +17,7 @@ flowchart LR
     loop --> cart
   end
 
-  server["mimir-server<br/>/v1/system-prompt · /v1/projects<br/>/v1/keys · /v1/sync"]
+  server["mimir-server<br/>/v1/system-prompt<br/>/v1/keys · /v1/sync"]
   providers["Providers (direct, BYOK)<br/>Anthropic · OpenRouter · vLLM ·<br/>Ollama · LM Studio · …"]
 
   zed <-->|"ACP (stdio)"| loop

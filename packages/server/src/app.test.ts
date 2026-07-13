@@ -100,3 +100,53 @@ describe("web route boundary", () => {
     expect(forbiddenPage.headers.get("location")).toBeNull();
   });
 });
+
+describe("operator boundary", () => {
+  const initialize = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+  });
+
+  test("operator MCP is disabled when its dedicated token is unset", async () => {
+    const response = await createApp({
+      authEnabled: false,
+      operatorToken: "",
+    }).request("/mcp", { method: "POST", body: initialize });
+
+    expect(response.status).toBe(404);
+  });
+
+  test("tenant identity cannot authorize the operator MCP", async () => {
+    const response = await createApp({
+      authEnabled: true,
+      sessionLookup: allowSession,
+      operatorToken: "operator-secret",
+    }).request("/mcp", {
+      method: "POST",
+      headers: { Authorization: "Bearer tenant-api-key" },
+      body: initialize,
+    });
+
+    expect(response.status).toBe(401);
+  });
+
+  test("the dedicated operator token authorizes MCP without tenant identity", async () => {
+    const response = await createApp({
+      authEnabled: true,
+      sessionLookup: denySession,
+      operatorToken: "operator-secret",
+    }).request("/mcp", {
+      method: "POST",
+      headers: { Authorization: "Bearer operator-secret" },
+      body: initialize,
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      jsonrpc: "2.0",
+      id: 1,
+      result: { serverInfo: { name: "mimir" } },
+    });
+  });
+});

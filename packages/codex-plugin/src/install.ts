@@ -186,20 +186,10 @@ const renderConfigToml = (opts: {
   readonly apiKey?: string;
   readonly selfPath: string;
 }) => {
-  const base = opts.serverUrl.replace(/\/+$/, "");
-
   let rendered = configTemplate
-    .replaceAll("{{MIMIR_SERVER_URL}}", base)
     .replaceAll("{{MIMIR_CODEX_BIN}}", opts.selfPath)
     .replaceAll("{{USER_MEMORY_DB}}", opts.userMemoryDb)
-    .replaceAll("{{ORG_REPLICA_DB}}", defaultOrgReplicaPath())
-    // HTTP MCP auth: bearer_token inline is rejected for streamable_http;
-    // bearer_token_env_var is the supported shape. The wrapper exports
-    // MIMIR_API_KEY from the shared config.
-    .replace(
-      "{{MIMIR_BEARER_LINE}}",
-      opts.apiKey ? `bearer_token_env_var = "MIMIR_API_KEY"` : "",
-    );
+    .replaceAll("{{ORG_REPLICA_DB}}", defaultOrgReplicaPath());
 
   if (opts.cartographerBinary) {
     rendered = rendered.replace(
