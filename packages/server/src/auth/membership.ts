@@ -2,8 +2,13 @@ import type { Database } from "bun:sqlite";
 import {
   appendOrganizationAuditEvent,
   createOrganizationAuditStore,
-  type OrganizationAuditMetadata,
 } from "../audit/store";
+import {
+  auditFailure,
+  auditOwnershipChange,
+  type MutationIdentity,
+} from "./membership-audit";
+import { organizationDeletionPending } from "./organization-lifecycle";
 
 export type OrganizationRole = "owner" | "admin" | "member";
 
@@ -28,12 +33,6 @@ interface MemberRecord {
 interface OrganizationKeyRecord {
   keyGeneration: number | null;
   recoveryPublicKey: string | null;
-}
-
-interface MutationIdentity {
-  orgId: string;
-  actorUserId: string;
-  requestId: string;
 }
 
 interface ChangeRoleInput extends MutationIdentity {
@@ -94,50 +93,24 @@ function memberMutationReason(
     return "forbidden";
   }
   if (
+    nextRole === "owner" &&
+    (target.publicKey === null || target.wrappedOrgKey === null)
+  ) {
+    return "key_not_ready";
+  }
+  if (
     targetIsOwner &&
     nextRole !== "owner" &&
-    members.filter((member) => hasRole(member, "owner")).length === 1
+    !members.some(
+      (member) =>
+        member.id !== target.id &&
+        hasRole(member, "owner") &&
+        member.wrappedOrgKey !== null,
+    )
   ) {
     return "last_owner";
   }
   return null;
-}
-
-function failureMetadata(reason: string): OrganizationAuditMetadata {
-  return {
-    reasonCode:
-      reason === "conflict"
-        ? "conflict"
-        : reason === "forbidden" || reason === "last_owner"
-          ? "unauthorized"
-          : reason === "not_found" || reason === "invalid_wraps"
-            ? "validation"
-            : "dependency",
-  };
-}
-
-function auditFailure(
-  db: Database,
-  input: MutationIdentity,
-  action:
-    | "membership.role_changed"
-    | "membership.removed"
-    | "encryption.generation_changed",
-  targetType: "member" | "encryption",
-  targetId: string,
-  reason: string,
-  metadata: OrganizationAuditMetadata = {},
-) {
-  createOrganizationAuditStore(db).append({
-    orgId: input.orgId,
-    actorUserId: input.actorUserId,
-    action,
-    targetType,
-    targetId,
-    outcome: "failed",
-    requestId: input.requestId,
-    metadata: { ...metadata, ...failureMetadata(reason) },
-  });
 }
 
 export function changeOrganizationMemberRole(
@@ -154,6 +127,25 @@ export function changeOrganizationMemberRole(
     ...(fromRole ? { fromRole } : {}),
     toRole: input.role,
   };
+  const ownershipChange =
+    fromRole !== undefined &&
+    fromRole !== input.role &&
+    (fromRole === "owner" || input.role === "owner");
+  const auditOwnership = (
+    outcome: "intent" | "succeeded" | "failed",
+    reason?: string,
+  ) => {
+    if (ownershipChange) {
+      auditOwnershipChange(
+        db,
+        input,
+        input.memberId,
+        outcome,
+        metadata,
+        reason,
+      );
+    }
+  };
   audit.append({
     orgId: input.orgId,
     actorUserId: input.actorUserId,
@@ -164,6 +156,20 @@ export function changeOrganizationMemberRole(
     requestId: input.requestId,
     metadata,
   });
+  auditOwnership("intent");
+  if (organizationDeletionPending(db, input.orgId)) {
+    auditFailure(
+      db,
+      input,
+      "membership.role_changed",
+      "member",
+      input.memberId,
+      "conflict",
+      metadata,
+    );
+    auditOwnership("failed", "conflict");
+    return "conflict";
+  }
   const initialReason = memberMutationReason(
     initialMembers,
     input.actorUserId,
@@ -181,6 +187,7 @@ export function changeOrganizationMemberRole(
       reason,
       metadata,
     );
+    auditOwnership("failed", reason);
     return reason;
   }
   if (fromRole === input.role) {
@@ -198,6 +205,7 @@ export function changeOrganizationMemberRole(
   }
 
   const result = db.transaction(() => {
+    if (organizationDeletionPending(db, input.orgId)) return "conflict";
     const members = membersForOrganization(db, input.orgId);
     const target = members.find((member) => member.id === input.memberId);
     const reason = memberMutationReason(
@@ -222,6 +230,7 @@ export function changeOrganizationMemberRole(
       requestId: input.requestId,
       metadata,
     });
+    auditOwnership("succeeded");
     return "changed";
   })();
 
@@ -235,6 +244,7 @@ export function changeOrganizationMemberRole(
       result,
       metadata,
     );
+    auditOwnership("failed", result);
   }
   return result;
 }
@@ -308,6 +318,8 @@ export function rotateOrganizationKey(db: Database, input: RotateKeyInput) {
     return reason;
   };
 
+  if (organizationDeletionPending(db, input.orgId)) return fail("conflict");
+
   const initialMembers = membersForOrganization(db, input.orgId);
   const initialActor = initialMembers.find(
     (member) => member.userId === input.actorUserId,
@@ -328,6 +340,7 @@ export function rotateOrganizationKey(db: Database, input: RotateKeyInput) {
   }
 
   const result = db.transaction(() => {
+    if (organizationDeletionPending(db, input.orgId)) return "conflict";
     const organization = db
       .query<OrganizationKeyRecord, [string]>(
         "SELECT keyGeneration, recoveryPublicKey FROM organization WHERE id = ?",

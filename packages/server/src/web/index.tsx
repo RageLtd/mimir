@@ -52,6 +52,8 @@ import {
   renderOrganizationSettings,
 } from "./settings";
 import {
+  createOrganizationDeletionCancelAction,
+  createOrganizationDeletionScheduleAction,
   createOrganizationNameAction,
   createOrganizationPolicyAction,
   createOrganizationSlugAction,
@@ -164,6 +166,14 @@ export function createWeb(options: WebOptions = {}) {
       web.post(
         "/admin/settings/policy",
         createOrganizationPolicyAction(organizationSettings),
+      );
+      web.post(
+        "/admin/settings/deletion/schedule",
+        createOrganizationDeletionScheduleAction(organizationSettings),
+      );
+      web.post(
+        "/admin/settings/deletion/cancel",
+        createOrganizationDeletionCancelAction(organizationSettings),
       );
     }
   }

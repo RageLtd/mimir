@@ -188,6 +188,49 @@ describe("organization members page", () => {
     expect(inviteRoles).not.toContain('<option value="owner"');
     expect(html).not.toContain("Confirm rotation-backed removal");
   });
+
+  test("an owner leaves through the rotation-backed member ceremony", async () => {
+    const app = testApp("owner", {
+      list: () => ({
+        keyGeneration: 2,
+        defaultInvitationRole: "member",
+        members: [
+          {
+            id: "member-actor",
+            userId: "actor-user",
+            name: "Current Owner",
+            email: "owner@example.test",
+            role: "owner",
+            joinedAt: "2026-07-13T00:00:00.000Z",
+            publicKeyRegistered: true,
+            wrapAvailable: true,
+            readiness: "ready",
+          },
+          {
+            id: "member-successor",
+            userId: "successor-user",
+            name: "Successor Owner",
+            email: "successor@example.test",
+            role: "owner",
+            joinedAt: "2026-07-13T01:00:00.000Z",
+            publicKeyRegistered: true,
+            wrapAvailable: true,
+            readiness: "ready",
+          },
+        ],
+        invitations: [],
+        nextMemberCursor: null,
+        nextInvitationCursor: null,
+      }),
+    });
+    const html = await (
+      await app.request("/admin/members", { headers: browserHeaders })
+    ).text();
+
+    expect(html).toContain("Leave organization");
+    expect(html).toContain("another active keyed owner");
+    expect(html).toContain("Confirm rotation-backed departure");
+  });
 });
 
 describe("organization member forms", () => {
@@ -303,6 +346,7 @@ describe("organization member forms", () => {
       "/api/auth/organization/update-member-role",
       "/api/auth/organization/remove-member",
       "/api/auth/organization/leave",
+      "/api/auth/organization/delete",
       "/api/auth/organization/update",
     ]) {
       const response = await app.request(path, { method: "POST" });

@@ -160,6 +160,13 @@ settingsWeb.route(
       updateName: () => Promise.resolve("updated"),
       updateSlug: () => Promise.resolve("updated"),
       updatePolicy: () => "updated",
+      readLifecycle: () => ({
+        ownerCount: 2,
+        keyedOwnerCount: 2,
+        deletion: null,
+      }),
+      scheduleDeletion: () => "scheduled",
+      cancelDeletion: () => "cancelled",
     },
   }),
 );

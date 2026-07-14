@@ -145,3 +145,60 @@ export const createOrganizationPolicyAction =
       ? redirect("policy")
       : failed(c, options);
   };
+
+export const createOrganizationDeletionScheduleAction =
+  (options: OrganizationSettingsOptions) => async (c: Context<IdentityEnv>) => {
+    const identity = c.get("identity");
+    const form = await readForm(c);
+    if (!identity || !owner(c) || !form || !hasTrustedOrigin(c, options)) {
+      return failed(c, options);
+    }
+    const [error, result] = attemptSync(() =>
+      options.scheduleDeletion({
+        orgId: identity.orgId,
+        actorUserId: identity.userId,
+        requestId: requestId(c),
+        confirmation: formValue(form, "confirmation"),
+        recentAuthentication: isTrustedRecentBrowser(
+          c,
+          options.origin,
+          options.now ?? Date.now,
+        ),
+      }),
+    );
+    return !error && result === "scheduled"
+      ? redirect("deletion-scheduled")
+      : failed(c, options);
+  };
+
+export const createOrganizationDeletionCancelAction =
+  (options: OrganizationSettingsOptions) => async (c: Context<IdentityEnv>) => {
+    const identity = c.get("identity");
+    const form = await readForm(c);
+    const scheduleId = form ? formValue(form, "scheduleId") : "";
+    if (
+      !identity ||
+      !owner(c) ||
+      !form ||
+      !hasTrustedOrigin(c, options) ||
+      !OPAQUE_ID.test(scheduleId)
+    ) {
+      return failed(c, options);
+    }
+    const [error, result] = attemptSync(() =>
+      options.cancelDeletion({
+        orgId: identity.orgId,
+        actorUserId: identity.userId,
+        requestId: requestId(c),
+        scheduleId,
+        recentAuthentication: isTrustedRecentBrowser(
+          c,
+          options.origin,
+          options.now ?? Date.now,
+        ),
+      }),
+    );
+    return !error && result === "cancelled"
+      ? redirect("deletion-cancelled")
+      : failed(c, options);
+  };

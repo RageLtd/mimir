@@ -1,5 +1,10 @@
 import type { Context } from "hono";
 import type {
+  CancelOrganizationDeletionInput,
+  readOrganizationLifecycle,
+  ScheduleOrganizationDeletionInput,
+} from "../auth/organization-lifecycle";
+import type {
   readOrganizationSettings,
   UpdateOrganizationNameInput,
   UpdateOrganizationPolicyInput,
@@ -30,6 +35,11 @@ export interface OrganizationSettingsOptions {
     headers: Headers,
   ) => Promise<string>;
   updatePolicy: (input: UpdateOrganizationPolicyInput) => string;
+  readLifecycle: (
+    orgId: string,
+  ) => ReturnType<typeof readOrganizationLifecycle>;
+  scheduleDeletion: (input: ScheduleOrganizationDeletionInput) => string;
+  cancelDeletion: (input: CancelOrganizationDeletionInput) => string;
   now?: () => number;
 }
 
@@ -41,7 +51,17 @@ function noticeText(value: string | undefined) {
   if (value === "name") return "Organization name updated.";
   if (value === "slug") return "Organization slug updated.";
   if (value === "policy") return "Organization policy updated.";
+  if (value === "deletion-scheduled") {
+    return "Organization deletion scheduled. It may be cancelled until the purge begins.";
+  }
+  if (value === "deletion-cancelled") {
+    return "Organization deletion cancelled.";
+  }
   return "";
+}
+
+function readableTime(value: string) {
+  return value.replace("T", " ").replace(".000Z", " UTC");
 }
 
 export function renderOrganizationSettings(
@@ -54,6 +74,16 @@ export function renderOrganizationSettings(
   const [error, settings] = attemptSync(() => options.read(identity.orgId));
   if (error || !settings) return c.text("Unavailable", 503);
   const owner = identity.organizationRoles?.includes("owner") ?? false;
+  const lifecycleResult = owner
+    ? attemptSync(() => options.readLifecycle(identity.orgId))
+    : null;
+  if (
+    owner &&
+    (!lifecycleResult || lifecycleResult[0] || !lifecycleResult[1])
+  ) {
+    return c.text("Unavailable", 503);
+  }
+  const lifecycle = lifecycleResult?.[1];
   const notice = noticeText(c.req.query("notice"));
   c.header("cache-control", "private, no-store");
   c.status(state.error ? 400 : 200);
@@ -216,6 +246,86 @@ export function renderOrganizationSettings(
                   Update policy
                 </button>
               </form>
+            </section>
+          ) : null}
+
+          {owner && lifecycle ? (
+            <section class="card" aria-labelledby="lifecycle-settings-title">
+              <h2 id="lifecycle-settings-title">Ownership &amp; deletion</h2>
+              <p>
+                This organization has {lifecycle.ownerCount} owner
+                {lifecycle.ownerCount === 1 ? "" : "s"}, of whom{" "}
+                {lifecycle.keyedOwnerCount} currently hold encrypted key access.
+                Promote another key-ready member before leaving.
+              </p>
+              <p>
+                <a href="/admin/members">Manage owners and members</a>
+              </p>
+              {lifecycle.deletion ? (
+                <div class="stack">
+                  <p role="status">
+                    Deletion was scheduled at{" "}
+                    <time datetime={lifecycle.deletion.scheduledAt}>
+                      {readableTime(lifecycle.deletion.scheduledAt)}
+                    </time>
+                    . Purging begins after{" "}
+                    <time datetime={lifecycle.deletion.purgeAfter}>
+                      {readableTime(lifecycle.deletion.purgeAfter)}
+                    </time>
+                    .
+                  </p>
+                  {lifecycle.deletion.status === "scheduled" ? (
+                    <form
+                      class="stack"
+                      method="post"
+                      action="/admin/settings/deletion/cancel"
+                    >
+                      <input
+                        type="hidden"
+                        name="scheduleId"
+                        value={lifecycle.deletion.scheduleId}
+                      />
+                      <button class="button" type="submit">
+                        Cancel organization deletion
+                      </button>
+                    </form>
+                  ) : (
+                    <p>Purging has begun and can no longer be cancelled.</p>
+                  )}
+                </div>
+              ) : (
+                <div class="stack">
+                  <p>
+                    Deletion permanently removes memberships, invitations,
+                    wrapped key shelves, recovery configuration, encrypted
+                    server records, synchronization state, and organization
+                    activity after a seven-day grace period. Recovery keys
+                    cannot restore ciphertext after the server purge.
+                  </p>
+                  <p>
+                    <a href="/admin/memories">Export an encrypted backup</a>
+                    {" before scheduling deletion."}
+                  </p>
+                  <form
+                    class="stack"
+                    method="post"
+                    action="/admin/settings/deletion/schedule"
+                  >
+                    <label for="organization-deletion-confirmation">
+                      Type <strong>{settings.name}</strong> to confirm
+                    </label>
+                    <input
+                      id="organization-deletion-confirmation"
+                      name="confirmation"
+                      autocomplete="off"
+                      required
+                    />
+                    <button class="button" type="submit">
+                      Schedule organization deletion
+                    </button>
+                  </form>
+                </div>
+              )}
             </section>
           ) : null}
         </div>

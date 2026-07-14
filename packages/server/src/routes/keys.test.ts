@@ -12,6 +12,7 @@ import { getMigrations } from "better-auth/db/migration";
 import { Hono } from "hono";
 import { migrateOrganizationAudit } from "../audit/store";
 import { buildAuthOptions } from "../auth/instance";
+import { migrateOrganizationLifecycle } from "../auth/organization-lifecycle";
 import type { IdentityEnv } from "../middleware/identity";
 import { createKeysRoutes } from "./keys";
 
@@ -47,6 +48,7 @@ async function seedOrg() {
   const { runMigrations } = await getMigrations(options);
   await runMigrations();
   migrateOrganizationAudit(db);
+  migrateOrganizationLifecycle(db);
   const auth = betterAuth(options);
 
   const signupA = await auth.api.signUpEmail({
@@ -323,6 +325,34 @@ describe("POST /v1/keys/rotate", () => {
     const state = await getJson(await appFor(db, asA).request("/v1/keys/org"));
     expect(state.keyGeneration).toBe(2);
     expect(state.recoveryPublicKey).toBe("recovery-pub-2");
+  });
+
+  test("key rotation conflicts while organization deletion is pending", async () => {
+    const { db, asA, memberRow, userA, userB } = await seedKeyed();
+    db.query(
+      `INSERT INTO organization_deletion_schedule
+        (org_id, schedule_id, actor_user_id, request_id, scheduled_at, purge_after, status)
+       VALUES (?, ?, ?, ?, ?, ?, 'scheduled')`,
+    ).run(
+      asA.orgId,
+      "schedule:pending",
+      userA,
+      "request:schedule",
+      "2026-07-14T03:00:00.000Z",
+      "2026-07-21T03:00:00.000Z",
+    );
+
+    const response = await post(appFor(db, asA), "/v1/keys/rotate", {
+      keyGeneration: 2,
+      wraps: [
+        { memberId: memberRow(userA).id, wrappedOrgKey: "wrap-a-2" },
+        { memberId: memberRow(userB).id, wrappedOrgKey: "wrap-b-2" },
+      ],
+    });
+
+    expect(response.status).toBe(409);
+    expect(memberRow(userA).wrappedOrgKey).toBe("wrap-a-1");
+    expect(memberRow(userB).wrappedOrgKey).toBe("wrap-b-1");
   });
 
   test("recent owner rotation removes the member only after generation acceptance", async () => {

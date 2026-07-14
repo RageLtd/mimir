@@ -21,6 +21,7 @@ import { getMigrations } from "better-auth/db/migration";
 import { organization } from "better-auth/plugins";
 import { migrateOrganizationAudit } from "../audit/store";
 import { config } from "../config";
+import { migrateOrganizationLifecycle } from "./organization-lifecycle";
 import {
   invitationExpiresAt,
   migrateOrganizationPolicy,
@@ -66,6 +67,7 @@ export function buildAuthOptions(database: Database, secret: string) {
     },
     plugins: [
       organization({
+        disableOrganizationDeletion: true,
         organizationHooks: {
           beforeCreateInvitation: async ({ invitation }) => ({
             data: {
@@ -189,4 +191,5 @@ export async function runAuthMigrations() {
   await runMigrations();
   migrateOrganizationAudit(getAuthDb());
   migrateOrganizationPolicy(getAuthDb());
+  migrateOrganizationLifecycle(getAuthDb());
 }

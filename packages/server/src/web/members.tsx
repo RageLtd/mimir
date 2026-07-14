@@ -292,6 +292,14 @@ export function renderOrganizationMembers(
                   {result.members.map((member) => {
                     const canManage =
                       actorRole === "owner" || member.role !== "owner";
+                    const leavingOrganization =
+                      member.userId === identity.userId &&
+                      member.role === "owner";
+                    const memberRoles =
+                      member.role !== "owner" &&
+                      (!member.publicKeyRegistered || !member.wrapAvailable)
+                        ? ADMIN_ROLES
+                        : availableRoles;
                     return (
                       <li class="item">
                         <div class="item-head">
@@ -326,7 +334,7 @@ export function renderOrganizationMembers(
                               <label>
                                 Role{" "}
                                 <select name="role">
-                                  {availableRoles.map((value) => (
+                                  {memberRoles.map((value) => (
                                     <option
                                       value={value}
                                       selected={member.role === value}
@@ -339,18 +347,24 @@ export function renderOrganizationMembers(
                               <button type="submit">Change role</button>
                             </form>
                             <details>
-                              <summary>Remove {member.name}</summary>
+                              <summary>
+                                {leavingOrganization
+                                  ? "Leave organization"
+                                  : `Remove ${member.name}`}
+                              </summary>
                               <p>
-                                This rotates future encryption access before
-                                removing membership. It cannot erase old keys or
-                                plaintext already held by this member.
+                                {leavingOrganization
+                                  ? "Leaving requires another active keyed owner and rotates future encryption access before removing your membership."
+                                  : "This rotates future encryption access before removing membership. It cannot erase old keys or plaintext already held by this member."}
                               </p>
                               <button
                                 type="button"
                                 data-action="remove"
                                 data-member-id={member.id}
                               >
-                                Confirm rotation-backed removal
+                                {leavingOrganization
+                                  ? "Confirm rotation-backed departure"
+                                  : "Confirm rotation-backed removal"}
                               </button>
                             </details>
                           </>

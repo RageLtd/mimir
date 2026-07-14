@@ -1,12 +1,39 @@
 import { createApp } from "./app";
 import { countUsers } from "./auth/claim";
 import { getAuthDb, runAuthMigrations } from "./auth/instance";
+import { purgeDueOrganizations } from "./auth/organization-lifecycle";
 import { config } from "./config";
 import { getTenantDb } from "./db/tenant";
 import { log } from "./util/logger";
 import { attempt, attemptSync } from "./util/result";
 
 const app = createApp();
+
+function sweepDueOrganizationDeletions() {
+  const [sweepError, results] = attemptSync(() =>
+    purgeDueOrganizations(getAuthDb(), getTenantDb()),
+  );
+  if (sweepError) {
+    log.error(
+      { err: sweepError },
+      "organization purge sweep failed and will be retried",
+    );
+    return;
+  }
+  for (const result of results) {
+    if ("error" in result) {
+      log.error(
+        { err: result.error, organizationId: result.orgId },
+        "organization purge failed and will be resumed",
+      );
+    } else if (result.status === "purged") {
+      log.info(
+        { organizationId: result.orgId },
+        "scheduled organization purge completed",
+      );
+    }
+  }
+}
 
 // Boot sequence
 let server: ReturnType<typeof Bun.serve> | null = null;
@@ -49,6 +76,8 @@ async function boot() {
       process.exit(1);
     }
     log.info({ db: config.auth.dbPath }, "auth layer enabled (better-auth)");
+    sweepDueOrganizationDeletions();
+    setInterval(sweepDueOrganizationDeletions, 60_000).unref();
 
     // First-boot claim state (MIM-70 slice 2): announce loudly so the
     // operator knows whether the instance is claimable — and whether the

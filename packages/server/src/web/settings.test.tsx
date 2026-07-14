@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { createApp } from "../app";
 import type {
+  CancelOrganizationDeletionInput,
+  ScheduleOrganizationDeletionInput,
+} from "../auth/organization-lifecycle";
+import type {
   UpdateOrganizationNameInput,
   UpdateOrganizationPolicyInput,
   UpdateOrganizationSlugInput,
@@ -29,6 +33,14 @@ function settings(orgId: string) {
   };
 }
 
+function lifecycle() {
+  return {
+    ownerCount: 2,
+    keyedOwnerCount: 2,
+    deletion: null,
+  };
+}
+
 function testApp(
   role: "owner" | "admin" | "member" = "owner",
   overrides: Partial<OrganizationSettingsOptions> = {},
@@ -54,6 +66,9 @@ function testApp(
     updateName: () => Promise.resolve("updated"),
     updateSlug: () => Promise.resolve("updated"),
     updatePolicy: () => "updated",
+    readLifecycle: lifecycle,
+    scheduleDeletion: () => "scheduled",
+    cancelDeletion: () => "cancelled",
     now: () => NOW,
     ...overrides,
   };
@@ -99,6 +114,9 @@ describe("organization settings page", () => {
     expect(html).toContain("Recovery configured");
     expect(html).not.toContain("recovery-public");
     expect(html).not.toContain("wrapped-key");
+    expect(html).toContain("2 owners");
+    expect(html).toContain('href="/admin/memories"');
+    expect(html).toContain('action="/admin/settings/deletion/schedule"');
     expect(html).not.toContain("<script");
   });
 
@@ -112,6 +130,30 @@ describe("organization settings page", () => {
     expect(html).toContain('action="/admin/settings/name"');
     expect(html).not.toContain('action="/admin/settings/slug"');
     expect(html).not.toContain('action="/admin/settings/policy"');
+    expect(html).not.toContain("Ownership &amp; deletion");
+    expect(html).not.toContain('action="/admin/settings/deletion/schedule"');
+  });
+
+  test("shows the bounded grace period and cancellation control", async () => {
+    const html = await (
+      await testApp("owner", {
+        readLifecycle: () => ({
+          ownerCount: 1,
+          keyedOwnerCount: 1,
+          deletion: {
+            scheduleId: "schedule:one",
+            scheduledAt: "2026-07-14T06:00:00.000Z",
+            purgeAfter: "2026-07-21T06:00:00.000Z",
+            status: "scheduled",
+          },
+        }),
+      }).request("/admin/settings", { headers: browserHeaders })
+    ).text();
+
+    expect(html).toContain("2026-07-21 06:00:00 UTC");
+    expect(html).toContain('value="schedule:one"');
+    expect(html).toContain('action="/admin/settings/deletion/cancel"');
+    expect(html).not.toContain('action="/admin/settings/deletion/schedule"');
   });
 
   test("active organization switching re-scopes every read", async () => {
@@ -133,6 +175,8 @@ describe("organization settings forms", () => {
     let nameInput: UpdateOrganizationNameInput | undefined;
     let slugInput: UpdateOrganizationSlugInput | undefined;
     let policyInput: UpdateOrganizationPolicyInput | undefined;
+    let scheduleInput: ScheduleOrganizationDeletionInput | undefined;
+    let cancelInput: CancelOrganizationDeletionInput | undefined;
     const app = testApp("owner", {
       updateName: (input) => {
         nameInput = input;
@@ -145,6 +189,14 @@ describe("organization settings forms", () => {
       updatePolicy: (input) => {
         policyInput = input;
         return "updated";
+      },
+      scheduleDeletion: (input) => {
+        scheduleInput = input;
+        return "scheduled";
+      },
+      cancelDeletion: (input) => {
+        cancelInput = input;
+        return "cancelled";
       },
     });
 
@@ -188,6 +240,34 @@ describe("organization settings forms", () => {
       auditRetentionDays: 180,
       recentAuthentication: true,
     });
+
+    expect(
+      (
+        await postForm(app, "/admin/settings/deletion/schedule", {
+          confirmation: "First Org",
+        })
+      ).status,
+    ).toBe(303);
+    expect(scheduleInput).toMatchObject({
+      orgId: "org-1",
+      actorUserId: "actor-user",
+      confirmation: "First Org",
+      recentAuthentication: true,
+    });
+
+    expect(
+      (
+        await postForm(app, "/admin/settings/deletion/cancel", {
+          scheduleId: "schedule:one",
+        })
+      ).status,
+    ).toBe(303);
+    expect(cancelInput).toMatchObject({
+      orgId: "org-1",
+      actorUserId: "actor-user",
+      scheduleId: "schedule:one",
+      recentAuthentication: true,
+    });
   });
 
   test("untrusted origins and forged admin owner mutations fail before handlers", async () => {
@@ -196,6 +276,10 @@ describe("organization settings forms", () => {
       updateName: () => {
         mutations += 1;
         return Promise.resolve("updated");
+      },
+      scheduleDeletion: () => {
+        mutations += 1;
+        return "scheduled";
       },
     });
     const admin = testApp("admin", {
@@ -207,6 +291,10 @@ describe("organization settings forms", () => {
         mutations += 1;
         return "updated";
       },
+      scheduleDeletion: () => {
+        mutations += 1;
+        return "scheduled";
+      },
     });
 
     expect(
@@ -215,6 +303,16 @@ describe("organization settings forms", () => {
           owner,
           "/admin/settings/name",
           { expectedName: "First Org", name: "Attacker" },
+          "https://evil.test",
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await postForm(
+          owner,
+          "/admin/settings/deletion/schedule",
+          { confirmation: "First Org" },
           "https://evil.test",
         )
       ).status,
@@ -237,6 +335,13 @@ describe("organization settings forms", () => {
         })
       ).status,
     ).toBe(400);
+    expect(
+      (
+        await postForm(admin, "/admin/settings/deletion/schedule", {
+          confirmation: "First Org",
+        })
+      ).status,
+    ).toBe(400);
     expect(mutations).toBe(0);
   });
 
@@ -248,6 +353,10 @@ describe("organization settings forms", () => {
         recentAuthentication = input.recentAuthentication;
         return Promise.resolve("forbidden");
       },
+      scheduleDeletion: (input) => {
+        recentAuthentication = input.recentAuthentication;
+        return "forbidden";
+      },
     });
     const response = await postForm(app, "/admin/settings/slug", {
       expectedSlug: "first-org",
@@ -257,6 +366,14 @@ describe("organization settings forms", () => {
     expect(response.status).toBe(400);
     expect(recentAuthentication).toBe(false);
     expect(await response.text()).toContain("could not be completed");
+
+    const deletionResponse = await postForm(
+      app,
+      "/admin/settings/deletion/schedule",
+      { confirmation: "First Org" },
+    );
+    expect(deletionResponse.status).toBe(400);
+    expect(recentAuthentication).toBe(false);
   });
 
   test("members, signed-out browsers, API keys, and auth-off deployments cannot mutate", async () => {

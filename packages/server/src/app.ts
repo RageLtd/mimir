@@ -4,6 +4,11 @@ import { createOrganizationAuditStore } from "./audit/store";
 import { createClaimGuard } from "./auth/claim";
 import { getAuth, getAuthDb } from "./auth/instance";
 import {
+  cancelOrganizationDeletion,
+  readOrganizationLifecycle,
+  scheduleOrganizationDeletion,
+} from "./auth/organization-lifecycle";
+import {
   createOrganizationInvitation,
   listOrganizationMembers,
   reissueOrganizationInvitation,
@@ -55,6 +60,7 @@ const CONTROLLED_ORGANIZATION_MUTATIONS = new Set([
   "/api/auth/organization/update-member-role",
   "/api/auth/organization/remove-member",
   "/api/auth/organization/leave",
+  "/api/auth/organization/delete",
   "/api/auth/organization/update",
 ]);
 
@@ -126,6 +132,10 @@ export function createApp(options: AppOptions = {}) {
           headers,
         ),
       updatePolicy: (input) => updateOrganizationPolicy(getAuthDb(), input),
+      readLifecycle: (orgId) => readOrganizationLifecycle(getAuthDb(), orgId),
+      scheduleDeletion: (input) =>
+        scheduleOrganizationDeletion(getAuthDb(), input),
+      cancelDeletion: (input) => cancelOrganizationDeletion(getAuthDb(), input),
     };
   const organizationMemoryMaintenance: OrganizationMemoryMaintenanceOptions =
     options.organizationMemoryMaintenance ?? {

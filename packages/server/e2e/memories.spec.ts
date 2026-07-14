@@ -5,6 +5,7 @@ const UPDATED_MEMORY = "Playwright private canary beta";
 const ADMIN_MEMORY_A = "Playwright admin memory first";
 const ADMIN_MEMORY_B = "Playwright admin memory second";
 const ADMIN_UPDATED_MEMORY = "Playwright admin memory revised";
+const OWNER_EMAIL = "playwright@example.com";
 const MEMBER_EMAIL = "playwright-member@example.com";
 
 async function enableVirtualAuthenticator(context: BrowserContext, page: Page) {
@@ -77,7 +78,7 @@ test("manages encrypted memories and rotation-backed member access", async ({
 
   await page.goto("/sign-up");
   await page.getByLabel("Name").fill("Playwright User");
-  await page.getByLabel("Email").fill("playwright@example.com");
+  await page.getByLabel("Email").fill(OWNER_EMAIL);
   await page.getByLabel("Password").fill("playwright-password-123");
   await page.getByLabel(/Setup token/).fill("mimir-playwright-setup");
   await page.getByRole("button", { name: "Create account" }).click();
@@ -364,29 +365,68 @@ test("manages encrypted memories and rotation-backed member access", async ({
   const promotedAdminPage = await memberPage.goto("/admin/memories");
   expect(promotedAdminPage?.status()).toBe(200);
 
-  await activeMember.getByText("Remove Playwright Member").click();
-  await activeMember
-    .getByRole("button", { name: "Confirm rotation-backed removal" })
+  await page.goto("/admin/members");
+  const successor = page
+    .locator('[aria-labelledby="active-members-title"] .item')
+    .filter({ hasText: MEMBER_EMAIL });
+  await successor.getByLabel("Role").selectOption("owner");
+  await successor.getByRole("button", { name: "Change role" }).click();
+  await expect(page).toHaveURL(/\/admin\/members\?notice=role$/);
+  await expect(successor).toContainText("owner");
+
+  await memberPage.goto("/admin/settings");
+  const organizationName = await memberPage
+    .getByLabel("Display name")
+    .inputValue();
+  await expect(memberPage.locator("body")).toContainText(
+    "Recovery keys cannot restore ciphertext after the server purge",
+  );
+  await memberPage.getByLabel(/Type .* to confirm/).fill(organizationName);
+  await memberPage
+    .getByRole("button", { name: "Schedule organization deletion" })
+    .click();
+  await expect(memberPage).toHaveURL(
+    /\/admin\/settings\?notice=deletion-scheduled$/,
+  );
+  await memberPage
+    .getByRole("button", { name: "Cancel organization deletion" })
+    .click();
+  await expect(memberPage).toHaveURL(
+    /\/admin\/settings\?notice=deletion-cancelled$/,
+  );
+
+  await page.goto("/admin/members");
+  const departingOwner = page
+    .locator('[aria-labelledby="active-members-title"] .item')
+    .filter({ hasText: OWNER_EMAIL });
+  await departingOwner.getByText("Leave organization").click();
+  await departingOwner
+    .getByRole("button", { name: "Confirm rotation-backed departure" })
     .click();
   await expect(page).toHaveURL(/\/admin\/members\?notice=removed$/);
-  await expect(activeMember).toHaveCount(0);
+  await expect(page.locator("body")).toHaveText("Forbidden");
 
-  const removedPage = await memberPage.goto("/app");
-  expect(removedPage?.status()).toBe(403);
-  const removedAdminPage = await memberPage.goto("/admin/memories");
-  expect(removedAdminPage?.status()).toBe(403);
+  const successorApp = await memberPage.goto("/app");
+  expect(successorApp?.status()).toBe(200);
+  const successorAdmin = await memberPage.goto("/admin/memories");
+  expect(successorAdmin?.status()).toBe(200);
   expect(
     await memberPage.evaluate(() =>
       fetch("/v1/keys/org").then((response) => response.status),
     ),
-  ).toBe(403);
+  ).toBe(200);
 
-  await page.goto("/admin/activity");
-  await expect(page.locator("body")).not.toContainText(MEMBER_EMAIL);
-  await expect(page.locator("body")).toContainText(
+  await memberPage.goto("/admin/activity");
+  await expect(memberPage.locator("body")).not.toContainText(MEMBER_EMAIL);
+  await expect(memberPage.locator("body")).toContainText(
     "encryption.generation_changed",
   );
-  await expect(page.locator("body")).toContainText("memory.maintenance");
-  await expect(page.locator("body")).not.toContainText(ADMIN_UPDATED_MEMORY);
+  await expect(memberPage.locator("body")).toContainText(
+    "organization.ownership_changed",
+  );
+  await expect(memberPage.locator("body")).toContainText("memory.maintenance");
+  await expect(memberPage.locator("body")).not.toContainText(
+    ADMIN_UPDATED_MEMORY,
+  );
   await memberContext.close();
 });
