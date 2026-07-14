@@ -24,6 +24,7 @@
 
 import type { Database } from "bun:sqlite";
 import { type Context, Hono } from "hono";
+import { appendOrganizationAuditEvent } from "../audit/store";
 import { getAuthDb } from "../auth/instance";
 import {
   type OrganizationKeyWrap,
@@ -233,6 +234,18 @@ export function createKeysRoutes(
       );
       return c.json(NOT_FOUND, 404);
     }
+    const wrapRequestId = requestId(c.req.header("x-request-id"));
+    const auditWrap = (outcome: "intent" | "succeeded" | "failed") =>
+      appendOrganizationAuditEvent(r.db, {
+        orgId: r.identity.orgId,
+        actorUserId: r.identity.userId,
+        action: "encryption.wrap_provisioned",
+        targetType: "member",
+        targetId: target.memberId,
+        outcome,
+        requestId: wrapRequestId,
+      });
+    auditWrap("intent");
     // Only keyed members distribute wraps — except to THEMSELVES, the
     // recovery re-entry path (a wrap-less member writing garbage to their
     // own row hurts nobody else).
@@ -242,6 +255,7 @@ export function createKeysRoutes(
         { orgId: r.identity.orgId, memberId },
         "keys: wrap-less caller tried to wrap another member",
       );
+      auditWrap("failed");
       return c.json(FORBIDDEN, 403);
     }
     const updated = r.db.transaction(() => {
@@ -257,6 +271,7 @@ export function createKeysRoutes(
       r.db
         .query("UPDATE member SET wrappedOrgKey = ? WHERE id = ?")
         .run(wrappedOrgKey, memberId);
+      auditWrap("succeeded");
       return true;
     })();
     if (!updated) {
@@ -264,6 +279,7 @@ export function createKeysRoutes(
         { orgId: r.identity.orgId, memberId },
         "keys: wrap target already keyed",
       );
+      auditWrap("failed");
       return c.json(CONFLICT, 409);
     }
     log.info({ orgId: r.identity.orgId, memberId }, "keys: wrap delivered");

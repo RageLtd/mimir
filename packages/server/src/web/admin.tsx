@@ -30,7 +30,10 @@ export function renderOrganizationAdmin(c: Context<IdentityEnv>) {
         <div class="cards">
           <section class="card" aria-labelledby="members-title">
             <h2 id="members-title">Members &amp; invitations</h2>
-            <p>Manage organization access and organization-scoped roles.</p>
+            <p>
+              <a href="/admin/members">Manage members and invitations</a>,
+              organization roles, and encryption-key readiness.
+            </p>
           </section>
           <section class="card" aria-labelledby="settings-title">
             <h2 id="settings-title">Organization settings</h2>

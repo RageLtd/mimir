@@ -13,13 +13,6 @@ type RegistrationOptionsJSON = {
   attestation?: AttestationConveyancePreference;
 };
 
-type AuthenticationOptionsJSON = {
-  challenge: string;
-  rpId?: string;
-  timeout?: number;
-  userVerification?: UserVerificationRequirement;
-};
-
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const KEYSET_INFO = "mimir/keyset/v1";
@@ -295,26 +288,6 @@ function registrationResponse(credential: PublicKeyCredential) {
   };
 }
 
-function authenticationResponse(credential: PublicKeyCredential) {
-  if (!(credential.response instanceof AuthenticatorAssertionResponse)) {
-    throw new Error("Unexpected passkey response");
-  }
-  return {
-    id: credential.id,
-    rawId: toB64u(credential.rawId),
-    response: {
-      clientDataJSON: toB64u(credential.response.clientDataJSON),
-      authenticatorData: toB64u(credential.response.authenticatorData),
-      signature: toB64u(credential.response.signature),
-      userHandle: credential.response.userHandle
-        ? toB64u(credential.response.userHandle)
-        : null,
-    },
-    type: credential.type,
-    authenticatorAttachment: credential.authenticatorAttachment,
-  };
-}
-
 function prfOutput(credential: PublicKeyCredential) {
   const prf = Reflect.get(credential.getClientExtensionResults(), "prf");
   const results =
@@ -361,15 +334,10 @@ export async function registerPasskey(
 }
 
 export async function authenticate(credentialId: string, salt: Uint8Array) {
-  const raw = (await json(
-    "/api/auth/passkey/generate-authenticate-options",
-  )) as AuthenticationOptionsJSON;
   const credential = await navigator.credentials.get({
     publicKey: {
-      challenge: fromB64u(raw.challenge),
-      rpId: raw.rpId,
-      timeout: raw.timeout,
-      userVerification: raw.userVerification,
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      userVerification: "required",
       allowCredentials: [{ id: fromB64u(credentialId), type: "public-key" }],
       extensions: { prf: { eval: { first: buffer(salt) } } },
     },
@@ -378,9 +346,9 @@ export async function authenticate(credentialId: string, salt: Uint8Array) {
     throw new Error("Passkey unlock was cancelled");
   const output = prfOutput(credential);
   if (!output) throw new Error("This passkey does not support WebAuthn PRF");
-  await post("/api/auth/passkey/verify-authentication", {
-    response: authenticationResponse(credential),
-  });
+  // This assertion proves local authenticator possession only. Sending it to
+  // Better Auth would turn every key unlock into a new login session; both
+  // the challenge and PRF output stay in this browser instead.
   return output;
 }
 

@@ -13,6 +13,7 @@ export type OrganizationAuditAction =
   | "organization.deletion_scheduled"
   | "organization.deletion_cancelled"
   | "organization.deleted"
+  | "encryption.wrap_provisioned"
   | "encryption.generation_changed"
   | "memory.maintenance";
 
@@ -79,6 +80,7 @@ export const ORGANIZATION_AUDIT_ACTIONS: readonly OrganizationAuditAction[] = [
   "organization.deletion_scheduled",
   "organization.deletion_cancelled",
   "organization.deleted",
+  "encryption.wrap_provisioned",
   "encryption.generation_changed",
   "memory.maintenance",
 ];

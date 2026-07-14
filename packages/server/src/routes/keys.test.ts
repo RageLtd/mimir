@@ -215,6 +215,26 @@ describe("POST /v1/keys/wrap", () => {
     });
     expect(res.status).toBe(200);
     expect(memberRow(userB).wrappedOrgKey).toBe("wrap-b");
+    expect(
+      db
+        .query(
+          "SELECT action, target_id, outcome, metadata_json FROM organization_audit_event ORDER BY seq",
+        )
+        .all(),
+    ).toEqual([
+      {
+        action: "encryption.wrap_provisioned",
+        target_id: memberRow(userB).id,
+        outcome: "intent",
+        metadata_json: "{}",
+      },
+      {
+        action: "encryption.wrap_provisioned",
+        target_id: memberRow(userB).id,
+        outcome: "succeeded",
+        metadata_json: "{}",
+      },
+    ]);
     // B can read their own wrap back.
     const state = await getJson(await appFor(db, asB).request("/v1/keys/org"));
     expect((state.self as Record<string, unknown>).wrappedOrgKey).toBe(
@@ -339,6 +359,8 @@ describe("POST /v1/keys/rotate", () => {
         )
         .all(),
     ).toEqual([
+      { action: "encryption.wrap_provisioned", outcome: "intent" },
+      { action: "encryption.wrap_provisioned", outcome: "succeeded" },
       { action: "encryption.generation_changed", outcome: "intent" },
       { action: "membership.removed", outcome: "intent" },
       { action: "encryption.generation_changed", outcome: "succeeded" },
@@ -379,6 +401,8 @@ describe("POST /v1/keys/rotate", () => {
         .query("SELECT action, outcome FROM organization_audit_event ORDER BY seq")
         .all(),
     ).toEqual([
+      { action: "encryption.wrap_provisioned", outcome: "intent" },
+      { action: "encryption.wrap_provisioned", outcome: "succeeded" },
       { action: "encryption.generation_changed", outcome: "intent" },
       { action: "membership.removed", outcome: "intent" },
       { action: "encryption.generation_changed", outcome: "failed" },

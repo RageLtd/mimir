@@ -86,7 +86,7 @@ export const createOrganizationAdminGate =
     if (!sessionIdentity.orgId) return c.text("Forbidden", 403);
 
     const identity = await enrichIdentity(
-      { userId: sessionIdentity.userId, orgId: sessionIdentity.orgId },
+      { ...sessionIdentity, orgId: sessionIdentity.orgId },
       headers,
       memberLookup,
     );

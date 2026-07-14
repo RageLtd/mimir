@@ -7,7 +7,7 @@ import {
   COLD_LOAD_BUDGET_BYTES,
   MINIMUM_PUBLIC_HTTP_VERSION,
   measureFirstLoad,
-  SINGLE_DATAGRAM_TARGET_BYTES,
+  SINGLE_PACKET_PAYLOAD_TARGET_BYTES,
 } from "../src/web/transfer-budget";
 
 const fetcher = (path: string, init?: RequestInit) => web.request(path, init);
@@ -76,6 +76,60 @@ const credentialWeb = createWeb({
 });
 const credentialFetcher = (path: string, init?: RequestInit) =>
   credentialWeb.request(path, init);
+const memberWeb = new Hono<IdentityEnv>();
+memberWeb.use("*", (c, next) => {
+  c.set("identity", {
+    userId: "user-1",
+    orgId: "org-1",
+    organizationRoles: ["owner"],
+  });
+  return next();
+});
+memberWeb.route(
+  "/",
+  createWeb({
+    organizationAdmin: true,
+    organizationMembers: {
+      origin: "https://mimir.local",
+      list: () => ({
+        keyGeneration: 1,
+        members: [
+          {
+            id: "member-1",
+            userId: "user-1",
+            name: "Owner",
+            email: "owner@example.test",
+            role: "owner",
+            joinedAt: "2026-07-13T00:00:00.000Z",
+            publicKeyRegistered: true,
+            wrapAvailable: true,
+            readiness: "ready",
+          },
+          {
+            id: "member-2",
+            userId: "user-2",
+            name: "Member",
+            email: "member@example.test",
+            role: "member",
+            joinedAt: "2026-07-14T00:00:00.000Z",
+            publicKeyRegistered: true,
+            wrapAvailable: false,
+            readiness: "pending",
+          },
+        ],
+        invitations: [],
+        nextMemberCursor: null,
+        nextInvitationCursor: null,
+      }),
+      invite: () => Promise.resolve("created"),
+      revokeInvitation: () => Promise.resolve("revoked"),
+      reissueInvitation: () => Promise.resolve("reissued"),
+      request: () => Response.json({ ok: true }),
+    },
+  }),
+);
+const memberFetcher = (path: string, init?: RequestInit) =>
+  memberWeb.request(path, init);
 const encodings: WebEncoding[] = ["identity", "br", "zstd", "gzip", "deflate"];
 const reports = [];
 for (const route of ["/sign-in", "/sign-up", "/app"]) {
@@ -91,6 +145,9 @@ for (const encoding of encodings) {
   reports.push(
     await measureFirstLoad(credentialFetcher, "/app/credentials", encoding),
   );
+  reports.push(
+    await measureFirstLoad(memberFetcher, "/admin/members", encoding),
+  );
   reports.push(await measureFirstLoad(fetcher, "/app/memories", encoding));
 }
 
@@ -101,7 +158,7 @@ process.stdout.write(
     {
       budgets: {
         minimumPublicHttpVersion: MINIMUM_PUBLIC_HTTP_VERSION,
-        singleDatagramTargetBytes: SINGLE_DATAGRAM_TARGET_BYTES,
+        singlePacketPayloadTargetBytes: SINGLE_PACKET_PAYLOAD_TARGET_BYTES,
         coldLoadHardLimitBytes: COLD_LOAD_BUDGET_BYTES,
       },
       reports,

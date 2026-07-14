@@ -1,12 +1,10 @@
-import { expect, test } from "@playwright/test";
+import { type BrowserContext, expect, type Page, test } from "@playwright/test";
 
 const MEMORY = "Playwright private canary alpha";
 const UPDATED_MEMORY = "Playwright private canary beta";
+const MEMBER_EMAIL = "playwright-member@example.com";
 
-test("enrolls, unlocks, manages, and fails closed on encrypted memories", async ({
-  context,
-  page,
-}) => {
+async function enableVirtualAuthenticator(context: BrowserContext, page: Page) {
   const cdp = await context.newCDPSession(page);
   await cdp.send("WebAuthn.enable", { enableUI: false });
   await cdp.send("WebAuthn.addVirtualAuthenticator", {
@@ -21,9 +19,24 @@ test("enrolls, unlocks, manages, and fails closed on encrypted memories", async 
       isUserVerified: true,
     },
   });
+}
+
+test("manages encrypted memories and rotation-backed member access", async ({
+  browser,
+  context,
+  page,
+}) => {
+  await enableVirtualAuthenticator(context, page);
 
   const syncRequests: Array<{ url: string; body: string }> = [];
+  const passkeySignIns: string[] = [];
   page.on("request", (request) => {
+    if (
+      request.url().includes("/passkey/generate-authenticate-options") ||
+      request.url().includes("/passkey/verify-authentication")
+    ) {
+      passkeySignIns.push(request.url());
+    }
     if (!request.url().includes("/v1/sync/")) return;
     syncRequests.push({ url: request.url(), body: request.postData() ?? "" });
   });
@@ -145,4 +158,109 @@ test("enrolls, unlocks, manages, and fails closed on encrypted memories", async 
     "Memory tombstone synchronized",
   );
   await expect(page.locator(".memory-item")).toHaveCount(0);
+  expect(passkeySignIns).toHaveLength(0);
+
+  await page.goto("/admin/members");
+  const inviteCard = page.locator("section.card").filter({
+    has: page.getByRole("heading", { name: "Invite a member" }),
+  });
+  await inviteCard.getByLabel("Email").fill(MEMBER_EMAIL);
+  await inviteCard.getByLabel("Role").selectOption("member");
+  await inviteCard.getByRole("button", { name: "Create invitation" }).click();
+  await expect(page).toHaveURL(/\/admin\/members\?notice=invited$/);
+  await expect(page.locator("body")).toContainText(MEMBER_EMAIL);
+
+  const keyMaterial = await page.evaluate(async () => {
+    const state: unknown = await fetch("/v1/keys/org").then((response) =>
+      response.json(),
+    );
+    if (typeof state !== "object" || state === null) return [];
+    const self = Reflect.get(state, "self");
+    const members = Reflect.get(state, "members");
+    return [
+      Reflect.get(state, "recoveryPublicKey"),
+      Reflect.get(state, "wrappedRecoveryKey"),
+      typeof self === "object" && self ? Reflect.get(self, "publicKey") : null,
+      typeof self === "object" && self
+        ? Reflect.get(self, "encryptedKeyset")
+        : null,
+      typeof self === "object" && self
+        ? Reflect.get(self, "wrappedOrgKey")
+        : null,
+      ...(Array.isArray(members)
+        ? members.map((member) =>
+            typeof member === "object" && member
+              ? Reflect.get(member, "publicKey")
+              : null,
+          )
+        : []),
+    ].flatMap((value) => (typeof value === "string" && value ? [value] : []));
+  });
+  const memberDirectoryHtml = await page.content();
+  for (const value of keyMaterial) {
+    expect(memberDirectoryHtml).not.toContain(value);
+  }
+
+  const origin = new URL(page.url()).origin;
+  const memberContext = await browser.newContext({ baseURL: origin });
+  const memberPage = await memberContext.newPage();
+  await enableVirtualAuthenticator(memberContext, memberPage);
+
+  await memberPage.goto("/sign-up");
+  await memberPage.getByLabel("Name").fill("Playwright Member");
+  await memberPage.getByLabel("Email").fill(MEMBER_EMAIL);
+  await memberPage
+    .getByLabel("Password")
+    .fill("playwright-member-password-123");
+  await memberPage.getByRole("button", { name: "Create account" }).click();
+  await expect(memberPage).toHaveURL(/\/app$/);
+
+  await memberPage.goto("/app/credentials");
+  await memberPage.getByRole("button", { name: "Enroll browser" }).click();
+  await expect(memberPage.locator("p[role=status]")).toContainText(
+    "Browser enrolled and locally verified",
+  );
+
+  await page.goto("/admin/members");
+  const activeMember = page
+    .locator('[aria-labelledby="active-members-title"] .item')
+    .filter({ hasText: MEMBER_EMAIL });
+  await expect(activeMember).toContainText("Pending key access");
+  await page
+    .getByRole("button", { name: "Provision pending key access" })
+    .click();
+  await expect(activeMember).toContainText("Key access available");
+
+  await memberPage.reload();
+  await memberPage.getByRole("button", { name: "Unlock", exact: true }).click();
+  await expect(memberPage.locator("p[role=status]")).toContainText(
+    "organization key generation 1",
+  );
+
+  await activeMember.getByLabel("Role").selectOption("admin");
+  await activeMember.getByRole("button", { name: "Change role" }).click();
+  await expect(page).toHaveURL(/\/admin\/members\?notice=role$/);
+  await expect(activeMember).toContainText("admin");
+
+  await activeMember.getByText("Remove Playwright Member").click();
+  await activeMember
+    .getByRole("button", { name: "Confirm rotation-backed removal" })
+    .click();
+  await expect(page).toHaveURL(/\/admin\/members\?notice=removed$/);
+  await expect(activeMember).toHaveCount(0);
+
+  const removedPage = await memberPage.goto("/app");
+  expect(removedPage?.status()).toBe(403);
+  expect(
+    await memberPage.evaluate(() =>
+      fetch("/v1/keys/org").then((response) => response.status),
+    ),
+  ).toBe(403);
+
+  await page.goto("/admin/activity");
+  await expect(page.locator("body")).not.toContainText(MEMBER_EMAIL);
+  await expect(page.locator("body")).toContainText(
+    "encryption.generation_changed",
+  );
+  await memberContext.close();
 });

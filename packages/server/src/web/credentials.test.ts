@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { betterAuth } from "better-auth";
 import { getMigrations } from "better-auth/db/migration";
 import { createApp } from "../app";
+import { migrateOrganizationAudit } from "../audit/store";
 import {
   bootstrapOwnerOrg,
   createClaimGuard,
@@ -22,6 +23,7 @@ async function credentialApp() {
   const options = buildAuthOptions(db, TEST_SECRET);
   const { runMigrations } = await getMigrations(options);
   await runMigrations();
+  migrateOrganizationAudit(db);
   const auth = betterAuth(options);
   const app = createApp({
     authEnabled: true,
@@ -29,6 +31,7 @@ async function credentialApp() {
     claimGuard: createClaimGuard({
       db,
       setupToken: SETUP_TOKEN,
+      auth,
       bootstrap: (response) => bootstrapOwnerOrg(response, auth),
     }),
     sessionLookup: (headers) => auth.api.getSession({ headers }),

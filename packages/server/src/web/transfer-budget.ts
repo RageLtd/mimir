@@ -1,6 +1,8 @@
 import type { WebEncoding } from "./compression";
 
-export const SINGLE_DATAGRAM_TARGET_BYTES = 1_000;
+// Aspirational TCP payload ceiling that leaves room for IPv6 and TCP headers
+// inside the 1,280-byte minimum IPv6 MTU. Packetization remains transport-owned.
+export const SINGLE_PACKET_PAYLOAD_TARGET_BYTES = 1_000;
 export const COLD_LOAD_BUDGET_BYTES = 10 * 1_024;
 export const MINIMUM_PUBLIC_HTTP_VERSION = 2;
 
@@ -244,8 +246,8 @@ export async function measureFirstLoad(
   const hardLimitMet = budgetEnforced
     ? withinHardLimit && discovered.externalResources.length === 0
     : null;
-  const singleDatagramMet =
-    totalBytes <= SINGLE_DATAGRAM_TARGET_BYTES &&
+  const singlePacketPayloadMet =
+    totalBytes <= SINGLE_PACKET_PAYLOAD_TARGET_BYTES &&
     requestCount === 1 &&
     bytesByKind.javascript === 0 &&
     discovered.externalResources.length === 0;
@@ -264,8 +266,8 @@ export async function measureFirstLoad(
     budgetEnforced,
     withinHardLimit,
     hardLimitMet,
-    singleDatagramTargetBytes: SINGLE_DATAGRAM_TARGET_BYTES,
-    singleDatagramMet,
+    singlePacketPayloadTargetBytes: SINGLE_PACKET_PAYLOAD_TARGET_BYTES,
+    singlePacketPayloadMet,
   };
 }
 

@@ -3,7 +3,13 @@ import { cors } from "hono/cors";
 import { createOrganizationAuditStore } from "./audit/store";
 import { createClaimGuard } from "./auth/claim";
 import { getAuth, getAuthDb } from "./auth/instance";
-import { SIGNUP_PATH } from "./auth/paths";
+import {
+  createOrganizationInvitation,
+  listOrganizationMembers,
+  reissueOrganizationInvitation,
+  revokeOrganizationInvitation,
+} from "./auth/organization-members";
+import { SIGNIN_PATH, SIGNUP_PATH } from "./auth/paths";
 import { config } from "./config";
 import { getTenantDb } from "./db/tenant";
 import {
@@ -32,7 +38,16 @@ import { log } from "./util/logger";
 import { attemptSync } from "./util/result";
 import { createWeb } from "./web";
 import type { OrganizationAuditList } from "./web/activity";
+import type { OrganizationMembersOptions } from "./web/members";
 import { isPublicWebPath } from "./web/paths";
+
+const CONTROLLED_ORGANIZATION_MUTATIONS = new Set([
+  "/api/auth/organization/invite-member",
+  "/api/auth/organization/cancel-invitation",
+  "/api/auth/organization/update-member-role",
+  "/api/auth/organization/remove-member",
+  "/api/auth/organization/leave",
+]);
 
 interface AppOptions {
   authEnabled?: boolean;
@@ -43,6 +58,7 @@ interface AppOptions {
   membershipLookup?: MembershipLookup;
   activeMemberLookup?: ActiveMemberLookup;
   organizationAuditList?: OrganizationAuditList;
+  organizationMembers?: OrganizationMembersOptions;
   keyRoutes?: ReturnType<typeof createKeysRoutes>;
   memberRoutes?: ReturnType<typeof createMembersRoutes>;
   operatorToken?: string;
@@ -65,6 +81,19 @@ export function createApp(options: AppOptions = {}) {
       ? (_identity: { userId: string; orgId: string }, headers: Headers) =>
           activeMemberLookup(headers)
       : undefined);
+  const organizationMembers: OrganizationMembersOptions =
+    options.organizationMembers ?? {
+      origin: new URL(config.auth.baseUrl).origin,
+      list: (orgId, filters) =>
+        listOrganizationMembers(getAuthDb(), orgId, filters),
+      invite: (input, headers) =>
+        createOrganizationInvitation(getAuthDb(), getAuth(), input, headers),
+      revokeInvitation: (input, headers) =>
+        revokeOrganizationInvitation(getAuthDb(), getAuth(), input, headers),
+      reissueInvitation: (input, headers) =>
+        reissueOrganizationInvitation(getAuthDb(), getAuth(), input, headers),
+      request: (path, init) => app.request(path, init),
+    };
 
   app.use("*", cors());
   app.use("*", createOperatorGate(options.operatorToken));
@@ -79,6 +108,16 @@ export function createApp(options: AppOptions = {}) {
     const authHandler =
       options.authHandler ?? ((request) => getAuth().handler(request));
     app.use(SIGNUP_PATH, claimGuard);
+    app.use(SIGNIN_PATH, claimGuard);
+    app.use("/api/auth/organization/*", async (c, next) => {
+      if (
+        c.req.method === "POST" &&
+        CONTROLLED_ORGANIZATION_MUTATIONS.has(c.req.path)
+      ) {
+        return c.json({ error: { message: "Forbidden" } }, 403);
+      }
+      return next();
+    });
     app.on(["POST", "GET"], "/api/auth/*", (c) => authHandler(c.req.raw));
     app.get("/", createRootRedirect(options.sessionLookup));
     app.use(
@@ -141,6 +180,7 @@ export function createApp(options: AppOptions = {}) {
     createWeb({
       organizationAdmin: authEnabled,
       ...(authEnabled ? { organizationAuditList } : {}),
+      ...(authEnabled ? { organizationMembers } : {}),
       ...(authEnabled
         ? {
             authForms: {

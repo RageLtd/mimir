@@ -17,11 +17,16 @@
 import type { Database } from "bun:sqlite";
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { Context, Next } from "hono";
+import {
+  type AppendOrganizationAuditEvent,
+  createOrganizationAuditStore,
+} from "../audit/store";
 import { config } from "../config";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 import { getAuth, getAuthDb } from "./instance";
-import { SETUP_TOKEN_HEADER } from "./paths";
+import { organizationInvitationTarget } from "./organization-members";
+import { SETUP_TOKEN_HEADER, SIGNIN_PATH, SIGNUP_PATH } from "./paths";
 
 const CLOSED_MESSAGE = "Sign-up is closed";
 
@@ -88,7 +93,9 @@ export function pendingInviteExists(db: Database, email: string) {
   if (!email) return false;
   const row = db
     .query(
-      "SELECT count(*) AS c FROM invitation WHERE email = ? AND status = 'pending'",
+      `SELECT count(*) AS c FROM invitation
+        WHERE lower(email) = lower(?) AND status = 'pending'
+          AND datetime(expiresAt) > datetime('now')`,
     )
     .get(email) as { c: number };
   return row.c > 0;
@@ -146,6 +153,102 @@ export async function bootstrapOwnerOrg(
   log.info({ orgId: org.id }, "instance claimed — owner org created");
 }
 
+function sessionUser(value: unknown) {
+  if (typeof value !== "object" || value === null || !("user" in value)) {
+    return null;
+  }
+  const user = value.user;
+  if (
+    typeof user !== "object" ||
+    user === null ||
+    !("id" in user) ||
+    typeof user.id !== "string" ||
+    !("email" in user) ||
+    typeof user.email !== "string"
+  ) {
+    return null;
+  }
+  return { id: user.id, email: user.email };
+}
+
+export async function acceptPendingInvitations(
+  db: Database,
+  response: { headers: { getSetCookie(): string[] } },
+  auth = getAuth(),
+) {
+  const cookie = setCookiesToCookieHeader(response.headers.getSetCookie());
+  if (!cookie) return { accepted: 0, failed: 0 };
+  const headers = new Headers({ cookie });
+  const [sessionError, session] = await attempt(() =>
+    auth.api.getSession({ headers }),
+  );
+  const user = sessionError ? null : sessionUser(session);
+  if (!user) return { accepted: 0, failed: 0 };
+  const invitations = db
+    .query<{ id: string; organizationId: string }, [string]>(
+      `SELECT id, organizationId FROM invitation
+        WHERE lower(email) = lower(?) AND status = 'pending'
+          AND datetime(expiresAt) > datetime('now')
+        ORDER BY createdAt, id`,
+    )
+    .all(user.email);
+  let accepted = 0;
+  let failed = 0;
+  let acceptedOrgId = "";
+  const audit = createOrganizationAuditStore(db);
+  for (const invitation of invitations) {
+    const requestId = crypto.randomUUID();
+    const event: Omit<AppendOrganizationAuditEvent, "outcome" | "metadata"> = {
+      orgId: invitation.organizationId,
+      actorUserId: user.id,
+      action: "invitation.accepted",
+      targetType: "invitation",
+      targetId: organizationInvitationTarget(
+        invitation.organizationId,
+        user.email,
+      ),
+      requestId,
+    };
+    audit.append({ ...event, outcome: "intent" });
+    const [error] = await attempt(() =>
+      auth.api.acceptInvitation({
+        body: { invitationId: invitation.id },
+        headers,
+      }),
+    );
+    if (error) {
+      failed += 1;
+      audit.append({
+        ...event,
+        outcome: "failed",
+        metadata: { reasonCode: "dependency" },
+      });
+    } else {
+      accepted += 1;
+      acceptedOrgId ||= invitation.organizationId;
+      audit.append({ ...event, outcome: "succeeded" });
+    }
+  }
+  if (accepted > 0 && acceptedOrgId) {
+    const [activeError] = await attempt(() =>
+      auth.api.setActiveOrganization({
+        body: { organizationId: acceptedOrgId },
+        headers,
+      }),
+    );
+    if (activeError) {
+      log.warn("accepted invitation could not be made the active organization");
+    }
+  }
+  if (failed > 0) {
+    log.warn(
+      { accepted, failed },
+      "some pending invitations were not accepted",
+    );
+  }
+  return { accepted, failed };
+}
+
 /**
  * Hono middleware guarding the email signup endpoint. Mounted on
  * The sign-up API path before the better-auth handler; everything except POST
@@ -155,12 +258,26 @@ interface ClaimGuardOptions {
   db?: Database;
   setupToken?: string;
   bootstrap?: typeof bootstrapOwnerOrg;
+  auth?: ReturnType<typeof getAuth>;
 }
 
 export const createClaimGuard =
   (options: ClaimGuardOptions = {}) =>
   async (c: Context, next: Next) => {
     if (c.req.method !== "POST") return next();
+
+    if (c.req.path === SIGNIN_PATH) {
+      await next();
+      if (c.res.status === 200) {
+        await acceptPendingInvitations(
+          options.db ?? getAuthDb(),
+          c.res.clone(),
+          options.auth ?? getAuth(),
+        );
+      }
+      return;
+    }
+    if (c.req.path !== SIGNUP_PATH) return next();
 
     const db = options.db ?? getAuthDb();
     const setupToken = options.setupToken ?? config.auth.setupToken;
@@ -196,5 +313,11 @@ export const createClaimGuard =
 
     if (decision.claim && c.res.status === 200) {
       await (options.bootstrap ?? bootstrapOwnerOrg)(c.res.clone());
+    } else if (c.res.status === 200) {
+      await acceptPendingInvitations(
+        db,
+        c.res.clone(),
+        options.auth ?? getAuth(),
+      );
     }
   };

@@ -25,7 +25,21 @@ import {
   createRevokeSessionAction,
 } from "./credential-actions";
 import { type CredentialOptions, renderCredentials } from "./credentials";
-import { credentialIslandResponse, memoryIslandResponse } from "./islands";
+import {
+  credentialIslandResponse,
+  memberIslandResponse,
+  memoryIslandResponse,
+} from "./islands";
+import {
+  createChangeMemberRoleAction,
+  createInviteMemberAction,
+  createReissueInvitationAction,
+  createRevokeInvitationAction,
+} from "./member-actions";
+import {
+  type OrganizationMembersOptions,
+  renderOrganizationMembers,
+} from "./members";
 import { renderMemories } from "./memories";
 
 interface WebOptions {
@@ -33,6 +47,7 @@ interface WebOptions {
   credentials?: CredentialOptions;
   organizationAdmin?: boolean;
   organizationAuditList?: OrganizationAuditList;
+  organizationMembers?: OrganizationMembersOptions;
 }
 
 export function createWeb(options: WebOptions = {}) {
@@ -44,6 +59,7 @@ export function createWeb(options: WebOptions = {}) {
   web.get("/sign-up", (c) => renderSignUp(c));
   web.get("/assets/credentials.js", credentialIslandResponse);
   web.get("/assets/memories.js", memoryIslandResponse);
+  web.get("/assets/members.js", memberIslandResponse);
   if (options.authForms) {
     web.post("/sign-in", createSignInAction(options.authForms));
     web.post("/sign-up", createSignUpAction(options.authForms));
@@ -82,6 +98,28 @@ export function createWeb(options: WebOptions = {}) {
     if (organizationAuditList) {
       web.get("/admin/activity", (c) =>
         renderOrganizationActivity(c, organizationAuditList),
+      );
+    }
+    const organizationMembers = options.organizationMembers;
+    if (organizationMembers) {
+      web.get("/admin/members", (c) =>
+        renderOrganizationMembers(c, organizationMembers),
+      );
+      web.post(
+        "/admin/members/invite",
+        createInviteMemberAction(organizationMembers),
+      );
+      web.post(
+        "/admin/members/invitations/revoke",
+        createRevokeInvitationAction(organizationMembers),
+      );
+      web.post(
+        "/admin/members/invitations/reissue",
+        createReissueInvitationAction(organizationMembers),
+      );
+      web.post(
+        "/admin/members/role",
+        createChangeMemberRoleAction(organizationMembers),
       );
     }
   }

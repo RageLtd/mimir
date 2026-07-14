@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { betterAuth } from "better-auth";
 import { getMigrations } from "better-auth/db/migration";
 import { createApp } from "../app";
+import { migrateOrganizationAudit } from "../audit/store";
 import {
   bootstrapOwnerOrg,
   countUsers,
@@ -22,6 +23,7 @@ async function formApp() {
   const options = buildAuthOptions(db, TEST_SECRET);
   const { runMigrations } = await getMigrations(options);
   await runMigrations();
+  migrateOrganizationAudit(db);
   const auth = betterAuth(options);
   const app = createApp({
     authEnabled: true,
@@ -29,6 +31,7 @@ async function formApp() {
     claimGuard: createClaimGuard({
       db,
       setupToken: SETUP_TOKEN,
+      auth,
       bootstrap: (response) => bootstrapOwnerOrg(response, auth),
     }),
     sessionLookup: (headers) => auth.api.getSession({ headers }),
@@ -164,6 +167,16 @@ describe("Better Auth HTML forms", () => {
     });
     expect(invitedSignup.status).toBe(303);
     expect(countUsers(db)).toBe(2);
+    expect(
+      db
+        .query(
+          `SELECT i.status, m.role
+             FROM invitation i JOIN member m ON m.organizationId = i.organizationId
+             JOIN "user" u ON u.id = m.userId
+            WHERE i.email = 'invited@example.test' AND u.email = i.email`,
+        )
+        .get(),
+    ).toEqual({ status: "accepted", role: "member" });
   });
 
   test("origin failures and invalid credentials stay generic and do not reflect secrets", async () => {

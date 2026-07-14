@@ -53,6 +53,62 @@ const createActivityWeb = () => {
   return app;
 };
 
+const createMemberWeb = () => {
+  const app = new Hono<IdentityEnv>();
+  app.use("*", (c, next) => {
+    c.set("identity", {
+      userId: "user-1",
+      orgId: "org-1",
+      organizationRoles: ["owner"],
+    });
+    return next();
+  });
+  app.route(
+    "/",
+    createWeb({
+      organizationAdmin: true,
+      organizationMembers: {
+        origin: "https://mimir.local",
+        list: () => ({
+          keyGeneration: 1,
+          members: [
+            {
+              id: "member-1",
+              userId: "user-1",
+              name: "Owner",
+              email: "owner@example.test",
+              role: "owner",
+              joinedAt: "2026-07-13T00:00:00.000Z",
+              publicKeyRegistered: true,
+              wrapAvailable: true,
+              readiness: "ready",
+            },
+            {
+              id: "member-2",
+              userId: "user-2",
+              name: "Member",
+              email: "member@example.test",
+              role: "member",
+              joinedAt: "2026-07-14T00:00:00.000Z",
+              publicKeyRegistered: true,
+              wrapAvailable: false,
+              readiness: "pending",
+            },
+          ],
+          invitations: [],
+          nextMemberCursor: null,
+          nextInvitationCursor: null,
+        }),
+        invite: () => Promise.resolve("created"),
+        revokeInvitation: () => Promise.resolve("revoked"),
+        reissueInvitation: () => Promise.resolve("reissued"),
+        request: () => Response.json({ ok: true }),
+      },
+    }),
+  );
+  return app;
+};
+
 describe("critical resource discovery", () => {
   test("finds same-origin initial assets and rejects third-party paths", () => {
     const found = discoverCriticalResources(
@@ -178,6 +234,40 @@ describe("first-load measurement", () => {
     expect(bundle).not.toContain("from\"");
     expect(bundle).not.toContain("node:");
     expect(bundle).not.toContain("playwright");
+    expect(bundle).not.toContain("generate-authenticate-options");
+    expect(bundle).not.toContain("verify-authentication");
+  });
+
+  test("member island is route-scoped, runtime-free, and inside the hard gate", async () => {
+    const fetcher = fetchWith(createMemberWeb());
+    const identity = await measureFirstLoad(
+      fetcher,
+      "/admin/members",
+      "identity",
+    );
+    const compressed = await Promise.all(
+      compressedEncodings.map((encoding) =>
+        measureFirstLoad(fetcher, "/admin/members", encoding),
+      ),
+    );
+    const bundle = await buildIsland("members");
+
+    assertTransferBudget(identity);
+    expect(identity.requestCount).toBe(2);
+    expect(identity.bytesByKind.javascript).toBeGreaterThan(0);
+    expect(bundle).toContain(
+      'customElements.define("mimir-member-key-manager"',
+    );
+    expect(bundle).not.toContain("from\"");
+    expect(bundle).not.toContain("node:");
+    expect(bundle).not.toContain("playwright");
+    expect(bundle).not.toContain("generate-authenticate-options");
+    expect(bundle).not.toContain("verify-authentication");
+    for (const report of compressed) {
+      assertTransferBudget(report);
+      expect(report.totalBytes).toBeLessThan(identity.totalBytes);
+      expect(report.protocol).toBe("h2");
+    }
   });
 
   test("memory island is route-scoped, dependency-free, and inside the hard gate", async () => {
