@@ -8,10 +8,11 @@ import {
   type ResolvedIdentity,
   type SessionLookup,
 } from "./identity";
+import { canManageOrganization } from "./organization-roles";
+
+export { canManageOrganization } from "./organization-roles";
 
 export type ActiveMemberLookup = (headers: Headers) => Promise<unknown>;
-
-const ADMIN_ROLES = new Set(["owner", "admin"]);
 
 const defaultActiveMemberLookup: ActiveMemberLookup = (headers) =>
   getAuth().api.getActiveMember({ headers });
@@ -43,12 +44,6 @@ export function readOrganizationMembership(
   const organizationRoles = readRoles(value.role);
   if (organizationRoles.length === 0) return null;
   return { ...identity, organizationRoles } satisfies ResolvedIdentity;
-}
-
-export function canManageOrganization(identity: ResolvedIdentity | undefined) {
-  return Boolean(
-    identity?.organizationRoles?.some((role) => ADMIN_ROLES.has(role)),
-  );
 }
 
 async function enrichIdentity(

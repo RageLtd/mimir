@@ -19,6 +19,7 @@ import { passkey } from "@better-auth/passkey";
 import { type BetterAuthOptions, betterAuth } from "better-auth";
 import { getMigrations } from "better-auth/db/migration";
 import { organization } from "better-auth/plugins";
+import { migrateOrganizationAudit } from "../audit/store";
 import { config } from "../config";
 
 /**
@@ -171,4 +172,5 @@ export function getAuth() {
 export async function runAuthMigrations() {
   const { runMigrations } = await getMigrations(getAuth().options);
   await runMigrations();
+  migrateOrganizationAudit(getAuthDb());
 }

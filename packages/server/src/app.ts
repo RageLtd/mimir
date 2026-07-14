@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { createOrganizationAuditStore } from "./audit/store";
 import { createClaimGuard } from "./auth/claim";
-import { getAuth } from "./auth/instance";
+import { getAuth, getAuthDb } from "./auth/instance";
 import { SIGNUP_PATH } from "./auth/paths";
 import { config } from "./config";
 import { getTenantDb } from "./db/tenant";
@@ -28,6 +29,7 @@ import { systemPrompt } from "./routes/system-prompt";
 import { log } from "./util/logger";
 import { attemptSync } from "./util/result";
 import { createWeb } from "./web";
+import type { OrganizationAuditList } from "./web/activity";
 import { isPublicWebPath } from "./web/paths";
 
 interface AppOptions {
@@ -37,6 +39,7 @@ interface AppOptions {
   sessionLookup?: SessionLookup;
   orgLister?: OrgLister;
   activeMemberLookup?: ActiveMemberLookup;
+  organizationAuditList?: OrganizationAuditList;
   keyRoutes?: ReturnType<typeof createKeysRoutes>;
   operatorToken?: string;
 }
@@ -44,6 +47,13 @@ interface AppOptions {
 export function createApp(options: AppOptions = {}) {
   const app = new Hono<IdentityEnv>();
   const authEnabled = options.authEnabled ?? config.auth.enabled;
+  let auditStore: ReturnType<typeof createOrganizationAuditStore> | null = null;
+  const organizationAuditList: OrganizationAuditList =
+    options.organizationAuditList ??
+    ((orgId, filters) => {
+      auditStore ??= createOrganizationAuditStore(getAuthDb());
+      return auditStore.list(orgId, filters);
+    });
 
   app.use("*", cors());
   app.use("*", createOperatorGate(options.operatorToken));
@@ -113,6 +123,7 @@ export function createApp(options: AppOptions = {}) {
     "/",
     createWeb({
       organizationAdmin: authEnabled,
+      ...(authEnabled ? { organizationAuditList } : {}),
       ...(authEnabled
         ? {
             authForms: {

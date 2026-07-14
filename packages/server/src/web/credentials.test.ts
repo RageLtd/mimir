@@ -33,6 +33,7 @@ async function credentialApp() {
     }),
     sessionLookup: (headers) => auth.api.getSession({ headers }),
     orgLister: (headers) => auth.api.listOrganizations({ headers }),
+    activeMemberLookup: (headers) => auth.api.getActiveMember({ headers }),
     keyRoutes: createKeysRoutes(() => db),
   });
   const signup = await postForm(

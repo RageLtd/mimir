@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { type Env, Hono } from "hono";
 import { createWeb, web } from ".";
+import type { IdentityEnv } from "../middleware/identity";
+import type { WebEncoding } from "./compression";
 import { buildIsland } from "./islands";
 import {
   assertTransferBudget,
@@ -12,6 +14,44 @@ import {
 const fetchWith = <E extends Env>(app: Hono<E>) =>
   (path: string, init?: RequestInit) =>
     app.request(path, init);
+const compressedEncodings: WebEncoding[] = ["br", "zstd", "gzip", "deflate"];
+
+const createActivityWeb = () => {
+  const app = new Hono<IdentityEnv>();
+  app.use("*", (c, next) => {
+    c.set("identity", {
+      userId: "user-1",
+      orgId: "org-1",
+      organizationRoles: ["owner"],
+    });
+    return next();
+  });
+  app.route(
+    "/",
+    createWeb({
+      organizationAdmin: true,
+      organizationAuditList: () => ({
+        events: [
+          {
+            id: "event-1",
+            actorUserId: "user-1",
+            action: "membership.role_changed",
+            targetType: "member",
+            targetId: "member-2",
+            outcome: "succeeded",
+            requestId: "request-1",
+            metadata: { fromRole: "member", toRole: "admin" },
+            createdAt: "2026-07-13T00:00:00.000Z",
+            cursor: "MQ",
+          },
+        ],
+        nextCursor: null,
+        retentionDays: 365,
+      }),
+    }),
+  );
+  return app;
+};
 
 describe("critical resource discovery", () => {
   test("finds same-origin initial assets and rejects third-party paths", () => {
@@ -47,7 +87,7 @@ describe("first-load measurement", () => {
     for (const route of ["/sign-in", "/sign-up", "/app", "/admin"]) {
       const identity = await measureFirstLoad(fetcher, route, "identity");
       const compressed = await Promise.all(
-        (["br", "zstd", "gzip", "deflate"] as const).map((encoding) =>
+        compressedEncodings.map((encoding) =>
           measureFirstLoad(fetcher, route, encoding),
         ),
       );
@@ -66,6 +106,29 @@ describe("first-load measurement", () => {
         expect(report.totalBytes).toBeLessThan(identity.totalBytes);
         expect(report.protocol).toBe("h2");
       }
+    }
+  });
+
+  test("organization activity stays server-rendered and inside the hard gate", async () => {
+    const fetcher = fetchWith(createActivityWeb());
+    const identity = await measureFirstLoad(
+      fetcher,
+      "/admin/activity",
+      "identity",
+    );
+    const compressed = await Promise.all(
+      compressedEncodings.map((encoding) =>
+        measureFirstLoad(fetcher, "/admin/activity", encoding),
+      ),
+    );
+
+    assertTransferBudget(identity);
+    expect(identity.requestCount).toBe(1);
+    expect(identity.bytesByKind.javascript).toBe(0);
+    for (const report of compressed) {
+      assertTransferBudget(report);
+      expect(report.totalBytes).toBeLessThan(identity.totalBytes);
+      expect(report.protocol).toBe("h2");
     }
   });
 
@@ -125,7 +188,7 @@ describe("first-load measurement", () => {
       "identity",
     );
     const compressed = await Promise.all(
-      (["br", "zstd", "gzip", "deflate"] as const).map((encoding) =>
+      compressedEncodings.map((encoding) =>
         measureFirstLoad(fetcher, "/app/memories", encoding),
       ),
     );

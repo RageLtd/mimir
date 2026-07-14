@@ -1,6 +1,10 @@
 import { Hono } from "hono";
 import type { IdentityEnv } from "../middleware/identity";
-import { canManageOrganization } from "../middleware/organization-admin";
+import { canManageOrganization } from "../middleware/organization-roles";
+import {
+  type OrganizationAuditList,
+  renderOrganizationActivity,
+} from "./activity";
 import { renderOrganizationAdmin } from "./admin";
 import {
   type AuthFormOptions,
@@ -28,6 +32,7 @@ interface WebOptions {
   authForms?: AuthFormOptions;
   credentials?: CredentialOptions;
   organizationAdmin?: boolean;
+  organizationAuditList?: OrganizationAuditList;
 }
 
 export function createWeb(options: WebOptions = {}) {
@@ -73,6 +78,12 @@ export function createWeb(options: WebOptions = {}) {
   web.get("/app/memories", (c) => renderMemories(c));
   if (options.organizationAdmin) {
     web.get("/admin", (c) => renderOrganizationAdmin(c));
+    const organizationAuditList = options.organizationAuditList;
+    if (organizationAuditList) {
+      web.get("/admin/activity", (c) =>
+        renderOrganizationActivity(c, organizationAuditList),
+      );
+    }
   }
 
   web.get("/app", (c) => {

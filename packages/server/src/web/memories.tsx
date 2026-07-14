@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import type { IdentityEnv } from "../middleware/identity";
-import { canManageOrganization } from "../middleware/organization-admin";
+import { canManageOrganization } from "../middleware/organization-roles";
 import { DashboardNavigation, PageFrame } from "./chrome";
 
 export function renderMemories(c: Context<IdentityEnv>) {

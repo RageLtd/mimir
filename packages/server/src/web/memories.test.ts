@@ -13,6 +13,11 @@ const app = createApp({
         }
       : null,
   orgLister: async () => [],
+  activeMemberLookup: async () => ({
+    userId: "user-1",
+    organizationId: "org-1",
+    role: "member",
+  }),
 });
 
 describe("encrypted memories page", () => {

@@ -42,7 +42,10 @@ export function renderOrganizationAdmin(c: Context<IdentityEnv>) {
           </section>
           <section class="card" aria-labelledby="operations-title">
             <h2 id="operations-title">Operations</h2>
-            <p>Review permitted organization-level operational metadata.</p>
+            <p>
+              <a href="/admin/activity">Review organization activity</a> and
+              permitted operational metadata.
+            </p>
           </section>
         </div>
       </section>
