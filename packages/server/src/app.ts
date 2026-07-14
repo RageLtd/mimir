@@ -9,6 +9,12 @@ import {
   reissueOrganizationInvitation,
   revokeOrganizationInvitation,
 } from "./auth/organization-members";
+import {
+  readOrganizationSettings,
+  updateOrganizationName,
+  updateOrganizationPolicy,
+  updateOrganizationSlug,
+} from "./auth/organization-settings";
 import { SIGNIN_PATH, SIGNUP_PATH } from "./auth/paths";
 import { config } from "./config";
 import { getTenantDb } from "./db/tenant";
@@ -40,6 +46,7 @@ import { createWeb } from "./web";
 import type { OrganizationAuditList } from "./web/activity";
 import type { OrganizationMembersOptions } from "./web/members";
 import { isPublicWebPath } from "./web/paths";
+import type { OrganizationSettingsOptions } from "./web/settings";
 
 const CONTROLLED_ORGANIZATION_MUTATIONS = new Set([
   "/api/auth/organization/invite-member",
@@ -47,6 +54,7 @@ const CONTROLLED_ORGANIZATION_MUTATIONS = new Set([
   "/api/auth/organization/update-member-role",
   "/api/auth/organization/remove-member",
   "/api/auth/organization/leave",
+  "/api/auth/organization/update",
 ]);
 
 interface AppOptions {
@@ -59,6 +67,7 @@ interface AppOptions {
   activeMemberLookup?: ActiveMemberLookup;
   organizationAuditList?: OrganizationAuditList;
   organizationMembers?: OrganizationMembersOptions;
+  organizationSettings?: OrganizationSettingsOptions;
   keyRoutes?: ReturnType<typeof createKeysRoutes>;
   memberRoutes?: ReturnType<typeof createMembersRoutes>;
   operatorToken?: string;
@@ -93,6 +102,28 @@ export function createApp(options: AppOptions = {}) {
       reissueInvitation: (input, headers) =>
         reissueOrganizationInvitation(getAuthDb(), getAuth(), input, headers),
       request: (path, init) => app.request(path, init),
+    };
+  const organizationSettings: OrganizationSettingsOptions =
+    options.organizationSettings ?? {
+      origin: new URL(config.auth.baseUrl).origin,
+      read: (orgId) => readOrganizationSettings(getAuthDb(), orgId),
+      updateName: (input, headers) =>
+        updateOrganizationName(
+          getAuthDb(),
+          (body, forwarded) =>
+            getAuth().api.updateOrganization({ body, headers: forwarded }),
+          input,
+          headers,
+        ),
+      updateSlug: (input, headers) =>
+        updateOrganizationSlug(
+          getAuthDb(),
+          (body, forwarded) =>
+            getAuth().api.updateOrganization({ body, headers: forwarded }),
+          input,
+          headers,
+        ),
+      updatePolicy: (input) => updateOrganizationPolicy(getAuthDb(), input),
     };
 
   app.use("*", cors());
@@ -181,6 +212,7 @@ export function createApp(options: AppOptions = {}) {
       organizationAdmin: authEnabled,
       ...(authEnabled ? { organizationAuditList } : {}),
       ...(authEnabled ? { organizationMembers } : {}),
+      ...(authEnabled ? { organizationSettings } : {}),
       ...(authEnabled
         ? {
             authForms: {

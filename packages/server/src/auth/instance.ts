@@ -21,6 +21,10 @@ import { getMigrations } from "better-auth/db/migration";
 import { organization } from "better-auth/plugins";
 import { migrateOrganizationAudit } from "../audit/store";
 import { config } from "../config";
+import {
+  invitationExpiresAt,
+  migrateOrganizationPolicy,
+} from "./organization-policy";
 
 /**
  * Assemble better-auth options for a given store and secret. Split from
@@ -62,6 +66,17 @@ export function buildAuthOptions(database: Database, secret: string) {
     },
     plugins: [
       organization({
+        organizationHooks: {
+          beforeCreateInvitation: async ({ invitation }) => ({
+            data: {
+              ...invitation,
+              expiresAt: invitationExpiresAt(
+                database,
+                invitation.organizationId,
+              ),
+            },
+          }),
+        },
         schema: {
           organization: {
             additionalFields: {
@@ -173,4 +188,5 @@ export async function runAuthMigrations() {
   const { runMigrations } = await getMigrations(getAuth().options);
   await runMigrations();
   migrateOrganizationAudit(getAuthDb());
+  migrateOrganizationPolicy(getAuthDb());
 }

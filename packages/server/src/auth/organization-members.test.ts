@@ -4,6 +4,7 @@ import { betterAuth } from "better-auth";
 import { getMigrations } from "better-auth/db/migration";
 import { migrateOrganizationAudit } from "../audit/store";
 import { buildAuthOptions } from "./instance";
+import { migrateOrganizationPolicy } from "./organization-policy";
 import {
   createOrganizationInvitation,
   type InvitationMutationInput,
@@ -27,6 +28,7 @@ async function seededAuth() {
   const { runMigrations } = await getMigrations(options);
   await runMigrations();
   migrateOrganizationAudit(db);
+  migrateOrganizationPolicy(db);
   const auth = betterAuth(options);
   const owner = await auth.api.signUpEmail({
     body: {
@@ -106,6 +108,7 @@ describe("organization member directory", () => {
       () => new Date("2026-07-14T00:00:00.000Z"),
     );
     if (!first) throw new Error("missing directory page");
+    expect(first.defaultInvitationRole).toBe("member");
     expect(first.members).toHaveLength(1);
     expect(first.nextMemberCursor).toBeString();
     expect(first.invitations).toEqual([
@@ -143,6 +146,12 @@ describe("Better Auth invitation mutations", () => {
   test("creates, invalidates on reissue, revokes, and audits without tokens or email", async () => {
     const { auth, cookie, db, orgId, ownerId } = await seededAuth();
     const headers = new Headers({ cookie });
+    db.query(
+      `INSERT INTO organization_policy
+        (org_id, default_invitation_role, invitation_lifetime_days, version)
+       VALUES (?, 'member', 7, 1)`,
+    ).run(orgId);
+    const invitationStartedAt = Date.now();
     const base = {
       orgId,
       actorUserId: ownerId,
@@ -161,11 +170,19 @@ describe("Better Auth invitation mutations", () => {
       ),
     ).toBe("created");
     const original = db
-      .query<{ id: string }, []>(
-        "SELECT id FROM invitation WHERE status = 'pending'",
+      .query<{ expiresAt: string; id: string }, []>(
+        "SELECT id, expiresAt FROM invitation WHERE status = 'pending'",
       )
       .get();
     if (!original) throw new Error("missing invitation");
+    const invitationLifetime =
+      new Date(original.expiresAt).valueOf() - invitationStartedAt;
+    expect(invitationLifetime).toBeGreaterThanOrEqual(
+      7 * 86_400_000 - 1_000,
+    );
+    expect(invitationLifetime).toBeLessThanOrEqual(
+      7 * 86_400_000 + 1_000,
+    );
 
     expect(
       await reissueOrganizationInvitation(

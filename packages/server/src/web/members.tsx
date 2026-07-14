@@ -249,7 +249,12 @@ export function renderOrganizationMembers(
               <label for="invite-role">Role</label>
               <select id="invite-role" name="role">
                 {availableRoles.map((value) => (
-                  <option value={value}>{value}</option>
+                  <option
+                    value={value}
+                    selected={result.defaultInvitationRole === value}
+                  >
+                    {value}
+                  </option>
                 ))}
               </select>
               <button class="button" type="submit">

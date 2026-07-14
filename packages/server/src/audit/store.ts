@@ -1,4 +1,18 @@
 import type { Database } from "bun:sqlite";
+import {
+  DEFAULT_AUDIT_RETENTION_DAYS,
+  isOrganizationSettingField,
+  MAX_AUDIT_RETENTION_DAYS,
+  MIN_AUDIT_RETENTION_DAYS,
+  type OrganizationSettingField,
+  organizationSettingAuditValue,
+} from "../auth/organization-settings-schema";
+
+export {
+  DEFAULT_AUDIT_RETENTION_DAYS,
+  MAX_AUDIT_RETENTION_DAYS,
+  MIN_AUDIT_RETENTION_DAYS,
+} from "../auth/organization-settings-schema";
 
 export type OrganizationAuditAction =
   | "invitation.created"
@@ -28,12 +42,9 @@ export type OrganizationAuditOutcome = "intent" | "succeeded" | "failed";
 
 export interface OrganizationAuditMetadata {
   count?: number;
-  field?:
-    | "name"
-    | "slug"
-    | "defaultInvitationRole"
-    | "invitationLifetimeDays"
-    | "auditRetentionDays";
+  field?: OrganizationSettingField;
+  fromValue?: string | number;
+  toValue?: string | number;
   fromRole?: "owner" | "admin" | "member";
   toRole?: "owner" | "admin" | "member";
   generation?: number;
@@ -96,9 +107,6 @@ export const ORGANIZATION_AUDIT_TARGETS: readonly OrganizationAuditTarget[] = [
 export const ORGANIZATION_AUDIT_OUTCOMES: readonly OrganizationAuditOutcome[] =
   ["intent", "succeeded", "failed"];
 
-export const DEFAULT_AUDIT_RETENTION_DAYS = 365;
-export const MIN_AUDIT_RETENTION_DAYS = 30;
-export const MAX_AUDIT_RETENTION_DAYS = 2_555;
 export const MAX_AUDIT_PAGE_SIZE = 50;
 
 export const ORGANIZATION_AUDIT_SCHEMA = `
@@ -165,18 +173,6 @@ function isRole(value: unknown): value is "owner" | "admin" | "member" {
   return value === "owner" || value === "admin" || value === "member";
 }
 
-function isField(
-  value: unknown,
-): value is NonNullable<OrganizationAuditMetadata["field"]> {
-  return (
-    value === "name" ||
-    value === "slug" ||
-    value === "defaultInvitationRole" ||
-    value === "invitationLifetimeDays" ||
-    value === "auditRetentionDays"
-  );
-}
-
 function isReasonCode(
   value: unknown,
 ): value is NonNullable<OrganizationAuditMetadata["reasonCode"]> {
@@ -191,6 +187,18 @@ function isReasonCode(
 
 function safeMetadata(input: unknown) {
   if (typeof input !== "object" || input === null) return {};
+  const field =
+    "field" in input && isOrganizationSettingField(input.field)
+      ? input.field
+      : undefined;
+  const fromValue =
+    field && "fromValue" in input
+      ? organizationSettingAuditValue(field, input.fromValue)
+      : undefined;
+  const toValue =
+    field && "toValue" in input
+      ? organizationSettingAuditValue(field, input.toValue)
+      : undefined;
   const count =
     "count" in input && typeof input.count === "number"
       ? boundedInteger(input.count, 0, 1_000_000)
@@ -209,7 +217,9 @@ function safeMetadata(input: unknown) {
       : undefined;
   return {
     ...(count === undefined ? {} : { count }),
-    ...("field" in input && isField(input.field) ? { field: input.field } : {}),
+    ...(field ? { field } : {}),
+    ...(fromValue === undefined ? {} : { fromValue }),
+    ...(toValue === undefined ? {} : { toValue }),
     ...("fromRole" in input && isRole(input.fromRole)
       ? { fromRole: input.fromRole }
       : {}),

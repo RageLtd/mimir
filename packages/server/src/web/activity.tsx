@@ -72,6 +72,8 @@ export function parseActivityFilters(query: ActivityQuery) {
 function metadataRows(metadata: {
   count?: number;
   field?: string;
+  fromValue?: string | number;
+  toValue?: string | number;
   fromRole?: string;
   toRole?: string;
   generation?: number;
@@ -81,6 +83,12 @@ function metadataRows(metadata: {
   return [
     metadata.count === undefined ? null : ["Count", String(metadata.count)],
     metadata.field ? ["Field", metadata.field] : null,
+    metadata.fromValue === undefined
+      ? null
+      : ["Previous value", String(metadata.fromValue)],
+    metadata.toValue === undefined
+      ? null
+      : ["New value", String(metadata.toValue)],
     metadata.fromRole ? ["Previous role", metadata.fromRole] : null,
     metadata.toRole ? ["New role", metadata.toRole] : null,
     metadata.generation === undefined

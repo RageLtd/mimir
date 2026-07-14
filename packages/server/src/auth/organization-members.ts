@@ -4,6 +4,7 @@ import { createOrganizationAuditStore } from "../audit/store";
 import { attempt, attemptSync } from "../util/result";
 import type { getAuth } from "./instance";
 import type { OrganizationRole } from "./membership";
+import { readOrganizationPolicy } from "./organization-policy";
 
 export type MemberReadiness = "ready" | "pending" | "unregistered";
 
@@ -225,6 +226,8 @@ export function listOrganizationMembers(
     )
     .get(orgId);
   if (!organization) return null;
+  const policy = readOrganizationPolicy(db, orgId);
+  if (!policy) return null;
   const current = now();
   const memberPage = memberRows(db, orgId, filters);
   const invitationPage = invitationRows(db, orgId, filters, current);
@@ -260,6 +263,7 @@ export function listOrganizationMembers(
     .at(-1);
   return {
     keyGeneration: organization.keyGeneration,
+    defaultInvitationRole: policy.defaultInvitationRole,
     members,
     invitations,
     nextMemberCursor:

@@ -41,6 +41,15 @@ import {
   renderOrganizationMembers,
 } from "./members";
 import { renderMemories } from "./memories";
+import {
+  type OrganizationSettingsOptions,
+  renderOrganizationSettings,
+} from "./settings";
+import {
+  createOrganizationNameAction,
+  createOrganizationPolicyAction,
+  createOrganizationSlugAction,
+} from "./settings-actions";
 
 interface WebOptions {
   authForms?: AuthFormOptions;
@@ -48,6 +57,7 @@ interface WebOptions {
   organizationAdmin?: boolean;
   organizationAuditList?: OrganizationAuditList;
   organizationMembers?: OrganizationMembersOptions;
+  organizationSettings?: OrganizationSettingsOptions;
 }
 
 export function createWeb(options: WebOptions = {}) {
@@ -120,6 +130,24 @@ export function createWeb(options: WebOptions = {}) {
       web.post(
         "/admin/members/role",
         createChangeMemberRoleAction(organizationMembers),
+      );
+    }
+    const organizationSettings = options.organizationSettings;
+    if (organizationSettings) {
+      web.get("/admin/settings", (c) =>
+        renderOrganizationSettings(c, organizationSettings),
+      );
+      web.post(
+        "/admin/settings/name",
+        createOrganizationNameAction(organizationSettings),
+      );
+      web.post(
+        "/admin/settings/slug",
+        createOrganizationSlugAction(organizationSettings),
+      );
+      web.post(
+        "/admin/settings/policy",
+        createOrganizationPolicyAction(organizationSettings),
       );
     }
   }

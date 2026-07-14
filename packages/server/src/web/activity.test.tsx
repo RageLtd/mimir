@@ -23,6 +23,9 @@ const memberFor = (orgId: string, role: string) => () =>
 
 function auditListFor(targetId: string, nextCursor: string | null = null) {
   const metadata: OrganizationAuditMetadata & { secret: string } = {
+    field: "defaultInvitationRole",
+    fromValue: "member",
+    toValue: "admin",
     fromRole: "member",
     toRole: "admin",
     secret: "never-render-this-password",
@@ -85,6 +88,8 @@ describe("organization activity view", () => {
     expect(html).toContain("member:member-1");
     expect(html).toContain("Previous role");
     expect(html).toContain("New role");
+    expect(html).toContain("Previous value");
+    expect(html).toContain("New value");
     expect(html).toContain("Older activity");
     expect(html).not.toContain("never-render-this-password");
     expect(html).not.toContain("<script");

@@ -71,6 +71,7 @@ const createMemberWeb = () => {
         origin: "https://mimir.local",
         list: () => ({
           keyGeneration: 1,
+          defaultInvitationRole: "member",
           members: [
             {
               id: "member-1",
@@ -103,6 +104,42 @@ const createMemberWeb = () => {
         revokeInvitation: () => Promise.resolve("revoked"),
         reissueInvitation: () => Promise.resolve("reissued"),
         request: () => Response.json({ ok: true }),
+      },
+    }),
+  );
+  return app;
+};
+
+const createSettingsWeb = () => {
+  const app = new Hono<IdentityEnv>();
+  app.use("*", (c, next) => {
+    c.set("identity", {
+      userId: "user-1",
+      orgId: "org-1",
+      organizationRoles: ["owner"],
+    });
+    return next();
+  });
+  app.route(
+    "/",
+    createWeb({
+      organizationAdmin: true,
+      organizationSettings: {
+        origin: "https://mimir.local",
+        read: () => ({
+          id: "org-1",
+          name: "Mimir Testers",
+          slug: "mimir-testers",
+          defaultInvitationRole: "member",
+          invitationLifetimeDays: 2,
+          auditRetentionDays: 365,
+          policyVersion: 0,
+          keyGeneration: 1,
+          recoveryReady: true,
+        }),
+        updateName: () => Promise.resolve("updated"),
+        updateSlug: () => Promise.resolve("updated"),
+        updatePolicy: () => "updated",
       },
     }),
   );
@@ -263,6 +300,29 @@ describe("first-load measurement", () => {
     expect(bundle).not.toContain("playwright");
     expect(bundle).not.toContain("generate-authenticate-options");
     expect(bundle).not.toContain("verify-authentication");
+    for (const report of compressed) {
+      assertTransferBudget(report);
+      expect(report.totalBytes).toBeLessThan(identity.totalBytes);
+      expect(report.protocol).toBe("h2");
+    }
+  });
+
+  test("organization settings stays server-rendered and inside the hard gate", async () => {
+    const fetcher = fetchWith(createSettingsWeb());
+    const identity = await measureFirstLoad(
+      fetcher,
+      "/admin/settings",
+      "identity",
+    );
+    const compressed = await Promise.all(
+      compressedEncodings.map((encoding) =>
+        measureFirstLoad(fetcher, "/admin/settings", encoding),
+      ),
+    );
+
+    assertTransferBudget(identity);
+    expect(identity.requestCount).toBe(1);
+    expect(identity.bytesByKind.javascript).toBe(0);
     for (const report of compressed) {
       assertTransferBudget(report);
       expect(report.totalBytes).toBeLessThan(identity.totalBytes);

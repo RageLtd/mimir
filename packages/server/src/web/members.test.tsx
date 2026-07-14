@@ -20,6 +20,7 @@ function directory(orgId: string, filters: OrganizationMemberFilters) {
   const suffix = orgId === "org-1" ? "one" : "two";
   return {
     keyGeneration: 3,
+    defaultInvitationRole: "member" as const,
     members: [
       {
         id: `member-${suffix}`,
@@ -129,6 +130,7 @@ describe("organization members page", () => {
     expect(html).toContain("invited-one@example.test");
     expect(html).toContain("Pending key access");
     expect(html).toContain("Current organization generation: 3");
+    expect(html).toContain('<option value="member" selected');
     expect(html).toContain('src="/assets/members.js"');
     expect(html).not.toContain("public-key-never-render");
     expect(html).not.toContain("wrapped-key-never-render");
@@ -156,6 +158,7 @@ describe("organization members page", () => {
     const app = testApp("admin", {
       list: () => ({
         keyGeneration: 1,
+        defaultInvitationRole: "member",
         members: [
           {
             id: "member-owner",
@@ -300,6 +303,7 @@ describe("organization member forms", () => {
       "/api/auth/organization/update-member-role",
       "/api/auth/organization/remove-member",
       "/api/auth/organization/leave",
+      "/api/auth/organization/update",
     ]) {
       const response = await app.request(path, { method: "POST" });
       expect(response.status).toBe(403);

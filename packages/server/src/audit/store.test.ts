@@ -146,6 +146,38 @@ describe("organization audit store", () => {
     expect(JSON.stringify(store.list("org-a"))).not.toContain("never-store");
   });
 
+  test("keeps only schema-valid before and after setting values", () => {
+    const db = auditDb();
+    const store = fixtureStore(db);
+    store.append({
+      ...event("org-a", "org-a"),
+      action: "organization.settings_changed",
+      targetType: "organization",
+      metadata: {
+        field: "slug",
+        fromValue: "before-org",
+        toValue: "after-org",
+      },
+    });
+    store.append({
+      ...event("org-a", "org-a"),
+      action: "organization.settings_changed",
+      targetType: "organization",
+      metadata: {
+        field: "slug",
+        fromValue: "../../secret",
+        toValue: "also invalid",
+      },
+    });
+
+    expect(store.list("org-a").events[1]?.metadata).toEqual({
+      field: "slug",
+      fromValue: "before-org",
+      toValue: "after-org",
+    });
+    expect(store.list("org-a").events[0]?.metadata).toEqual({ field: "slug" });
+  });
+
   test("rejects identifiers that could smuggle emails, tokens, or paths", () => {
     const store = fixtureStore(auditDb());
     expect(() =>

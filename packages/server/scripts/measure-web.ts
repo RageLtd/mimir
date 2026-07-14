@@ -93,6 +93,7 @@ memberWeb.route(
       origin: "https://mimir.local",
       list: () => ({
         keyGeneration: 1,
+        defaultInvitationRole: "member",
         members: [
           {
             id: "member-1",
@@ -130,6 +131,40 @@ memberWeb.route(
 );
 const memberFetcher = (path: string, init?: RequestInit) =>
   memberWeb.request(path, init);
+const settingsWeb = new Hono<IdentityEnv>();
+settingsWeb.use("*", (c, next) => {
+  c.set("identity", {
+    userId: "user-1",
+    orgId: "org-1",
+    organizationRoles: ["owner"],
+  });
+  return next();
+});
+settingsWeb.route(
+  "/",
+  createWeb({
+    organizationAdmin: true,
+    organizationSettings: {
+      origin: "https://mimir.local",
+      read: () => ({
+        id: "org-1",
+        name: "Mimir Testers",
+        slug: "mimir-testers",
+        defaultInvitationRole: "member",
+        invitationLifetimeDays: 2,
+        auditRetentionDays: 365,
+        policyVersion: 0,
+        keyGeneration: 1,
+        recoveryReady: true,
+      }),
+      updateName: () => Promise.resolve("updated"),
+      updateSlug: () => Promise.resolve("updated"),
+      updatePolicy: () => "updated",
+    },
+  }),
+);
+const settingsFetcher = (path: string, init?: RequestInit) =>
+  settingsWeb.request(path, init);
 const encodings: WebEncoding[] = ["identity", "br", "zstd", "gzip", "deflate"];
 const reports = [];
 for (const route of ["/sign-in", "/sign-up", "/app"]) {
@@ -147,6 +182,9 @@ for (const encoding of encodings) {
   );
   reports.push(
     await measureFirstLoad(memberFetcher, "/admin/members", encoding),
+  );
+  reports.push(
+    await measureFirstLoad(settingsFetcher, "/admin/settings", encoding),
   );
   reports.push(await measureFirstLoad(fetcher, "/app/memories", encoding));
 }

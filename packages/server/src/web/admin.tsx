@@ -37,7 +37,10 @@ export function renderOrganizationAdmin(c: Context<IdentityEnv>) {
           </section>
           <section class="card" aria-labelledby="settings-title">
             <h2 id="settings-title">Organization settings</h2>
-            <p>Configure settings owned by this organization.</p>
+            <p>
+              <a href="/admin/settings">Configure organization settings</a>
+              and bounded access policy.
+            </p>
           </section>
           <section class="card" aria-labelledby="billing-title">
             <h2 id="billing-title">Billing</h2>
