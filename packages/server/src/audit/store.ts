@@ -304,56 +304,60 @@ export function migrateOrganizationAudit(db: Database) {
   db.run(ORGANIZATION_AUDIT_SCHEMA);
 }
 
+export function appendOrganizationAuditEvent(
+  db: Database,
+  input: AppendOrganizationAuditEvent,
+  id: () => string = () => crypto.randomUUID(),
+  now: () => Date = () => new Date(),
+) {
+  requireOpaqueId("organization", input.orgId);
+  requireOpaqueId("actor", input.actorUserId);
+  requireOpaqueId("target", input.targetId);
+  requireOpaqueId("request", input.requestId);
+  if (!isAuditAction(input.action)) throw new Error("invalid audit action");
+  if (!isAuditTarget(input.targetType)) throw new Error("invalid audit target");
+  if (!isAuditOutcome(input.outcome)) throw new Error("invalid audit outcome");
+
+  const eventId = requireOpaqueId("event", id());
+  const createdAt = now().toISOString();
+  const metadata = safeMetadata(input.metadata);
+  db.run(
+    `INSERT INTO organization_audit_event
+      (id, org_id, actor_user_id, action, target_type, target_id, outcome, request_id, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      eventId,
+      input.orgId,
+      input.actorUserId,
+      input.action,
+      input.targetType,
+      input.targetId,
+      input.outcome,
+      input.requestId,
+      JSON.stringify(metadata),
+      createdAt,
+    ],
+  );
+  db.run(
+    "DELETE FROM organization_audit_event WHERE org_id = ? AND created_at < ?",
+    [
+      input.orgId,
+      new Date(
+        new Date(createdAt).valueOf() -
+          retentionDays(db, input.orgId) * 86_400_000,
+      ).toISOString(),
+    ],
+  );
+  return { id: eventId, createdAt };
+}
+
 export function createOrganizationAuditStore(
   db: Database,
   id: () => string = () => crypto.randomUUID(),
   now: () => Date = () => new Date(),
 ) {
-  const append = (input: AppendOrganizationAuditEvent) => {
-    requireOpaqueId("organization", input.orgId);
-    requireOpaqueId("actor", input.actorUserId);
-    requireOpaqueId("target", input.targetId);
-    requireOpaqueId("request", input.requestId);
-    if (!isAuditAction(input.action)) throw new Error("invalid audit action");
-    if (!isAuditTarget(input.targetType))
-      throw new Error("invalid audit target");
-    if (!isAuditOutcome(input.outcome))
-      throw new Error("invalid audit outcome");
-
-    const eventId = requireOpaqueId("event", id());
-    const createdAt = now().toISOString();
-    const metadata = safeMetadata(input.metadata);
-    db.transaction(() => {
-      db.run(
-        `INSERT INTO organization_audit_event
-          (id, org_id, actor_user_id, action, target_type, target_id, outcome, request_id, metadata_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          eventId,
-          input.orgId,
-          input.actorUserId,
-          input.action,
-          input.targetType,
-          input.targetId,
-          input.outcome,
-          input.requestId,
-          JSON.stringify(metadata),
-          createdAt,
-        ],
-      );
-      db.run(
-        "DELETE FROM organization_audit_event WHERE org_id = ? AND created_at < ?",
-        [
-          input.orgId,
-          new Date(
-            new Date(createdAt).valueOf() -
-              retentionDays(db, input.orgId) * 86_400_000,
-          ).toISOString(),
-        ],
-      );
-    })();
-    return { id: eventId, createdAt };
-  };
+  const append = (input: AppendOrganizationAuditEvent) =>
+    db.transaction(() => appendOrganizationAuditEvent(db, input, id, now))();
 
   const list = (orgId: string, filters: OrganizationAuditFilters = {}) => {
     requireOpaqueId("organization", orgId);

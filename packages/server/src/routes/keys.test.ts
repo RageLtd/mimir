@@ -10,15 +10,20 @@ import { describe, expect, test } from "bun:test";
 import { betterAuth } from "better-auth";
 import { getMigrations } from "better-auth/db/migration";
 import { Hono } from "hono";
+import { migrateOrganizationAudit } from "../audit/store";
 import { buildAuthOptions } from "../auth/instance";
 import type { IdentityEnv } from "../middleware/identity";
 import { createKeysRoutes } from "./keys";
 
 const TEST_SECRET = "test-secret-material-at-least-32-chars-long";
 
-type Identity = { userId: string; orgId: string };
+type Identity = { userId: string; orgId: string; authenticatedAt?: number };
 
-const appFor = (db: Database, identity: Identity | null) => {
+const appFor = (
+  db: Database,
+  identity: Identity | null,
+  options?: { origin?: string; now?: () => number },
+) => {
   const app = new Hono<IdentityEnv>();
   if (identity) {
     app.use("*", (c, next) => {
@@ -26,7 +31,7 @@ const appFor = (db: Database, identity: Identity | null) => {
       return next();
     });
   }
-  app.route("/v1/keys", createKeysRoutes(() => db));
+  app.route("/v1/keys", createKeysRoutes(() => db, options));
   return app;
 };
 
@@ -41,6 +46,7 @@ async function seedOrg() {
   const options = buildAuthOptions(db, TEST_SECRET);
   const { runMigrations } = await getMigrations(options);
   await runMigrations();
+  migrateOrganizationAudit(db);
   const auth = betterAuth(options);
 
   const signupA = await auth.api.signUpEmail({
@@ -96,10 +102,15 @@ async function seedOrg() {
   };
 }
 
-const post = (app: Hono<IdentityEnv>, path: string, body: unknown) =>
+const post = (
+  app: Hono<IdentityEnv>,
+  path: string,
+  body: unknown,
+  headers?: Record<string, string>,
+) =>
   app.request(path, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
 
@@ -273,11 +284,14 @@ describe("POST /v1/keys/rotate", () => {
     return seeded;
   };
 
-  test("rotation replaces listed wraps and revokes unlisted members", async () => {
+  test("ordinary rotation re-wraps every key-ready member", async () => {
     const { db, asA, memberRow, userA, userB } = await seedKeyed();
     const res = await post(appFor(db, asA), "/v1/keys/rotate", {
       keyGeneration: 2,
-      wraps: [{ memberId: memberRow(userA).id, wrappedOrgKey: "wrap-a-2" }],
+      wraps: [
+        { memberId: memberRow(userA).id, wrappedOrgKey: "wrap-a-2" },
+        { memberId: memberRow(userB).id, wrappedOrgKey: "wrap-b-2" },
+      ],
       recovery: {
         recoveryPublicKey: "recovery-pub-2",
         wrappedRecoveryKey: "recovery-wrap-2",
@@ -285,22 +299,183 @@ describe("POST /v1/keys/rotate", () => {
     });
     expect(res.status).toBe(200);
     expect(memberRow(userA).wrappedOrgKey).toBe("wrap-a-2");
-    // Revocation teeth: B was not re-wrapped, so B lost access.
-    expect(memberRow(userB).wrappedOrgKey).toBeNull();
+    expect(memberRow(userB).wrappedOrgKey).toBe("wrap-b-2");
     const state = await getJson(await appFor(db, asA).request("/v1/keys/org"));
     expect(state.keyGeneration).toBe(2);
     expect(state.recoveryPublicKey).toBe("recovery-pub-2");
+  });
+
+  test("recent owner rotation removes the member only after generation acceptance", async () => {
+    const { db, asA, memberRow, userA, userB } = await seedKeyed();
+    const now = Date.parse("2026-07-14T03:00:00.000Z");
+    const response = await post(
+      appFor(
+        db,
+        { ...asA, authenticatedAt: now - 60_000 },
+        { origin: "https://mimir.test", now: () => now },
+      ),
+      "/v1/keys/rotate",
+      {
+        keyGeneration: 2,
+        wraps: [
+          { memberId: memberRow(userA).id, wrappedOrgKey: "wrap-a-2" },
+        ],
+        removeMemberId: memberRow(userB).id,
+      },
+      { cookie: "session=owner", origin: "https://mimir.test" },
+    );
+
+    expect(response.status).toBe(200);
+    expect(memberRow(userA).wrappedOrgKey).toBe("wrap-a-2");
+    expect(
+      db
+        .query("SELECT id FROM member WHERE organizationId = ? AND userId = ?")
+        .get(asA.orgId, userB),
+    ).toBeNull();
+    expect(
+      db
+        .query(
+          "SELECT action, outcome FROM organization_audit_event ORDER BY seq",
+        )
+        .all(),
+    ).toEqual([
+      { action: "encryption.generation_changed", outcome: "intent" },
+      { action: "membership.removed", outcome: "intent" },
+      { action: "encryption.generation_changed", outcome: "succeeded" },
+      { action: "membership.removed", outcome: "succeeded" },
+    ]);
+  });
+
+  test("failed revocation rotation leaves membership and wraps unchanged", async () => {
+    const { db, asA, memberRow, userA, userB } = await seedKeyed();
+    const now = Date.parse("2026-07-14T03:00:00.000Z");
+    const response = await post(
+      appFor(
+        db,
+        { ...asA, authenticatedAt: now },
+        { origin: "https://mimir.test", now: () => now },
+      ),
+      "/v1/keys/rotate",
+      {
+        keyGeneration: 3,
+        wraps: [
+          { memberId: memberRow(userA).id, wrappedOrgKey: "wrap-a-3" },
+        ],
+        removeMemberId: memberRow(userB).id,
+      },
+      { cookie: "session=owner", origin: "https://mimir.test" },
+    );
+
+    expect(response.status).toBe(409);
+    expect(memberRow(userA).wrappedOrgKey).toBe("wrap-a-1");
+    expect(memberRow(userB).wrappedOrgKey).toBe("wrap-b-1");
+    expect(
+      db
+        .query("SELECT COUNT(*) AS count FROM member WHERE organizationId = ?")
+        .get(asA.orgId),
+    ).toEqual({ count: 2 });
+    expect(
+      db
+        .query("SELECT action, outcome FROM organization_audit_event ORDER BY seq")
+        .all(),
+    ).toEqual([
+      { action: "encryption.generation_changed", outcome: "intent" },
+      { action: "membership.removed", outcome: "intent" },
+      { action: "encryption.generation_changed", outcome: "failed" },
+      { action: "membership.removed", outcome: "failed" },
+    ]);
+  });
+
+  test("last owner cannot remove themselves and API keys cannot revoke members", async () => {
+    const { db, asA, asB, memberRow, userA, userB } = await seedKeyed();
+    const now = Date.parse("2026-07-14T03:00:00.000Z");
+    const browser = appFor(
+      db,
+      { ...asA, authenticatedAt: now },
+      { origin: "https://mimir.test", now: () => now },
+    );
+    const body = {
+      keyGeneration: 2,
+      wraps: [
+        { memberId: memberRow(userB).id, wrappedOrgKey: "wrap-b-2" },
+      ],
+      removeMemberId: memberRow(userA).id,
+    };
+    expect(
+      (
+        await post(browser, "/v1/keys/rotate", body, {
+          cookie: "session=owner",
+          origin: "https://mimir.test",
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await post(
+          appFor(db, { ...asA, authenticatedAt: now }),
+          "/v1/keys/rotate",
+          {
+            ...body,
+            removeMemberId: memberRow(userB).id,
+            wraps: [
+              { memberId: memberRow(userA).id, wrappedOrgKey: "wrap-a-2" },
+            ],
+          },
+          { authorization: "Bearer api-key", origin: "https://mimir.test" },
+        )
+      ).status,
+    ).toBe(403);
+    expect(memberRow(userA).wrappedOrgKey).toBe("wrap-a-1");
+    expect(memberRow(userB).wrappedOrgKey).toBe("wrap-b-1");
+    void asB;
   });
 
   test("stale generation → 409 and nothing changes", async () => {
     const { db, asA, memberRow, userA, userB } = await seedKeyed();
     const res = await post(appFor(db, asA), "/v1/keys/rotate", {
       keyGeneration: 3, // current is 1; must be exactly 2
-      wraps: [{ memberId: memberRow(userA).id, wrappedOrgKey: "wrap-a-3" }],
+      wraps: [
+        { memberId: memberRow(userA).id, wrappedOrgKey: "wrap-a-3" },
+        { memberId: memberRow(userB).id, wrappedOrgKey: "wrap-b-3" },
+      ],
     });
     expect(res.status).toBe(409);
     expect(memberRow(userA).wrappedOrgKey).toBe("wrap-a-1");
     expect(memberRow(userB).wrappedOrgKey).toBe("wrap-b-1");
+  });
+
+  test("configured recovery must be refreshed without changing its public key", async () => {
+    const { db, asA, memberRow, userA, userB } = await seedKeyed();
+    await post(appFor(db, asA), "/v1/keys/recovery", {
+      recoveryPublicKey: "recovery-pub",
+      wrappedRecoveryKey: "recovery-wrap-1",
+    });
+    const wraps = [
+      { memberId: memberRow(userA).id, wrappedOrgKey: "wrap-a-2" },
+      { memberId: memberRow(userB).id, wrappedOrgKey: "wrap-b-2" },
+    ];
+
+    const missing = await post(appFor(db, asA), "/v1/keys/rotate", {
+      keyGeneration: 2,
+      wraps,
+    });
+    expect(missing.status).toBe(409);
+    expect(memberRow(userA).wrappedOrgKey).toBe("wrap-a-1");
+    expect(memberRow(userB).wrappedOrgKey).toBe("wrap-b-1");
+
+    const refreshed = await post(appFor(db, asA), "/v1/keys/rotate", {
+      keyGeneration: 2,
+      wraps,
+      recovery: {
+        recoveryPublicKey: "recovery-pub",
+        wrappedRecoveryKey: "recovery-wrap-2",
+      },
+    });
+    expect(refreshed.status).toBe(200);
+    const state = await getJson(await appFor(db, asA).request("/v1/keys/org"));
+    expect(state.keyGeneration).toBe(2);
+    expect(state.recoveryPublicKey).toBe("recovery-pub");
+    expect(state.wrappedRecoveryKey).toBe("recovery-wrap-2");
   });
 
   test("wrap-less caller cannot rotate", async () => {

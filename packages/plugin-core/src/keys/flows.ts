@@ -15,7 +15,7 @@
  *
  * - EXPLICIT (the `mimir keys` CLI): `registerKeys` (device secret +
  *   keyset generation — the 1P Emergency-Kit moment), `adoptDeviceSecret`
- *   (new device, pasted secret), `rotateOrgKey` (revocation),
+ *   (new device, pasted secret), `rotateOrgKey` / `revokeOrgMember`,
  *   `setupRecovery` / `recoverAccess`.
  *
  * `getOrgKeyring` is the MIM-88 consumer API: sync encrypts/decrypts
@@ -201,13 +201,17 @@ export async function fulfillPendingWraps(
 }
 
 /**
- * EXPLICIT: rotation = revocation. Appends generation N+1 and re-wraps
- * to every member still in the org (better-auth member removal happens
- * FIRST; anyone still listed is a keeper). Refreshes the recovery wrap
- * when a recovery keyset is configured. MIM-88's re-encrypt job prunes
- * old generations after the store is re-pushed.
+ * EXPLICIT: append generation N+1 and re-wrap every keyed member. When
+ * removing a member, omit that member's wrap and ask the server to commit
+ * the key rotation and membership deletion in one transaction. Refreshes
+ * the recovery wrap when a recovery keyset is configured. MIM-88's
+ * re-encrypt job prunes old generations after the store is re-pushed.
  */
-export async function rotateOrgKey(cfg: KeyFlowConfig, keyset: Keyset) {
+export async function rotateOrgKey(
+  cfg: KeyFlowConfig,
+  keyset: Keyset,
+  options?: { removeMemberId?: string },
+) {
   const state = await fetchOrgKeyState(cfg);
   if (!state.self.wrappedOrgKey) {
     throw new Error("cannot rotate without holding the current org key");
@@ -215,7 +219,7 @@ export async function rotateOrgKey(cfg: KeyFlowConfig, keyset: Keyset) {
   const current = unwrapKeyring(keyset.privateKey, state.self.wrappedOrgKey);
   const { keyring, generation } = appendGeneration(current);
   const wraps = state.members.flatMap((m) =>
-    m.publicKey
+    m.publicKey && m.memberId !== options?.removeMemberId
       ? [
           {
             memberId: m.memberId,
@@ -234,9 +238,20 @@ export async function rotateOrgKey(cfg: KeyFlowConfig, keyset: Keyset) {
     keyGeneration: generation,
     wraps,
     ...(recovery ? { recovery } : {}),
+    ...(options?.removeMemberId
+      ? { removeMemberId: options.removeMemberId }
+      : {}),
   });
   return { generation, wrapped: wraps.length, keyring };
 }
+
+/** EXPLICIT: cryptographically revoke a member and remove their live
+ *  authorization only if the replacement generation is committed. */
+export const revokeOrgMember = (
+  cfg: KeyFlowConfig,
+  keyset: Keyset,
+  memberId: string,
+) => rotateOrgKey(cfg, keyset, { removeMemberId: memberId });
 
 /**
  * EXPLICIT: configure the org recovery keyset (1P Recovery Group

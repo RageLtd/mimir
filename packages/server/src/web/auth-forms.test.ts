@@ -33,6 +33,16 @@ async function formApp() {
     }),
     sessionLookup: (headers) => auth.api.getSession({ headers }),
     orgLister: (headers) => auth.api.listOrganizations({ headers }),
+    membershipLookup: ({ userId, orgId }) =>
+      Promise.resolve(
+        db
+          .query(
+            `SELECT m.userId, m.organizationId
+               FROM member m JOIN organization o ON o.id = m.organizationId
+              WHERE m.userId = ? AND m.organizationId = ?`,
+          )
+          .get(userId, orgId),
+      ),
     activeMemberLookup: (headers) => auth.api.getActiveMember({ headers }),
   });
   return { app, auth, db };

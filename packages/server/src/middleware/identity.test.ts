@@ -9,6 +9,7 @@ import { Hono } from "hono";
 import {
   createIdentityGate,
   type IdentityEnv,
+  type MembershipLookup,
   pickSoleOrg,
   readIdentity,
   scopeOrgId,
@@ -46,9 +47,14 @@ describe("toAuthHeaders", () => {
 function appWithGate(
   lookup: (headers: Headers) => Promise<unknown>,
   listOrgs: (headers: Headers) => Promise<unknown> = () => Promise.resolve([]),
+  lookupMembership: MembershipLookup = ({ userId, orgId }) =>
+    Promise.resolve({ userId, organizationId: orgId }),
 ) {
   const app = new Hono<IdentityEnv>();
-  app.use("*", createIdentityGate(lookup, listOrgs));
+  app.use(
+    "*",
+    createIdentityGate(lookup, listOrgs, () => false, lookupMembership),
+  );
   app.get("/health", (c) => c.json({ ok: true }));
   // Echo the resolved org so tests can assert the gate's scoping decision.
   app.get("/v1/protected", (c) => c.json({ ok: true, org: scopeOrgId(c) }));
@@ -67,6 +73,22 @@ describe("readIdentity", () => {
     expect(readIdentity({ user: { id: "u1" }, session: {} })).toEqual({
       userId: "u1",
       orgId: null,
+    });
+  });
+
+  test("carries the session authentication time when Better Auth supplies it", () => {
+    expect(
+      readIdentity({
+        user: { id: "u1" },
+        session: {
+          activeOrganizationId: "o1",
+          createdAt: "2026-07-13T12:00:00.000Z",
+        },
+      }),
+    ).toEqual({
+      userId: "u1",
+      orgId: "o1",
+      authenticatedAt: Date.parse("2026-07-13T12:00:00.000Z"),
     });
   });
 
@@ -106,6 +128,25 @@ describe("createIdentityGate", () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, org: "org-1" });
+  });
+
+  test("stale active organization is denied when the live membership is gone", async () => {
+    let membershipExists = true;
+    const app = appWithGate(
+      allowWithOrg,
+      () => Promise.resolve([{ id: "org-1" }]),
+      ({ userId, orgId }) =>
+        Promise.resolve(
+          membershipExists ? { userId, organizationId: orgId } : null,
+        ),
+    );
+    const headers = { authorization: "Bearer still-valid-api-key" };
+
+    expect((await app.request("/v1/protected", { headers })).status).toBe(200);
+    membershipExists = false;
+    const denied = await app.request("/v1/protected", { headers });
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toEqual({ error: { message: "Forbidden" } });
   });
 
   test("no active org falls back to a sole membership", async () => {

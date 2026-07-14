@@ -17,6 +17,7 @@ import {
   reconcileKeys,
   recoverAccess,
   registerKeys,
+  revokeOrgMember,
   resolveKeyset,
   rotateOrgKey,
   setupRecovery,
@@ -51,11 +52,6 @@ function fakeOrg() {
       encryptedKeyset: null,
       wrappedOrgKey: null,
     });
-  };
-
-  const removeMember = (userId: string) => {
-    const index = members.findIndex((m) => m.userId === userId);
-    if (index >= 0) members.splice(index, 1);
   };
 
   const json = (data: unknown, status = 200) =>
@@ -129,22 +125,54 @@ function fakeOrg() {
         if (generation !== (org.keyGeneration ?? 0) + 1) {
           return json({ error: "Conflict" }, 409);
         }
-        for (const m of members) m.wrappedOrgKey = null;
         const wraps = body.wraps as Array<{
           memberId: string;
           wrappedOrgKey: string;
         }>;
-        for (const wrap of wraps) {
-          const target = members.find((m) => m.memberId === wrap.memberId);
-          if (target) target.wrappedOrgKey = wrap.wrappedOrgKey;
+        const removeMemberId =
+          typeof body.removeMemberId === "string" ? body.removeMemberId : null;
+        if (
+          removeMemberId &&
+          !members.some((member) => member.memberId === removeMemberId)
+        ) {
+          return json({ error: "Not found" }, 404);
         }
-        org.keyGeneration = generation;
+        const remainingKeyed = members.filter(
+          (member) =>
+            member.publicKey !== null && member.memberId !== removeMemberId,
+        );
+        if (
+          wraps.length !== remainingKeyed.length ||
+          remainingKeyed.some(
+            (member) =>
+              !wraps.some((wrap) => wrap.memberId === member.memberId),
+          )
+        ) {
+          return json({ error: "Every remaining member needs a wrap" }, 400);
+        }
         const recovery = body.recovery as
           | { recoveryPublicKey: string; wrappedRecoveryKey: string }
           | undefined;
+        if (org.recoveryPublicKey && !recovery) {
+          return json({ error: "Recovery wrap required" }, 409);
+        }
+
+        // Everything below this line is the fake's atomic commit.
+        for (const member of members) member.wrappedOrgKey = null;
+        for (const wrap of wraps) {
+          const target = members.find((member) => member.memberId === wrap.memberId);
+          if (target) target.wrappedOrgKey = wrap.wrappedOrgKey;
+        }
+        org.keyGeneration = generation;
         if (recovery) {
           org.recoveryPublicKey = recovery.recoveryPublicKey;
           org.wrappedRecoveryKey = recovery.wrappedRecoveryKey;
+        }
+        if (removeMemberId) {
+          const index = members.findIndex(
+            (member) => member.memberId === removeMemberId,
+          );
+          members.splice(index, 1);
         }
         return json({ ok: true, keyGeneration: generation });
       }
@@ -158,7 +186,7 @@ function fakeOrg() {
     };
   };
 
-  return { org, members, addMember, removeMember, fetcherFor };
+  return { org, members, addMember, fetcherFor };
 }
 
 const memoryStore = () => {
@@ -300,11 +328,11 @@ describe("org key lifecycle", () => {
     await reconcileKeys(deviceA); // wrap B
     const before = await getOrgKeyring(deviceA);
 
-    // Revocation: B leaves the org FIRST, then A rotates.
-    world.removeMember("b");
-    const rotated = await rotateOrgKey(deviceA, keysetA);
+    expect(world.members.some((member) => member.userId === "b")).toBe(true);
+    const rotated = await revokeOrgMember(deviceA, keysetA, "member-b");
     expect(rotated.generation).toBe(2);
     expect(rotated.wrapped).toBe(1); // only A remains
+    expect(world.members.some((member) => member.userId === "b")).toBe(false);
 
     const after = await getOrgKeyring(deviceA);
     expect(after.status).toBe("ready");

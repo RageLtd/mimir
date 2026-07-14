@@ -10,11 +10,11 @@
  *   better-auth as x-api-key so client wiring stays unchanged, they just
  *   carry better-auth-minted keys now.
  *
- * On a valid session the gate resolves the request's org (MIM-69) and stashes
- * a ResolvedIdentity on the Hono context; downstream routes read it via
- * scopeOrgId to scope every store access. A session with no active
- * organization falls back to the user's sole membership; a user in zero or
- * many orgs with none active is rejected (they must pick one first).
+ * On a valid session the gate resolves the request's org (MIM-69), verifies
+ * the membership still exists in the live auth store, and stashes a
+ * ResolvedIdentity on the Hono context. A session with no active organization
+ * falls back to the user's sole current membership; a user in zero or many
+ * orgs with none active is rejected (they must pick one first).
  *
  * 401/403s are detail-free (MIM-77 discipline). /health stays exempt for
  * credential-less healthchecks; /api/auth/* self-gates (and the signup path
@@ -23,7 +23,7 @@
  */
 
 import type { Context, Next } from "hono";
-import { getAuth } from "../auth/instance";
+import { getAuth, getAuthDb } from "../auth/instance";
 import { OWNER_ORG_SENTINEL } from "../db/tenant";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
@@ -33,6 +33,7 @@ import { attempt } from "../util/result";
 export interface ResolvedIdentity {
   readonly userId: string;
   readonly orgId: string;
+  readonly authenticatedAt?: number;
   readonly organizationRoles?: readonly string[];
 }
 
@@ -87,6 +88,7 @@ export function readIdentity(session: unknown) {
   if (typeof userId !== "string") return null;
 
   let orgId: string | null = null;
+  let authenticatedAt: number | undefined;
   if ("session" in session) {
     const inner = session.session;
     if (
@@ -97,8 +99,21 @@ export function readIdentity(session: unknown) {
     ) {
       orgId = inner.activeOrganizationId;
     }
+    if (typeof inner === "object" && inner !== null && "createdAt" in inner) {
+      const createdAt =
+        inner.createdAt instanceof Date
+          ? inner.createdAt.valueOf()
+          : typeof inner.createdAt === "string"
+            ? Date.parse(inner.createdAt)
+            : NaN;
+      if (Number.isFinite(createdAt)) authenticatedAt = createdAt;
+    }
   }
-  return { userId, orgId };
+  return {
+    userId,
+    orgId,
+    ...(authenticatedAt === undefined ? {} : { authenticatedAt }),
+  };
 }
 
 /** The lone organization id from a list result, or null when the user belongs
@@ -121,6 +136,10 @@ export function pickSoleOrg(orgs: unknown) {
  *  the config-driven singleton (which would create a SQLite file). */
 export type SessionLookup = (headers: Headers) => Promise<unknown>;
 export type OrgLister = (headers: Headers) => Promise<unknown>;
+export type MembershipLookup = (
+  identity: { userId: string; orgId: string },
+  headers: Headers,
+) => Promise<unknown>;
 export type PathExemption = (path: string) => boolean;
 
 type IdentityResolution =
@@ -132,6 +151,30 @@ const defaultLookup: SessionLookup = (headers) =>
   getAuth().api.getSession({ headers });
 const defaultListOrgs: OrgLister = (headers) =>
   getAuth().api.listOrganizations({ headers });
+const defaultMembershipLookup: MembershipLookup = ({ userId, orgId }) =>
+  Promise.resolve(
+    getAuthDb()
+      .query(
+        `SELECT m.userId, m.organizationId
+           FROM member m JOIN organization o ON o.id = m.organizationId
+          WHERE m.userId = ? AND m.organizationId = ?`,
+      )
+      .get(userId, orgId),
+  );
+
+function isCurrentMembership(
+  value: unknown,
+  identity: { userId: string; orgId: string },
+) {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "userId" in value &&
+    value.userId === identity.userId &&
+    "organizationId" in value &&
+    value.organizationId === identity.orgId
+  );
+}
 
 export function requestAuthHeaders(c: Context) {
   return toAuthHeaders({
@@ -154,6 +197,7 @@ export async function resolveIdentity(
   headers: Headers,
   lookup: SessionLookup = defaultLookup,
   listOrgs: OrgLister = defaultListOrgs,
+  lookupMembership: MembershipLookup = defaultMembershipLookup,
 ) {
   const identity = await lookupIdentity(headers, lookup);
   if (!identity) {
@@ -174,8 +218,26 @@ export async function resolveIdentity(
     orgId = sole;
   }
 
+  const scopedIdentity = {
+    userId: identity.userId,
+    orgId,
+    ...(identity.authenticatedAt === undefined
+      ? {}
+      : { authenticatedAt: identity.authenticatedAt }),
+  };
+  const [memberError, member] = await attempt(() =>
+    lookupMembership(scopedIdentity, headers),
+  );
+  if (memberError || !isCurrentMembership(member, scopedIdentity)) {
+    return {
+      identity: null,
+      status: 403,
+      userId: identity.userId,
+    } satisfies IdentityResolution;
+  }
+
   return {
-    identity: { userId: identity.userId, orgId },
+    identity: scopedIdentity,
     status: null,
   } satisfies IdentityResolution;
 }
@@ -189,6 +251,7 @@ export const createIdentityGate =
     lookup: SessionLookup = defaultLookup,
     listOrgs: OrgLister = defaultListOrgs,
     isExempt: PathExemption = () => false,
+    lookupMembership: MembershipLookup = defaultMembershipLookup,
   ) =>
   async (c: Context<IdentityEnv>, next: Next) => {
     const path = c.req.path;
@@ -205,12 +268,13 @@ export const createIdentityGate =
       requestAuthHeaders(c),
       lookup,
       listOrgs,
+      lookupMembership,
     );
     if (!resolution.identity) {
       if (resolution.status === 403) {
         log.warn(
           { userId: resolution.userId },
-          "identity gate: no active organization and no sole membership — rejecting",
+          "identity gate: no current organization membership — rejecting",
         );
       }
       const message = resolution.status === 401 ? "Unauthorized" : "Forbidden";

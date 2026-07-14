@@ -3,6 +3,7 @@ import { signInLocation } from "../web/paths";
 import {
   type IdentityEnv,
   lookupIdentity,
+  type MembershipLookup,
   type OrgLister,
   requestAuthHeaders,
   resolveIdentity,
@@ -17,13 +18,18 @@ export const createRootRedirect =
   };
 
 export const createWebAccessGate =
-  (lookup?: SessionLookup, listOrgs?: OrgLister) =>
+  (
+    lookup?: SessionLookup,
+    listOrgs?: OrgLister,
+    lookupMembership?: MembershipLookup,
+  ) =>
   async (c: Context<IdentityEnv>, next: Next) => {
     c.header("cache-control", "private, no-store");
     const resolution = await resolveIdentity(
       requestAuthHeaders(c),
       lookup,
       listOrgs,
+      lookupMembership,
     );
     if (!resolution.identity) {
       if (resolution.status === 401) {

@@ -8,6 +8,8 @@ const allowSession = () =>
     session: { activeOrganizationId: "org-1" },
   });
 const browserSession = { cookie: "better-auth.session_token=session-1" };
+const allowMembership = ({ userId, orgId }: { userId: string; orgId: string }) =>
+  Promise.resolve({ userId, organizationId: orgId });
 const memberWithRole = (role: string | string[]) => () =>
   Promise.resolve({
     userId: "user-1",
@@ -67,6 +69,7 @@ describe("web route boundary", () => {
     const signedIn = await createApp({
       authEnabled: true,
       sessionLookup: allowSession,
+      membershipLookup: allowMembership,
     }).request("/app");
     const html = await signedIn.text();
 
@@ -250,6 +253,40 @@ describe("organization admin boundary", () => {
 
     expect(await owner.text()).toContain('href="/admin"');
     expect(await member.text()).not.toContain('href="/admin"');
+  });
+
+  test("demotion removes direct admin access and navigation on the next request", async () => {
+    let role = "admin";
+    const app = createApp({
+      authEnabled: true,
+      sessionLookup: allowSession,
+      activeMemberLookup: () =>
+        Promise.resolve({
+          userId: "user-1",
+          organizationId: "org-1",
+          role,
+        }),
+    });
+
+    expect(
+      (await app.request("/admin", { headers: browserSession })).status,
+    ).toBe(200);
+    expect(
+      await (
+        await app.request("/app", { headers: browserSession })
+      ).text(),
+    ).toContain('href="/admin"');
+
+    role = "member";
+
+    expect(
+      (await app.request("/admin", { headers: browserSession })).status,
+    ).toBe(403);
+    expect(
+      await (
+        await app.request("/app", { headers: browserSession })
+      ).text(),
+    ).not.toContain('href="/admin"');
   });
 });
 

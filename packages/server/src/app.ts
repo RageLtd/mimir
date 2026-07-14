@@ -9,6 +9,7 @@ import { getTenantDb } from "./db/tenant";
 import {
   createIdentityGate,
   type IdentityEnv,
+  type MembershipLookup,
   type OrgLister,
   type SessionLookup,
 } from "./middleware/identity";
@@ -24,6 +25,7 @@ import {
 } from "./middleware/web-access";
 import { type createKeysRoutes, keys } from "./routes/keys";
 import { mcp } from "./routes/mcp";
+import { type createMembersRoutes, members } from "./routes/members";
 import { sync } from "./routes/sync";
 import { systemPrompt } from "./routes/system-prompt";
 import { log } from "./util/logger";
@@ -38,9 +40,11 @@ interface AppOptions {
   claimGuard?: ReturnType<typeof createClaimGuard>;
   sessionLookup?: SessionLookup;
   orgLister?: OrgLister;
+  membershipLookup?: MembershipLookup;
   activeMemberLookup?: ActiveMemberLookup;
   organizationAuditList?: OrganizationAuditList;
   keyRoutes?: ReturnType<typeof createKeysRoutes>;
+  memberRoutes?: ReturnType<typeof createMembersRoutes>;
   operatorToken?: string;
 }
 
@@ -54,6 +58,13 @@ export function createApp(options: AppOptions = {}) {
       auditStore ??= createOrganizationAuditStore(getAuthDb());
       return auditStore.list(orgId, filters);
     });
+  const activeMemberLookup = options.activeMemberLookup;
+  const membershipLookup =
+    options.membershipLookup ??
+    (activeMemberLookup
+      ? (_identity: { userId: string; orgId: string }, headers: Headers) =>
+          activeMemberLookup(headers)
+      : undefined);
 
   app.use("*", cors());
   app.use("*", createOperatorGate(options.operatorToken));
@@ -72,7 +83,11 @@ export function createApp(options: AppOptions = {}) {
     app.get("/", createRootRedirect(options.sessionLookup));
     app.use(
       "/app/*",
-      createWebAccessGate(options.sessionLookup, options.orgLister),
+      createWebAccessGate(
+        options.sessionLookup,
+        options.orgLister,
+        membershipLookup,
+      ),
     );
     app.use(
       "/app/*",
@@ -90,6 +105,7 @@ export function createApp(options: AppOptions = {}) {
         options.sessionLookup,
         options.orgLister,
         (path) => isOperatorPath(path) || isPublicWebPath(path),
+        membershipLookup,
       ),
     );
     log.info("better-auth identity gate active");
@@ -117,6 +133,7 @@ export function createApp(options: AppOptions = {}) {
 
   app.route("/v1/system-prompt", systemPrompt);
   app.route("/v1/keys", options.keyRoutes ?? keys);
+  app.route("/v1/members", options.memberRoutes ?? members);
   app.route("/v1/sync", sync);
   app.route("/mcp", mcp);
   app.route(

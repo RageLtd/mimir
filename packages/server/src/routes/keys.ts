@@ -25,13 +25,20 @@
 import type { Database } from "bun:sqlite";
 import { type Context, Hono } from "hono";
 import { getAuthDb } from "../auth/instance";
+import {
+  type OrganizationKeyWrap,
+  rotateOrganizationKey,
+} from "../auth/membership";
+import { config } from "../config";
 import type { IdentityEnv } from "../middleware/identity";
+import { isTrustedRecentBrowser } from "../middleware/recent-browser";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 
 const FORBIDDEN = { error: "Forbidden" };
 const CONFLICT = { error: "Conflict" };
 const NOT_FOUND = { error: "Not found" };
+const OPAQUE_ID = /^[A-Za-z0-9:_-]{1,200}$/;
 
 type MemberRow = {
   memberId: string;
@@ -50,6 +57,15 @@ type OrgRow = {
 
 const asString = (v: unknown) =>
   typeof v === "string" && v.length > 0 ? v : undefined;
+
+interface KeyRouteOptions {
+  origin?: string;
+  now?: () => number;
+}
+
+function requestId(value: string | undefined) {
+  return value && OPAQUE_ID.test(value) ? value : crypto.randomUUID();
+}
 
 /** Read the org's key state — the shared substrate of every handler. */
 function readOrgState(db: Database, orgId: string) {
@@ -82,8 +98,12 @@ const anyWrapped = (members: MemberRow[]) =>
  * in-memory migrated store instead of the config singleton (same pattern
  * as the identity gate's injectable session lookup).
  */
-export function createKeysRoutes(getDb: () => Database = getAuthDb) {
+export function createKeysRoutes(
+  getDb: () => Database = getAuthDb,
+  options: KeyRouteOptions = {},
+) {
   const keys = new Hono<IdentityEnv>();
+  const origin = options.origin ?? new URL(config.auth.baseUrl).origin;
 
   /** Resolve identity + org state into a discriminated result — handlers
    *  answer denials themselves (keeps Hono's per-route Context generics
@@ -265,7 +285,11 @@ export function createKeysRoutes(getDb: () => Database = getAuthDb) {
       return c.json(FORBIDDEN, 403);
     }
     const generation =
-      typeof body.keyGeneration === "number" ? body.keyGeneration : null;
+      typeof body.keyGeneration === "number" &&
+      Number.isSafeInteger(body.keyGeneration) &&
+      body.keyGeneration > 0
+        ? body.keyGeneration
+        : null;
     const rawWraps = Array.isArray(body.wraps) ? body.wraps : null;
     if (generation === null || !rawWraps || rawWraps.length === 0) {
       return c.json(
@@ -273,7 +297,7 @@ export function createKeysRoutes(getDb: () => Database = getAuthDb) {
         400,
       );
     }
-    const wraps: Array<{ memberId: string; wrappedOrgKey: string }> = [];
+    const wraps: OrganizationKeyWrap[] = [];
     for (const entry of rawWraps) {
       if (typeof entry !== "object" || entry === null) {
         return c.json({ error: "malformed wraps entry" }, 400);
@@ -300,59 +324,76 @@ export function createKeysRoutes(getDb: () => Database = getAuthDb) {
         return c.json({ error: "wraps must target org members" }, 400);
       }
     }
-    const recovery =
+    const recoveryRecord =
       typeof body.recovery === "object" && body.recovery !== null
         ? (body.recovery as Record<string, unknown>)
         : null;
+    const recoveryPublicKey = recoveryRecord
+      ? asString(recoveryRecord.recoveryPublicKey)
+      : undefined;
+    const wrappedRecoveryKey = recoveryRecord
+      ? asString(recoveryRecord.wrappedRecoveryKey)
+      : undefined;
+    if (recoveryRecord && (!recoveryPublicKey || !wrappedRecoveryKey)) {
+      return c.json({ error: "malformed recovery entry" }, 400);
+    }
+    const removeMemberId =
+      body.removeMemberId === undefined
+        ? undefined
+        : typeof body.removeMemberId === "string" &&
+            OPAQUE_ID.test(body.removeMemberId)
+          ? body.removeMemberId
+          : null;
+    if (removeMemberId === null) {
+      return c.json({ error: "malformed removeMemberId" }, 400);
+    }
+    if (
+      removeMemberId &&
+      !isTrustedRecentBrowser(c, origin, options.now ?? Date.now)
+    ) {
+      return c.json(FORBIDDEN, 403);
+    }
 
-    const rotated = r.db.transaction(() => {
-      const fresh = r.db
-        .query("SELECT keyGeneration FROM organization WHERE id = ?")
-        .get(r.identity.orgId) as { keyGeneration: number | null } | null;
-      const current = fresh?.keyGeneration ?? 0;
-      // Stale-generation CAS: two racing rotations cannot both land.
-      if (generation !== current + 1) return false;
-      // Revocation teeth: every member NOT re-wrapped loses access.
-      r.db
-        .query(
-          "UPDATE member SET wrappedOrgKey = NULL WHERE organizationId = ?",
-        )
-        .run(r.identity.orgId);
-      for (const wrap of wraps) {
-        r.db
-          .query("UPDATE member SET wrappedOrgKey = ? WHERE id = ?")
-          .run(wrap.wrappedOrgKey, wrap.memberId);
-      }
-      if (recovery) {
-        r.db
-          .query(
-            "UPDATE organization SET keyGeneration = ?, recoveryPublicKey = ?, wrappedRecoveryKey = ? WHERE id = ?",
-          )
-          .run(
-            generation,
-            asString(recovery.recoveryPublicKey) ?? null,
-            asString(recovery.wrappedRecoveryKey) ?? null,
-            r.identity.orgId,
-          );
-      } else {
-        r.db
-          .query("UPDATE organization SET keyGeneration = ? WHERE id = ?")
-          .run(generation, r.identity.orgId);
-      }
-      return true;
-    })();
-    if (!rotated) {
+    const result = rotateOrganizationKey(r.db, {
+      orgId: r.identity.orgId,
+      actorUserId: r.identity.userId,
+      requestId: requestId(c.req.header("x-request-id")),
+      keyGeneration: generation,
+      wraps,
+      ...(recoveryPublicKey && wrappedRecoveryKey
+        ? { recovery: { recoveryPublicKey, wrappedRecoveryKey } }
+        : {}),
+      ...(removeMemberId ? { removeMemberId } : {}),
+    });
+    if (result === "conflict") {
       log.warn(
         { orgId: r.identity.orgId, generation },
         "keys: rotate generation stale",
       );
       return c.json(CONFLICT, 409);
     }
+    if (result === "not_found") return c.json(NOT_FOUND, 404);
+    if (result === "forbidden" || result === "last_owner") {
+      return c.json(FORBIDDEN, 403);
+    }
+    if (result === "recovery_required") return c.json(CONFLICT, 409);
+    if (result !== "rotated") {
+      return c.json({ error: "wraps must match remaining keyed members" }, 400);
+    }
     log.info(
-      { orgId: r.identity.orgId, generation, wraps: wraps.length },
+      {
+        orgId: r.identity.orgId,
+        generation,
+        wraps: wraps.length,
+        removedMember: Boolean(removeMemberId),
+      },
       "keys: org key rotated",
     );
-    return c.json({ ok: true, keyGeneration: generation });
+    return c.json({
+      ok: true,
+      keyGeneration: generation,
+      ...(removeMemberId ? { memberRemoved: true } : {}),
+    });
   });
 
   keys.post("/recovery", async (c) => {

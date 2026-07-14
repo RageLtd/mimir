@@ -200,7 +200,7 @@ async function runRotate(cfg: KeysClientConfig) {
     `Org key rotated to generation ${rotated.generation}; ${rotated.wrapped} member(s) re-wrapped.`,
   );
   console.log(
-    "Members removed before this rotation no longer hold the new key. Synced data re-encrypts under the new generation as it is pushed.",
+    "Current keyed members now hold the new key. Synced data re-encrypts under the new generation as it is pushed.",
   );
   return 0;
 }

@@ -131,13 +131,13 @@ let instance: ReturnType<typeof createInstance> | null = null;
 let store: Database | null = null;
 
 /**
- * Direct handle on the auth SQLite store — for the read-only row counts the
- * claim flow needs (user/invitation counts have no better-auth API surface).
- * Writes stay better-auth's exclusive business, with ONE documented
- * exception: routes/keys.ts writes the MIM-87 key-distribution columns
- * (member.wrappedOrgKey, organization.keyGeneration + recovery fields)
- * because better-auth has no endpoint that writes another member's row,
- * and rotation must replace every member's wrap in one transaction.
+ * Direct handle on the auth SQLite store. Reads cover claim-flow counts and
+ * authoritative membership checks that Better Auth cannot perform against a
+ * stale active organization. Writes stay Better Auth's business except for
+ * auth/membership.ts: key rotation must replace every member wrap atomically,
+ * and revocation must commit that rotation before deleting the membership.
+ * The same module applies tightly constrained role changes so last-owner and
+ * owner-only rules are rechecked in the transaction that records the audit.
  */
 export function getAuthDb() {
   if (!store) {

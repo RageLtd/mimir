@@ -2,7 +2,8 @@
  * HTTP layer for the key-distribution flows (MIM-87): the /v1/keys
  * routes plus better-auth's update-user (publicKey/encryptedKeyset
  * registration). Editor-agnostic — callers supply {serverUrl, apiKey}
- * from their own config chain; the fetcher is injectable for tests.
+ * from their own config chain; browser callers may use cookie credentials
+ * instead. The fetcher is injectable for tests.
  *
  * Error contract: throws on transport failures and non-OK statuses
  * (message carries the status code so flows can branch on 409 races);
@@ -15,11 +16,19 @@ import { parseJSON } from "../util";
  *  properties that would make injected test fakes unassignable. */
 export type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
 
-export type KeysClientConfig = {
+type KeysClientBaseConfig = {
   readonly serverUrl: string;
-  readonly apiKey: string;
   readonly fetcher?: Fetcher;
 };
+
+export type KeysClientConfig = KeysClientBaseConfig &
+  (
+    | { readonly apiKey: string; readonly credentials?: never }
+    | {
+        readonly apiKey?: never;
+        readonly credentials: "include" | "same-origin";
+      }
+  );
 
 export type OrgKeyMember = {
   memberId: string;
@@ -52,17 +61,19 @@ const request = async (
   init?: { method?: string; body?: unknown },
 ) => {
   const fetcher = cfg.fetcher ?? fetch;
+  const headers = new Headers({ "content-type": "application/json" });
+  if (cfg.apiKey) {
+    // Both credential headers, same key: the /v1 identity gate maps
+    // Bearer → x-api-key itself, but /api/auth/* routes hit better-auth
+    // DIRECTLY and its api-key plugin only reads x-api-key natively
+    // (found live: update-user 401s on Bearer alone).
+    headers.set("Authorization", `Bearer ${cfg.apiKey}`);
+    headers.set("x-api-key", cfg.apiKey);
+  }
   const response = await fetcher(`${trimSlash(cfg.serverUrl)}${path}`, {
     method: init?.method ?? "GET",
-    headers: {
-      // Both credential headers, same key: the /v1 identity gate maps
-      // Bearer → x-api-key itself, but /api/auth/* routes hit better-auth
-      // DIRECTLY and its api-key plugin only reads x-api-key natively
-      // (found live: update-user 401s on Bearer alone).
-      Authorization: `Bearer ${cfg.apiKey}`,
-      "x-api-key": cfg.apiKey,
-      "content-type": "application/json",
-    },
+    headers,
+    ...(cfg.credentials ? { credentials: cfg.credentials } : {}),
     ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
   });
   const text = await response.text();
@@ -100,6 +111,7 @@ export const postRotate = (
     keyGeneration: number;
     wraps: Array<{ memberId: string; wrappedOrgKey: string }>;
     recovery?: { recoveryPublicKey: string; wrappedRecoveryKey: string };
+    removeMemberId?: string;
   },
 ) => request(cfg, "/v1/keys/rotate", { method: "POST", body });
 
