@@ -117,7 +117,7 @@ export async function open(
   sealed: Uint8Array,
   additionalData?: Uint8Array,
 ) {
-  if (sealed.length < 29) throw new Error("Encrypted value is malformed");
+  if (sealed.length < 28) throw new Error("Encrypted value is malformed");
   return new Uint8Array(
     await crypto.subtle.decrypt(
       {

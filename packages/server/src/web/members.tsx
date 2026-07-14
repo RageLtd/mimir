@@ -448,6 +448,18 @@ export function renderOrganizationMembers(
       description:
         "Manage members and invitations for the active organization.",
       scripts: ["/assets/members.js"],
+      styles: [
+        "dashboard",
+        "card",
+        "cards",
+        "forms",
+        "lists",
+        "listHeads",
+        "status",
+        "secret",
+        "filters",
+        "members",
+      ],
     },
   );
 }

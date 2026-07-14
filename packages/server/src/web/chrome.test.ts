@@ -16,7 +16,9 @@ describe("dashboard chrome", () => {
     expect(html).toContain("<footer class=");
     expect(html).toContain("system-ui");
     expect(html).toContain(":focus-visible");
-    expect(html).toContain("@media(min-width:48rem)");
+    expect(html).toContain(".public-frame{");
+    expect(html).not.toContain(".app-frame{");
+    expect(html).not.toContain(".cards{");
     expect(html).toContain('<form class="auth-form" method="post" action="/sign-in">');
     expect(html).toContain('autocomplete="email"');
     expect(html).toContain('autocomplete="current-password"');

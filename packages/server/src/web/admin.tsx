@@ -42,6 +42,13 @@ export function renderOrganizationAdmin(c: Context<IdentityEnv>) {
               and bounded access policy.
             </p>
           </section>
+          <section class="card" aria-labelledby="memory-admin-title">
+            <h2 id="memory-admin-title">Encrypted memories</h2>
+            <p>
+              <a href="/admin/memories">Maintain organization memories</a> after
+              local browser unlock.
+            </p>
+          </section>
           <section class="card" aria-labelledby="billing-title">
             <h2 id="billing-title">Billing</h2>
             <p>Review organization billing when it becomes available.</p>
@@ -59,6 +66,7 @@ export function renderOrganizationAdmin(c: Context<IdentityEnv>) {
     {
       title: "Organization administration — Mimir",
       description: "Manage the active Mimir organization.",
+      styles: ["dashboard", "card", "cards"],
     },
   );
 }

@@ -1,6 +1,9 @@
 import { fileURLToPath } from "node:url";
 
 const entries = {
+  adminMemories: fileURLToPath(
+    new URL("./browser/admin-memories-element.ts", import.meta.url),
+  ),
   credentials: fileURLToPath(
     new URL("./browser/credential-entry.ts", import.meta.url),
   ),
@@ -53,6 +56,16 @@ export async function memoryIslandResponse() {
 
 export async function memberIslandResponse() {
   return new Response(await buildIsland("members"), {
+    headers: {
+      "cache-control": "public, max-age=300",
+      "content-type": "text/javascript; charset=UTF-8",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+export async function adminMemoryIslandResponse() {
+  return new Response(await buildIsland("adminMemories"), {
     headers: {
       "cache-control": "public, max-age=300",
       "content-type": "text/javascript; charset=UTF-8",

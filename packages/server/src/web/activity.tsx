@@ -241,6 +241,15 @@ export function renderOrganizationActivity(
     {
       title: "Organization activity — Mimir",
       description: "Review security-sensitive organization changes.",
+      styles: [
+        "dashboard",
+        "lists",
+        "listHeads",
+        "status",
+        "secret",
+        "filters",
+        "activity",
+      ],
     },
   );
 }

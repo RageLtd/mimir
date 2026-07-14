@@ -224,6 +224,7 @@ export function renderOrganizationSettings(
     {
       title: "Organization settings — Mimir",
       description: "Manage bounded settings for the active organization.",
+      styles: ["dashboard", "card", "cards", "forms", "status", "secret"],
     },
   );
 }

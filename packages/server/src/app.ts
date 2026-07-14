@@ -45,6 +45,7 @@ import { attemptSync } from "./util/result";
 import { createWeb } from "./web";
 import type { OrganizationAuditList } from "./web/activity";
 import type { OrganizationMembersOptions } from "./web/members";
+import type { OrganizationMemoryMaintenanceOptions } from "./web/memory-maintenance";
 import { isPublicWebPath } from "./web/paths";
 import type { OrganizationSettingsOptions } from "./web/settings";
 
@@ -67,6 +68,7 @@ interface AppOptions {
   activeMemberLookup?: ActiveMemberLookup;
   organizationAuditList?: OrganizationAuditList;
   organizationMembers?: OrganizationMembersOptions;
+  organizationMemoryMaintenance?: OrganizationMemoryMaintenanceOptions;
   organizationSettings?: OrganizationSettingsOptions;
   keyRoutes?: ReturnType<typeof createKeysRoutes>;
   memberRoutes?: ReturnType<typeof createMembersRoutes>;
@@ -124,6 +126,20 @@ export function createApp(options: AppOptions = {}) {
           headers,
         ),
       updatePolicy: (input) => updateOrganizationPolicy(getAuthDb(), input),
+    };
+  const organizationMemoryMaintenance: OrganizationMemoryMaintenanceOptions =
+    options.organizationMemoryMaintenance ?? {
+      origin: new URL(config.auth.baseUrl).origin,
+      push: async (envelopes, headers) =>
+        app.request("/v1/sync/push", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ envelopes }),
+        }),
+      audit: (event) => {
+        auditStore ??= createOrganizationAuditStore(getAuthDb());
+        return auditStore.append(event);
+      },
     };
 
   app.use("*", cors());
@@ -212,6 +228,7 @@ export function createApp(options: AppOptions = {}) {
       organizationAdmin: authEnabled,
       ...(authEnabled ? { organizationAuditList } : {}),
       ...(authEnabled ? { organizationMembers } : {}),
+      ...(authEnabled ? { organizationMemoryMaintenance } : {}),
       ...(authEnabled ? { organizationSettings } : {}),
       ...(authEnabled
         ? {

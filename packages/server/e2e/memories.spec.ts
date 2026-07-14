@@ -2,6 +2,9 @@ import { type BrowserContext, expect, type Page, test } from "@playwright/test";
 
 const MEMORY = "Playwright private canary alpha";
 const UPDATED_MEMORY = "Playwright private canary beta";
+const ADMIN_MEMORY_A = "Playwright admin memory first";
+const ADMIN_MEMORY_B = "Playwright admin memory second";
+const ADMIN_UPDATED_MEMORY = "Playwright admin memory revised";
 const MEMBER_EMAIL = "playwright-member@example.com";
 
 async function enableVirtualAuthenticator(context: BrowserContext, page: Page) {
@@ -21,6 +24,32 @@ async function enableVirtualAuthenticator(context: BrowserContext, page: Page) {
   });
 }
 
+async function tamperMemoryPull(page: Page) {
+  await page.route("**/v1/sync/pull?**", async (route) => {
+    const response = await route.fetch();
+    const body: unknown = await response.json();
+    if (typeof body !== "object" || body === null) {
+      await route.fulfill({ response });
+      return;
+    }
+    const envelopes = Reflect.get(body, "envelopes");
+    if (Array.isArray(envelopes) && envelopes[0]) {
+      const first = envelopes[0];
+      if (typeof first === "object" && first !== null) {
+        const payload = Reflect.get(first, "payload");
+        if (typeof payload === "string" && payload.length > 0) {
+          Reflect.set(
+            first,
+            "payload",
+            `${payload.startsWith("A") ? "B" : "A"}${payload.slice(1)}`,
+          );
+        }
+      }
+    }
+    await route.fulfill({ response, json: body });
+  });
+}
+
 test("manages encrypted memories and rotation-backed member access", async ({
   browser,
   context,
@@ -37,7 +66,12 @@ test("manages encrypted memories and rotation-backed member access", async ({
     ) {
       passkeySignIns.push(request.url());
     }
-    if (!request.url().includes("/v1/sync/")) return;
+    if (
+      !request.url().includes("/v1/sync/") &&
+      !request.url().includes("/admin/memories/maintenance")
+    ) {
+      return;
+    }
     syncRequests.push({ url: request.url(), body: request.postData() ?? "" });
   });
 
@@ -116,29 +150,7 @@ test("manages encrypted memories and rotation-backed member access", async ({
   await expect(page.locator("[data-unlocked]")).toBeHidden();
   await expect(page.locator("body")).not.toContainText(UPDATED_MEMORY);
 
-  await page.route("**/v1/sync/pull?**", async (route) => {
-    const response = await route.fetch();
-    const body: unknown = await response.json();
-    if (typeof body !== "object" || body === null) {
-      await route.fulfill({ response });
-      return;
-    }
-    const envelopes = Reflect.get(body, "envelopes");
-    if (Array.isArray(envelopes) && envelopes[0]) {
-      const first = envelopes[0];
-      if (typeof first === "object" && first !== null) {
-        const payload = Reflect.get(first, "payload");
-        if (typeof payload === "string" && payload.length > 0) {
-          Reflect.set(
-            first,
-            "payload",
-            `${payload.slice(0, -1)}${payload.endsWith("A") ? "B" : "A"}`,
-          );
-        }
-      }
-    }
-    await route.fulfill({ response, json: body });
-  });
+  await tamperMemoryPull(page);
   await page.getByRole("button", { name: "Unlock memories" }).click();
   await expect(page.locator("p[role=status]")).toContainText(
     "encrypted records failed validation; browser locked",
@@ -159,6 +171,110 @@ test("manages encrypted memories and rotation-backed member access", async ({
   );
   await expect(page.locator(".memory-item")).toHaveCount(0);
   expect(passkeySignIns).toHaveLength(0);
+
+  for (const content of [ADMIN_MEMORY_A, ADMIN_MEMORY_B]) {
+    await create.getByLabel("Memory").fill(content);
+    await create.getByLabel("Project ID").fill("project-admin");
+    await create.getByRole("button", { name: "Encrypt & save" }).click();
+    await expect(page.locator("p[role=status]")).toContainText(
+      "Memory encrypted and synchronized",
+    );
+  }
+
+  await page.goto("/admin/memories");
+  await expect(page.locator("mimir-admin-memory-manager")).toBeVisible();
+  await expect(page.locator("body")).not.toContainText(ADMIN_MEMORY_A);
+  await page
+    .getByRole("button", { name: "Unlock organization memories" })
+    .click();
+  await expect(page.locator("p[role=status]")).toContainText(
+    "Synchronized 2 decrypted records locally",
+  );
+  await expect(page.locator(".memory-item")).toHaveCount(2);
+
+  const requestsBeforeAdminSearch = syncRequests.length;
+  await page.getByLabel("Search").fill("first");
+  await expect(page.locator(".memory-item")).toHaveCount(1);
+  await page.getByLabel("Search").fill("");
+  expect(syncRequests).toHaveLength(requestsBeforeAdminSearch);
+
+  await page.getByRole("button", { name: "Lock" }).click();
+  await tamperMemoryPull(page);
+  await page
+    .getByRole("button", { name: "Unlock organization memories" })
+    .click();
+  await expect(page.locator("p[role=status]")).toContainText(
+    "Encrypted memory validation failed; browser locked",
+  );
+  await expect(page.locator("[data-unlocked]")).toBeHidden();
+  await expect(page.locator("body")).not.toContainText(ADMIN_MEMORY_A);
+  await page.unroute("**/v1/sync/pull?**");
+
+  await page
+    .getByRole("button", { name: "Unlock organization memories" })
+    .click();
+  const adminItem = page
+    .locator(".memory-item")
+    .filter({ hasText: ADMIN_MEMORY_A });
+  await adminItem.getByText("Edit locally").click();
+  const requestsBeforeAdminDraft = syncRequests.length;
+  await adminItem
+    .getByLabel("Memory", { exact: true })
+    .fill(ADMIN_UPDATED_MEMORY);
+  expect(syncRequests).toHaveLength(requestsBeforeAdminDraft);
+  await adminItem.getByRole("button", { name: "Encrypt & save" }).click();
+  await expect(page.locator("p[role=status]")).toContainText(
+    "Memory edit encrypted, synchronized, and audited",
+  );
+  await expect(
+    page.locator(".memory-item").filter({ hasText: ADMIN_UPDATED_MEMORY }),
+  ).toHaveCount(1);
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export encrypted backup" }).click();
+  const download = await downloadPromise;
+  const downloadPath = await download.path();
+  if (!downloadPath) throw new Error("Encrypted backup was not downloaded");
+  const backupStream = await download.createReadStream();
+  let backup = "";
+  for await (const chunk of backupStream) backup += chunk.toString();
+  expect(backup).toContain('"payload"');
+  expect(backup).not.toContain(ADMIN_UPDATED_MEMORY);
+  expect(backup).not.toContain(ADMIN_MEMORY_B);
+
+  const selection = page.locator("[data-select-id]");
+  await selection.nth(0).check();
+  await selection.nth(1).check();
+  const requestsBeforeBulk = syncRequests.length;
+  await page.getByLabel("Confirmation count").fill("1");
+  await page
+    .getByRole("button", { name: "Create selected tombstones" })
+    .click();
+  await expect(page.locator("p[role=status]")).toContainText(
+    "Confirmation count must exactly match the selection",
+  );
+  expect(syncRequests).toHaveLength(requestsBeforeBulk);
+  await page.getByLabel("Confirmation count").fill("2");
+  await page
+    .getByRole("button", { name: "Create selected tombstones" })
+    .click();
+  await expect(page.locator("p[role=status]")).toContainText(
+    "2 authenticated tombstones synchronized and audited",
+  );
+  await expect(page.locator(".memory-item")).toHaveCount(0);
+
+  for (const request of syncRequests) {
+    for (const plaintext of [
+      MEMORY,
+      UPDATED_MEMORY,
+      ADMIN_MEMORY_A,
+      ADMIN_MEMORY_B,
+      ADMIN_UPDATED_MEMORY,
+    ]) {
+      expect(request.url).not.toContain(plaintext);
+      expect(request.body).not.toContain(plaintext);
+    }
+  }
 
   await page.goto("/admin/members");
   const inviteCard = page.locator("section.card").filter({
@@ -237,10 +353,16 @@ test("manages encrypted memories and rotation-backed member access", async ({
     "organization key generation 1",
   );
 
+  const memberAdminPage = await memberPage.goto("/admin/memories");
+  expect(memberAdminPage?.status()).toBe(403);
+
   await activeMember.getByLabel("Role").selectOption("admin");
   await activeMember.getByRole("button", { name: "Change role" }).click();
   await expect(page).toHaveURL(/\/admin\/members\?notice=role$/);
   await expect(activeMember).toContainText("admin");
+
+  const promotedAdminPage = await memberPage.goto("/admin/memories");
+  expect(promotedAdminPage?.status()).toBe(200);
 
   await activeMember.getByText("Remove Playwright Member").click();
   await activeMember
@@ -251,6 +373,8 @@ test("manages encrypted memories and rotation-backed member access", async ({
 
   const removedPage = await memberPage.goto("/app");
   expect(removedPage?.status()).toBe(403);
+  const removedAdminPage = await memberPage.goto("/admin/memories");
+  expect(removedAdminPage?.status()).toBe(403);
   expect(
     await memberPage.evaluate(() =>
       fetch("/v1/keys/org").then((response) => response.status),
@@ -262,5 +386,7 @@ test("manages encrypted memories and rotation-backed member access", async ({
   await expect(page.locator("body")).toContainText(
     "encryption.generation_changed",
   );
+  await expect(page.locator("body")).toContainText("memory.maintenance");
+  await expect(page.locator("body")).not.toContainText(ADMIN_UPDATED_MEMORY);
   await memberContext.close();
 });

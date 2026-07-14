@@ -110,6 +110,30 @@ const createMemberWeb = () => {
   return app;
 };
 
+const createAdminMemoryWeb = () => {
+  const app = new Hono<IdentityEnv>();
+  app.use("*", (c, next) => {
+    c.set("identity", {
+      userId: "user-1",
+      orgId: "org-1",
+      organizationRoles: ["owner"],
+    });
+    return next();
+  });
+  app.route(
+    "/",
+    createWeb({
+      organizationAdmin: true,
+      organizationMemoryMaintenance: {
+        origin: "https://mimir.local",
+        push: () => Promise.resolve(Response.json({ accepted: 1, stale: [] })),
+        audit: () => undefined,
+      },
+    }),
+  );
+  return app;
+};
+
 const createSettingsWeb = () => {
   const app = new Hono<IdentityEnv>();
   app.use("*", (c, next) => {
@@ -175,6 +199,59 @@ describe("critical resource discovery", () => {
 });
 
 describe("first-load measurement", () => {
+  test("ships only the CSS groups owned by each route", async () => {
+    const publicWeb = createWeb({ organizationAdmin: true });
+    const signIn = await (await publicWeb.request("/sign-in")).text();
+    expect(signIn).toContain(".public-frame{");
+    expect(signIn).toContain(".auth-form{");
+    expect(signIn).not.toContain(".app-frame{");
+    expect(signIn).not.toContain(".cards{");
+    expect(signIn).not.toContain(".memory-controls{");
+
+    const dashboard = await (await publicWeb.request("/app")).text();
+    expect(dashboard).toContain(".app-frame{");
+    expect(dashboard).toContain(".card{");
+    expect(dashboard).toContain(".cards{");
+    expect(dashboard).not.toContain(".auth-form{");
+    expect(dashboard).not.toContain(".stack{");
+    expect(dashboard).not.toContain(".audit-filters{");
+
+    const activity = await (
+      await createActivityWeb().request("/admin/activity")
+    ).text();
+    expect(activity).toContain(".items{");
+    expect(activity).toContain(".item-head{");
+    expect(activity).toContain(".status{");
+    expect(activity).toContain(".secret{");
+    expect(activity).toContain(".audit-filters{");
+    expect(activity).toContain(".audit-events time{");
+    expect(activity).not.toContain(".cards{");
+    expect(activity).not.toContain(".memory-controls{");
+    expect(activity).not.toContain(".member-actions{");
+
+    const memories = await (
+      await createAdminMemoryWeb().request("/admin/memories")
+    ).text();
+    for (const selector of [
+      ".app-frame{",
+      ".card{",
+      ".stack{",
+      ".items{",
+      ".status{",
+      ".ceremony{",
+      ".memory-controls{",
+    ]) {
+      expect(memories).toContain(selector);
+    }
+    expect(memories).not.toContain(".auth-form{");
+    expect(memories).not.toContain(".audit-filters{");
+    expect(memories).not.toContain(".audit-events time{");
+    expect(memories).not.toContain(".member-actions{");
+    expect(memories).not.toContain(".cards{");
+    expect(memories).not.toContain(".item-head{");
+    expect(memories).not.toContain(".secret{");
+  });
+
   test("enforces the current SSR route under identity and gzip", async () => {
     const fetcher = fetchWith(createWeb({ organizationAdmin: true }));
     for (const route of ["/sign-in", "/sign-up", "/app", "/admin"]) {
@@ -348,6 +425,34 @@ describe("first-load measurement", () => {
     expect(identity.requestCount).toBe(2);
     expect(identity.bytesByKind.javascript).toBeGreaterThan(0);
     expect(bundle).toContain('customElements.define("mimir-memory-manager"');
+    expect(bundle).not.toContain("from\"");
+    expect(bundle).not.toContain("node:");
+    for (const report of compressed) {
+      assertTransferBudget(report);
+      expect(report.totalBytes).toBeLessThan(identity.totalBytes);
+    }
+  });
+
+  test("admin memory island is route-scoped, dependency-free, and inside the hard gate", async () => {
+    const fetcher = fetchWith(createAdminMemoryWeb());
+    const identity = await measureFirstLoad(
+      fetcher,
+      "/admin/memories",
+      "identity",
+    );
+    const compressed = await Promise.all(
+      compressedEncodings.map((encoding) =>
+        measureFirstLoad(fetcher, "/admin/memories", encoding),
+      ),
+    );
+    const bundle = await buildIsland("adminMemories");
+
+    assertTransferBudget(identity);
+    expect(identity.requestCount).toBe(2);
+    expect(identity.bytesByKind.javascript).toBeGreaterThan(0);
+    expect(bundle).toContain(
+      'customElements.define("mimir-admin-memory-manager"',
+    );
     expect(bundle).not.toContain("from\"");
     expect(bundle).not.toContain("node:");
     for (const report of compressed) {

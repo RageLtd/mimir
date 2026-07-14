@@ -423,6 +423,17 @@ export async function renderCredentials(
       title: "Credentials — Mimir",
       description: "Manage Mimir credentials, sessions, passkeys, and devices.",
       scripts: ["/assets/credentials.js"],
+      styles: [
+        "dashboard",
+        "card",
+        "cards",
+        "forms",
+        "lists",
+        "listHeads",
+        "status",
+        "secret",
+        "ceremony",
+      ],
     },
   );
 }

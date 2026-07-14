@@ -90,6 +90,9 @@ describe("browser envelope compatibility", () => {
     expect(envelope.nonce).not.toBe("");
     expect(envelope.payload).not.toBe("");
     expect(openEnvelope(envelope, { orgId: "org-1", cipher }).payload).toBeNull();
+    await expect(
+      openMemoryEnvelope(envelope, "org-1", unlocked.keys),
+    ).resolves.toBeNull();
   });
 
   test("lock zeroes device and organization key material", () => {

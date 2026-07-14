@@ -165,6 +165,28 @@ settingsWeb.route(
 );
 const settingsFetcher = (path: string, init?: RequestInit) =>
   settingsWeb.request(path, init);
+const adminMemoryWeb = new Hono<IdentityEnv>();
+adminMemoryWeb.use("*", (c, next) => {
+  c.set("identity", {
+    userId: "user-1",
+    orgId: "org-1",
+    organizationRoles: ["owner"],
+  });
+  return next();
+});
+adminMemoryWeb.route(
+  "/",
+  createWeb({
+    organizationAdmin: true,
+    organizationMemoryMaintenance: {
+      origin: "https://mimir.local",
+      push: () => Promise.resolve(Response.json({ accepted: 1, stale: [] })),
+      audit: () => undefined,
+    },
+  }),
+);
+const adminMemoryFetcher = (path: string, init?: RequestInit) =>
+  adminMemoryWeb.request(path, init);
 const encodings: WebEncoding[] = ["identity", "br", "zstd", "gzip", "deflate"];
 const reports = [];
 for (const route of ["/sign-in", "/sign-up", "/app"]) {
@@ -185,6 +207,9 @@ for (const encoding of encodings) {
   );
   reports.push(
     await measureFirstLoad(settingsFetcher, "/admin/settings", encoding),
+  );
+  reports.push(
+    await measureFirstLoad(adminMemoryFetcher, "/admin/memories", encoding),
   );
   reports.push(await measureFirstLoad(fetcher, "/app/memories", encoding));
 }

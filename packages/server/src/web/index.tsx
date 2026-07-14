@@ -6,6 +6,7 @@ import {
   renderOrganizationActivity,
 } from "./activity";
 import { renderOrganizationAdmin } from "./admin";
+import { renderAdminMemories } from "./admin-memories";
 import {
   type AuthFormOptions,
   createSignInAction,
@@ -26,6 +27,7 @@ import {
 } from "./credential-actions";
 import { type CredentialOptions, renderCredentials } from "./credentials";
 import {
+  adminMemoryIslandResponse,
   credentialIslandResponse,
   memberIslandResponse,
   memoryIslandResponse,
@@ -42,6 +44,10 @@ import {
 } from "./members";
 import { renderMemories } from "./memories";
 import {
+  createMemoryMaintenanceAction,
+  type OrganizationMemoryMaintenanceOptions,
+} from "./memory-maintenance";
+import {
   type OrganizationSettingsOptions,
   renderOrganizationSettings,
 } from "./settings";
@@ -57,6 +63,7 @@ interface WebOptions {
   organizationAdmin?: boolean;
   organizationAuditList?: OrganizationAuditList;
   organizationMembers?: OrganizationMembersOptions;
+  organizationMemoryMaintenance?: OrganizationMemoryMaintenanceOptions;
   organizationSettings?: OrganizationSettingsOptions;
 }
 
@@ -68,6 +75,7 @@ export function createWeb(options: WebOptions = {}) {
   web.get("/sign-in", (c) => renderSignIn(c));
   web.get("/sign-up", (c) => renderSignUp(c));
   web.get("/assets/credentials.js", credentialIslandResponse);
+  web.get("/assets/admin-memories.js", adminMemoryIslandResponse);
   web.get("/assets/memories.js", memoryIslandResponse);
   web.get("/assets/members.js", memberIslandResponse);
   if (options.authForms) {
@@ -108,6 +116,14 @@ export function createWeb(options: WebOptions = {}) {
     if (organizationAuditList) {
       web.get("/admin/activity", (c) =>
         renderOrganizationActivity(c, organizationAuditList),
+      );
+    }
+    const organizationMemoryMaintenance = options.organizationMemoryMaintenance;
+    if (organizationMemoryMaintenance) {
+      web.get("/admin/memories", (c) => renderAdminMemories(c));
+      web.post(
+        "/admin/memories/maintenance",
+        createMemoryMaintenanceAction(organizationMemoryMaintenance),
       );
     }
     const organizationMembers = options.organizationMembers;
@@ -189,6 +205,7 @@ export function createWeb(options: WebOptions = {}) {
       {
         title: "Dashboard — Mimir",
         description: "Manage your Mimir account, devices, and agent context.",
+        styles: ["dashboard", "card", "cards"],
       },
     );
   });

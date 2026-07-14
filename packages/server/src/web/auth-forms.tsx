@@ -127,6 +127,7 @@ export function renderSignIn(
     {
       title: "Sign in — Mimir",
       description: "Sign in to your Mimir dashboard.",
+      styles: ["public"],
     },
   );
 }
@@ -201,6 +202,7 @@ export function renderSignUp(
     {
       title: "Create account — Mimir",
       description: "Create a Mimir dashboard account.",
+      styles: ["public"],
     },
   );
 }

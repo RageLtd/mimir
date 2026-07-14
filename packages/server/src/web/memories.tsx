@@ -129,6 +129,7 @@ export function renderMemories(c: Context<IdentityEnv>) {
       title: "Memories — Mimir",
       description: "Manage locally decrypted organization memories.",
       scripts: ["/assets/memories.js"],
+      styles: ["dashboard", "card", "forms", "lists", "ceremony", "memory"],
     },
   );
 }
