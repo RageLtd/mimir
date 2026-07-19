@@ -13,9 +13,9 @@ import {
   KIND_MEMORY,
   KIND_PLAYBOOK,
   openEnvelope,
-  sealEnvelope,
   SUITE_AES_256_GCM,
   SUITE_PLAINTEXT,
+  sealEnvelope,
   type WireEnvelope,
 } from "./envelope";
 
@@ -67,9 +67,7 @@ describe("encrypted envelopes (suite 0x01)", () => {
     const cipher = keyringCipher();
     const envelope = seal({ cipher });
     const transplanted = { ...envelope, id: "memory:other" };
-    expect(() =>
-      openEnvelope(transplanted, { orgId: ORG, cipher }),
-    ).toThrow();
+    expect(() => openEnvelope(transplanted, { orgId: ORG, cipher })).toThrow();
   });
 
   test("transplanted org fails authentication", () => {

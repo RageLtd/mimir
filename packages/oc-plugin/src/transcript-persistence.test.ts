@@ -14,7 +14,10 @@ describe("convertMessage — user turns", () => {
         { type: "text", text: "second line" },
       ],
     });
-    expect(result).toEqual({ role: "user", content: "first line\nsecond line" });
+    expect(result).toEqual({
+      role: "user",
+      content: "first line\nsecond line",
+    });
   });
 
   test("returns null for a user turn with no text parts", () => {
@@ -85,7 +88,10 @@ describe("convertMessage — assistant turns", () => {
         { type: "tool", name: "read" }, // no callID
       ],
     });
-    expect(result).toEqual({ role: "assistant", content: [{ type: "text", text: "hi" }] });
+    expect(result).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "hi" }],
+    });
   });
 
   test("returns null for an assistant turn with no convertible parts", () => {

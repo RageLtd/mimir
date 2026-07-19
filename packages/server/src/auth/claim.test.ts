@@ -7,7 +7,6 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { getMigrations } from "better-auth/db/migration";
-import { buildAuthOptions } from "./instance";
 import {
   countUsers,
   pendingInviteExists,
@@ -15,6 +14,7 @@ import {
   signupDecision,
   tokenMatches,
 } from "./claim";
+import { buildAuthOptions } from "./instance";
 
 const TEST_SECRET = "test-secret-material-at-least-32-chars-long";
 

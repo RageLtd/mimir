@@ -76,6 +76,7 @@ function testApp(
     authEnabled: true,
     sessionLookup,
     activeMemberLookup,
+    operatorGrantLookup: () => false,
     organizationSettings,
   });
 }

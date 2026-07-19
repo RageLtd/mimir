@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { generateSymmetricKey, generateKeypair } from "./crypto";
+import { generateKeypair, generateSymmetricKey } from "./crypto";
 import { decryptKeyset, encryptKeyset, generateKeyset } from "./keyset";
 
 describe("keyset", () => {

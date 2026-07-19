@@ -8,7 +8,7 @@ import {
 } from "../audit/store";
 import type { IdentityEnv } from "../middleware/identity";
 import { attemptSync } from "../util/result";
-import { DashboardNavigation, PageFrame } from "./chrome";
+import { dashboardNavigation, PageFrame } from "./chrome";
 
 export type OrganizationAuditList = ReturnType<
   typeof createOrganizationAuditStore
@@ -133,10 +133,8 @@ export function renderOrganizationActivity(
   c.header("cache-control", "private, no-store");
   return c.render(
     <PageFrame
-      actions={<a href="/admin">Organization</a>}
-      navigation={
-        <DashboardNavigation current="admin" organizationAdmin={true} />
-      }
+      actions={<a href="/app">Account</a>}
+      navigation={dashboardNavigation(c, "organization-activity")}
     >
       <section aria-labelledby="activity-title">
         <p class="kicker">Organization administration</p>

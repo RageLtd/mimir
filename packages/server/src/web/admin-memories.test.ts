@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { AppendOrganizationAuditEvent } from "../audit/store";
 import { createApp } from "../app";
+import type { AppendOrganizationAuditEvent } from "../audit/store";
 
 function fixture() {
   const audits: AppendOrganizationAuditEvent[] = [];
@@ -20,6 +20,7 @@ function fixture() {
       };
     },
     orgLister: async () => [],
+    operatorGrantLookup: () => false,
     activeMemberLookup: async (headers) => {
       const cookie = headers.get("cookie");
       if (cookie === "session=removed") return null;
@@ -86,7 +87,7 @@ describe("encrypted organization memory administration", () => {
       expect(body).toContain("mimir-admin-memory-manager");
       expect(body).toContain('data-user-id="user-1"');
       expect(body).toContain('data-org-id="org-1"');
-      expect(body).toContain('/assets/admin-memories.js');
+      expect(body).toContain("/assets/admin-memories.js");
       expect(body).toContain("server cannot render, search, or moderate it");
       expect(body).not.toContain("private canary memory");
     }
@@ -119,9 +120,9 @@ describe("encrypted organization memory administration", () => {
 
   test("untrusted origins and non-admin identities fail before maintenance", async () => {
     const { app, audits, pushes } = fixture();
-    expect((await maintain(app, "session=owner", "https://evil.test")).status).toBe(
-      403,
-    );
+    expect(
+      (await maintain(app, "session=owner", "https://evil.test")).status,
+    ).toBe(403);
     expect((await maintain(app, "session=member")).status).toBe(403);
     expect((await maintain(app, "session=removed")).status).toBe(302);
     const apiKey = await app.request(

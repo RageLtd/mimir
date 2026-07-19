@@ -1,11 +1,25 @@
 import { Hono } from "hono";
 import type { IdentityEnv } from "../middleware/identity";
-import { canManageOrganization } from "../middleware/organization-roles";
+import {
+  OPERATOR_AUDIT_PATH,
+  OPERATOR_GRANT_PATH,
+  OPERATOR_GRANTS_PATH,
+  OPERATOR_HEALTH_PATH,
+  OPERATOR_ORGANIZATIONS_PATH,
+  OPERATOR_ORGANIZATIONS_PROVISION_PATH,
+  OPERATOR_REVOKE_PATH,
+  OPERATOR_ROOT_PATH,
+  OPERATOR_SETTINGS_MCP_CREDENTIAL_PATH,
+  OPERATOR_SETTINGS_NAME_PATH,
+  OPERATOR_SETTINGS_PATH,
+  OPERATOR_SETTINGS_SUPPORT_URL_PATH,
+  OPERATOR_SETTINGS_SYSTEM_PROMPT_PATH,
+} from "../operator/paths";
 import {
   type OrganizationAuditList,
   renderOrganizationActivity,
 } from "./activity";
-import { renderOrganizationAdmin } from "./admin";
+import { renderOrganizationAdmin, renderOrganizationBilling } from "./admin";
 import { renderAdminMemories } from "./admin-memories";
 import {
   type AuthFormOptions,
@@ -14,7 +28,7 @@ import {
   renderSignIn,
   renderSignUp,
 } from "./auth-forms";
-import { DashboardNavigation, PageFrame, pageRenderer } from "./chrome";
+import { dashboardNavigation, PageFrame, pageRenderer } from "./chrome";
 import { webCompression } from "./compression";
 import {
   createApiKeyAction,
@@ -48,6 +62,22 @@ import {
   type OrganizationMemoryMaintenanceOptions,
 } from "./memory-maintenance";
 import {
+  type OperatorDashboardOptions,
+  renderOperatorAudit,
+  renderOperatorGrants,
+  renderOperatorHealth,
+  renderOperatorHome,
+  renderOperatorOrganizations,
+  renderOperatorSettings,
+} from "./operator";
+import {
+  createGrantOperatorAction,
+  createInstanceSettingAction,
+  createOperatorCredentialAction,
+  createProvisionOrganizationAction,
+  createRevokeOperatorAction,
+} from "./operator-actions";
+import {
   type OrganizationSettingsOptions,
   renderOrganizationSettings,
 } from "./settings";
@@ -67,6 +97,7 @@ interface WebOptions {
   organizationMembers?: OrganizationMembersOptions;
   organizationMemoryMaintenance?: OrganizationMemoryMaintenanceOptions;
   organizationSettings?: OrganizationSettingsOptions;
+  operator?: OperatorDashboardOptions;
 }
 
 export function createWeb(options: WebOptions = {}) {
@@ -111,9 +142,42 @@ export function createWeb(options: WebOptions = {}) {
     );
   }
 
+  const operator = options.operator;
+  if (operator) {
+    web.get(OPERATOR_ROOT_PATH, renderOperatorHome);
+    web.get(OPERATOR_SETTINGS_PATH, (c) => renderOperatorSettings(c, operator));
+    web.post(
+      OPERATOR_SETTINGS_NAME_PATH,
+      createInstanceSettingAction(operator, "instance_name"),
+    );
+    web.post(
+      OPERATOR_SETTINGS_SUPPORT_URL_PATH,
+      createInstanceSettingAction(operator, "support_url"),
+    );
+    web.post(
+      OPERATOR_SETTINGS_SYSTEM_PROMPT_PATH,
+      createInstanceSettingAction(operator, "system_prompt"),
+    );
+    web.post(
+      OPERATOR_SETTINGS_MCP_CREDENTIAL_PATH,
+      createOperatorCredentialAction(operator),
+    );
+    web.get(OPERATOR_ORGANIZATIONS_PATH, (c) => renderOperatorOrganizations(c));
+    web.post(
+      OPERATOR_ORGANIZATIONS_PROVISION_PATH,
+      createProvisionOrganizationAction(operator),
+    );
+    web.get(OPERATOR_GRANTS_PATH, (c) => renderOperatorGrants(c, operator));
+    web.post(OPERATOR_GRANT_PATH, createGrantOperatorAction(operator));
+    web.post(OPERATOR_REVOKE_PATH, createRevokeOperatorAction(operator));
+    web.get(OPERATOR_HEALTH_PATH, (c) => renderOperatorHealth(c, operator));
+    web.get(OPERATOR_AUDIT_PATH, (c) => renderOperatorAudit(c, operator));
+  }
+
   web.get("/app/memories", (c) => renderMemories(c));
   if (options.organizationAdmin) {
     web.get("/admin", (c) => renderOrganizationAdmin(c));
+    web.get("/admin/billing", (c) => renderOrganizationBilling(c));
     const organizationAuditList = options.organizationAuditList;
     if (organizationAuditList) {
       web.get("/admin/activity", (c) =>
@@ -183,39 +247,31 @@ export function createWeb(options: WebOptions = {}) {
     return c.render(
       <PageFrame
         actions={<a href="/">Home</a>}
-        navigation={
-          <DashboardNavigation
-            current="overview"
-            organizationAdmin={canManageOrganization(identity)}
-          />
-        }
+        navigation={dashboardNavigation(c, "account")}
       >
         <section
           aria-labelledby="dashboard-title"
           data-user-id={identity?.userId}
           data-organization-id={identity?.orgId}
         >
-          <p class="kicker">Workspace</p>
-          <h1 id="dashboard-title">Dashboard</h1>
+          <p class="kicker">Your Mimir account</p>
+          <h1 id="dashboard-title">Account</h1>
           <p class="lede">
-            Your account, devices, and shared context will live here.
+            Manage the identity signed into this browser and its active
+            organization.
           </p>
-          <div class="cards">
-            <section class="card" aria-labelledby="account-card-title">
-              <h2 id="account-card-title">Account</h2>
-              <p>Manage your identity and active organization.</p>
-            </section>
-            <section class="card" aria-labelledby="memory-card-title">
-              <h2 id="memory-card-title">Memory</h2>
-              <p>Review the encrypted context available to your agents.</p>
-            </section>
-          </div>
+          <dl class="status">
+            <dt>User</dt>
+            <dd class="secret">{identity?.userId ?? "Local user"}</dd>
+            <dt>Active organization</dt>
+            <dd class="secret">{identity?.orgId ?? "Local organization"}</dd>
+          </dl>
         </section>
       </PageFrame>,
       {
-        title: "Dashboard — Mimir",
-        description: "Manage your Mimir account, devices, and agent context.",
-        styles: ["dashboard", "card", "cards"],
+        title: "Account — Mimir",
+        description: "Manage your Mimir account and active organization.",
+        styles: ["dashboard", "status", "secret"],
       },
     );
   });

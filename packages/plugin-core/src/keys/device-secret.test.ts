@@ -1,18 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { mkdtempSync } from "node:fs";
-
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fromB64u } from "./crypto";
 import {
   ensureDeviceSecret,
   fileSecretStore,
   generateDeviceSecret,
   getDeviceSecret,
+  type SecretStore,
   secretName,
   storeDeviceSecret,
-  type SecretStore,
 } from "./device-secret";
-import { fromB64u } from "./crypto";
 
 /** In-memory store — tests must never touch the developer's keychain. */
 const memoryStore = () => {
@@ -73,9 +72,9 @@ describe("store/get round-trip", () => {
 
   test("rejects malformed secrets before persisting", async () => {
     const store = memoryStore();
-    await expect(
-      storeDeviceSecret(SERVER, "too-short", store),
-    ).rejects.toThrow("32 bytes");
+    await expect(storeDeviceSecret(SERVER, "too-short", store)).rejects.toThrow(
+      "32 bytes",
+    );
   });
 });
 

@@ -65,6 +65,7 @@ describe("organization activity view", () => {
       authEnabled: true,
       sessionLookup: sessionFor("org-1"),
       activeMemberLookup: memberFor("org-1", "owner"),
+      operatorGrantLookup: () => false,
       organizationAuditList: list,
     }).request(
       "/admin/activity?action=membership.role_changed&actor=user-2&target=member&outcome=succeeded&from=2026-07-01",
@@ -105,12 +106,14 @@ describe("organization activity view", () => {
       authEnabled: true,
       sessionLookup: sessionFor("org-1"),
       activeMemberLookup: memberFor("org-1", "member"),
+      operatorGrantLookup: () => false,
       organizationAuditList: list,
     });
     const signedOut = createApp({
       authEnabled: true,
       sessionLookup: () => Promise.resolve(null),
       activeMemberLookup: memberFor("org-1", "owner"),
+      operatorGrantLookup: () => false,
       organizationAuditList: list,
     });
 
@@ -148,6 +151,7 @@ describe("organization activity view", () => {
       authEnabled: true,
       sessionLookup,
       activeMemberLookup,
+      operatorGrantLookup: () => false,
       organizationAuditList: list,
     });
     const first = await app.request("/admin/activity", {
@@ -171,6 +175,7 @@ describe("organization activity view", () => {
       authEnabled: true,
       sessionLookup: sessionFor("org-1"),
       activeMemberLookup: memberFor("org-1", "owner"),
+      operatorGrantLookup: () => false,
       organizationAuditList: () => {
         reads += 1;
         return { events: [], nextCursor: null, retentionDays: 365 };
@@ -180,6 +185,7 @@ describe("organization activity view", () => {
       authEnabled: true,
       sessionLookup: sessionFor("org-1"),
       activeMemberLookup: memberFor("org-1", "owner"),
+      operatorGrantLookup: () => false,
       organizationAuditList: () => {
         throw new Error("database path and secret must stay hidden");
       },

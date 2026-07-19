@@ -8,9 +8,7 @@ describe("web content negotiation", () => {
   });
 
   test("honors client quality weights before server preference", () => {
-    expect(negotiateWebEncoding("br;q=.5, zstd;q=.8, gzip;q=1")).toBe(
-      "gzip",
-    );
+    expect(negotiateWebEncoding("br;q=.5, zstd;q=.8, gzip;q=1")).toBe("gzip");
   });
 
   test("falls through every supported coding and finally identity", () => {

@@ -7,7 +7,11 @@ import {
   type OrganizationMemoryMaintenanceOptions,
 } from "./memory-maintenance";
 
-const envelope = (id: string) => ({ id, tombstone: false, payload: "ciphertext" });
+const envelope = (id: string) => ({
+  id,
+  tombstone: false,
+  payload: "ciphertext",
+});
 
 function fixture(
   pushResult: { accepted: number; stale: string[] } = {
@@ -35,11 +39,18 @@ function fixture(
     });
     return next();
   });
-  app.post("/admin/memories/maintenance", createMemoryMaintenanceAction(options));
+  app.post(
+    "/admin/memories/maintenance",
+    createMemoryMaintenanceAction(options),
+  );
   return { app, audits, pushes };
 }
 
-const request = (app: Hono<IdentityEnv>, body: unknown, origin = "https://mimir.test") =>
+const request = (
+  app: Hono<IdentityEnv>,
+  body: unknown,
+  origin = "https://mimir.test",
+) =>
   app.request("/admin/memories/maintenance", {
     method: "POST",
     headers: { "content-type": "application/json", origin },
@@ -93,8 +104,13 @@ describe("organization memory maintenance action", () => {
   test("rejects untrusted origins and malformed batches before side effects", async () => {
     const { app, audits, pushes } = fixture();
     expect(
-      (await request(app, { envelopes: [envelope("memory:one")] }, "https://evil.test"))
-        .status,
+      (
+        await request(
+          app,
+          { envelopes: [envelope("memory:one")] },
+          "https://evil.test",
+        )
+      ).status,
     ).toBe(403);
     expect((await request(app, { envelopes: [] })).status).toBe(400);
     expect(audits).toEqual([]);

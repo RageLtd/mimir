@@ -23,13 +23,23 @@ const world = (memberCount = 1) => {
         return next();
       });
     }
-    app.route("/v1/sync", createSyncRoutes(() => db, () => memberCount));
+    app.route(
+      "/v1/sync",
+      createSyncRoutes(
+        () => db,
+        () => memberCount,
+      ),
+    );
     return app;
   };
   return { db, appFor };
 };
 
-const envelope = (id: string, version = 1, overrides?: Record<string, unknown>) => ({
+const envelope = (
+  id: string,
+  version = 1,
+  overrides?: Record<string, unknown>,
+) => ({
   id,
   kind: 1,
   v: 2,
@@ -112,10 +122,14 @@ describe("LWW", () => {
     const { appFor } = world();
     const app = appFor(A);
     await push(app, [envelope("memory:contested", 2)]);
-    const older = await json(await push(app, [envelope("memory:contested", 1)]));
+    const older = await json(
+      await push(app, [envelope("memory:contested", 1)]),
+    );
     expect(older.accepted).toBe(0);
     expect(older.stale).toEqual(["memory:contested"]);
-    const newer = await json(await push(app, [envelope("memory:contested", 3)]));
+    const newer = await json(
+      await push(app, [envelope("memory:contested", 3)]),
+    );
     expect(newer.accepted).toBe(1);
     const pulled = await pull(app);
     expect(pulled.envelopes).toHaveLength(1);
@@ -200,16 +214,16 @@ describe("tombstone GC", () => {
     const appA = appFor(A);
     const appB = appFor(B);
     await push(appA, [envelope("memory:doomed", 1)]);
-    await push(appA, [
-      envelope("memory:doomed", 2, { tombstone: true }),
-    ]);
+    await push(appA, [envelope("memory:doomed", 2, { tombstone: true })]);
 
     // Only A has pulled past the tombstone; B lags at 0 → no GC.
     const a = await pull(appA);
     await pull(appA, a.nextCursor); // records A's confirmed cursor
     await push(appA, [envelope("memory:unrelated")]); // triggers GC pass
     const rows = () =>
-      db.query("SELECT COUNT(*) AS n FROM envelope WHERE tombstone = 1").get() as {
+      db
+        .query("SELECT COUNT(*) AS n FROM envelope WHERE tombstone = 1")
+        .get() as {
         n: number;
       };
     expect(rows().n).toBe(1);

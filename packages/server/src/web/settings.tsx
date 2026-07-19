@@ -21,7 +21,7 @@ import {
 } from "../auth/organization-settings-schema";
 import type { IdentityEnv } from "../middleware/identity";
 import { attemptSync } from "../util/result";
-import { DashboardNavigation, PageFrame } from "./chrome";
+import { dashboardNavigation, PageFrame } from "./chrome";
 
 export interface OrganizationSettingsOptions {
   origin: string;
@@ -89,10 +89,8 @@ export function renderOrganizationSettings(
   c.status(state.error ? 400 : 200);
   return c.render(
     <PageFrame
-      actions={<a href="/admin">Organization</a>}
-      navigation={
-        <DashboardNavigation current="admin" organizationAdmin={true} />
-      }
+      actions={<a href="/app">Account</a>}
+      navigation={dashboardNavigation(c, "organization-settings")}
     >
       <section
         aria-labelledby="settings-title"

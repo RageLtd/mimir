@@ -3,19 +3,40 @@
 import type { Context, Next } from "hono";
 import { tokenMatches } from "../auth/claim";
 import { config } from "../config";
+import { operatorTokenDigest } from "../operator/state";
 import { log } from "../util/logger";
+import { attempt } from "../util/result";
 
 const BEARER_PREFIX = "Bearer ";
 
-export const isOperatorPath = (path: string) =>
+export const isOperatorMcpPath = (path: string) =>
   path === "/mcp" || path.startsWith("/mcp/");
 
-export const createOperatorGate =
-  (expectedToken = config.operator.token) =>
-  async (c: Context, next: Next) => {
-    if (!isOperatorPath(c.req.path)) return next();
+export type OperatorCredentialDigestLookup = () =>
+  | Promise<string | null>
+  | string
+  | null;
 
-    if (!expectedToken) {
+export const createOperatorGate =
+  (
+    expectedToken = config.operator.token,
+    digestLookup: OperatorCredentialDigestLookup = () => null,
+  ) =>
+  async (c: Context, next: Next) => {
+    if (!isOperatorMcpPath(c.req.path)) return next();
+
+    const [lookupError, storedDigest] = await attempt(() =>
+      Promise.resolve(digestLookup()),
+    );
+    if (lookupError) {
+      log.error(
+        { err: lookupError },
+        "operator MCP credential lookup failed — rejecting",
+      );
+      return c.json({ error: { message: "Unavailable" } }, 503);
+    }
+
+    if (!storedDigest && !expectedToken) {
       log.warn(
         "operator MCP request rejected — MIMIR_OPERATOR_TOKEN is not configured",
       );
@@ -26,7 +47,10 @@ export const createOperatorGate =
     const presented = authorization.startsWith(BEARER_PREFIX)
       ? authorization.slice(BEARER_PREFIX.length).trim()
       : "";
-    if (!tokenMatches(presented, expectedToken)) {
+    const valid = storedDigest
+      ? tokenMatches(operatorTokenDigest(presented), storedDigest)
+      : tokenMatches(presented, expectedToken);
+    if (!valid) {
       log.warn("operator MCP request rejected — invalid operator credential");
       return c.json({ error: { message: "Unauthorized" } }, 401);
     }

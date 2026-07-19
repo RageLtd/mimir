@@ -8,9 +8,9 @@ import { describe, expect, test } from "bun:test";
 import {
   buildExtractionText,
   type ConversationMessage,
+  type ExtractionConfig,
   extractFromConversation,
   extractMemories,
-  type ExtractionConfig,
 } from "./extract";
 
 type Captured = {

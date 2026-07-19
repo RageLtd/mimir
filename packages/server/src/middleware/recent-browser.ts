@@ -12,7 +12,9 @@ export function isTrustedRecentBrowser(
   if (c.req.header("authorization") || c.req.header("x-api-key")) return false;
   if (!c.req.header("cookie") || c.req.header("origin") !== origin)
     return false;
-  const authenticatedAt = c.get("identity")?.authenticatedAt;
+  const authenticatedAt =
+    c.get("operatorIdentity")?.authenticatedAt ??
+    c.get("identity")?.authenticatedAt;
   if (authenticatedAt === undefined) return false;
   const age = now() - authenticatedAt;
   return age >= -CLOCK_SKEW_MS && age <= RECENT_AUTH_MAX_AGE_MS;

@@ -2,14 +2,14 @@ import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { migrateOrganizationAudit } from "../audit/store";
 import {
-  DEFAULT_INVITATION_LIFETIME_DAYS,
-  DEFAULT_INVITATION_ROLE,
-} from "./organization-settings-schema";
-import {
   invitationExpiresAt,
   migrateOrganizationPolicy,
   readOrganizationPolicy,
 } from "./organization-policy";
+import {
+  DEFAULT_INVITATION_LIFETIME_DAYS,
+  DEFAULT_INVITATION_ROLE,
+} from "./organization-settings-schema";
 
 function policyDb() {
   const db = new Database(":memory:");

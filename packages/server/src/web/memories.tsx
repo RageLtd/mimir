@@ -1,20 +1,14 @@
 import type { Context } from "hono";
 import type { IdentityEnv } from "../middleware/identity";
-import { canManageOrganization } from "../middleware/organization-roles";
-import { DashboardNavigation, PageFrame } from "./chrome";
+import { dashboardNavigation, PageFrame } from "./chrome";
 
 export function renderMemories(c: Context<IdentityEnv>) {
   const identity = c.get("identity");
   c.header("cache-control", "private, no-store");
   return c.render(
     <PageFrame
-      actions={<a href="/app">Dashboard</a>}
-      navigation={
-        <DashboardNavigation
-          current="memories"
-          organizationAdmin={canManageOrganization(identity)}
-        />
-      }
+      actions={<a href="/app">Account</a>}
+      navigation={dashboardNavigation(c, "memories")}
     >
       <section aria-labelledby="memories-title">
         <p class="kicker">Private context</p>

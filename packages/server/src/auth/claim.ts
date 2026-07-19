@@ -22,6 +22,7 @@ import {
   createOrganizationAuditStore,
 } from "../audit/store";
 import { config } from "../config";
+import { grantInitialOperator } from "../operator/state";
 import { log } from "../util/logger";
 import { attempt } from "../util/result";
 import { getAuth, getAuthDb } from "./instance";
@@ -249,6 +250,20 @@ export async function acceptPendingInvitations(
   return { accepted, failed };
 }
 
+async function grantClaimedOperator(
+  db: Database,
+  response: { headers: { getSetCookie(): string[] } },
+  auth: ReturnType<typeof getAuth>,
+) {
+  const cookie = setCookiesToCookieHeader(response.headers.getSetCookie());
+  if (!cookie) return false;
+  const [sessionError, session] = await attempt(() =>
+    auth.api.getSession({ headers: new Headers({ cookie }) }),
+  );
+  const user = sessionError ? null : sessionUser(session);
+  return user ? grantInitialOperator(db, user.id) : false;
+}
+
 /**
  * Hono middleware guarding the email signup endpoint. Mounted on
  * The sign-up API path before the better-auth handler; everything except POST
@@ -313,6 +328,15 @@ export const createClaimGuard =
 
     if (decision.claim && c.res.status === 200) {
       await (options.bootstrap ?? bootstrapOwnerOrg)(c.res.clone());
+      const [grantError, granted] = await attempt(() =>
+        grantClaimedOperator(db, c.res.clone(), options.auth ?? getAuth()),
+      );
+      if (grantError || !granted) {
+        log.error(
+          { err: grantError },
+          "claimed account could not be granted instance-operator access",
+        );
+      }
     } else if (c.res.status === 200) {
       await acceptPendingInvitations(
         db,

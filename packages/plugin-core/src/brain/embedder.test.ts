@@ -6,12 +6,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { join } from "node:path";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
-  EMBEDDER_MODEL,
   createEmbedQuery,
+  EMBEDDER_MODEL,
   embedderBaseUrl,
   embedderDir,
   embedderInstalled,
@@ -51,9 +51,7 @@ const vectorOf = (fill: number, dims: number = DIMS) =>
 
 /** Stub llama-server: healthy /health plus a configurable embeddings leg. */
 const withStub = async (
-  embeddings: (body: {
-    input: string[];
-  }) => Response | Promise<Response>,
+  embeddings: (body: { input: string[] }) => Response | Promise<Response>,
   fn: (port: number) => Promise<void>,
 ) => {
   const server = Bun.serve({

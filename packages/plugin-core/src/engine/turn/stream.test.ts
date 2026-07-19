@@ -9,26 +9,30 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import type {
+  LanguageModelV3,
+  LanguageModelV3StreamPart,
+} from "@ai-sdk/provider";
 import { streamTurn, type TurnEvent } from "./stream";
 
-type Part = Record<string, unknown>;
+type Part = LanguageModelV3StreamPart;
 
-const fakeModel = (parts: Part[]) => ({
-  doStream: async () => ({
-    stream: new ReadableStream<Part>({
-      start(controller) {
-        for (const part of parts) controller.enqueue(part);
-        controller.close();
-      },
+const fakeModel = (parts: Part[]) =>
+  ({
+    doStream: async () => ({
+      stream: new ReadableStream<Part>({
+        start(controller) {
+          for (const part of parts) controller.enqueue(part);
+          controller.close();
+        },
+      }),
     }),
-  }),
-});
+  }) satisfies Pick<LanguageModelV3, "doStream">;
 
 const collect = async (parts: Part[]) => {
   const events: TurnEvent[] = [];
-  // biome-ignore lint/suspicious/noExplicitAny: fake model narrows the Pick<LanguageModelV3> contract
   for await (const event of streamTurn({
-    model: fakeModel(parts) as any,
+    model: fakeModel(parts),
     prompt: [],
   })) {
     events.push(event);
@@ -36,21 +40,31 @@ const collect = async (parts: Part[]) => {
   return events;
 };
 
-const finishPart = (input: number, output: number) => ({
-  type: "finish",
-  finishReason: { unified: "stop" },
-  usage: {
-    inputTokens: { total: input },
-    outputTokens: { total: output },
-  },
-});
+const finishPart = (input: number, output: number) =>
+  ({
+    type: "finish",
+    finishReason: { unified: "stop", raw: undefined },
+    usage: {
+      inputTokens: {
+        total: input,
+        noCache: input,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+      },
+      outputTokens: {
+        total: output,
+        text: output,
+        reasoning: undefined,
+      },
+    },
+  }) satisfies Part;
 
 describe("streamTurn", () => {
   test("streams text and thinking deltas in order, finish carries usage", async () => {
     const events = await collect([
-      { type: "reasoning-delta", delta: "hmm " },
-      { type: "text-delta", delta: "Hello" },
-      { type: "text-delta", delta: " world" },
+      { type: "reasoning-delta", id: "r1", delta: "hmm " },
+      { type: "text-delta", id: "t1", delta: "Hello" },
+      { type: "text-delta", id: "t1", delta: " world" },
       finishPart(120, 8),
     ]);
 
@@ -70,10 +84,10 @@ describe("streamTurn", () => {
         toolName: "read_file",
         input: '{"path":"/tmp/x"}',
       },
-      { type: "text-delta", delta: "reading" },
+      { type: "text-delta", id: "t1", delta: "reading" },
       {
         ...finishPart(50, 5),
-        finishReason: { unified: "tool-calls" },
+        finishReason: { unified: "tool-calls", raw: undefined },
       },
     ]);
 
@@ -115,7 +129,7 @@ describe("streamTurn", () => {
   test("in-stream error part throws to the caller", async () => {
     const iterate = async () => {
       await collect([
-        { type: "text-delta", delta: "partial" },
+        { type: "text-delta", id: "t1", delta: "partial" },
         { type: "error", error: new Error("upstream 500") },
       ]);
     };
@@ -126,7 +140,7 @@ describe("streamTurn", () => {
     const events = await collect([
       { type: "stream-start", warnings: [] },
       { type: "text-start", id: "t1" },
-      { type: "text-delta", delta: "ok" },
+      { type: "text-delta", id: "t1", delta: "ok" },
       { type: "text-end", id: "t1" },
       finishPart(5, 1),
     ]);

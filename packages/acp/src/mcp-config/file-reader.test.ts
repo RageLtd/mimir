@@ -26,10 +26,7 @@ const writeProjectConfig = (projectPath: string, content: object) => {
 
 const writeGlobalConfig = (content: object) => {
   mkdirSync(join(FAKE_HOME, ".mimir"), { recursive: true });
-  writeFileSync(
-    join(FAKE_HOME, ".mimir", "mcp.json"),
-    JSON.stringify(content),
-  );
+  writeFileSync(join(FAKE_HOME, ".mimir", "mcp.json"), JSON.stringify(content));
 };
 
 describe("loadMcpConfig", () => {

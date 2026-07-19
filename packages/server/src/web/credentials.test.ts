@@ -37,6 +37,7 @@ async function credentialApp() {
     sessionLookup: (headers) => auth.api.getSession({ headers }),
     orgLister: (headers) => auth.api.listOrganizations({ headers }),
     activeMemberLookup: (headers) => auth.api.getActiveMember({ headers }),
+    operatorGrantLookup: () => false,
     keyRoutes: createKeysRoutes(() => db),
   });
   const signup = await postForm(
@@ -177,9 +178,9 @@ describe("credential dashboard", () => {
     );
 
     expect(revoked.status).toBe(303);
-    expect(
-      (await app.request("/app", { headers: { cookie } })).status,
-    ).toBe(200);
+    expect((await app.request("/app", { headers: { cookie } })).status).toBe(
+      200,
+    );
     expect(
       (await app.request("/app", { headers: { cookie: secondCookie } })).status,
     ).toBe(302);
@@ -256,8 +257,8 @@ describe("credential dashboard", () => {
       cookie,
     );
     expect(removed.status).toBe(303);
-    expect(
-      db.query("SELECT count(*) AS count FROM passkey").get(),
-    ).toEqual({ count: 0 });
+    expect(db.query("SELECT count(*) AS count FROM passkey").get()).toEqual({
+      count: 0,
+    });
   });
 });

@@ -16,45 +16,52 @@ const rule = (overrides: Partial<RuleEntry> = {}): RuleEntry => ({
   ...overrides,
 });
 
+const placeholder = (expression: string) =>
+  ["$", "{", expression, "}"].join("");
+
 describe("renderTemplate", () => {
-  test("interpolates ${match} and numbered captures", () => {
+  test("interpolates match and numbered capture placeholders", () => {
     expect(
-      renderTemplate("got ${1} via ${match}", ["FOO BAR", "FOO"], undefined),
+      renderTemplate(
+        `got ${placeholder("1")} via ${placeholder("match")}`,
+        ["FOO BAR", "FOO"],
+        undefined,
+      ),
     ).toBe("got FOO via FOO BAR");
   });
 
-  test("interpolates ${line} when defined", () => {
-    expect(renderTemplate("at ${line}", ["x"], 42)).toBe("at 42");
+  test("interpolates the line placeholder when defined", () => {
+    expect(renderTemplate(`at ${placeholder("line")}`, ["x"], 42)).toBe(
+      "at 42",
+    );
   });
 
-  test("blank ${line} when undefined", () => {
-    expect(renderTemplate("at ${line}", ["x"], undefined)).toBe("at ");
+  test("blanks the line placeholder when undefined", () => {
+    expect(renderTemplate(`at ${placeholder("line")}`, ["x"], undefined)).toBe(
+      "at ",
+    );
   });
 
   test("leaves unknown placeholders intact", () => {
-    expect(renderTemplate("hi ${typo}", [], undefined)).toBe("hi ${typo}");
+    const template = `hi ${placeholder("typo")}`;
+    expect(renderTemplate(template, [], undefined)).toBe(template);
   });
 });
 
 describe("applyMessageTemplate", () => {
   test("uses the rule message when set", () => {
-    const r = rule({ message: "found ${1}" });
-    const v = applyMessageTemplate(
-      r,
-      { message: "literal", line: 3 },
-      ["FULL", "G1"],
-    );
+    const r = rule({ message: `found ${placeholder("1")}` });
+    const v = applyMessageTemplate(r, { message: "literal", line: 3 }, [
+      "FULL",
+      "G1",
+    ]);
     expect(v.message).toBe("found G1");
     expect(v.line).toBe(3);
   });
 
   test("returns the violation untouched when no template", () => {
     const r = rule();
-    const v = applyMessageTemplate(
-      r,
-      { message: "literal" },
-      ["FULL"],
-    );
+    const v = applyMessageTemplate(r, { message: "literal" }, ["FULL"]);
     expect(v.message).toBe("literal");
   });
 });
@@ -122,9 +129,7 @@ describe("formatLoadErrors", () => {
   });
 
   test("singular noun for one error", () => {
-    const out = formatLoadErrors([
-      { path: "/x.toml", message: "boom" },
-    ]);
+    const out = formatLoadErrors([{ path: "/x.toml", message: "boom" }]);
     expect(out).toContain("1 rule failed to load");
   });
 });

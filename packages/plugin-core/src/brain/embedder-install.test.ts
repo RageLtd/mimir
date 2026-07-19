@@ -12,15 +12,15 @@ import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { $ } from "bun";
+import { embedderBinaryPath, embedderDir, embedderModelPath } from "./embedder";
 import {
   installEmbedderModel,
   installLlamaServer,
-  llamaCppAssetUrl,
   LLAMA_CPP_RELEASE,
+  llamaCppAssetUrl,
   platformAssetSuffix,
   sha256File,
 } from "./embedder-install";
-import { embedderBinaryPath, embedderDir, embedderModelPath } from "./embedder";
 
 let savedHome: string | undefined;
 

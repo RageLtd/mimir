@@ -13,6 +13,7 @@ const app = createApp({
         }
       : null,
   orgLister: async () => [],
+  operatorGrantLookup: () => false,
   activeMemberLookup: async () => ({
     userId: "user-1",
     organizationId: "org-1",
@@ -39,7 +40,7 @@ describe("encrypted memories page", () => {
     expect(body).toContain("mimir-memory-manager");
     expect(body).toContain('data-user-id="user-1"');
     expect(body).toContain('data-org-id="org-1"');
-    expect(body).toContain('/assets/memories.js');
+    expect(body).toContain("/assets/memories.js");
     expect(body).toContain("No memory plaintext has been requested");
     expect(body).not.toContain("private canary memory");
   });

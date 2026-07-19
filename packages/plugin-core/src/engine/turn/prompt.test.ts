@@ -6,9 +6,7 @@ import { sanitizeToolMessages } from "./prompt";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function assistantWithToolCalls(
-  ...calls: Array<{ id: string; name: string }>
-) {
+function assistantWithToolCalls(...calls: Array<{ id: string; name: string }>) {
   return {
     role: "assistant" as const,
     content: calls.map((c) => ({
@@ -20,9 +18,7 @@ function assistantWithToolCalls(
   } satisfies ModelMessage;
 }
 
-function toolResult(
-  ...results: Array<{ id: string; name: string }>
-) {
+function toolResult(...results: Array<{ id: string; name: string }>) {
   return {
     role: "tool" as const,
     content: results.map((r) => ({
@@ -110,10 +106,7 @@ describe("sanitizeToolMessages", () => {
         { id: "tc1", name: "search" },
         { id: "tc2", name: "read" },
       ),
-      toolResult(
-        { id: "tc1", name: "search" },
-        { id: "tc2", name: "read" },
-      ),
+      toolResult({ id: "tc1", name: "search" }, { id: "tc2", name: "read" }),
     ];
     expect(sanitizeToolMessages(msgs)).toEqual(msgs);
   });
@@ -132,10 +125,7 @@ describe("sanitizeToolMessages", () => {
     const result = sanitizeToolMessages(msgs);
     expect(result).toEqual([
       assistantTurn,
-      toolResult(
-        { id: "tc1", name: "search" },
-        { id: "tc2", name: "read" },
-      ),
+      toolResult({ id: "tc1", name: "search" }, { id: "tc2", name: "read" }),
       assistant("done"),
     ]);
   });
@@ -152,10 +142,7 @@ describe("sanitizeToolMessages", () => {
     ]);
     expect(result).toEqual([
       assistantTurn,
-      toolResult(
-        { id: "tc1", name: "search" },
-        { id: "tc2", name: "read" },
-      ),
+      toolResult({ id: "tc1", name: "search" }, { id: "tc2", name: "read" }),
     ]);
   });
 

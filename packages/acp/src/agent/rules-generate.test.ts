@@ -80,10 +80,7 @@ describe("findOrphanedRuleBodies", () => {
     // accidentally pair.
     const orphan = await writeFile("a/x.md", "a-x");
     await writeFile("b/x.md", "b-x");
-    await writeFile(
-      "b/x.enforce.toml",
-      'id = "b/x"\nevent = "file"\n',
-    );
+    await writeFile("b/x.enforce.toml", 'id = "b/x"\nevent = "file"\n');
     const result = await findOrphanedRuleBodies(rulesDir);
     expect(result).toEqual([orphan]);
   });

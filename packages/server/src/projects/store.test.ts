@@ -135,7 +135,9 @@ describe("org isolation", () => {
     expect(theirs?.id).not.toBe(mine.id);
     // Cross-org reads and writes miss.
     expect(await getProject(OTHER_ORG, mine.id)).toBeNull();
-    expect(await updateProject(OTHER_ORG, mine.id, { title: "pwned" })).toBeNull();
+    expect(
+      await updateProject(OTHER_ORG, mine.id, { title: "pwned" }),
+    ).toBeNull();
     expect((await getProject(ORG, mine.id))?.title).not.toBe("pwned");
   });
 });

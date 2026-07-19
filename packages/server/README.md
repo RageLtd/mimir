@@ -12,6 +12,7 @@ The blind sync server. It has exactly four jobs — **auth** (accounts, orgs, in
 | `/v1/sync/*` | Envelope push/pull, cursors, leases |
 | `/v1/system-prompt` | Persona markdown for client boot |
 | `/mcp` | Operator-only introspection (`read_mimir_logs`); disabled unless `MIMIR_OPERATOR_TOKEN` is set |
+| `/operator/*` | Browser-session operator dashboard for runtime settings, provisioning, health, grants, and audit |
 
 Storage is two SQLite files: the tenant store (`MIMIR_DB_PATH` — envelopes, sync cursors, and leases) and the auth store (`AUTH_DB_PATH`). There is no database service to operate.
 
@@ -21,8 +22,9 @@ Storage is two SQLite files: the tenant store (`MIMIR_DB_PATH` — envelopes, sy
 |----------|---------|---------|
 | `MIMIR_PORT` / `MIMIR_HOST` | `8080` / `0.0.0.0` | Bind address |
 | `MIMIR_DB_PATH` | `./mimir.sqlite` | Tenant store — point at a persistent volume in deployments |
-| `MIMIR_OPERATOR_TOKEN` | — | Dedicated bearer token for operator log introspection; tenant API keys are never accepted |
-| `SYSTEM_PROMPT_PATH` | `./system-prompt.md` | Persona markdown served to clients |
+| `MIMIR_OPERATOR_TOKEN` | — | Bootstrap/fallback bearer token for operator MCP introspection; a one-way runtime replacement retires it |
+| `MIMIR_OPERATOR_USER_IDS` | — | Comma-separated existing Better Auth user ids imported once as browser-operator grants |
+| `SYSTEM_PROMPT_PATH` | `./system-prompt.md` | First-boot system-prompt seed; runtime content is stored in the auth database |
 | `AUTH_ENABLED` | `false` | Off = single-user self-hosted mode (ungated, plaintext sync); on = accounts + E2E-encrypted sync |
 | `AUTH_SECRET` | — | better-auth signing secret. Required when auth is enabled; boot fails loudly without it |
 | `AUTH_DB_PATH` | `./auth.sqlite` | Auth store |
@@ -43,7 +45,7 @@ curl http://localhost:8080/health
 
 By default this **pulls** the prebuilt image (`ghcr.io/rageltd/mimir-server:next`) rather than building — see [Pulling the published image](#pulling-the-published-image) for the one-time GHCR login it needs. To compile your working tree instead, see [Building from source](#building-from-source).
 
-With auth off (the default) the server boots ungated with a loud warning — the right shape when the operator and the only user are the same person. To run multi-user, set `AUTH_ENABLED=true` plus `AUTH_SECRET` and `AUTH_SETUP_TOKEN`, claim the first account with the setup token, and issue API keys through `/api/auth`.
+With auth off (the default) the server boots ungated with a loud warning — the right shape when the operator and the only user are the same person. To run multi-user, set `AUTH_ENABLED=true` plus `AUTH_SECRET` and `AUTH_SETUP_TOKEN`, claim the first account with the setup token, and issue API keys through `/api/auth`. The first claimant receives an explicit instance-operator grant in addition to the separate owner membership created for the bootstrap organization. On an already-claimed instance, `MIMIR_OPERATOR_USER_IDS` seeds existing account ids once; later grants are audited runtime changes under `/operator/operators`.
 
 ## Building from source
 

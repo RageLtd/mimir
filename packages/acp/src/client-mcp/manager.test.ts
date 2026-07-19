@@ -39,6 +39,12 @@ const makeFake = (): FakeClient => ({
   close: mock(() => Promise.resolve()),
 });
 
+const fakeClient = (index: number) => {
+  const client = fakeClients[index];
+  if (!client) throw new Error(`Missing fake MCP client at index ${index}`);
+  return client;
+};
+
 mock.module("@modelcontextprotocol/sdk/client/index.js", () => ({
   // The proxy routes each method call to fakeClients[idx] at CALL time,
   // not construction time. That lets tests push fixtures on fakeClients
@@ -50,16 +56,16 @@ mock.module("@modelcontextprotocol/sdk/client/index.js", () => ({
       fakeClients.push(makeFake());
     }
     connect(...args: unknown[]) {
-      return fakeClients[this.idx]!.connect(...args);
+      return fakeClient(this.idx).connect(...args);
     }
     listTools(...args: unknown[]) {
-      return fakeClients[this.idx]!.listTools(...args);
+      return fakeClient(this.idx).listTools(...args);
     }
     callTool(...args: unknown[]) {
-      return fakeClients[this.idx]!.callTool(...args);
+      return fakeClient(this.idx).callTool(...args);
     }
     close(...args: unknown[]) {
-      return fakeClients[this.idx]!.close(...args);
+      return fakeClient(this.idx).close(...args);
     }
   },
 }));
@@ -110,7 +116,7 @@ describe("ClientMcpManager", () => {
     await Promise.resolve();
 
     expect(fakeClients.length).toBe(2);
-    fakeClients[0]!.listTools = mock(() =>
+    fakeClient(0).listTools = mock(() =>
       Promise.resolve({
         tools: [
           {
@@ -129,7 +135,7 @@ describe("ClientMcpManager", () => {
         ],
       }),
     );
-    fakeClients[1]!.listTools = mock(() =>
+    fakeClient(1).listTools = mock(() =>
       Promise.resolve({
         tools: [
           {
@@ -162,7 +168,7 @@ describe("ClientMcpManager", () => {
     const initTick = mgr.getToolDefs();
     await Promise.resolve();
     expect(fakeClients.length).toBe(1);
-    fakeClients[0]!.listTools = mock(() =>
+    fakeClient(0).listTools = mock(() =>
       Promise.resolve({
         tools: [
           {
@@ -172,7 +178,7 @@ describe("ClientMcpManager", () => {
         ],
       }),
     );
-    fakeClients[0]!.callTool = mock((params: { name: string }) =>
+    fakeClient(0).callTool = mock((params: { name: string }) =>
       Promise.resolve({
         content: [{ type: "text", text: `called:${params.name}` }],
       }),
@@ -182,7 +188,7 @@ describe("ClientMcpManager", () => {
     const result = await mgr.callTool("mcp__zed__read_file", { path: "/x" });
 
     expect(result).toBe("called:read_file");
-    expect(fakeClients[0]!.callTool).toHaveBeenCalledWith({
+    expect(fakeClient(0).callTool).toHaveBeenCalledWith({
       name: "read_file",
       arguments: { path: "/x" },
     });
@@ -192,16 +198,14 @@ describe("ClientMcpManager", () => {
     const mgr = createClientMcpManager("s1", [mkStdioServer("zed")]);
     const initTick = mgr.getToolDefs();
     await Promise.resolve();
-    fakeClients[0]!.listTools = mock(() =>
+    fakeClient(0).listTools = mock(() =>
       Promise.resolve({
         tools: [
           { name: "boom", inputSchema: { type: "object", properties: {} } },
         ],
       }),
     );
-    fakeClients[0]!.callTool = mock(() =>
-      Promise.reject(new Error("nope")),
-    );
+    fakeClient(0).callTool = mock(() => Promise.reject(new Error("nope")));
     await initTick;
 
     const result = await mgr.callTool("mcp__zed__boom", {});
@@ -216,7 +220,7 @@ describe("ClientMcpManager", () => {
       .then(() => null)
       .catch((e: Error) => e);
     expect(err).toBeInstanceOf(Error);
-    expect(err!.message).toContain("not a client MCP tool");
+    expect(err?.message).toContain("not a client MCP tool");
   });
 
   test("connection failure on one server doesn't poison the others", async () => {
@@ -227,8 +231,8 @@ describe("ClientMcpManager", () => {
     const initTick = mgr.getToolDefs();
     await Promise.resolve();
     expect(fakeClients.length).toBe(2);
-    fakeClients[0]!.connect = mock(() => Promise.reject(new Error("boom")));
-    fakeClients[1]!.listTools = mock(() =>
+    fakeClient(0).connect = mock(() => Promise.reject(new Error("boom")));
+    fakeClient(1).listTools = mock(() =>
       Promise.resolve({
         tools: [
           { name: "ok", inputSchema: { type: "object", properties: {} } },
@@ -247,14 +251,14 @@ describe("ClientMcpManager", () => {
     const mgr = createClientMcpManager("s1", [mkStdioServer("zed")]);
     const initTick = mgr.getToolDefs();
     await Promise.resolve();
-    fakeClients[0]!.listTools = mock(() =>
+    fakeClient(0).listTools = mock(() =>
       Promise.resolve({
         tools: [
           { name: "oops", inputSchema: { type: "object", properties: {} } },
         ],
       }),
     );
-    fakeClients[0]!.callTool = mock(() =>
+    fakeClient(0).callTool = mock(() =>
       Promise.resolve({
         isError: true,
         content: [{ type: "text", text: "boom message" }],
@@ -279,19 +283,17 @@ describe("ClientMcpManager", () => {
 
     await mgr.close();
 
-    expect(fakeClients[0]!.close).toHaveBeenCalledTimes(1);
-    expect(fakeClients[1]!.close).toHaveBeenCalledTimes(1);
+    expect(fakeClient(0).close).toHaveBeenCalledTimes(1);
+    expect(fakeClient(1).close).toHaveBeenCalledTimes(1);
   });
 
   test("getToolDefs is idempotent — second call does not reconnect", async () => {
     const mgr = createClientMcpManager("s1", [mkStdioServer("zed")]);
     const initTick = mgr.getToolDefs();
     await Promise.resolve();
-    fakeClients[0]!.listTools = mock(() =>
+    fakeClient(0).listTools = mock(() =>
       Promise.resolve({
-        tools: [
-          { name: "t", inputSchema: { type: "object", properties: {} } },
-        ],
+        tools: [{ name: "t", inputSchema: { type: "object", properties: {} } }],
       }),
     );
     await initTick;
@@ -300,6 +302,6 @@ describe("ClientMcpManager", () => {
     await mgr.getToolDefs();
     await mgr.getToolDefs();
     expect(fakeClients.length).toBe(clientCountAfterFirst);
-    expect(fakeClients[0]!.connect).toHaveBeenCalledTimes(1);
+    expect(fakeClient(0).connect).toHaveBeenCalledTimes(1);
   });
 });

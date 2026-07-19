@@ -32,7 +32,10 @@ const appFor = (
       return next();
     });
   }
-  app.route("/v1/keys", createKeysRoutes(() => db, options));
+  app.route(
+    "/v1/keys",
+    createKeysRoutes(() => db, options),
+  );
   return app;
 };
 
@@ -175,9 +178,7 @@ describe("POST /v1/keys/init", () => {
     expect(first.status).toBe(200);
     expect(memberRow(userA).wrappedOrgKey).toBe("wrap-a-gen1");
 
-    const state = await getJson(
-      await appFor(db, asA).request("/v1/keys/org"),
-    );
+    const state = await getJson(await appFor(db, asA).request("/v1/keys/org"));
     expect(state.initialized).toBe(true);
     expect(state.keyGeneration).toBe(1);
 
@@ -367,9 +368,7 @@ describe("POST /v1/keys/rotate", () => {
       "/v1/keys/rotate",
       {
         keyGeneration: 2,
-        wraps: [
-          { memberId: memberRow(userA).id, wrappedOrgKey: "wrap-a-2" },
-        ],
+        wraps: [{ memberId: memberRow(userA).id, wrappedOrgKey: "wrap-a-2" }],
         removeMemberId: memberRow(userB).id,
       },
       { cookie: "session=owner", origin: "https://mimir.test" },
@@ -410,9 +409,7 @@ describe("POST /v1/keys/rotate", () => {
       "/v1/keys/rotate",
       {
         keyGeneration: 3,
-        wraps: [
-          { memberId: memberRow(userA).id, wrappedOrgKey: "wrap-a-3" },
-        ],
+        wraps: [{ memberId: memberRow(userA).id, wrappedOrgKey: "wrap-a-3" }],
         removeMemberId: memberRow(userB).id,
       },
       { cookie: "session=owner", origin: "https://mimir.test" },
@@ -428,7 +425,9 @@ describe("POST /v1/keys/rotate", () => {
     ).toEqual({ count: 2 });
     expect(
       db
-        .query("SELECT action, outcome FROM organization_audit_event ORDER BY seq")
+        .query(
+          "SELECT action, outcome FROM organization_audit_event ORDER BY seq",
+        )
         .all(),
     ).toEqual([
       { action: "encryption.wrap_provisioned", outcome: "intent" },
@@ -450,9 +449,7 @@ describe("POST /v1/keys/rotate", () => {
     );
     const body = {
       keyGeneration: 2,
-      wraps: [
-        { memberId: memberRow(userB).id, wrappedOrgKey: "wrap-b-2" },
-      ],
+      wraps: [{ memberId: memberRow(userB).id, wrappedOrgKey: "wrap-b-2" }],
       removeMemberId: memberRow(userA).id,
     };
     expect(

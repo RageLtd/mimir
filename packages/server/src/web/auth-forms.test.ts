@@ -13,6 +13,7 @@ import {
 import { buildAuthOptions } from "../auth/instance";
 import { SETUP_TOKEN_HEADER, SIGNUP_PATH } from "../auth/paths";
 import { config } from "../config";
+import { hasOperatorGrant, migrateOperatorState } from "../operator/state";
 
 const TEST_SECRET = "test-secret-material-at-least-32-chars-long";
 const SETUP_TOKEN = "first-claim-token";
@@ -24,6 +25,7 @@ async function formApp() {
   const { runMigrations } = await getMigrations(options);
   await runMigrations();
   migrateOrganizationAudit(db);
+  migrateOperatorState(db);
   const auth = betterAuth(options);
   const app = createApp({
     authEnabled: true,
@@ -47,6 +49,7 @@ async function formApp() {
           .get(userId, orgId),
       ),
     activeMemberLookup: (headers) => auth.api.getActiveMember({ headers }),
+    operatorGrantLookup: (userId) => hasOperatorGrant(db, userId),
   });
   return { app, auth, db };
 }
@@ -87,16 +90,20 @@ describe("Better Auth HTML forms", () => {
     expect(signup.headers.get("cache-control")).toBe("private, no-store");
     expect(signupCookie).not.toBe("");
     expect(countUsers(db)).toBe(1);
-    expect(
-      db.query("SELECT count(*) AS c FROM organization").get(),
-    ).toEqual({ c: 1 });
+    const claimedUser = db
+      .query<{ id: string }, []>('SELECT id FROM "user"')
+      .get();
+    expect(claimedUser && hasOperatorGrant(db, claimedUser.id)).toBe(true);
+    expect(db.query("SELECT count(*) AS c FROM organization").get()).toEqual({
+      c: 1,
+    });
     expect(
       (await app.request("/app", { headers: { cookie: signupCookie } })).status,
     ).toBe(200);
     expect(
       (await app.request("/admin", { headers: { cookie: signupCookie } }))
         .status,
-    ).toBe(200);
+    ).toBe(302);
     db.run("UPDATE member SET role = 'member'");
     expect(
       (await app.request("/admin", { headers: { cookie: signupCookie } }))

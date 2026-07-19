@@ -25,9 +25,7 @@ describe("createUserMemoryStore", () => {
     const store = createUserMemoryStore("~/.mimir/user-memories.db");
     store.addMemory("home-relative path resolved");
 
-    expect(store.getMemories()[0]?.content).toBe(
-      "home-relative path resolved",
-    );
+    expect(store.getMemories()[0]?.content).toBe("home-relative path resolved");
     store.close();
   });
 });

@@ -1,8 +1,7 @@
 import type { Context } from "hono";
 import type { IdentityEnv } from "../middleware/identity";
-import { canManageOrganization } from "../middleware/organization-roles";
 import { attempt } from "../util/result";
-import { DashboardNavigation, PageFrame } from "./chrome";
+import { dashboardNavigation, PageFrame } from "./chrome";
 
 export type CredentialOptions = {
   origin: string;
@@ -158,13 +157,8 @@ export async function renderCredentials(
   c.status(state.error ? 400 : 200);
   return c.render(
     <PageFrame
-      actions={<a href="/app">Dashboard</a>}
-      navigation={
-        <DashboardNavigation
-          current="credentials"
-          organizationAdmin={canManageOrganization(identity)}
-        />
-      }
+      actions={<a href="/app">Account</a>}
+      navigation={dashboardNavigation(c, "credentials")}
     >
       <section aria-labelledby="credentials-title">
         <p class="kicker">Security</p>

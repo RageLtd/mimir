@@ -89,9 +89,12 @@ describe("dirty lifecycle", () => {
     replica.markPushed([first, second]);
 
     expect(replica.prepareEnvelopeUpgrade("sync.example")).toBe(2);
-    expect(replica.listDirty().map((row) => row.id).sort()).toEqual(
-      [first, second].sort(),
-    );
+    expect(
+      replica
+        .listDirty()
+        .map((row) => row.id)
+        .sort(),
+    ).toEqual([first, second].sort());
     replica.markPushed([first, second]);
     expect(replica.prepareEnvelopeUpgrade("sync.example")).toBe(0);
     expect(replica.listDirty()).toHaveLength(0);

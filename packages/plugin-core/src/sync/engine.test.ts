@@ -14,7 +14,13 @@ import { join } from "node:path";
 
 import type { Fetcher } from "../keys/client";
 import type { SecretStore } from "../keys/device-secret";
-import { getOrgKeyring, registerKeys, reconcileKeys, rotateOrgKey, resolveKeyset } from "../keys/flows";
+import {
+  getOrgKeyring,
+  reconcileKeys,
+  registerKeys,
+  resolveKeyset,
+  rotateOrgKey,
+} from "../keys/flows";
 import { createOrgReplica } from "../store/org-replica";
 import { syncOrg } from "./engine";
 
@@ -106,7 +112,10 @@ function fakeWorld() {
         return json({ ok: true });
       }
       if (path === "/v1/keys/rotate" && self) {
-        const wraps = body.wraps as Array<{ memberId: string; wrappedOrgKey: string }>;
+        const wraps = body.wraps as Array<{
+          memberId: string;
+          wrappedOrgKey: string;
+        }>;
         for (const m of members) m.wrappedOrgKey = null;
         for (const wrap of wraps) {
           const target = members.find((m) => m.memberId === wrap.memberId);

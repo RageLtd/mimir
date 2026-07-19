@@ -13,7 +13,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -139,9 +146,7 @@ exit 0
     expect(records[0]).not.toContain("--continue");
 
     // Second call: marker consumed, env + flags merged in.
-    expect(records[1]).toContain(
-      "ANTHROPIC_BASE_URL=http://mimir-server:3000",
-    );
+    expect(records[1]).toContain("ANTHROPIC_BASE_URL=http://mimir-server:3000");
     expect(records[1]).toContain("--model glm-5.1");
     expect(records[1]).toContain("--continue");
   });

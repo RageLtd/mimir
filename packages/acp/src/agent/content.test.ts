@@ -1,9 +1,6 @@
-import { test, expect, describe } from "bun:test";
-import {
-  acpBlocksToAnthropicContent,
-  formatContentBlocks,
-} from "./content";
+import { describe, expect, test } from "bun:test";
 import type * as acp from "@agentclientprotocol/sdk";
+import { acpBlocksToAnthropicContent, formatContentBlocks } from "./content";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -76,7 +73,7 @@ describe("acpBlocksToAnthropicContent", () => {
     });
 
     test("preserves unicode, emoji, and special characters", () => {
-      const text = "Ελληνικά 日本語 🎉 <xml> & \"quotes\"";
+      const text = 'Ελληνικά 日本語 🎉 <xml> & "quotes"';
       const result = acpBlocksToAnthropicContent([textBlock(text)]);
       expect(result[0]).toEqual({ type: "text", text });
     });
@@ -244,11 +241,11 @@ describe("acpBlocksToAnthropicContent", () => {
       ];
       const result = acpBlocksToAnthropicContent(blocks);
       expect(result).toHaveLength(5);
-      expect(result[0]!.type).toBe("text");
-      expect(result[1]!.type).toBe("image");
-      expect(result[2]!.type).toBe("text"); // audio → placeholder
-      expect(result[3]!.type).toBe("text"); // resource_link → text
-      expect(result[4]!.type).toBe("text"); // embedded resource → text
+      expect(result[0]?.type).toBe("text");
+      expect(result[1]?.type).toBe("image");
+      expect(result[2]?.type).toBe("text"); // audio → placeholder
+      expect(result[3]?.type).toBe("text"); // resource_link → text
+      expect(result[4]?.type).toBe("text"); // embedded resource → text
     });
 
     test("returns empty array for empty input", () => {
@@ -313,10 +310,7 @@ describe("formatContentBlocks", () => {
 
   test("filters empty text parts from joining", () => {
     // An empty text block produces an empty string — filter(Boolean) removes it
-    const blocks: acp.ContentBlock[] = [
-      textBlock(""),
-      textBlock("visible"),
-    ];
+    const blocks: acp.ContentBlock[] = [textBlock(""), textBlock("visible")];
     const result = formatContentBlocks(blocks);
     // empty string is falsy so filter(Boolean) removes it
     expect(result).toBe("visible");

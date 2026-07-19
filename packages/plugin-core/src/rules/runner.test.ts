@@ -87,9 +87,7 @@ describe("runRules — basic flow", () => {
   });
 
   test("rule does not fire when event doesn't match the tool", async () => {
-    const conditions = await compileFor([
-      { field: "command", pattern: "rm" },
-    ]);
+    const conditions = await compileFor([{ field: "command", pattern: "rm" }]);
     const r = rule({ event: "bash", conditions });
     const findings = await runRules([r], ctx("Edit", { new_string: "rm" }));
     expect(findings).toHaveLength(0);
@@ -122,9 +120,7 @@ describe("runRules — negative_conditions (AND-NOT)", () => {
     const conditions = await compileFor([
       { field: "command", pattern: "\\| grep" },
     ]);
-    const negatives = await compileFor([
-      { field: "command", pattern: "2>" },
-    ]);
+    const negatives = await compileFor([{ field: "command", pattern: "2>" }]);
     const r = rule({
       event: "bash",
       conditions,
@@ -171,12 +167,9 @@ describe("runRules — message templates", () => {
     const r = rule({
       event: "bash",
       conditions,
-      message: "pipes into ${1}",
+      message: ["pipes into $", "{1}"].join(""),
     });
-    const findings = await runRules(
-      [r],
-      ctx("Bash", { command: "ls | head" }),
-    );
+    const findings = await runRules([r], ctx("Bash", { command: "ls | head" }));
     expect(findings[0]?.violations[0]?.message).toBe("pipes into head");
   });
 });

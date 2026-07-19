@@ -4,7 +4,6 @@ import { betterAuth } from "better-auth";
 import { getMigrations } from "better-auth/db/migration";
 import { migrateOrganizationAudit } from "../audit/store";
 import { buildAuthOptions } from "./instance";
-import { migrateOrganizationPolicy } from "./organization-policy";
 import {
   createOrganizationInvitation,
   type InvitationMutationInput,
@@ -12,6 +11,7 @@ import {
   reissueOrganizationInvitation,
   revokeOrganizationInvitation,
 } from "./organization-members";
+import { migrateOrganizationPolicy } from "./organization-policy";
 
 const TEST_SECRET = "test-secret-material-at-least-32-chars-long";
 
@@ -177,12 +177,8 @@ describe("Better Auth invitation mutations", () => {
     if (!original) throw new Error("missing invitation");
     const invitationLifetime =
       new Date(original.expiresAt).valueOf() - invitationStartedAt;
-    expect(invitationLifetime).toBeGreaterThanOrEqual(
-      7 * 86_400_000 - 1_000,
-    );
-    expect(invitationLifetime).toBeLessThanOrEqual(
-      7 * 86_400_000 + 1_000,
-    );
+    expect(invitationLifetime).toBeGreaterThanOrEqual(7 * 86_400_000 - 1_000);
+    expect(invitationLifetime).toBeLessThanOrEqual(7 * 86_400_000 + 1_000);
 
     expect(
       await reissueOrganizationInvitation(
@@ -197,8 +193,9 @@ describe("Better Auth invitation mutations", () => {
         "SELECT id, status FROM invitation ORDER BY createdAt, id",
       )
       .all();
-    expect(invitations.filter((invitation) => invitation.status === "pending"))
-      .toHaveLength(1);
+    expect(
+      invitations.filter((invitation) => invitation.status === "pending"),
+    ).toHaveLength(1);
     expect(
       invitations.find((invitation) => invitation.id === original.id)?.status,
     ).toBe("canceled");
@@ -220,10 +217,7 @@ describe("Better Auth invitation mutations", () => {
     ).toEqual({ count: 0 });
 
     const audit = db
-      .query<
-        { action: string; outcome: string; target_id: string },
-        []
-      >(
+      .query<{ action: string; outcome: string; target_id: string }, []>(
         "SELECT action, outcome, target_id FROM organization_audit_event ORDER BY seq",
       )
       .all();

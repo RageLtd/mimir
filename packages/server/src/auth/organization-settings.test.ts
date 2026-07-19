@@ -258,7 +258,9 @@ describe("organization settings", () => {
     expect(
       await updateOrganizationSlug(db, adapter.update, base, headers),
     ).toBe("forbidden");
-    db.query("UPDATE member SET role = 'owner' WHERE userId = 'admin-user'").run();
+    db.query(
+      "UPDATE member SET role = 'owner' WHERE userId = 'admin-user'",
+    ).run();
     expect(
       await updateOrganizationSlug(
         db,
@@ -356,7 +358,9 @@ describe("organization settings", () => {
       auditRetentionDays: 365,
       recentAuthentication: true,
     };
-    db.query("UPDATE member SET role = 'admin' WHERE userId = 'owner-user'").run();
+    db.query(
+      "UPDATE member SET role = 'admin' WHERE userId = 'owner-user'",
+    ).run();
 
     expect(updateOrganizationPolicy(db, input)).toBe("forbidden");
     expect(readOrganizationSettings(db, "org-a")?.policyVersion).toBe(0);

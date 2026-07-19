@@ -117,8 +117,8 @@ describe("sealed box", () => {
     const wrongVersion = toB64u(
       Buffer.from(JSON.stringify({ v: 99, epk: "x", ct: "y" }), "utf8"),
     );
-    expect(() =>
-      sealedBoxUnwrap(recipient.privateKey, wrongVersion),
-    ).toThrow("malformed sealed box");
+    expect(() => sealedBoxUnwrap(recipient.privateKey, wrongVersion)).toThrow(
+      "malformed sealed box",
+    );
   });
 });

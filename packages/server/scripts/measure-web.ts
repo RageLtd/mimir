@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { IdentityEnv } from "../src/middleware/identity";
+import { OPERATOR_ROOT_PATH } from "../src/operator/paths";
 import { createWeb, web } from "../src/web";
 import type { WebEncoding } from "../src/web/compression";
 import {
@@ -11,9 +12,54 @@ import {
 } from "../src/web/transfer-budget";
 
 const fetcher = (path: string, init?: RequestInit) => web.request(path, init);
-const adminWeb = createWeb({ organizationAdmin: true });
+const adminWeb = new Hono<IdentityEnv>();
+adminWeb.use("*", (c, next) => {
+  c.set("identity", {
+    userId: "user-1",
+    orgId: "org-1",
+    organizationRoles: ["owner"],
+  });
+  return next();
+});
+adminWeb.route("/", createWeb({ organizationAdmin: true }));
 const adminFetcher = (path: string, init?: RequestInit) =>
   adminWeb.request(path, init);
+const operatorWeb = new Hono<IdentityEnv>();
+operatorWeb.use("*", (c, next) => {
+  c.set("operatorIdentity", { userId: "operator-1" });
+  return next();
+});
+operatorWeb.route(
+  "/",
+  createWeb({
+    operator: {
+      origin: "https://mimir.local",
+      readSettings: () => ({
+        instanceName: "Mimir",
+        supportUrl: "",
+        systemPrompt: "Private by design.",
+        operatorMcpCredentialConfigured: true,
+        updatedAt: "2026-07-18T00:00:00.000Z",
+      }),
+      listGrants: () => [],
+      listAudit: () => [],
+      readHealth: () => ({
+        version: "0.3.0",
+        tenantStore: "ok",
+        userCount: 1,
+        organizationCount: 1,
+        operatorCount: 1,
+      }),
+      updateSetting: () => "updated",
+      replaceCredential: () => "updated",
+      grant: () => "created",
+      revoke: () => "revoked",
+      provision: () => "created",
+    },
+  }),
+);
+const operatorFetcher = (path: string, init?: RequestInit) =>
+  operatorWeb.request(path, init);
 const activityWeb = new Hono<IdentityEnv>();
 activityWeb.use("*", (c, next) => {
   c.set("identity", {
@@ -202,7 +248,12 @@ for (const route of ["/sign-in", "/sign-up", "/app"]) {
   }
 }
 for (const encoding of encodings) {
-  reports.push(await measureFirstLoad(adminFetcher, "/admin", encoding));
+  reports.push(
+    await measureFirstLoad(adminFetcher, "/admin/billing", encoding),
+  );
+  reports.push(
+    await measureFirstLoad(operatorFetcher, OPERATOR_ROOT_PATH, encoding),
+  );
   reports.push(
     await measureFirstLoad(activityFetcher, "/admin/activity", encoding),
   );

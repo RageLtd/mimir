@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+  type EnvelopeCipher,
   openEnvelope,
   sealEnvelope,
-  type EnvelopeCipher,
 } from "@mimir/plugin-core/sync/envelope";
 import { toB64u } from "./credentials-element";
 import {
@@ -89,7 +89,9 @@ describe("browser envelope compatibility", () => {
 
     expect(envelope.nonce).not.toBe("");
     expect(envelope.payload).not.toBe("");
-    expect(openEnvelope(envelope, { orgId: "org-1", cipher }).payload).toBeNull();
+    expect(
+      openEnvelope(envelope, { orgId: "org-1", cipher }).payload,
+    ).toBeNull();
     await expect(
       openMemoryEnvelope(envelope, "org-1", unlocked.keys),
     ).resolves.toBeNull();

@@ -155,10 +155,10 @@ describe("readDelta coalescing", () => {
 
     const { messages } = await readDelta(path, 0);
     expect(messages).toHaveLength(1);
-    const msg = messages[0]!;
-    expect(msg.role).toBe("assistant");
-    expect(Array.isArray(msg.content)).toBe(true);
-    const parts = msg.content as Array<{ type: string }>;
+    const msg = messages[0];
+    expect(msg?.role).toBe("assistant");
+    expect(Array.isArray(msg?.content)).toBe(true);
+    const parts = msg?.content as Array<{ type: string }>;
     // Thinking blocks stripped (decided in plan); tool_use + text preserved.
     expect(parts.map((p) => p.type)).toEqual(["tool-call", "text"]);
   });
@@ -199,18 +199,18 @@ describe("readDelta coalescing", () => {
 
     const { messages } = await readDelta(path, 0);
     expect(messages).toHaveLength(2);
-    const toolMsg = messages[1]!;
-    expect(toolMsg.role).toBe("tool");
-    const parts = toolMsg.content as Array<{
+    const toolMsg = messages[1];
+    expect(toolMsg?.role).toBe("tool");
+    const parts = toolMsg?.content as Array<{
       type: string;
       toolCallId: string;
       toolName: string;
       output: { type: string; value: string };
     }>;
     expect(parts).toHaveLength(1);
-    expect(parts[0]!.toolCallId).toBe("tu_42");
-    expect(parts[0]!.toolName).toBe("Read");
-    expect(parts[0]!.output.value).toBe("file contents here");
+    expect(parts[0]?.toolCallId).toBe("tu_42");
+    expect(parts[0]?.toolName).toBe("Read");
+    expect(parts[0]?.output.value).toBe("file contents here");
   });
 
   test("respects the watermark and only returns new entries", async () => {
@@ -230,4 +230,3 @@ describe("readDelta coalescing", () => {
     expect(newOffset).toBe(3);
   });
 });
-

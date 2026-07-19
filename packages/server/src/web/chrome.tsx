@@ -1,6 +1,10 @@
 // biome-ignore-all lint/style/useConsistentTypeDefinitions lint/style/useShorthandFunctionType: Hono's renderer contract requires declaration merging.
+import type { Context } from "hono";
 import type { Child } from "hono/jsx";
 import { jsxRenderer } from "hono/jsx-renderer";
+import type { IdentityEnv } from "../middleware/identity";
+import { canManageOrganization } from "../middleware/organization-roles";
+import * as operatorPaths from "../operator/paths";
 
 const BASE_STYLES = `
 :root{color-scheme:light dark;--bg:#f5f6f3;--surface:#fff;--text:#171a1f;--muted:#626b78;--line:#d7dcd3;--accent:#5946d2;--accent-text:#fff;--danger:#a12525;--max:72rem}
@@ -10,7 +14,7 @@ const BASE_STYLES = `
 
 const STYLE_GROUPS = {
   public: `.public-frame{min-height:calc(100vh - 8rem);display:grid;place-items:center}.hero{max-width:44rem}.auth-form{display:grid;gap:.45rem;max-width:32rem}.auth-form label{margin-top:.45rem;font-weight:700}.auth-form label span{color:var(--muted);font-weight:400}.auth-form input{width:100%;padding:.6rem .7rem;border:1px solid var(--line);border-radius:.35rem;background:var(--surface);color:var(--text);font:inherit}.auth-form .button{margin-top:.75rem}`,
-  dashboard: `.app-frame{display:grid;gap:1.5rem}.side{border-bottom:1px solid var(--line);padding-bottom:1rem}.side nav{display:flex;gap:.5rem;overflow:auto}.side a{padding:.4rem .65rem;border-radius:.35rem;text-decoration:none;white-space:nowrap}.side a[aria-current=page]{background:var(--surface);font-weight:700}.content h1{font-size:clamp(2rem,6vw,3.5rem)}@media(min-width:48rem){.app-frame{grid-template-columns:12rem 1fr;padding-top:3rem}.side{border:0;border-right:1px solid var(--line);padding:0 1.5rem 0 0}.side nav{display:grid}}`,
+  dashboard: `.app-frame{display:grid;gap:1.5rem}.side{border-bottom:1px solid var(--line);padding-bottom:1rem}.side ul{margin:0;padding:0;list-style:none}.side details ul{padding-left:.65rem}.side a,.side summary{padding:.4rem .65rem}.side summary{font-weight:700}.side a{display:block;text-decoration:none}.side a[aria-current=page]{background:var(--surface);font-weight:700}.content h1{font-size:clamp(2rem,6vw,3.5rem)}@media(min-width:48rem){.app-frame{grid-template-columns:13rem 1fr;padding-top:3rem}.side{border:0;border-right:1px solid var(--line);padding:0 1.5rem 0 0}}`,
   card: `.card{padding:1rem;border:1px solid var(--line);border-radius:.6rem;background:var(--surface)}.card p{margin:.25rem 0;color:var(--muted)}`,
   cards: `.cards{display:grid;gap:1rem;margin-top:2rem}.wide{grid-column:1/-1}@media(min-width:48rem){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}`,
   forms: `.stack{display:grid;gap:.45rem;max-width:32rem}.stack label{margin-top:.45rem;font-weight:700}.stack input,.stack select,.stack textarea{width:100%;padding:.6rem .7rem;border:1px solid var(--line);border-radius:.35rem;background:var(--surface);color:var(--text);font:inherit}.stack textarea{min-height:7rem;resize:vertical}.stack .button{margin-top:.75rem}`,
@@ -99,38 +103,203 @@ export function PageFrame(props: PageFrameProps) {
   );
 }
 
-export function DashboardNavigation({
+export type DashboardLocation =
+  | "account"
+  | "credentials"
+  | "memories"
+  | "organization-members"
+  | "organization-settings"
+  | "organization-memories"
+  | "organization-billing"
+  | "organization-activity"
+  | "operator-overview"
+  | "operator-settings"
+  | "operator-organizations"
+  | "operator-grants"
+  | "operator-health"
+  | "operator-audit";
+
+function DashboardNavigation({
   current,
-  organizationAdmin = false,
+  organizationAdmin,
+  operator,
 }: {
-  current: string;
-  organizationAdmin?: boolean;
+  current: DashboardLocation;
+  organizationAdmin: boolean;
+  operator: boolean;
 }) {
   return (
     <nav aria-label="Dashboard">
-      <a href="/app" aria-current={current === "overview" ? "page" : undefined}>
-        Overview
-      </a>
-      <a
-        href="/app/memories"
-        aria-current={current === "memories" ? "page" : undefined}
-      >
-        Memories
-      </a>
-      <a
-        href="/app/credentials"
-        aria-current={current === "credentials" ? "page" : undefined}
-      >
-        Credentials
-      </a>
-      {organizationAdmin ? (
-        <a
-          href="/admin"
-          aria-current={current === "admin" ? "page" : undefined}
-        >
-          Organization
-        </a>
-      ) : null}
+      <ul>
+        <li>
+          <a
+            href="/app"
+            aria-current={current === "account" ? "page" : undefined}
+          >
+            Account
+          </a>
+        </li>
+        <li>
+          <a
+            href="/app/credentials"
+            aria-current={current === "credentials" ? "page" : undefined}
+          >
+            Credentials
+          </a>
+        </li>
+        <li>
+          <a
+            href="/app/memories"
+            aria-current={current === "memories" ? "page" : undefined}
+          >
+            Memories
+          </a>
+        </li>
+        {organizationAdmin ? (
+          <li>
+            <details open>
+              <summary>Organization</summary>
+              <ul>
+                <li>
+                  <a
+                    href="/admin/members"
+                    aria-current={
+                      current === "organization-members" ? "page" : undefined
+                    }
+                  >
+                    Members
+                  </a>
+                </li>
+                <li>
+                  <a
+                    href="/admin/settings"
+                    aria-current={
+                      current === "organization-settings" ? "page" : undefined
+                    }
+                  >
+                    Settings
+                  </a>
+                </li>
+                <li>
+                  <a
+                    href="/admin/memories"
+                    aria-current={
+                      current === "organization-memories" ? "page" : undefined
+                    }
+                  >
+                    Encrypted memories
+                  </a>
+                </li>
+                <li>
+                  <a
+                    href="/admin/billing"
+                    aria-current={
+                      current === "organization-billing" ? "page" : undefined
+                    }
+                  >
+                    Billing
+                  </a>
+                </li>
+                <li>
+                  <a
+                    href="/admin/activity"
+                    aria-current={
+                      current === "organization-activity" ? "page" : undefined
+                    }
+                  >
+                    Activity
+                  </a>
+                </li>
+              </ul>
+            </details>
+          </li>
+        ) : null}
+        {operator ? (
+          <li>
+            <details open>
+              <summary>Server operation</summary>
+              <ul>
+                <li>
+                  <a
+                    href={operatorPaths.OPERATOR_ROOT_PATH}
+                    aria-current={
+                      current === "operator-overview" ? "page" : undefined
+                    }
+                  >
+                    Overview
+                  </a>
+                </li>
+                <li>
+                  <a
+                    href={operatorPaths.OPERATOR_SETTINGS_PATH}
+                    aria-current={
+                      current === "operator-settings" ? "page" : undefined
+                    }
+                  >
+                    Settings
+                  </a>
+                </li>
+                <li>
+                  <a
+                    href={operatorPaths.OPERATOR_ORGANIZATIONS_PATH}
+                    aria-current={
+                      current === "operator-organizations" ? "page" : undefined
+                    }
+                  >
+                    Organizations
+                  </a>
+                </li>
+                <li>
+                  <a
+                    href={operatorPaths.OPERATOR_GRANTS_PATH}
+                    aria-current={
+                      current === "operator-grants" ? "page" : undefined
+                    }
+                  >
+                    Operators
+                  </a>
+                </li>
+                <li>
+                  <a
+                    href={operatorPaths.OPERATOR_HEALTH_PATH}
+                    aria-current={
+                      current === "operator-health" ? "page" : undefined
+                    }
+                  >
+                    Health
+                  </a>
+                </li>
+                <li>
+                  <a
+                    href={operatorPaths.OPERATOR_AUDIT_PATH}
+                    aria-current={
+                      current === "operator-audit" ? "page" : undefined
+                    }
+                  >
+                    Audit
+                  </a>
+                </li>
+              </ul>
+            </details>
+          </li>
+        ) : null}
+      </ul>
     </nav>
+  );
+}
+
+export function dashboardNavigation(
+  c: Context<IdentityEnv>,
+  current: DashboardLocation,
+) {
+  return (
+    <DashboardNavigation
+      current={current}
+      organizationAdmin={canManageOrganization(c.get("identity"))}
+      operator={
+        c.get("operatorNavigation") === true ||
+        c.get("operatorIdentity") !== undefined
+      }
+    />
   );
 }

@@ -66,7 +66,9 @@ describe("upsertMemory (import path)", () => {
 describe("searchByText (FTS5)", () => {
   test("finds by content, higher score first", () => {
     replica.storeMemory({ content: "surreal database migration plan" });
-    replica.storeMemory({ content: "migration of the surreal migration tooling migration" });
+    replica.storeMemory({
+      content: "migration of the surreal migration tooling migration",
+    });
     replica.storeMemory({ content: "unrelated cooking recipe" });
     const hits = replica.searchByText("migration");
     expect(hits.length).toBe(2);

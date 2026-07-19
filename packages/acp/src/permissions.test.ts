@@ -1,4 +1,4 @@
-import { test, expect, describe, mock } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { createRequestToolPermission } from "./permissions";
 
 const baseRequest = {
@@ -24,7 +24,7 @@ describe("createRequestToolPermission", () => {
     await requestPermission(baseRequest);
 
     expect(conn.requestPermission).toHaveBeenCalledTimes(1);
-    const call = conn.requestPermission.mock.calls[0]![0] as Record<
+    const call = conn.requestPermission.mock.calls[0]?.[0] as Record<
       string,
       unknown
     >;
@@ -45,14 +45,11 @@ describe("createRequestToolPermission", () => {
 
   test("uses toolName as title fallback", async () => {
     const conn = mockConn({ outcome: "selected", optionId: "allow_once" });
-    const requestPermission = createRequestToolPermission(
-      conn as never,
-      "s1",
-    );
+    const requestPermission = createRequestToolPermission(conn as never, "s1");
 
     await requestPermission({ ...baseRequest, title: undefined });
 
-    const call = conn.requestPermission.mock.calls[0]![0] as Record<
+    const call = conn.requestPermission.mock.calls[0]?.[0] as Record<
       string,
       unknown
     >;
@@ -62,10 +59,7 @@ describe("createRequestToolPermission", () => {
 
   test("allow_once → allowed, not permanent", async () => {
     const conn = mockConn({ outcome: "selected", optionId: "allow_once" });
-    const requestPermission = createRequestToolPermission(
-      conn as never,
-      "s1",
-    );
+    const requestPermission = createRequestToolPermission(conn as never, "s1");
 
     const result = await requestPermission(baseRequest);
 
@@ -75,10 +69,7 @@ describe("createRequestToolPermission", () => {
 
   test("allow_always → allowed, permanent", async () => {
     const conn = mockConn({ outcome: "selected", optionId: "allow_always" });
-    const requestPermission = createRequestToolPermission(
-      conn as never,
-      "s1",
-    );
+    const requestPermission = createRequestToolPermission(conn as never, "s1");
 
     const result = await requestPermission(baseRequest);
 
@@ -88,10 +79,7 @@ describe("createRequestToolPermission", () => {
 
   test("reject_once → denied with message", async () => {
     const conn = mockConn({ outcome: "selected", optionId: "reject_once" });
-    const requestPermission = createRequestToolPermission(
-      conn as never,
-      "s1",
-    );
+    const requestPermission = createRequestToolPermission(conn as never, "s1");
 
     const result = await requestPermission(baseRequest);
 
@@ -101,10 +89,7 @@ describe("createRequestToolPermission", () => {
 
   test("cancelled → denied", async () => {
     const conn = mockConn({ outcome: "cancelled" });
-    const requestPermission = createRequestToolPermission(
-      conn as never,
-      "s1",
-    );
+    const requestPermission = createRequestToolPermission(conn as never, "s1");
 
     const result = await requestPermission(baseRequest);
 
@@ -117,10 +102,7 @@ describe("createRequestToolPermission", () => {
       outcome: "selected",
       optionId: "something_unknown",
     });
-    const requestPermission = createRequestToolPermission(
-      conn as never,
-      "s1",
-    );
+    const requestPermission = createRequestToolPermission(conn as never, "s1");
 
     const result = await requestPermission(baseRequest);
 

@@ -84,6 +84,23 @@ test("manages encrypted memories and rotation-backed member access", async ({
   await page.getByRole("button", { name: "Create account" }).click();
   await expect(page).toHaveURL(/\/app$/);
 
+  const ownerNavigation = page.getByRole("navigation", { name: "Dashboard" });
+  await expect(
+    ownerNavigation.getByRole("link", { name: "Account" }),
+  ).toHaveAttribute("aria-current", "page");
+  await expect(
+    ownerNavigation.getByRole("link", { name: "Credentials" }),
+  ).toBeVisible();
+  await expect(
+    ownerNavigation.getByRole("link", { name: "Memories" }),
+  ).toBeVisible();
+  await expect(
+    ownerNavigation.getByText("Organization", { exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    ownerNavigation.getByText("Server operation", { exact: true }),
+  ).toHaveCount(1);
+
   await page.goto("/app/credentials");
   await page.getByRole("button", { name: "Enroll browser" }).click();
   await expect(page.locator("p[role=status]")).toContainText(
@@ -332,6 +349,25 @@ test("manages encrypted memories and rotation-backed member access", async ({
   await memberPage.getByRole("button", { name: "Create account" }).click();
   await expect(memberPage).toHaveURL(/\/app$/);
 
+  const memberNavigation = memberPage.getByRole("navigation", {
+    name: "Dashboard",
+  });
+  await expect(
+    memberNavigation.getByRole("link", { name: "Account" }),
+  ).toBeVisible();
+  await expect(
+    memberNavigation.getByRole("link", { name: "Credentials" }),
+  ).toBeVisible();
+  await expect(
+    memberNavigation.getByRole("link", { name: "Memories" }),
+  ).toBeVisible();
+  await expect(
+    memberNavigation.getByText("Organization", { exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    memberNavigation.getByText("Server operation", { exact: true }),
+  ).toHaveCount(0);
+
   await memberPage.goto("/app/credentials");
   await memberPage.getByRole("button", { name: "Enroll browser" }).click();
   await expect(memberPage.locator("p[role=status]")).toContainText(
@@ -364,6 +400,16 @@ test("manages encrypted memories and rotation-backed member access", async ({
 
   const promotedAdminPage = await memberPage.goto("/admin/memories");
   expect(promotedAdminPage?.status()).toBe(200);
+  await expect(
+    memberPage
+      .getByRole("navigation", { name: "Dashboard" })
+      .getByText("Organization", { exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    memberPage
+      .getByRole("navigation", { name: "Dashboard" })
+      .getByText("Server operation", { exact: true }),
+  ).toHaveCount(0);
 
   await page.goto("/admin/members");
   const successor = page

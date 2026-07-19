@@ -17,8 +17,8 @@ import {
   reconcileKeys,
   recoverAccess,
   registerKeys,
-  revokeOrgMember,
   resolveKeyset,
+  revokeOrgMember,
   rotateOrgKey,
   setupRecovery,
 } from "./flows";
@@ -120,7 +120,8 @@ function fakeOrg() {
         return json({ ok: true });
       }
       if (path === "/v1/keys/rotate") {
-        if (self.wrappedOrgKey === null) return json({ error: "Forbidden" }, 403);
+        if (self.wrappedOrgKey === null)
+          return json({ error: "Forbidden" }, 403);
         const generation = Number(body.keyGeneration);
         if (generation !== (org.keyGeneration ?? 0) + 1) {
           return json({ error: "Conflict" }, 409);
@@ -160,7 +161,9 @@ function fakeOrg() {
         // Everything below this line is the fake's atomic commit.
         for (const member of members) member.wrappedOrgKey = null;
         for (const wrap of wraps) {
-          const target = members.find((member) => member.memberId === wrap.memberId);
+          const target = members.find(
+            (member) => member.memberId === wrap.memberId,
+          );
           if (target) target.wrappedOrgKey = wrap.wrappedOrgKey;
         }
         org.keyGeneration = generation;
@@ -177,7 +180,8 @@ function fakeOrg() {
         return json({ ok: true, keyGeneration: generation });
       }
       if (path === "/v1/keys/recovery") {
-        if (self.wrappedOrgKey === null) return json({ error: "Forbidden" }, 403);
+        if (self.wrappedOrgKey === null)
+          return json({ error: "Forbidden" }, 403);
         org.recoveryPublicKey = String(body.recoveryPublicKey);
         org.wrappedRecoveryKey = String(body.wrappedRecoveryKey);
         return json({ ok: true });
@@ -257,9 +261,7 @@ describe("registration", () => {
         return deviceFor(world, "z");
       })(),
     );
-    await expect(
-      adoptDeviceSecret(freshDevice, otherSecret),
-    ).rejects.toThrow();
+    await expect(adoptDeviceSecret(freshDevice, otherSecret)).rejects.toThrow();
     expect((await resolveKeyset(freshDevice)).status).toBe("needs-secret");
   });
 });
@@ -379,9 +381,9 @@ describe("recovery", () => {
     const deviceA = deviceFor(world, "a");
     await registerKeys(deviceA);
     await getOrgKeyring(deviceA);
-    await expect(
-      recoverAccess(deviceA, "bm90LWEtcmVhbC1rZXk"),
-    ).rejects.toThrow("no recovery keyset");
+    await expect(recoverAccess(deviceA, "bm90LWEtcmVhbC1rZXk")).rejects.toThrow(
+      "no recovery keyset",
+    );
   });
 
   test("rotation refreshes the recovery wrap", async () => {

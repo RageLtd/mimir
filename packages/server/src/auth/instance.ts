@@ -21,6 +21,7 @@ import { getMigrations } from "better-auth/db/migration";
 import { organization } from "better-auth/plugins";
 import { migrateOrganizationAudit } from "../audit/store";
 import { config } from "../config";
+import { migrateOperatorState } from "../operator/state";
 import { migrateOrganizationLifecycle } from "./organization-lifecycle";
 import {
   invitationExpiresAt,
@@ -192,4 +193,12 @@ export async function runAuthMigrations() {
   migrateOrganizationAudit(getAuthDb());
   migrateOrganizationPolicy(getAuthDb());
   migrateOrganizationLifecycle(getAuthDb());
+  const promptFile = Bun.file(config.systemPromptPath);
+  const systemPromptSeed = (await promptFile.exists())
+    ? await promptFile.text()
+    : undefined;
+  migrateOperatorState(getAuthDb(), {
+    bootstrapUserIds: config.operator.bootstrapUserIds,
+    ...(systemPromptSeed ? { systemPromptSeed } : {}),
+  });
 }

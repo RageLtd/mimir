@@ -18,9 +18,19 @@ const MULTI_FILE_PATCH = [
   "*** End Patch",
 ].join("\n");
 
+const placeholder = (expression: string) =>
+  ["$", "{", expression, "}"].join("");
+
 // Captured verbatim from the 0.144.0 spike (hook-payloads.jsonl).
-const SPIKE_PATCH =
-  "*** Begin Patch\n*** Update File: /tmp/mimir-codex-spike/project/greet.ts\n@@\n export const farewell = (name: string) => `Goodbye, ${name}!`;\n+\n+export const shout = (name: string) => `HELLO, ${name.toUpperCase()}!`;\n*** End Patch";
+const SPIKE_PATCH = [
+  "*** Begin Patch",
+  "*** Update File: /tmp/mimir-codex-spike/project/greet.ts",
+  "@@",
+  ` export const farewell = (name: string) => \`Goodbye, ${placeholder("name")}!\`;`,
+  "+",
+  `+export const shout = (name: string) => \`HELLO, ${placeholder("name.toUpperCase()")}!\`;`,
+  "*** End Patch",
+].join("\n");
 
 describe("parsePatchOps", () => {
   test("extracts every header from a multi-file patch", () => {
@@ -69,9 +79,9 @@ describe("normalizeToolCalls", () => {
 
 describe("editedFilePaths", () => {
   test("returns written paths, skipping deletes", () => {
-    expect(editedFilePaths("apply_patch", { command: MULTI_FILE_PATCH })).toEqual(
-      ["/repo/src/a.ts", "/repo/src/b.ts"],
-    );
+    expect(
+      editedFilePaths("apply_patch", { command: MULTI_FILE_PATCH }),
+    ).toEqual(["/repo/src/a.ts", "/repo/src/b.ts"]);
   });
 
   test("non-edit tools contribute nothing", () => {
@@ -81,9 +91,9 @@ describe("editedFilePaths", () => {
 
 describe("readFilePath", () => {
   test("matches Codex's sed read idiom from the spike", () => {
-    expect(
-      readFilePath("Bash", { command: "sed -n '1,240p' greet.ts" }),
-    ).toBe("greet.ts");
+    expect(readFilePath("Bash", { command: "sed -n '1,240p' greet.ts" })).toBe(
+      "greet.ts",
+    );
   });
 
   test("matches simple cat / head / tail", () => {

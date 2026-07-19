@@ -138,7 +138,9 @@ describe("buildPlaybookContext", () => {
     });
     const block = await buildPlaybookContext(replica, "unrelated query");
     expect(block).toContain("Available playbooks");
-    expect(block).toContain("- Deploy on Railway — use when deploying to Railway");
+    expect(block).toContain(
+      "- Deploy on Railway — use when deploying to Railway",
+    );
     expect(block).not.toContain("Relevant to the current task");
   });
 

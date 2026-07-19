@@ -33,6 +33,13 @@ export const config = {
    * Better Auth tenant credentials: organization owners are not operators. */
   operator: {
     token: Bun.env.MIMIR_OPERATOR_TOKEN ?? "",
+    /** Existing auth-user ids to import once into the explicit browser
+     * operator grant table. Removing an imported id later does not revoke it;
+     * revocation is a runtime, audited operator action. */
+    bootstrapUserIds: (Bun.env.MIMIR_OPERATOR_USER_IDS ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
   },
 
   /** System prompt — loaded from markdown file */

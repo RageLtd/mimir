@@ -78,12 +78,7 @@ describe("authoritative organization membership", () => {
       .query(
         "INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES (?, ?, ?, 'member', ?)",
       )
-      .run(
-        memberId,
-        organization.id,
-        memberUserId,
-        new Date().toISOString(),
-      );
+      .run(memberId, organization.id, memberUserId, new Date().toISOString());
     const secondSession = await auth.api.signInEmail({
       body: {
         email: "member@example.test",
@@ -119,7 +114,13 @@ describe("authoritative organization membership", () => {
         membershipLookup,
       ),
     );
-    app.route("/v1/sync", createSyncRoutes(() => tenantDb, () => 1));
+    app.route(
+      "/v1/sync",
+      createSyncRoutes(
+        () => tenantDb,
+        () => 1,
+      ),
+    );
 
     const credentials = [
       new Headers({ cookie: cookieFrom(firstSession) }),

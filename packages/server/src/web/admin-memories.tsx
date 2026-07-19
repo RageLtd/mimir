@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import type { IdentityEnv } from "../middleware/identity";
-import { DashboardNavigation, PageFrame } from "./chrome";
+import { dashboardNavigation, PageFrame } from "./chrome";
 
 export function renderAdminMemories(c: Context<IdentityEnv>) {
   const identity = c.get("identity");
@@ -8,10 +8,8 @@ export function renderAdminMemories(c: Context<IdentityEnv>) {
   c.header("cache-control", "private, no-store");
   return c.render(
     <PageFrame
-      actions={<a href="/admin">Organization</a>}
-      navigation={
-        <DashboardNavigation current="admin" organizationAdmin={true} />
-      }
+      actions={<a href="/app">Account</a>}
+      navigation={dashboardNavigation(c, "organization-memories")}
     >
       <section aria-labelledby="admin-memories-title">
         <p class="kicker">Organization administration</p>
@@ -186,15 +184,7 @@ export function renderAdminMemories(c: Context<IdentityEnv>) {
       title: "Encrypted memory maintenance — Mimir",
       description: "Maintain locally decrypted organization memories.",
       scripts: ["/assets/admin-memories.js"],
-      styles: [
-        "dashboard",
-        "card",
-        "forms",
-        "lists",
-        "status",
-        "ceremony",
-        "memory",
-      ],
+      styles: ["dashboard", "card", "lists", "status", "ceremony", "memory"],
     },
   );
 }

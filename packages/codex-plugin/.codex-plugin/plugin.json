@@ -8,12 +8,7 @@
   },
   "repository": "https://github.com/RageLtd/mimir",
   "license": "UNLICENSED",
-  "keywords": [
-    "mimir",
-    "memory",
-    "persona",
-    "hooks"
-  ],
+  "keywords": ["mimir", "memory", "persona", "hooks"],
   "skills": "./skills/",
   "interface": {
     "displayName": "Mimir",
@@ -21,9 +16,6 @@
     "longDescription": "Codex plugins cannot carry lifecycle hooks, so this plugin ships only the install skill. Ask codex to 'install mimir' and the skill downloads the released mimir-codex binary and runs its installer, which materialises the persona, hooks, trust ledger, and MCP wiring in a dedicated CODEX_HOME (~/.mimir/codex) — your own ~/.codex is never touched.",
     "developerName": "RageLtd",
     "category": "Developer Tools",
-    "capabilities": [
-      "Interactive",
-      "Write"
-    ]
+    "capabilities": ["Interactive", "Write"]
   }
 }

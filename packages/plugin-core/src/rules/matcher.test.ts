@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  compileRegex,
-  evaluateCondition,
-  resolveField,
-} from "./matcher";
+import { compileRegex, evaluateCondition, resolveField } from "./matcher";
 import type { CompiledCondition, DetectorContext } from "./types";
 
 const ctx = (
@@ -23,12 +19,12 @@ describe("resolveField", () => {
   });
 
   test("new_text falls back across Edit / Write / MultiEdit", () => {
-    expect(
-      resolveField("new_text", ctx("Edit", { new_string: "abc" })),
-    ).toBe("abc");
-    expect(
-      resolveField("new_text", ctx("Write", { content: "xyz" })),
-    ).toBe("xyz");
+    expect(resolveField("new_text", ctx("Edit", { new_string: "abc" }))).toBe(
+      "abc",
+    );
+    expect(resolveField("new_text", ctx("Write", { content: "xyz" }))).toBe(
+      "xyz",
+    );
     const me = ctx("MultiEdit", {
       edits: [{ new_string: "one" }, { new_string: "two" }],
     });
@@ -36,15 +32,13 @@ describe("resolveField", () => {
   });
 
   test("command field for Bash", () => {
-    expect(
-      resolveField("command", ctx("Bash", { command: "ls -la" })),
-    ).toBe("ls -la");
+    expect(resolveField("command", ctx("Bash", { command: "ls -la" }))).toBe(
+      "ls -la",
+    );
   });
 
   test("unknown field falls back to top-level toolInput key", () => {
-    expect(
-      resolveField("notes", ctx("Edit", { notes: "info" })),
-    ).toBe("info");
+    expect(resolveField("notes", ctx("Edit", { notes: "info" }))).toBe("info");
   });
 
   test("returns undefined for missing or non-string fields", () => {
@@ -70,9 +64,7 @@ describe("compileRegex", () => {
 });
 
 describe("evaluateCondition", () => {
-  const cond = (
-    overrides: Partial<CompiledCondition> = {},
-  ) => ({
+  const cond = (overrides: Partial<CompiledCondition> = {}) => ({
     field: "new_text",
     operator: "regex_match" as const,
     pattern: "abc",

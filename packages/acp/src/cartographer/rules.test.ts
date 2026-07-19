@@ -23,32 +23,29 @@ describe("readProjectRules", () => {
     writeFileSync(join(TMP, "CLAUDE.md"), "# Rules\nNo OOP.");
     const entries = await readProjectRules(TMP);
     expect(entries).toHaveLength(1);
-    expect(entries[0]!.path).toBe("CLAUDE.md");
-    expect(entries[0]!.content).toBe("# Rules\nNo OOP.");
+    expect(entries[0]?.path).toBe("CLAUDE.md");
+    expect(entries[0]?.content).toBe("# Rules\nNo OOP.");
   });
 
   test("reads .cursorrules from project root", async () => {
     writeFileSync(join(TMP, ".cursorrules"), "Use functional style.");
     const entries = await readProjectRules(TMP);
     expect(entries).toHaveLength(1);
-    expect(entries[0]!.path).toBe(".cursorrules");
+    expect(entries[0]?.path).toBe(".cursorrules");
   });
 
   test("reads AGENTS.md from project root", async () => {
     writeFileSync(join(TMP, "AGENTS.md"), "Agent rules here.");
     const entries = await readProjectRules(TMP);
     expect(entries).toHaveLength(1);
-    expect(entries[0]!.path).toBe("AGENTS.md");
+    expect(entries[0]?.path).toBe("AGENTS.md");
   });
 
   test("reads files from .claude/rules/ recursively", async () => {
     const rulesDir = join(TMP, ".claude/rules/quality");
     mkdirSync(rulesDir, { recursive: true });
     writeFileSync(join(rulesDir, "standards.md"), "No empty catches.");
-    writeFileSync(
-      join(TMP, ".claude/rules/workflow.md"),
-      "Plan first.",
-    );
+    writeFileSync(join(TMP, ".claude/rules/workflow.md"), "Plan first.");
 
     const entries = await readProjectRules(TMP);
     expect(entries).toHaveLength(2);

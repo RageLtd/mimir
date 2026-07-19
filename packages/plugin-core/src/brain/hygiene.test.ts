@@ -10,11 +10,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrgReplica, generateMemoryId } from "../store/org-replica";
-import {
-  groupClusters,
-  runLocalHygieneSweep,
-  scoreMemory,
-} from "./hygiene";
+import { groupClusters, runLocalHygieneSweep, scoreMemory } from "./hygiene";
 
 let savedHome: string | undefined;
 
@@ -66,7 +62,11 @@ describe("scoreMemory (verbatim port)", () => {
       now,
     );
     const stale = scoreMemory(
-      { confidence: 0.5, access_count: 0, last_accessed: "2026-01-01T00:00:00Z" },
+      {
+        confidence: 0.5,
+        access_count: 0,
+        last_accessed: "2026-01-01T00:00:00Z",
+      },
       now,
     );
     expect(fresh).toBeGreaterThan(0.85);
@@ -95,7 +95,11 @@ const withJudge = async (
       const content = system.startsWith("You consolidate")
         ? (behavior.merge ?? "merged statement")
         : JSON.stringify(
-            behavior.classify ?? { action: "leave", survivor: null, reason: "" },
+            behavior.classify ?? {
+              action: "leave",
+              survivor: null,
+              reason: "",
+            },
           );
       return Response.json({ choices: [{ message: { content } }] });
     },
@@ -136,18 +140,21 @@ describe("runLocalHygieneSweep", () => {
     const replica = newReplica();
     seed(replica, "the port is 46337", vec(0));
     seed(replica, "embedder port: 46337", vec(angleFor(0.1)));
-    await withJudge({ merge: "The embedder port is 46337." }, async (config) => {
-      const report = await runLocalHygieneSweep({
-        replica,
-        config,
-        embed: embedNull,
-      });
-      expect(report.dryRun).toBe(true);
-      expect(report.clustersFound).toBe(1);
-      expect(report.proposals[0]?.merged).toBe("The embedder port is 46337.");
-      expect(report.proposals[0]?.applied).toBe(false);
-      expect(replica.countMemories()).toBe(2);
-    });
+    await withJudge(
+      { merge: "The embedder port is 46337." },
+      async (config) => {
+        const report = await runLocalHygieneSweep({
+          replica,
+          config,
+          embed: embedNull,
+        });
+        expect(report.dryRun).toBe(true);
+        expect(report.clustersFound).toBe(1);
+        expect(report.proposals[0]?.merged).toBe("The embedder port is 46337.");
+        expect(report.proposals[0]?.applied).toBe(false);
+        expect(replica.countMemories()).toBe(2);
+      },
+    );
     replica.close();
   });
 
@@ -155,23 +162,26 @@ describe("runLocalHygieneSweep", () => {
     const replica = newReplica();
     const a = seed(replica, "the port is 46337", vec(0));
     const b = seed(replica, "embedder port: 46337", vec(angleFor(0.1)));
-    await withJudge({ merge: "The embedder port is 46337." }, async (config) => {
-      const report = await runLocalHygieneSweep({
-        replica,
-        config,
-        embed: embedNull,
-        dryRun: false,
-      });
-      expect(report.proposals[0]?.applied).toBe(true);
-      expect(replica.countMemories()).toBe(1);
-      // Both originals gone — the survivor is a NEW record (LWW shape).
-      expect(replica.getMemory(a)).toBeNull();
-      expect(replica.getMemory(b)).toBeNull();
-      const [rest] = replica.listMemories(5);
-      expect(rest?.content).toBe("The embedder port is 46337.");
-      expect(rest?.id).not.toBe(a);
-      expect(rest?.id).not.toBe(b);
-    });
+    await withJudge(
+      { merge: "The embedder port is 46337." },
+      async (config) => {
+        const report = await runLocalHygieneSweep({
+          replica,
+          config,
+          embed: embedNull,
+          dryRun: false,
+        });
+        expect(report.proposals[0]?.applied).toBe(true);
+        expect(replica.countMemories()).toBe(1);
+        // Both originals gone — the survivor is a NEW record (LWW shape).
+        expect(replica.getMemory(a)).toBeNull();
+        expect(replica.getMemory(b)).toBeNull();
+        const [rest] = replica.listMemories(5);
+        expect(rest?.content).toBe("The embedder port is 46337.");
+        expect(rest?.id).not.toBe(a);
+        expect(rest?.id).not.toBe(b);
+      },
+    );
     replica.close();
   });
 

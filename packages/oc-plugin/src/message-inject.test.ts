@@ -62,7 +62,9 @@ describe("lastUserMessage", () => {
   });
 
   test("returns undefined when there is no user message", () => {
-    const messages: OcMessage[] = [{ info: assistantInfo("a1", "s"), parts: [] }];
+    const messages: OcMessage[] = [
+      { info: assistantInfo("a1", "s"), parts: [] },
+    ];
     expect(lastUserMessage(messages)).toBeUndefined();
   });
 });
@@ -82,7 +84,9 @@ describe("extractLastUserPrompt", () => {
   });
 
   test("returns empty string when there is no user message", () => {
-    const messages: OcMessage[] = [{ info: assistantInfo("a1", "s"), parts: [] }];
+    const messages: OcMessage[] = [
+      { info: assistantInfo("a1", "s"), parts: [] },
+    ];
     expect(extractLastUserPrompt(messages)).toBe("");
   });
 });
@@ -118,7 +122,9 @@ describe("injectLeadingContext", () => {
   });
 
   test("is a no-op when there is no user message to attach to", () => {
-    const messages: OcMessage[] = [{ info: assistantInfo("a1", "s"), parts: [] }];
+    const messages: OcMessage[] = [
+      { info: assistantInfo("a1", "s"), parts: [] },
+    ];
     injectLeadingContext(messages, ["<x/>"]);
     expect(messages[0]?.parts).toHaveLength(0);
   });

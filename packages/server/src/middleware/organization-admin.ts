@@ -55,11 +55,42 @@ async function enrichIdentity(
   return error ? null : readOrganizationMembership(member, identity);
 }
 
+async function operatorOrganizationIdentity(
+  c: Context<IdentityEnv>,
+  headers: Headers,
+  sessionLookup?: SessionLookup,
+) {
+  const operatorIdentity = c.get("operatorIdentity");
+  if (!operatorIdentity) return null;
+
+  const sessionIdentity = await lookupIdentity(headers, sessionLookup);
+  if (
+    !sessionIdentity?.orgId ||
+    sessionIdentity.userId !== operatorIdentity.userId
+  ) {
+    return null;
+  }
+  return {
+    userId: sessionIdentity.userId,
+    orgId: sessionIdentity.orgId,
+    ...(sessionIdentity.authenticatedAt === undefined
+      ? {}
+      : { authenticatedAt: sessionIdentity.authenticatedAt }),
+  } satisfies ResolvedIdentity;
+}
+
 export const createOrganizationRoleEnrichment =
-  (lookup: ActiveMemberLookup = defaultActiveMemberLookup) =>
+  (
+    lookup: ActiveMemberLookup = defaultActiveMemberLookup,
+    sessionLookup?: SessionLookup,
+  ) =>
   async (c: Context<IdentityEnv>, next: Next) => {
-    const identity = c.get("identity");
     const headers = browserHeaders(c);
+    const identity =
+      c.get("identity") ??
+      (headers
+        ? await operatorOrganizationIdentity(c, headers, sessionLookup)
+        : null);
     if (identity && headers) {
       const enriched = await enrichIdentity(identity, headers, lookup);
       if (enriched) c.set("identity", enriched);

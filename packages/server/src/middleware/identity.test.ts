@@ -65,7 +65,10 @@ function appWithGate(
 describe("readIdentity", () => {
   test("extracts userId + active org", () => {
     expect(
-      readIdentity({ user: { id: "u1" }, session: { activeOrganizationId: "o1" } }),
+      readIdentity({
+        user: { id: "u1" },
+        session: { activeOrganizationId: "o1" },
+      }),
     ).toEqual({ userId: "u1", orgId: "o1" });
   });
 
@@ -114,7 +117,10 @@ describe("pickSoleOrg", () => {
 describe("createIdentityGate", () => {
   const denyAll = () => Promise.resolve(null);
   const allowWithOrg = () =>
-    Promise.resolve({ user: { id: "u1" }, session: { activeOrganizationId: "org-1" } });
+    Promise.resolve({
+      user: { id: "u1" },
+      session: { activeOrganizationId: "org-1" },
+    });
 
   test("credential-less request to a gated route is a detail-free 401", async () => {
     const res = await appWithGate(denyAll).request("/v1/protected");

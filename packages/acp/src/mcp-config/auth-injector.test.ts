@@ -1,7 +1,7 @@
-import type * as acp from "@agentclientprotocol/sdk";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type * as acp from "@agentclientprotocol/sdk";
 import { injectStoredTokens } from "./auth-injector";
 
 const TMP = join(import.meta.dir, ".tmp-auth-injector-test");
@@ -92,9 +92,7 @@ describe("injectStoredTokens", () => {
 
   test("appends Bearer alongside existing non-auth headers", async () => {
     writeStoredToken("svc", "tok");
-    const servers = [
-      httpServer("svc", [{ name: "X-Custom", value: "foo" }]),
-    ];
+    const servers = [httpServer("svc", [{ name: "X-Custom", value: "foo" }])];
     const result = await injectStoredTokens(servers);
     if (!result[0] || !("headers" in result[0])) {
       throw new Error("expected http server");
@@ -108,9 +106,7 @@ describe("injectStoredTokens", () => {
   test("static auth check is case-insensitive", async () => {
     writeStoredToken("svc", "from-disk");
     const servers = [
-      httpServer("svc", [
-        { name: "authorization", value: "Bearer existing" },
-      ]),
+      httpServer("svc", [{ name: "authorization", value: "Bearer existing" }]),
     ];
     const result = await injectStoredTokens(servers);
     if (!result[0] || !("headers" in result[0])) {
@@ -122,4 +118,3 @@ describe("injectStoredTokens", () => {
     ]);
   });
 });
-

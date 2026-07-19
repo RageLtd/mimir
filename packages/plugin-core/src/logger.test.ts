@@ -16,9 +16,7 @@ describe("shouldRotate", () => {
   });
 
   test("previous-day file rotates", () => {
-    expect(shouldRotate({ mtimeMs: now - DAY_MS, size: 1024 }, now)).toBe(
-      true,
-    );
+    expect(shouldRotate({ mtimeMs: now - DAY_MS, size: 1024 }, now)).toBe(true);
   });
 
   test("same-day file over the size cap rotates", () => {

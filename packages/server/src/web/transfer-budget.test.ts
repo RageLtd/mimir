@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { type Env, Hono } from "hono";
-import { createWeb, web } from ".";
 import type { IdentityEnv } from "../middleware/identity";
+import { createWeb, web } from ".";
 import type { WebEncoding } from "./compression";
 import { buildIsland } from "./islands";
 import {
@@ -11,7 +11,8 @@ import {
   measureFirstLoad,
 } from "./transfer-budget";
 
-const fetchWith = <E extends Env>(app: Hono<E>) =>
+const fetchWith =
+  <E extends Env>(app: Hono<E>) =>
   (path: string, init?: RequestInit) =>
     app.request(path, init);
 const compressedEncodings: WebEncoding[] = ["br", "zstd", "gzip", "deflate"];
@@ -199,9 +200,7 @@ describe("critical resource discovery", () => {
       { path: "/hero.png", kind: "image" },
       { path: "/hero@2x.png", kind: "image" },
     ]);
-    expect(found.externalResources).toEqual([
-      "https://example.com/tracker.js",
-    ]);
+    expect(found.externalResources).toEqual(["https://example.com/tracker.js"]);
   });
 });
 
@@ -217,8 +216,10 @@ describe("first-load measurement", () => {
 
     const dashboard = await (await publicWeb.request("/app")).text();
     expect(dashboard).toContain(".app-frame{");
-    expect(dashboard).toContain(".card{");
-    expect(dashboard).toContain(".cards{");
+    expect(dashboard).toContain(".status{");
+    expect(dashboard).toContain(".secret{");
+    expect(dashboard).not.toContain(".card{");
+    expect(dashboard).not.toContain(".cards{");
     expect(dashboard).not.toContain(".auth-form{");
     expect(dashboard).not.toContain(".stack{");
     expect(dashboard).not.toContain(".audit-filters{");
@@ -242,7 +243,6 @@ describe("first-load measurement", () => {
     for (const selector of [
       ".app-frame{",
       ".card{",
-      ".stack{",
       ".items{",
       ".status{",
       ".ceremony{",
@@ -251,6 +251,7 @@ describe("first-load measurement", () => {
       expect(memories).toContain(selector);
     }
     expect(memories).not.toContain(".auth-form{");
+    expect(memories).not.toContain(".stack{");
     expect(memories).not.toContain(".audit-filters{");
     expect(memories).not.toContain(".audit-events time{");
     expect(memories).not.toContain(".member-actions{");
@@ -260,8 +261,8 @@ describe("first-load measurement", () => {
   });
 
   test("enforces the current SSR route under identity and gzip", async () => {
-    const fetcher = fetchWith(createWeb({ organizationAdmin: true }));
-    for (const route of ["/sign-in", "/sign-up", "/app", "/admin"]) {
+    const fetcher = fetchWith(createActivityWeb());
+    for (const route of ["/sign-in", "/sign-up", "/app", "/admin/billing"]) {
       const identity = await measureFirstLoad(fetcher, route, "identity");
       const compressed = await Promise.all(
         compressedEncodings.map((encoding) =>
@@ -339,11 +340,7 @@ describe("first-load measurement", () => {
       "/app/credentials",
       "identity",
     );
-    const gzip = await measureFirstLoad(
-      fetcher,
-      "/app/credentials",
-      "gzip",
-    );
+    const gzip = await measureFirstLoad(fetcher, "/app/credentials", "gzip");
     const bundle = await buildIsland("credentials");
 
     assertTransferBudget(identity);
@@ -351,8 +348,10 @@ describe("first-load measurement", () => {
     expect(identity.requestCount).toBe(2);
     expect(identity.bytesByKind.javascript).toBeGreaterThan(0);
     expect(gzip.totalBytes).toBeLessThan(identity.totalBytes);
-    expect(bundle).toContain('customElements.define("mimir-credential-ceremony"');
-    expect(bundle).not.toContain("from\"");
+    expect(bundle).toContain(
+      'customElements.define("mimir-credential-ceremony"',
+    );
+    expect(bundle).not.toContain('from"');
     expect(bundle).not.toContain("node:");
     expect(bundle).not.toContain("playwright");
     expect(bundle).not.toContain("generate-authenticate-options");
@@ -379,7 +378,7 @@ describe("first-load measurement", () => {
     expect(bundle).toContain(
       'customElements.define("mimir-member-key-manager"',
     );
-    expect(bundle).not.toContain("from\"");
+    expect(bundle).not.toContain('from"');
     expect(bundle).not.toContain("node:");
     expect(bundle).not.toContain("playwright");
     expect(bundle).not.toContain("generate-authenticate-options");
@@ -432,7 +431,7 @@ describe("first-load measurement", () => {
     expect(identity.requestCount).toBe(2);
     expect(identity.bytesByKind.javascript).toBeGreaterThan(0);
     expect(bundle).toContain('customElements.define("mimir-memory-manager"');
-    expect(bundle).not.toContain("from\"");
+    expect(bundle).not.toContain('from"');
     expect(bundle).not.toContain("node:");
     for (const report of compressed) {
       assertTransferBudget(report);
@@ -460,7 +459,7 @@ describe("first-load measurement", () => {
     expect(bundle).toContain(
       'customElements.define("mimir-admin-memory-manager"',
     );
-    expect(bundle).not.toContain("from\"");
+    expect(bundle).not.toContain('from"');
     expect(bundle).not.toContain("node:");
     for (const report of compressed) {
       assertTransferBudget(report);

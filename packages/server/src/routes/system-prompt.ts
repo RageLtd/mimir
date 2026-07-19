@@ -15,8 +15,6 @@ import { Hono } from "hono";
 import { config } from "../config";
 import { requestLog } from "../util/logger";
 
-export const systemPrompt = new Hono();
-
 let cachedContent: string | null = null;
 let versionHash: string | null = null;
 let lastMtime = 0;
@@ -48,17 +46,34 @@ export async function loadPrompt() {
  *
  * Returns the current system prompt with content version.
  */
-systemPrompt.get("/", async (c) => {
-  const rid = c.req.header("x-request-id") ?? "sysprompt";
-  const log = requestLog(rid);
+export type SystemPromptReader = () => Promise<string | null> | string | null;
 
-  try {
-    const { content, version } = await loadPrompt();
-    log.debug({ length: content.length, version }, "system prompt served");
-    return c.json({ content, version });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.error({ error: msg }, "failed to load system prompt");
-    return c.json({ error: "Failed to load system prompt" }, 500);
-  }
-});
+export function createSystemPromptRoutes(readStored?: SystemPromptReader) {
+  const routes = new Hono();
+  routes.get("/", async (c) => {
+    const rid = c.req.header("x-request-id") ?? "sysprompt";
+    const log = requestLog(rid);
+
+    try {
+      const stored = readStored ? await readStored() : null;
+      const prompt = stored
+        ? {
+            content: stored,
+            version: Bun.hash(stored).toString(16).slice(0, 12),
+          }
+        : await loadPrompt();
+      log.debug(
+        { length: prompt.content.length, version: prompt.version },
+        "system prompt served",
+      );
+      return c.json(prompt);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error({ error: msg }, "failed to load system prompt");
+      return c.json({ error: "Failed to load system prompt" }, 500);
+    }
+  });
+  return routes;
+}
+
+export const systemPrompt = createSystemPromptRoutes();

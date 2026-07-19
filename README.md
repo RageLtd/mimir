@@ -191,11 +191,12 @@ The entire config surface:
 |----------|---------|---------|
 | `MIMIR_PORT` / `MIMIR_HOST` | `8080` / `0.0.0.0` | Bind address |
 | `MIMIR_DB_PATH` | `./mimir.sqlite` | The tenant store — envelopes, cursors, leases, projects |
-| `SYSTEM_PROMPT_PATH` | `./system-prompt.md` | Mimir's persona |
+| `MIMIR_OPERATOR_TOKEN` / `MIMIR_OPERATOR_USER_IDS` | — | Operator MCP bootstrap token / one-time browser-operator user-id imports |
+| `SYSTEM_PROMPT_PATH` | `./system-prompt.md` | First-boot system-prompt seed; operator edits are stored at runtime |
 | `AUTH_ENABLED` | `false` | Off = single-user plaintext mode; on = accounts + E2E sync |
 | `AUTH_SECRET` / `AUTH_DB_PATH` / `AUTH_BASE_URL` / `AUTH_SETUP_TOKEN` | — | Required only when auth is enabled |
 
-With auth off (the default), the server boots ungated for single-user self-hosting. With auth on, the first boot is claimed via `AUTH_SETUP_TOKEN`, and clients authenticate with API keys.
+With auth off (the default), the server boots ungated for single-user self-hosting. With auth on, the first boot is claimed via `AUTH_SETUP_TOKEN`, the claimant receives separate organization-owner and instance-operator grants, and clients authenticate with API keys. Existing users can be imported once as browser operators through `MIMIR_OPERATOR_USER_IDS`; later grants and runtime settings are managed under `/operator`.
 
 ## Development
 

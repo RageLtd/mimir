@@ -9,7 +9,7 @@ import type {
 } from "../auth/organization-members";
 import type { IdentityEnv } from "../middleware/identity";
 import { attemptSync } from "../util/result";
-import { DashboardNavigation, PageFrame } from "./chrome";
+import { dashboardNavigation, PageFrame } from "./chrome";
 
 export interface OrganizationMembersOptions {
   origin: string;
@@ -154,10 +154,8 @@ export function renderOrganizationMembers(
   c.status(state.error ? 400 : 200);
   return c.render(
     <PageFrame
-      actions={<a href="/admin">Organization</a>}
-      navigation={
-        <DashboardNavigation current="admin" organizationAdmin={true} />
-      }
+      actions={<a href="/app">Account</a>}
+      navigation={dashboardNavigation(c, "organization-members")}
     >
       <section
         aria-labelledby="members-title"

@@ -37,6 +37,11 @@ export interface ResolvedIdentity {
   readonly organizationRoles?: readonly string[];
 }
 
+export interface OperatorIdentity {
+  readonly userId: string;
+  readonly authenticatedAt?: number;
+}
+
 const BEARER_PREFIX = "Bearer ";
 const API_KEY_HEADER = "x-api-key";
 /** Exact-match exemptions — deliberately case-sensitive, no trailing-slash
@@ -47,7 +52,11 @@ const AUTH_PATH_PREFIX = "/api/auth/";
 /** Hono context environment: the gate sets `identity`, routes read it. Optional
  *  because an auth-off boot never mounts the gate, so it may be unset. */
 export interface IdentityEnv {
-  Variables: { identity?: ResolvedIdentity };
+  Variables: {
+    identity?: ResolvedIdentity;
+    operatorIdentity?: OperatorIdentity;
+    operatorNavigation?: true;
+  };
 }
 
 /**

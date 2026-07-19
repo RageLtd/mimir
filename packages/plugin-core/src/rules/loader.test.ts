@@ -58,10 +58,7 @@ pattern = "rm -rf"
 
 describe("loadRules — body resolution", () => {
   test("resolves body relative to the .toml's directory", async () => {
-    await writeRule(
-      ".claude/rules/coding/x.md",
-      "# X rule body\nstuff",
-    );
+    await writeRule(".claude/rules/coding/x.md", "# X rule body\nstuff");
     await writeRule(
       ".claude/rules/coding/x.enforce.toml",
       `id = "coding/x"

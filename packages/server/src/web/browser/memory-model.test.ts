@@ -9,18 +9,19 @@ import {
   type WireEnvelope,
 } from "./memory-model";
 
-const memory = (id: string, content: string, projectId: string | null) => ({
-  id,
-  version: 1,
-  content,
-  projectId,
-  type: "fact",
-  name: null,
-  trigger: null,
-  confidence: 1,
-  createdAt: "2026-07-12T00:00:00.000Z",
-  updatedAt: "2026-07-12T00:00:00.000Z",
-}) satisfies MemoryRecord;
+const memory = (id: string, content: string, projectId: string | null) =>
+  ({
+    id,
+    version: 1,
+    content,
+    projectId,
+    type: "fact",
+    name: null,
+    trigger: null,
+    confidence: 1,
+    createdAt: "2026-07-12T00:00:00.000Z",
+    updatedAt: "2026-07-12T00:00:00.000Z",
+  }) satisfies MemoryRecord;
 
 const envelope = (overrides: Partial<WireEnvelope> = {}) => ({
   id: "memory:one",
@@ -106,11 +107,7 @@ describe("local memory model", () => {
     expect(
       applyOpened(memories, envelope({ version: 0 }), payloadFor(first)),
     ).toBe(false);
-    applyOpened(
-      memories,
-      envelope({ version: 2, tombstone: true }),
-      null,
-    );
+    applyOpened(memories, envelope({ version: 2, tombstone: true }), null);
     expect(memories.size).toBe(0);
   });
 
@@ -131,8 +128,12 @@ describe("local memory model", () => {
       }).rows.map((row) => row.id),
     ).toEqual(["memory:one"]);
     expect(
-      filterMemories(rows, { query: "", project: "", type: "", page: 1 })
-        .rows.map((row) => row.id),
+      filterMemories(rows, {
+        query: "",
+        project: "",
+        type: "",
+        page: 1,
+      }).rows.map((row) => row.id),
     ).toEqual(["memory:two", "memory:one"]);
   });
 });

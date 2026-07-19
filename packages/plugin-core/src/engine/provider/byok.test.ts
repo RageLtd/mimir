@@ -43,7 +43,7 @@ import {
   getProviderEnvVar,
   resolveModelWithOverride,
 } from "./query";
-import { providerConfig, providers, providerSdks } from "./registry";
+import { providerConfig, providerSdks, providers } from "./registry";
 
 describe("resolveModelWithOverride", () => {
   test("explicit provider resolves an unregistered provider's model", () => {

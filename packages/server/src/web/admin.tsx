@@ -1,72 +1,38 @@
 import type { Context } from "hono";
 import type { IdentityEnv } from "../middleware/identity";
-import { DashboardNavigation, PageFrame } from "./chrome";
+import { dashboardNavigation, PageFrame } from "./chrome";
 
 export function renderOrganizationAdmin(c: Context<IdentityEnv>) {
+  c.header("cache-control", "private, no-store");
+  return c.redirect("/admin/members");
+}
+
+export function renderOrganizationBilling(c: Context<IdentityEnv>) {
   const identity = c.get("identity");
-  const role = identity?.organizationRoles?.find(
-    (candidate) => candidate === "owner" || candidate === "admin",
-  );
+  if (!identity) return c.text("Forbidden", 403);
   c.header("cache-control", "private, no-store");
   return c.render(
     <PageFrame
-      actions={<a href="/app">Dashboard</a>}
-      navigation={
-        <DashboardNavigation current="admin" organizationAdmin={true} />
-      }
+      actions={<a href="/app">Account</a>}
+      navigation={dashboardNavigation(c, "organization-billing")}
     >
       <section
-        aria-labelledby="admin-title"
-        data-user-id={identity?.userId}
-        data-organization-id={identity?.orgId}
-        data-organization-role={role}
+        aria-labelledby="billing-title"
+        data-user-id={identity.userId}
+        data-organization-id={identity.orgId}
       >
         <p class="kicker">Organization administration</p>
-        <h1 id="admin-title">Manage this organization</h1>
+        <h1 id="billing-title">Billing</h1>
         <p class="lede">
-          Organization settings and membership stay scoped to the active
-          organization. Server operation is a separate authority.
+          Organization billing is not available yet. No payment provider or
+          billing contract has been configured.
         </p>
-        <div class="cards">
-          <section class="card" aria-labelledby="members-title">
-            <h2 id="members-title">Members &amp; invitations</h2>
-            <p>
-              <a href="/admin/members">Manage members and invitations</a>,
-              organization roles, and encryption-key readiness.
-            </p>
-          </section>
-          <section class="card" aria-labelledby="settings-title">
-            <h2 id="settings-title">Organization settings</h2>
-            <p>
-              <a href="/admin/settings">Configure organization settings</a>
-              and bounded access policy.
-            </p>
-          </section>
-          <section class="card" aria-labelledby="memory-admin-title">
-            <h2 id="memory-admin-title">Encrypted memories</h2>
-            <p>
-              <a href="/admin/memories">Maintain organization memories</a> after
-              local browser unlock.
-            </p>
-          </section>
-          <section class="card" aria-labelledby="billing-title">
-            <h2 id="billing-title">Billing</h2>
-            <p>Review organization billing when it becomes available.</p>
-          </section>
-          <section class="card" aria-labelledby="operations-title">
-            <h2 id="operations-title">Operations</h2>
-            <p>
-              <a href="/admin/activity">Review organization activity</a> and
-              permitted operational metadata.
-            </p>
-          </section>
-        </div>
       </section>
     </PageFrame>,
     {
-      title: "Organization administration — Mimir",
-      description: "Manage the active Mimir organization.",
-      styles: ["dashboard", "card", "cards"],
+      title: "Organization billing — Mimir",
+      description: "Review billing availability for the active organization.",
+      styles: ["dashboard"],
     },
   );
 }

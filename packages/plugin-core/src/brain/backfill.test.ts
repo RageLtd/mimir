@@ -13,8 +13,8 @@ import {
   generateMemoryId,
   memoryEmbedSource,
 } from "../store/org-replica";
-import { EMBEDDER_MODEL } from "./embedder";
 import { backfillEmbeddings } from "./backfill";
+import { EMBEDDER_MODEL } from "./embedder";
 
 const SAVED_KEYS = ["MIMIR_EMBEDDER_PORT", "MIMIR_HOME"] as const;
 let savedEnv: Record<string, string | undefined>;
@@ -55,9 +55,7 @@ const seedFact = (replica: ReturnType<typeof createOrgReplica>, n: number) => {
 };
 
 /** Stub embedder recording every input it was asked to embed. */
-const withEmbedStub = async (
-  fn: (inputs: () => string[]) => Promise<void>,
-) => {
+const withEmbedStub = async (fn: (inputs: () => string[]) => Promise<void>) => {
   const seen: string[] = [];
   const server = Bun.serve({
     port: 0,

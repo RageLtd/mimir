@@ -19,7 +19,9 @@ describe("dashboard chrome", () => {
     expect(html).toContain(".public-frame{");
     expect(html).not.toContain(".app-frame{");
     expect(html).not.toContain(".cards{");
-    expect(html).toContain('<form class="auth-form" method="post" action="/sign-in">');
+    expect(html).toContain(
+      '<form class="auth-form" method="post" action="/sign-in">',
+    );
     expect(html).toContain('autocomplete="email"');
     expect(html).toContain('autocomplete="current-password"');
     expect(html).toContain("required");
@@ -43,7 +45,9 @@ describe("dashboard chrome", () => {
     const html = await response.text();
 
     expect(response.status).toBe(200);
-    expect(html).toContain('<form class="auth-form" method="post" action="/sign-up">');
+    expect(html).toContain(
+      '<form class="auth-form" method="post" action="/sign-up">',
+    );
     expect(html).toContain('<label for="sign-up-name">');
     expect(html).toContain('autocomplete="new-password"');
     expect(html).toContain('name="setupToken"');
@@ -55,12 +59,18 @@ describe("dashboard chrome", () => {
     const html = await response.text();
 
     expect(response.status).toBe(200);
-    expect(html).toContain("<title>Dashboard — Mimir</title>");
+    expect(html).toContain("<title>Account — Mimir</title>");
     expect(html).toContain('<div class="frame app-frame">');
     expect(html).toContain('<aside class="side">');
     expect(html).toContain('<nav aria-label="Dashboard">');
+    expect(html).toContain("<ul>");
+    expect(html).toContain('href="/app" aria-current="page">Account</a>');
+    expect(html).toContain('href="/app/credentials">Credentials</a>');
+    expect(html).toContain('href="/app/memories">Memories</a>');
     expect(html).toContain('aria-current="page"');
     expect(html).toContain('<main id="main" class="content">');
+    expect(html).not.toContain("<summary>Organization</summary>");
+    expect(html).not.toContain("<summary>Server operation</summary>");
     expect(html).not.toContain("<script");
   });
 });

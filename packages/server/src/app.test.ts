@@ -8,8 +8,14 @@ const allowSession = () =>
     session: { activeOrganizationId: "org-1" },
   });
 const browserSession = { cookie: "better-auth.session_token=session-1" };
-const allowMembership = ({ userId, orgId }: { userId: string; orgId: string }) =>
-  Promise.resolve({ userId, organizationId: orgId });
+const allowMembership = ({
+  userId,
+  orgId,
+}: {
+  userId: string;
+  orgId: string;
+}) => Promise.resolve({ userId, organizationId: orgId });
+const denyOperator = () => false;
 const memberWithRole = (role: string | string[]) => () =>
   Promise.resolve({
     userId: "user-1",
@@ -29,7 +35,7 @@ describe("web route boundary", () => {
     expect(dashboard.status).toBe(200);
     expect(dashboard.headers.get("content-type")).toContain("text/html");
     expect(html).toStartWith("<!DOCTYPE html>");
-    expect(html).toContain("<title>Dashboard — Mimir</title>");
+    expect(html).toContain("<title>Account — Mimir</title>");
     expect(html).not.toContain("<script");
   });
 
@@ -70,6 +76,7 @@ describe("web route boundary", () => {
       authEnabled: true,
       sessionLookup: allowSession,
       membershipLookup: allowMembership,
+      operatorGrantLookup: denyOperator,
     }).request("/app");
     const html = await signedIn.text();
 
@@ -118,15 +125,17 @@ describe("organization admin boundary", () => {
         authEnabled: true,
         sessionLookup: allowSession,
         activeMemberLookup: memberWithRole(role),
-      }).request("/admin", { headers: browserSession });
+        operatorGrantLookup: denyOperator,
+      }).request("/admin/billing", { headers: browserSession });
       const html = await response.text();
 
       expect(response.status).toBe(200);
       expect(response.headers.get("cache-control")).toBe("private, no-store");
-      expect(html).toContain("Organization administration — Mimir");
+      expect(html).toContain("Organization billing — Mimir");
       expect(html).toContain('data-user-id="user-1"');
       expect(html).toContain('data-organization-id="org-1"');
-      expect(html).toContain(`data-organization-role="${role}"`);
+      expect(html).toContain("<summary>Organization</summary>");
+      expect(html).toContain('aria-current="page"');
       expect(html).not.toContain("<script");
       expect(html).not.toContain("Server settings");
     }
@@ -207,6 +216,7 @@ describe("organization admin boundary", () => {
       authEnabled: true,
       sessionLookup,
       activeMemberLookup,
+      operatorGrantLookup: denyOperator,
     });
 
     expect(
@@ -215,7 +225,7 @@ describe("organization admin boundary", () => {
           headers: { cookie: "active=org-1" },
         })
       ).status,
-    ).toBe(200);
+    ).toBe(302);
     expect(
       (
         await app.request("/admin", {
@@ -244,15 +254,31 @@ describe("organization admin boundary", () => {
       authEnabled: true,
       sessionLookup: allowSession,
       activeMemberLookup: memberWithRole("owner"),
+      operatorGrantLookup: denyOperator,
     }).request("/app", { headers: browserSession });
     const member = await createApp({
       authEnabled: true,
       sessionLookup: allowSession,
       activeMemberLookup: memberWithRole("member"),
+      operatorGrantLookup: denyOperator,
+    }).request("/app", { headers: browserSession });
+    const failedLookup = await createApp({
+      authEnabled: true,
+      sessionLookup: allowSession,
+      membershipLookup: allowMembership,
+      activeMemberLookup: () => Promise.reject(new Error("lookup failed")),
+      operatorGrantLookup: denyOperator,
     }).request("/app", { headers: browserSession });
 
-    expect(await owner.text()).toContain('href="/admin"');
-    expect(await member.text()).not.toContain('href="/admin"');
+    const ownerHtml = await owner.text();
+    expect(ownerHtml).toContain("<summary>Organization</summary>");
+    expect(ownerHtml).toContain('href="/admin/members"');
+    expect(await member.text()).not.toContain(
+      "<summary>Organization</summary>",
+    );
+    expect(await failedLookup.text()).not.toContain(
+      "<summary>Organization</summary>",
+    );
   });
 
   test("demotion removes direct admin access and navigation on the next request", async () => {
@@ -266,16 +292,15 @@ describe("organization admin boundary", () => {
           organizationId: "org-1",
           role,
         }),
+      operatorGrantLookup: denyOperator,
     });
 
     expect(
       (await app.request("/admin", { headers: browserSession })).status,
-    ).toBe(200);
+    ).toBe(302);
     expect(
-      await (
-        await app.request("/app", { headers: browserSession })
-      ).text(),
-    ).toContain('href="/admin"');
+      await (await app.request("/app", { headers: browserSession })).text(),
+    ).toContain('href="/admin/members"');
 
     role = "member";
 
@@ -283,10 +308,74 @@ describe("organization admin boundary", () => {
       (await app.request("/admin", { headers: browserSession })).status,
     ).toBe(403);
     expect(
-      await (
-        await app.request("/app", { headers: browserSession })
-      ).text(),
-    ).not.toContain('href="/admin"');
+      await (await app.request("/app", { headers: browserSession })).text(),
+    ).not.toContain('href="/admin/members"');
+  });
+});
+
+describe("role-scoped dashboard navigation", () => {
+  test("keeps user account destinations visible without privileged roles", async () => {
+    const response = await createApp({
+      authEnabled: true,
+      sessionLookup: allowSession,
+      activeMemberLookup: memberWithRole("member"),
+      operatorGrantLookup: denyOperator,
+    }).request("/app", { headers: browserSession });
+    const html = await response.text();
+
+    expect(html).toContain('href="/app" aria-current="page">Account</a>');
+    expect(html).toContain('href="/app/credentials">Credentials</a>');
+    expect(html).toContain('href="/app/memories">Memories</a>');
+    expect(html).not.toContain("<summary>Organization</summary>");
+    expect(html).not.toContain("<summary>Server operation</summary>");
+  });
+
+  test("adds operator navigation only while the live server grant exists", async () => {
+    let granted = true;
+    const app = createApp({
+      authEnabled: true,
+      sessionLookup: allowSession,
+      activeMemberLookup: memberWithRole("member"),
+      operatorGrantLookup: () => granted,
+    });
+    const grantedHtml = await (
+      await app.request("/app", { headers: browserSession })
+    ).text();
+    granted = false;
+    const revokedHtml = await (
+      await app.request("/app", { headers: browserSession })
+    ).text();
+
+    expect(grantedHtml).toContain("<summary>Server operation</summary>");
+    expect(grantedHtml).toContain('href="/operator/settings"');
+    expect(revokedHtml).not.toContain("<summary>Server operation</summary>");
+    expect(revokedHtml).not.toContain('href="/operator/settings"');
+  });
+
+  test("shows both independently confirmed scopes to an organization admin operator", async () => {
+    const response = await createApp({
+      authEnabled: true,
+      sessionLookup: allowSession,
+      activeMemberLookup: memberWithRole("owner"),
+      operatorGrantLookup: () => true,
+    }).request("/admin/billing", { headers: browserSession });
+    const html = await response.text();
+
+    expect(html).toContain("<summary>Organization</summary>");
+    expect(html).toContain("<summary>Server operation</summary>");
+  });
+
+  test("operator lookup errors render no operator navigation", async () => {
+    const response = await createApp({
+      authEnabled: true,
+      sessionLookup: allowSession,
+      activeMemberLookup: memberWithRole("member"),
+      operatorGrantLookup: () => Promise.reject(new Error("lookup failed")),
+    }).request("/app", { headers: browserSession });
+
+    expect(await response.text()).not.toContain(
+      "<summary>Server operation</summary>",
+    );
   });
 });
 
@@ -311,6 +400,7 @@ describe("operator boundary", () => {
       authEnabled: true,
       sessionLookup: allowSession,
       operatorToken: "operator-secret",
+      operatorCredentialDigestLookup: () => null,
     }).request("/mcp", {
       method: "POST",
       headers: { Authorization: "Bearer tenant-api-key" },
@@ -325,6 +415,7 @@ describe("operator boundary", () => {
       authEnabled: true,
       sessionLookup: denySession,
       operatorToken: "operator-secret",
+      operatorCredentialDigestLookup: () => null,
     }).request("/mcp", {
       method: "POST",
       headers: { Authorization: "Bearer operator-secret" },

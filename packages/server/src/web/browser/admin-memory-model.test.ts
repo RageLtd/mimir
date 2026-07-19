@@ -7,7 +7,11 @@ import {
   parseAdminPull,
   parseMaintenanceResult,
 } from "./admin-memory-model";
-import { payloadFor, type MemoryRecord, type WireEnvelope } from "./memory-model";
+import {
+  type MemoryRecord,
+  payloadFor,
+  type WireEnvelope,
+} from "./memory-model";
 
 const envelope = (overrides: Partial<WireEnvelope> = {}) => ({
   id: "memory:one",
@@ -97,10 +101,9 @@ describe("admin memory wire model", () => {
       page: 1,
     });
     expect(result.rows.map((row) => row.id)).toEqual(["memory:two"]);
-    expect(Array.from(groupManagedMemories([first, second], "type").keys())).toEqual([
-      "fact",
-      "summary",
-    ]);
+    expect(
+      Array.from(groupManagedMemories([first, second], "type").keys()),
+    ).toEqual(["fact", "summary"]);
   });
 
   test("requires a complete bounded maintenance result", () => {

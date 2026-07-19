@@ -30,7 +30,17 @@ import {
   type OrgLister,
   type SessionLookup,
 } from "./middleware/identity";
-import { createOperatorGate, isOperatorPath } from "./middleware/operator";
+import {
+  createOperatorGate,
+  isOperatorMcpPath,
+  type OperatorCredentialDigestLookup,
+} from "./middleware/operator";
+import {
+  createOperatorBrowserGate,
+  createOperatorNavigationEnrichment,
+  isOperatorBrowserPath,
+  type OperatorGrantLookup,
+} from "./middleware/operator-browser";
 import {
   type ActiveMemberLookup,
   createOrganizationAdminGate,
@@ -40,17 +50,33 @@ import {
   createRootRedirect,
   createWebAccessGate,
 } from "./middleware/web-access";
+import { OPERATOR_PATH_GLOB, OPERATOR_ROOT_PATH } from "./operator/paths";
+import {
+  grantOperator,
+  listOperatorAudit,
+  listOperatorGrants,
+  provisionOrganization,
+  readInstanceSettings,
+  readOperatorCredentialDigest,
+  replaceOperatorCredential,
+  revokeOperator,
+  updateInstanceSetting,
+} from "./operator/state";
 import { type createKeysRoutes, keys } from "./routes/keys";
 import { mcp } from "./routes/mcp";
 import { type createMembersRoutes, members } from "./routes/members";
 import { sync } from "./routes/sync";
-import { systemPrompt } from "./routes/system-prompt";
+import {
+  createSystemPromptRoutes,
+  type SystemPromptReader,
+} from "./routes/system-prompt";
 import { log } from "./util/logger";
 import { attemptSync } from "./util/result";
 import { createWeb } from "./web";
 import type { OrganizationAuditList } from "./web/activity";
 import type { OrganizationMembersOptions } from "./web/members";
 import type { OrganizationMemoryMaintenanceOptions } from "./web/memory-maintenance";
+import type { OperatorDashboardOptions } from "./web/operator";
 import { isPublicWebPath } from "./web/paths";
 import type { OrganizationSettingsOptions } from "./web/settings";
 
@@ -79,6 +105,10 @@ interface AppOptions {
   keyRoutes?: ReturnType<typeof createKeysRoutes>;
   memberRoutes?: ReturnType<typeof createMembersRoutes>;
   operatorToken?: string;
+  operatorCredentialDigestLookup?: OperatorCredentialDigestLookup;
+  operatorGrantLookup?: OperatorGrantLookup;
+  operatorDashboard?: OperatorDashboardOptions;
+  systemPromptReader?: SystemPromptReader;
 }
 
 export function createApp(options: AppOptions = {}) {
@@ -152,8 +182,59 @@ export function createApp(options: AppOptions = {}) {
       },
     };
 
+  const operatorDashboard: OperatorDashboardOptions | undefined = authEnabled
+    ? (options.operatorDashboard ?? {
+        origin: new URL(config.auth.baseUrl).origin,
+        readSettings: () => readInstanceSettings(getAuthDb()),
+        listGrants: () => listOperatorGrants(getAuthDb()),
+        listAudit: () => listOperatorAudit(getAuthDb()),
+        readHealth: () => {
+          const [tenantError] = attemptSync(() =>
+            getTenantDb().query("SELECT 1").get(),
+          );
+          const userCount = getAuthDb()
+            .query<{ count: number }, []>(
+              'SELECT count(*) AS count FROM "user"',
+            )
+            .get()?.count;
+          const organizationCount = getAuthDb()
+            .query<{ count: number }, []>(
+              "SELECT count(*) AS count FROM organization",
+            )
+            .get()?.count;
+          const operatorCount = getAuthDb()
+            .query<{ count: number }, []>(
+              "SELECT count(*) AS count FROM instance_operator_grant",
+            )
+            .get()?.count;
+          return {
+            version: "0.3.0",
+            tenantStore: tenantError ? "down" : "ok",
+            userCount: userCount ?? 0,
+            organizationCount: organizationCount ?? 0,
+            operatorCount: operatorCount ?? 0,
+          };
+        },
+        updateSetting: (input) => updateInstanceSetting(getAuthDb(), input),
+        replaceCredential: (input) =>
+          replaceOperatorCredential(getAuthDb(), input),
+        grant: (input) => grantOperator(getAuthDb(), input),
+        revoke: (input) => revokeOperator(getAuthDb(), input),
+        provision: (input) => provisionOrganization(getAuthDb(), input),
+      })
+    : undefined;
+
   app.use("*", cors());
-  app.use("*", createOperatorGate(options.operatorToken));
+  app.use(
+    "*",
+    createOperatorGate(
+      options.operatorToken,
+      options.operatorCredentialDigestLookup ??
+        (authEnabled
+          ? () => readOperatorCredentialDigest(getAuthDb())
+          : undefined),
+    ),
+  );
 
   // Better Auth (MIM-70) — the ONLY gating mechanism. Mount order matters:
   // the claim guard wraps the signup endpoint, the auth handler self-gates
@@ -185,22 +266,40 @@ export function createApp(options: AppOptions = {}) {
         membershipLookup,
       ),
     );
-    app.use(
-      "/app/*",
-      createOrganizationRoleEnrichment(options.activeMemberLookup),
+    const organizationRoleEnrichment = createOrganizationRoleEnrichment(
+      options.activeMemberLookup,
+      options.sessionLookup,
     );
+    app.use("/app/*", organizationRoleEnrichment);
+    const operatorNavigationEnrichment = createOperatorNavigationEnrichment(
+      options.operatorGrantLookup,
+    );
+    app.use("/app/*", operatorNavigationEnrichment);
     const organizationAdminGate = createOrganizationAdminGate(
       options.sessionLookup,
       options.activeMemberLookup,
     );
     app.use("/admin", organizationAdminGate);
     app.use("/admin/*", organizationAdminGate);
+    app.use("/admin", operatorNavigationEnrichment);
+    app.use("/admin/*", operatorNavigationEnrichment);
+    const operatorBrowserGate = createOperatorBrowserGate(
+      options.sessionLookup,
+      options.operatorGrantLookup,
+    );
+    app.use(OPERATOR_ROOT_PATH, operatorBrowserGate);
+    app.use(OPERATOR_PATH_GLOB, operatorBrowserGate);
+    app.use(OPERATOR_ROOT_PATH, organizationRoleEnrichment);
+    app.use(OPERATOR_PATH_GLOB, organizationRoleEnrichment);
     app.use(
       "*",
       createIdentityGate(
         options.sessionLookup,
         options.orgLister,
-        (path) => isOperatorPath(path) || isPublicWebPath(path),
+        (path) =>
+          isOperatorMcpPath(path) ||
+          isOperatorBrowserPath(path) ||
+          isPublicWebPath(path),
         membershipLookup,
       ),
     );
@@ -227,7 +326,15 @@ export function createApp(options: AppOptions = {}) {
     );
   });
 
-  app.route("/v1/system-prompt", systemPrompt);
+  app.route(
+    "/v1/system-prompt",
+    createSystemPromptRoutes(
+      options.systemPromptReader ??
+        (authEnabled
+          ? () => readInstanceSettings(getAuthDb()).systemPrompt
+          : undefined),
+    ),
+  );
   app.route("/v1/keys", options.keyRoutes ?? keys);
   app.route("/v1/members", options.memberRoutes ?? members);
   app.route("/v1/sync", sync);
@@ -240,6 +347,7 @@ export function createApp(options: AppOptions = {}) {
       ...(authEnabled ? { organizationMembers } : {}),
       ...(authEnabled ? { organizationMemoryMaintenance } : {}),
       ...(authEnabled ? { organizationSettings } : {}),
+      ...(operatorDashboard ? { operator: operatorDashboard } : {}),
       ...(authEnabled
         ? {
             authForms: {

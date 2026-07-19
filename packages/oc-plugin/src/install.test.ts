@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -63,10 +71,13 @@ describe("installMimir", () => {
       Response.json({ content: "# Mimir", version: "test-version" }),
     );
 
-    const result = await installMimir({
-      serverUrl: "https://mimir.example.com/",
-      apiKey: "test-key",
-    }, noCartographer);
+    const result = await installMimir(
+      {
+        serverUrl: "https://mimir.example.com/",
+        apiKey: "test-key",
+      },
+      noCartographer,
+    );
 
     expect(result.ok).toBe(true);
     expect(await Bun.file(opencodeConfig).text()).toBe(existingOpenCode);

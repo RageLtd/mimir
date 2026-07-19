@@ -40,9 +40,7 @@ function membershipDb() {
       ('user-admin', 'public-admin'),
       ('user-member', 'public-member')`,
   );
-  db.run(
-    "INSERT INTO organization (id, keyGeneration) VALUES ('org-1', 1)",
-  );
+  db.run("INSERT INTO organization (id, keyGeneration) VALUES ('org-1', 1)");
   db.run(
     `INSERT INTO member (id, organizationId, userId, role, wrappedOrgKey) VALUES
       ('member-owner', 'org-1', 'user-owner', 'owner', 'wrap-owner'),
@@ -54,11 +52,7 @@ function membershipDb() {
   return db;
 }
 
-function appFor(
-  db: Database,
-  userId: string,
-  authenticatedAt = NOW,
-) {
+function appFor(db: Database, userId: string, authenticatedAt = NOW) {
   const app = new Hono<IdentityEnv>();
   app.use("*", (c, next) => {
     c.set("identity", { userId, orgId: "org-1", authenticatedAt });
@@ -90,9 +84,7 @@ const changeRole = (
 
 const roleOf = (db: Database, memberId: string) =>
   db
-    .query<{ role: string }, [string]>(
-      "SELECT role FROM member WHERE id = ?",
-    )
+    .query<{ role: string }, [string]>("SELECT role FROM member WHERE id = ?")
     .get(memberId)?.role;
 
 describe("POST /v1/members/role", () => {
@@ -132,12 +124,8 @@ describe("POST /v1/members/role", () => {
     const db = membershipDb();
     const app = appFor(db, "user-admin");
 
-    expect(
-      (await changeRole(app, "member-owner", "member")).status,
-    ).toBe(403);
-    expect(
-      (await changeRole(app, "member-member", "owner")).status,
-    ).toBe(403);
+    expect((await changeRole(app, "member-owner", "member")).status).toBe(403);
+    expect((await changeRole(app, "member-member", "owner")).status).toBe(403);
     expect(roleOf(db, "member-owner")).toBe("owner");
     expect(roleOf(db, "member-member")).toBe("member");
     expect(
@@ -165,18 +153,14 @@ describe("POST /v1/members/role", () => {
       "member-member",
     );
 
-    expect(
-      (await changeRole(app, "member-member", "owner")).status,
-    ).toBe(403);
+    expect((await changeRole(app, "member-member", "owner")).status).toBe(403);
     expect(roleOf(db, "member-member")).toBe("member");
 
     db.query("UPDATE member SET wrappedOrgKey = ? WHERE id = ?").run(
       "wrap-member",
       "member-member",
     );
-    expect(
-      (await changeRole(app, "member-member", "owner")).status,
-    ).toBe(200);
+    expect((await changeRole(app, "member-member", "owner")).status).toBe(200);
     expect(roleOf(db, "member-member")).toBe("owner");
     expect(
       db
@@ -233,20 +217,16 @@ describe("POST /v1/members/role", () => {
   test("an owner can leave only after another owner has key access", async () => {
     const db = membershipDb();
     const app = appFor(db, "user-owner");
-    db.query("UPDATE member SET role = 'owner', wrappedOrgKey = NULL WHERE id = ?").run(
-      "member-admin",
-    );
+    db.query(
+      "UPDATE member SET role = 'owner', wrappedOrgKey = NULL WHERE id = ?",
+    ).run("member-admin");
 
-    expect(
-      (await changeRole(app, "member-owner", "admin")).status,
-    ).toBe(403);
+    expect((await changeRole(app, "member-owner", "admin")).status).toBe(403);
     db.query("UPDATE member SET wrappedOrgKey = ? WHERE id = ?").run(
       "wrap-admin",
       "member-admin",
     );
-    expect(
-      (await changeRole(app, "member-owner", "admin")).status,
-    ).toBe(200);
+    expect((await changeRole(app, "member-owner", "admin")).status).toBe(200);
     expect(roleOf(db, "member-owner")).toBe("admin");
   });
 
@@ -255,9 +235,7 @@ describe("POST /v1/members/role", () => {
     const old = appFor(db, "user-owner", NOW - 10 * 60 * 1000 - 1);
     const current = appFor(db, "user-owner");
 
-    expect(
-      (await changeRole(old, "member-admin", "member")).status,
-    ).toBe(403);
+    expect((await changeRole(old, "member-admin", "member")).status).toBe(403);
     expect(
       (
         await changeRole(current, "member-admin", "member", {

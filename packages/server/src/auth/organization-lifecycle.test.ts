@@ -215,9 +215,7 @@ describe("organization lifecycle", () => {
         recentAuthentication: false,
       }),
     ).toBe("forbidden");
-    expect(cancelOrganizationDeletion(authDb, cancellation)).toBe(
-      "cancelled",
-    );
+    expect(cancelOrganizationDeletion(authDb, cancellation)).toBe("cancelled");
     expect(readOrganizationLifecycle(authDb, orgA.id)?.deletion).toBeNull();
   });
 
@@ -232,9 +230,9 @@ describe("organization lifecycle", () => {
     const beforeDeadline = new Date(
       NOW.valueOf() + ORGANIZATION_DELETION_GRACE_DAYS * 86_400_000 - 1,
     );
-    expect(purgeDueOrganizations(authDb, tenantDb, () => beforeDeadline)).toEqual(
-      [],
-    );
+    expect(
+      purgeDueOrganizations(authDb, tenantDb, () => beforeDeadline),
+    ).toEqual([]);
 
     const deadline = new Date(beforeDeadline.valueOf() + 1);
     expect(purgeDueOrganizations(authDb, tenantDb, () => deadline)).toEqual([
@@ -278,9 +276,7 @@ describe("organization lifecycle", () => {
     ).toBe(1);
     expect(
       authDb
-        .query(
-          "SELECT * FROM organization_deletion_receipt WHERE org_id = ?",
-        )
+        .query("SELECT * FROM organization_deletion_receipt WHERE org_id = ?")
         .get(orgA.id),
     ).toEqual({
       org_id: orgA.id,
@@ -291,9 +287,7 @@ describe("organization lifecycle", () => {
       purged_at: deadline.toISOString(),
       outcome: "succeeded",
     });
-    expect(purgeDueOrganizations(authDb, tenantDb, () => deadline)).toEqual(
-      [],
-    );
+    expect(purgeDueOrganizations(authDb, tenantDb, () => deadline)).toEqual([]);
   });
 
   test("a purge interrupted after claiming resumes idempotently", async () => {
