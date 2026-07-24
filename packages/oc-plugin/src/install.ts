@@ -7,6 +7,7 @@
  *   ~/.mimir/system-prompt.md        — fetched from <server>/v1/system-prompt
  *   ~/.mimir/config.json             — the user's input (server, db, etc.)
  *   ~/.mimir/logs/                   — created
+ *   ~/.mimir/embedder/               — pinned llama-server + embedding model
  *   ~/.config/opencode/agents/mimir.md — the Mimir custom agent
  *   ~/.mimir/mimir-oc.ts             — stable CLI copy of this bundle
  *   ~/.local/bin/mimir-opencode      — wrapper script (chmod 755)
@@ -24,6 +25,7 @@
 import { chmod, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+import { installEmbedderArtifacts } from "@mimir/plugin-core/brain/embedder-install";
 import { resolveCartographerBinary } from "@mimir/plugin-core/cartographer/resolve";
 import { errMessage, mimirHome } from "@mimir/plugin-core/util";
 import agentTemplate from "../artifacts/agent-mimir.md.template" with {
@@ -38,7 +40,10 @@ import { type MimirConfig, readConfig, writeConfig } from "./config";
 
 const SYSTEM_PROMPT_ROUTE = "/v1/system-prompt";
 
-const defaultInstallDependencies = { resolveCartographerBinary };
+const defaultInstallDependencies = {
+  installEmbedderArtifacts,
+  resolveCartographerBinary,
+};
 const skipInteractiveCartographerPrompt = async () => null;
 
 type SystemPromptResponse = {
@@ -235,7 +240,24 @@ export const installMimir = async (
     };
   }
 
-  // 6. Write OpenCode-owned runtime artifacts. The package registration
+  // 6. Install the pinned local embedder. Artifact acquisition belongs to
+  //    this explicit runtime install rather than npm package registration,
+  //    and any failure fails the install instead of silently leaving vector
+  //    retrieval disabled.
+  const embedderLog: string[] = [];
+  const embedderErr = await dependencies.installEmbedderArtifacts((message) => {
+    embedderLog.push(message);
+    process.stderr.write(`[mimir-install] ${message}\n`);
+  });
+  if (embedderErr) {
+    return {
+      ok: false,
+      message: `Embedder install failed: ${embedderErr.message}`,
+      written,
+    };
+  }
+
+  // 7. Write OpenCode-owned runtime artifacts. The package registration
   //    in opencode.json/jsonc is deliberately untouched: OpenCode's
   //    `plugin --global` command already wrote it and preserves the
   //    user's existing config.
@@ -296,7 +318,7 @@ export const installMimir = async (
     };
   }
 
-  // 7. Write the wrapper script and make it executable.
+  // 8. Write the wrapper script and make it executable.
   try {
     await writeText(wrapperPath, renderTemplate(wrapperTemplate, tplVars));
     await chmod(wrapperPath, 0o755);
@@ -309,7 +331,7 @@ export const installMimir = async (
     };
   }
 
-  // 8. Write the slash commands so the user can trigger the install
+  // 9. Write the slash commands so the user can trigger the install
   //    and update from inside OpenCode.
   try {
     await writeText(installCommandPath, installCommand);
@@ -338,6 +360,7 @@ export const installMimir = async (
     message: [
       `Mimir installed (system prompt version ${promptVersion}).`,
       `Cartographer: ${cartographerBinary ?? "not found — code indexing disabled"}`,
+      `Embedder: ${embedderLog.at(-1) ?? "artifacts ready"}`,
       "",
       "Wrote:",
       ...written.map((p) => `  ${p}`),

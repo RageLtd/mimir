@@ -22,6 +22,7 @@ let savedHome: string | undefined;
 let savedMimirHome: string | undefined;
 
 const noCartographer = {
+  installEmbedderArtifacts: async () => null,
   resolveCartographerBinary: async () => ({
     ok: true as const,
     binary: null,
@@ -129,6 +130,7 @@ describe("installMimir", () => {
         apiKey: "test-key",
       },
       {
+        installEmbedderArtifacts: async () => null,
         resolveCartographerBinary: async () => ({
           ok: true as const,
           binary: cartographer,
@@ -139,5 +141,54 @@ describe("installMimir", () => {
     expect(result.ok).toBe(true);
     expect((await readConfig())?.cartographerBinary).toBe(cartographer);
     expect(result.message).toContain(`Cartographer: ${cartographer}`);
+  });
+
+  test("installs the pinned embedder artifacts", async () => {
+    let installed = false;
+
+    spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({ content: "# Mimir", version: "test-version" }),
+    );
+
+    const result = await installMimir(
+      {
+        serverUrl: "https://mimir.example.com",
+        apiKey: "test-key",
+      },
+      {
+        ...noCartographer,
+        installEmbedderArtifacts: async () => {
+          installed = true;
+          return null;
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(installed).toBe(true);
+    expect(result.message).toContain("Embedder: artifacts ready");
+  });
+
+  test("fails loudly when embedder acquisition fails", async () => {
+    spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({ content: "# Mimir", version: "test-version" }),
+    );
+
+    const result = await installMimir(
+      {
+        serverUrl: "https://mimir.example.com",
+        apiKey: "test-key",
+      },
+      {
+        ...noCartographer,
+        installEmbedderArtifacts: async () =>
+          new Error("artifact mirror unavailable"),
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toBe(
+      "Embedder install failed: artifact mirror unavailable",
+    );
   });
 });

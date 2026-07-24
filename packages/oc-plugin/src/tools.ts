@@ -183,7 +183,7 @@ export const userMemoryTools = (store: UserMemoryStore | null) => ({
 export const installTool = () =>
   tool({
     description:
-      "Install Mimir for OpenCode. Writes the system prompt, shared Mimir config, custom agent, wrapper script, and reusable slash commands to the user's home directory. Auto-detects Cartographer when no override is passed. The npm plugin package must already be installed through OpenCode. The cloud server requires MIMIR_API_KEY in the environment; check that first before calling.",
+      "Install Mimir for OpenCode. Writes the system prompt, shared Mimir config, pinned local embedder, custom agent, wrapper script, and reusable slash commands to the user's home directory. Auto-detects Cartographer when no override is passed. The npm plugin package must already be installed through OpenCode. The cloud server requires MIMIR_API_KEY in the environment; check that first before calling.",
     args: {
       serverUrl: tool.schema
         .string()

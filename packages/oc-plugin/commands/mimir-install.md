@@ -1,5 +1,5 @@
 ---
-description: Write the Mimir runtime state (system prompt, config, OpenCode agent, wrapper script, slash commands) to the user's home directory. Run after installing the plugin via `opencode plugin --global @RageLtd/mimir-oc`.
+description: Write the Mimir runtime state (system prompt, config, pinned local embedder, OpenCode agent, wrapper script, slash commands) to the user's home directory. Run after installing the plugin via `opencode plugin --global @RageLtd/mimir-oc`.
 ---
 
 You are helping the user set up the Mimir runtime state on their machine.
@@ -25,10 +25,10 @@ Use the defaults unless the user has already supplied an override. Omit `userMem
 
 ## Run the install
 
-Call the `mimir_install` tool with the gathered parameters.
+Call the `mimir_install` tool with the gathered parameters. The first install downloads the pinned llama-server release and embedding model; this is expected to take longer than subsequent idempotent installs.
 
 ## Report
 
-Surface the tool's result to the user verbatim. On success, the result lists the files written. On failure, the result includes the actionable error — read it carefully and tell the user exactly what to fix (typically `export MIMIR_API_KEY=...` and retry, or fix the server URL).
+Surface the tool's result to the user verbatim. On success, the result lists the files written and confirms the embedder artifacts are ready. On failure, the result includes the actionable error — read it carefully and tell the user exactly what to fix (typically `export MIMIR_API_KEY=...`, fix the server URL, or retry an interrupted artifact download).
 
 The install writes the slash commands (`/mimir-install`, `/mimir-update`) to `~/.config/opencode/commands/` as part of its work, so the user can re-trigger the install or update from inside OpenCode in future sessions without re-reading this prompt.
