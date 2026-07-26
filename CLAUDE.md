@@ -46,9 +46,9 @@ test("hello world", () => {
 
 Bun workspace — the root `package.json` defines `workspaces` plus dependency catalogs. Six packages:
 
-- `packages/server` — mimir-server: inference API, auth, project registry, the `/mcp` endpoint (memory/playbook/web_search/introspection), and `/v1/system-prompt`. Memory extraction, hygiene, and conversation persistence moved client-side (MIM-86); the remaining inference surface is slated to move into plugin-core (MIM-89).
-- `packages/plugin-core` — backend-agnostic shared layer consumed by every editor adapter: brain (extraction, retrieval, summarization, hygiene, embedder), local stores (org replica, user memories, cart index), shared runtime config, keys/sync CLIs, stdio MCP servers, rules engine, voice anchors.
-- `packages/acp` — ACP adapter connecting ACP editors (Zed) to mimir-server. **Server backend only** — every model routes through mimir-server; there is no per-backend switch (inverts under MIM-89).
+- `packages/server` — mimir-server, deliberately **blind**: auth, wrapped-key distribution (`/v1/keys`, `/v1/members`), ciphertext sync (`/v1/sync`), `/v1/system-prompt`, operator-only `/mcp` introspection, and the browser admin/operator surfaces. It runs no models and parses no memory content. Inference, extraction, hygiene, embeddings, and persistence are all client-side (MIM-86, MIM-89).
+- `packages/plugin-core` — backend-agnostic shared layer consumed by every editor adapter: brain (extraction, retrieval, summarization, hygiene, embedder), inference engine (provider registry, turn streaming), local stores (org replica, user memories, cart index), shared runtime config, keys/sync CLIs, stdio MCP servers, rules engine, voice anchors.
+- `packages/acp` — ACP adapter for ACP editors (Zed). **Fully local** — the agent loop, tool execution, and inference all run in-process on plugin-core with BYOK providers or local endpoints; the server is contacted only for the boot system prompt, key distribution, and encrypted sync.
 - `packages/cc-plugin` — Claude Code distribution: Mimir persona, MCP wiring, lifecycle hooks, and the `mimir` wrapper command that launches Claude Code as Mimir.
 - `packages/oc-plugin` — OpenCode distribution: in-process plugin bundle mirroring the cc-plugin brain legs.
 - `packages/codex-plugin` — OpenAI Codex CLI distribution: lifecycle hooks + hook-trust ledger in a dedicated `CODEX_HOME` (`~/.mimir/codex`), AGENTS.md persona, and the `mimir-codex` wrapper. Codex hosts its own models; Mimir contributes the brain.

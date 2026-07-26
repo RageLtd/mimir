@@ -93,21 +93,36 @@ Only needed if you're working on the plugin itself. It lives as the `@mimir/cc-p
 
 Alpha ships `darwin-arm64` and `linux-x64` binaries only. Other platforms will error out of `/mimir-install`.
 
-## Key ceremonies (`mimir keys`)
+## Command surface
 
-Against an auth-enabled server, E2E key material is managed with `mimir keys
-<status|setup|adopt|rotate|recovery-setup|recover>` — the same commands work
-from `mimir-acp keys …` and the OpenCode wrapper (the implementation is
-shared in plugin-core; no editor owns it). `setup` prints your **device
-secret exactly once** — store it in your password manager; it is the only
-way to bring a new device online (`mimir keys adopt`).
+Slash commands inside Claude Code:
 
-The device secret lives in the OS credential store via `Bun.secrets`
-(macOS Keychain Services / Linux libsecret / Windows Credential Manager).
-macOS note: the keychain ACL binds to the `bun` binary — the first access
-prompts once and covers all hook processes; upgrading Bun re-prompts once.
-Headless/keychain-less environments set `MIMIR_KEY_PASSPHRASE` to use the
-encrypted-file fallback at `~/.mimir/device-secret.enc`.
+| Command | What it does |
+|---------|--------------|
+| `/mimir-install` | Land the runtime — binary, system prompt, MCP config, hooks, wrapper |
+| `/mimir-update` | Re-fetch the binary and re-land the runtime. Without arguments it reuses the server URL from `~/.mimir/mcp.json` |
+| `/switch-model` | Stage `~/.mimir/next-session.json` so the wrapper relaunches on a different model. The next session starts fresh — continuity bridges through a project-memory checkpoint, because extended-thinking signatures don't survive cross-backend transcript replay |
+| `/run-hygiene` | Sweep the local replica. Dry-run by default; `--live` applies |
+
+Terminal subcommands on the `mimir-cc` binary — hooks aside, these are the
+human-driven ones:
+
+| Subcommand | What it does |
+|------------|--------------|
+| `mimir keys <status\|setup\|adopt\|rotate\|recovery-setup\|recover>` | E2E key ceremonies against an auth-enabled server |
+| `mimir sync` | Pull + apply + push org memories, including the embedding backfill |
+| `mimir-cc hygiene [--live] [--model <id>]` | The same local sweep `/run-hygiene` drives |
+| `mimir-cc embed-backfill` | Vectorize replica memories that lack embeddings |
+
+The ceremony and sync implementations are **shared plugin-core code** — the
+identical commands work from `mimir-acp keys …`, `mimir-opencode keys …`, and
+`mimir-codex keys …`. No editor owns a user-facing flow. Key hierarchy, the
+device-secret store, the keychain-ACL note, and the `MIMIR_KEY_PASSPHRASE`
+fallback are documented once in
+[`packages/plugin-core/README.md`](../plugin-core/README.md#keys-and-sync).
+
+`mimir keys setup` prints your **device secret exactly once** — store it in
+your password manager; it is the only way to bring a new device online.
 
 ## What the install lands
 

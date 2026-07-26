@@ -42,76 +42,22 @@ test("hello world", () => {
 });
 ```
 
-## Frontend
+## Repository Layout
 
-Use HTML imports with `Bun.serve()`. Don't use `vite`. HTML imports fully support React, CSS, Tailwind.
+Bun workspace — the root `package.json` defines `workspaces` plus dependency catalogs. Six packages:
 
-Server:
+- `packages/server` — mimir-server, deliberately **blind**: auth, wrapped-key distribution (`/v1/keys`, `/v1/members`), ciphertext sync (`/v1/sync`), `/v1/system-prompt`, operator-only `/mcp` introspection, and the browser admin/operator surfaces. It runs no models and parses no memory content. Inference, extraction, hygiene, embeddings, and persistence are all client-side (MIM-86, MIM-89).
+- `packages/plugin-core` — backend-agnostic shared layer consumed by every editor adapter: brain (extraction, retrieval, summarization, hygiene, embedder), inference engine (provider registry, turn streaming), local stores (org replica, user memories, cart index), shared runtime config, keys/sync CLIs, stdio MCP servers, rules engine, voice anchors.
+- `packages/acp` — ACP adapter for ACP editors (Zed). **Fully local** — the agent loop, tool execution, and inference all run in-process on plugin-core with BYOK providers or local endpoints; the server is contacted only for the boot system prompt, key distribution, and encrypted sync.
+- `packages/cc-plugin` — Claude Code distribution: Mimir persona, MCP wiring, lifecycle hooks, and the `mimir` wrapper command that launches Claude Code as Mimir.
+- `packages/oc-plugin` — OpenCode distribution: in-process plugin bundle mirroring the cc-plugin brain legs.
+- `packages/codex-plugin` — OpenAI Codex CLI distribution: lifecycle hooks + hook-trust ledger in a dedicated `CODEX_HOME` (`~/.mimir/codex`), AGENTS.md persona, and the `mimir-codex` wrapper. Codex hosts its own models; Mimir contributes the brain.
 
-```ts#index.ts
-import index from "./index.html"
+Editor-agnostic logic ships once in plugin-core with thin per-distribution wiring — never duplicated into a plugin package.
 
-Bun.serve({
-  routes: {
-    "/": index,
-    "/api/users/:id": {
-      GET: (req) => {
-        return new Response(JSON.stringify({ id: req.params.id }));
-      },
-    },
-  },
-  // optional websocket support
-  websocket: {
-    open: (ws) => {
-      ws.send("Hello, world!");
-    },
-    message: (ws, message) => {
-      ws.send(message);
-    },
-    close: (ws) => {
-      // handle close
-    }
-  },
-  development: {
-    hmr: true,
-    console: true,
-  }
-})
-```
+Tests run through the root harness, never `bun test <path>`:
 
-HTML files can import .tsx, .jsx or .js files directly and Bun's bundler will transpile & bundle automatically. `<link>` tags can point to stylesheets and Bun's CSS bundler will bundle.
+- `bun run test` — all packages
+- `bun run test:server` / `test:plugin-core` / `test:acp` / `test:cc-plugin` / `test:oc-plugin` / `test:codex-plugin` — a single package
 
-```html#index.html
-<html>
-  <body>
-    <h1>Hello, world!</h1>
-    <script type="module" src="./frontend.tsx"></script>
-  </body>
-</html>
-```
-
-With the following `frontend.tsx`:
-
-```tsx#frontend.tsx
-import React from "react";
-import { createRoot } from "react-dom/client";
-
-// import .css files directly and it works
-import './index.css';
-
-const root = createRoot(document.body);
-
-export default function Frontend() {
-  return <h1>Hello, world!</h1>;
-}
-
-root.render(<Frontend />);
-```
-
-Then, run index.ts
-
-```sh
-bun --hot ./index.ts
-```
-
-For more information, read the Bun API docs in `node_modules/bun-types/docs/**.mdx`.
+Shared dependencies are elevated to the root `package.json` catalogs (`ai-sdk`, `protocol`, `server`, `opencode`); reference them with `catalog:<name>`.

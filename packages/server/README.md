@@ -9,10 +9,13 @@ The blind sync server. It has exactly four jobs — **auth** (accounts, orgs, in
 | `/health` | Liveness + tenant-store probe |
 | `/api/auth/*` | Better Auth — accounts, orgs, invites, passkeys, API keys |
 | `/v1/keys/*` | Wrapped org-key distribution: init, wrap, rotate, recovery |
+| `/v1/members/*` | Member public keys and wrapped-key envelopes for the ceremony flows |
 | `/v1/sync/*` | Envelope push/pull, cursors, leases |
 | `/v1/system-prompt` | Persona markdown for client boot |
 | `/mcp` | Operator-only introspection (`read_mimir_logs`); disabled unless `MIMIR_OPERATOR_TOKEN` is set |
-| `/operator/*` | Browser-session operator dashboard for runtime settings, provisioning, health, grants, and audit |
+| `/app`, `/operator/*` | Browser surfaces — organization admin (members, settings, audit, memory maintenance) and the operator dashboard for runtime settings, provisioning, health, and grants. Both gated on browser sessions, mounted only when auth is enabled |
+
+There are **no inference routes**. `/v1/chat/completions`, `/v1/messages`, model listing, and the server-side agent loop were removed under MIM-89 — every model call now originates on the client. `routes/projects.ts` remains in the tree but is deliberately unmounted (project identity is derived locally; see THREAT_MODEL TM-006).
 
 Storage is two SQLite files: the tenant store (`MIMIR_DB_PATH` — envelopes, sync cursors, and leases) and the auth store (`AUTH_DB_PATH`). There is no database service to operate.
 
