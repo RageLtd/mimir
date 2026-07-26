@@ -1,0 +1,18 @@
+id = "coding/control-braces"
+body = "./control-braces.md"
+enabled = true
+event = "file"
+exclude_globs = ["*.md", "*.toml", "*.yaml", "*.yml", "*.json"]
+message = "A single-line control body appears to omit braces at line ${line}: `${match}`"
+
+# Scoped to the C family only. TypeScript, Rust, and Go are deliberately absent —
+# a brace-less early return is idiomatic there and the paired rule says so.
+[[conditions]]
+field = "file_path"
+operator = "regex_match"
+pattern = '''\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx|inl|ipp|ixx|cppm|m|mm)$'''
+
+[[conditions]]
+field = "new_text"
+operator = "regex_match"
+pattern = '''(?:^|\n)[\t ]*(?:(?:if|for|while|switch)[\t ]*\([^{}\n]*\)|(?:else|do))[\t ]+(?!\{|if\b)[^{}\n]+(?:\n|$)'''
