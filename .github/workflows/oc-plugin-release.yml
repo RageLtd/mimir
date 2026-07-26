@@ -53,8 +53,14 @@ jobs:
     # Serialized across the plugin release workflows (shared group with the
     # cc/codex release workflows): one push can fire several, and concurrent
     # chore(release) pushes to main would race to a non-fast-forward failure.
+    # Per-workflow, NOT a shared group. A group shared across the plugin
+    # releases serialised them, but GitHub holds only ONE pending run per
+    # group — a third contender is cancelled outright. Since a plugin-core
+    # change matches all three releases' paths filters, that starved
+    # codex-plugin for a week. Independent groups let all three proceed; the
+    # push step below handles the resulting concurrent bumps.
     concurrency:
-      group: mimir-release-version-bump
+      group: mimir-release-${{ github.workflow }}
     # Avoid the release commit re-triggering the workflow.
     if: "!startsWith(github.event.head_commit.message, 'chore(release): oc-plugin')"
     outputs:
@@ -90,13 +96,26 @@ jobs:
 
       - name: Push changes and tags
         if: steps.dry-run.outputs.should_release == 'true'
-        # Checkout pinned the trigger SHA; another plugin's serialized bump job
-        # may have already landed its release commit on main. Rebase ours on
-        # top (disjoint files — release commits only touch their own package's
+        # Checkout pinned the trigger SHA; another plugin's bump job may have
+        # already landed its release commit on main. Rebase ours on top
+        # (disjoint files — release commits only touch their own package's
         # manifest) so the push fast-forwards.
+        #
+        # Retried because the releases now run concurrently: pull-then-push is
+        # not atomic, so a sibling can land between our rebase and our push and
+        # take the fast-forward. Re-rebasing onto the new tip resolves it. Fails
+        # loudly after three attempts rather than skipping the release silently.
         run: |
-          git pull --rebase origin main
-          git push --follow-tags
+          for attempt in 1 2 3; do
+            git pull --rebase origin main
+            if git push --follow-tags; then
+              exit 0
+            fi
+            echo "push attempt ${attempt} lost the race; retrying" >&2
+            sleep $((attempt * 5))
+          done
+          echo "push failed after 3 attempts" >&2
+          exit 1
 
   build:
     name: Build Bundle
