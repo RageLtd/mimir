@@ -19,7 +19,13 @@ import {
 } from "./state";
 
 const TEST_SECRET = "test-secret-material-at-least-32-chars-long";
-const NOW = () => new Date("2026-07-18T12:00:00.000Z");
+// Must track the real clock, never a pinned instant. provisionOrganization
+// derives the invitation's expiresAt from this injected clock, but
+// auth.api.acceptInvitation validates that expiry against the real wall
+// clock — a fixed date silently rots into `Invitation not found` once
+// DEFAULT_INVITATION_LIFETIME_DAYS elapses, failing CI on a delay rather
+// than on a change.
+const NOW = () => new Date();
 
 async function migrated() {
   const db = new Database(":memory:");
