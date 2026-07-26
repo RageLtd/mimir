@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "source": "claude-rules",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "files": {
     ".claude/rules-check.mjs": "sha256-683b803c84a5867784637265e0eee48b48107074c1024b4b61b2147cd6e2c03a",
     ".claude/rules/coding/constants-over-strings.md": "sha256-3cac6f177486ac5f64dfa170b93dfe023a1e50ddefcf17d6995204dce2187896",
