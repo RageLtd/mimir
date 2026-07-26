@@ -1,5 +1,5 @@
 ---
-globs: ["*.ts", "*.tsx", "*.js", "*.jsx", "*.rs", "*.go", "*.py", "docker-compose.*", "Dockerfile"]
+paths: ["*.ts", "*.tsx", "*.js", "*.jsx", "*.rs", "*.go", "*.py", "docker-compose.*", "Dockerfile"]
 ---
 # Reuse Long-Lived Processes
 

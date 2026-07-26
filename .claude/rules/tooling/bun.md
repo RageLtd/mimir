@@ -1,5 +1,5 @@
 ---
-globs: ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mts", "*.mjs", "package.json", "bunfig.toml"]
+paths: ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mts", "*.mjs", "package.json", "bunfig.toml"]
 ---
 # Bun over Node
 

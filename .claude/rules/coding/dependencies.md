@@ -1,5 +1,5 @@
 ---
-globs: ["**/package.json", "**/Cargo.toml", "**/go.mod", "**/pyproject.toml"]
+paths: ["**/package.json", "**/Cargo.toml", "**/go.mod", "**/pyproject.toml"]
 tools: ["Edit", "Write", "MultiEdit"]
 ---
 # Dependency Management (CRITICAL)

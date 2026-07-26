@@ -1,5 +1,5 @@
 ---
-globs: ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mts", "*.mjs", "*.rs", "*.go"]
+paths: ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mts", "*.mjs", "*.rs", "*.go"]
 tools: ["Edit", "Write", "MultiEdit"]
 ---
 # Functional Style (CRITICAL)

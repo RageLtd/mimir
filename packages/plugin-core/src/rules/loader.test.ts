@@ -54,6 +54,66 @@ pattern = "rm -rf"
     expect(result.errors).toHaveLength(0);
     expect(result.rules.map((r) => r.id).sort()).toEqual(["b", "coding/a"]);
   });
+
+  // The claude-rules plugin distributes rules by symlinking them from
+  // $CLAUDE_PLUGIN_ROOT into the project's .claude/rules/. Bun's Glob
+  // defaults `followSymlinks` to false and skips symlinked FILES, not just
+  // symlinked directories — without the flag this discovers nothing and
+  // reports no error, so every plugin-fed project silently loses enforcement.
+  test("discovers rules that are symlinks into a plugin directory", async () => {
+    const pluginRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "rules-plugin-"),
+    );
+    const pluginRuleDir = path.join(pluginRoot, "rules", "coding");
+    await fs.mkdir(pluginRuleDir, { recursive: true });
+
+    const pluginToml = path.join(pluginRuleDir, "linked.enforce.toml");
+    await fs.writeFile(
+      pluginToml,
+      `id = "coding/linked"
+body = "./linked.md"
+event = "file"
+[[conditions]]
+field = "new_text"
+operator = "contains"
+pattern = "LINKED"
+`,
+    );
+    const pluginBody = path.join(pluginRuleDir, "linked.md");
+    await fs.writeFile(
+      pluginBody,
+      "# Linked\n\nBody reached through a link.\n",
+    );
+
+    const targetDir = path.join(projectRoot, ".claude", "rules", "coding");
+    await fs.mkdir(targetDir, { recursive: true });
+    await fs.symlink(pluginToml, path.join(targetDir, "linked.enforce.toml"));
+    await fs.symlink(pluginBody, path.join(targetDir, "linked.md"));
+
+    const result = await loadRules(projectRoot);
+    await fs.rm(pluginRoot, { recursive: true, force: true });
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.rules.map((r) => r.id)).toEqual(["coding/linked"]);
+    // `body` is relative to the toml, so it must resolve through the link too.
+    expect(result.rules[0]?.bodyContent).toContain(
+      "Body reached through a link",
+    );
+  });
+
+  // A dangling symlink is the normal state after the plugin cache is pruned or
+  // version-bumped. It must not throw — `throwErrorOnBrokenSymlink` stays off.
+  test("ignores dangling plugin symlinks without throwing", async () => {
+    const targetDir = path.join(projectRoot, ".claude", "rules");
+    await fs.mkdir(targetDir, { recursive: true });
+    await fs.symlink(
+      path.join(os.tmpdir(), "rules-plugin-gone", "vanished.enforce.toml"),
+      path.join(targetDir, "vanished.enforce.toml"),
+    );
+
+    const result = await loadRules(projectRoot);
+    expect(result.rules).toHaveLength(0);
+  });
 });
 
 describe("loadRules — body resolution", () => {

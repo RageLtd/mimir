@@ -1,5 +1,5 @@
 ---
-globs: ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mts", "*.mjs", "*.rs", "*.go", "*.py"]
+paths: ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mts", "*.mjs", "*.rs", "*.go", "*.py"]
 ---
 # Constants Over Bare Strings
 

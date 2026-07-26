@@ -74,7 +74,22 @@ export const loadRules = async (projectPath: string) => {
   // `.claude/`. Bun's Glob (like most modern globs) skips dot-prefixed
   // path components by default; without this, the loader silently finds
   // zero rules.
-  for await (const relativePath of glob.scan({ cwd: projectPath, dot: true })) {
+  //
+  // `followSymlinks: true` is required because the claude-rules plugin
+  // distributes rules by symlinking them out of $CLAUDE_PLUGIN_ROOT. Bun's
+  // Glob defaults it to false and skips symlinked *files*, not merely
+  // symlinked directories — the same silent-zero failure. Left off,
+  // enforcement is dead in every plugin-fed project.
+  //
+  // `throwErrorOnBrokenSymlink` stays at its default (false) on purpose: a
+  // dangling link is the normal state after the plugin cache is pruned or
+  // version-bumped, and it should degrade quietly rather than take the
+  // loader down.
+  for await (const relativePath of glob.scan({
+    cwd: projectPath,
+    dot: true,
+    followSymlinks: true,
+  })) {
     const absPath = path.join(projectPath, relativePath);
     const result = await loadOne(absPath, projectPath);
     if (!result.ok) {

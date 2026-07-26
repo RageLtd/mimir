@@ -1,5 +1,5 @@
 ---
-globs: ["*.ts", "*.tsx", "*.mts", "*.mjs"]
+paths: ["*.ts", "*.tsx", "*.mts", "*.mjs"]
 tools: ["Edit", "Write", "MultiEdit"]
 ---
 # No Explicit Return Type Annotations

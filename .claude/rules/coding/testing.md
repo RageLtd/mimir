@@ -1,5 +1,5 @@
 ---
-globs: ["*.test.*", "*.spec.*", "*_test.*", "*.ts", "*.tsx", "*.js", "*.jsx", "*.rs", "*.go", "*.py"]
+paths: ["*.test.*", "*.spec.*", "*_test.*", "*.ts", "*.tsx", "*.js", "*.jsx", "*.rs", "*.go", "*.py"]
 ---
 # Testing
 
