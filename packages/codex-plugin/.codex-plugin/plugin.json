@@ -1,6 +1,6 @@
 {
   "name": "mimir",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Mimir for OpenAI Codex CLI — persona, lifecycle-hook brain, local memory, and cartographer indexing. This plugin is the bootstrap: its skill installs the mimir-codex binary, which lands the real runtime in a dedicated CODEX_HOME.",
   "author": {
     "name": "RageLtd",
