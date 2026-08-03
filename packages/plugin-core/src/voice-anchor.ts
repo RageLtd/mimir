@@ -15,6 +15,8 @@
  * via `MIMIR_ANCHOR_INTERVAL`).
  */
 
+import { markdownToXml } from "./markdown-to-xml";
+
 const VOICE_IN_ACTION_BLOCK = /<voice_in_action>([\s\S]*?)<\/voice_in_action>/;
 const TITLE_LINE = /^\*\*(.+?):\*\*\s*$/;
 const QUOTE_LINE = /^>\s?(.*)$/;
@@ -39,21 +41,22 @@ export type AnchorStep =
     };
 
 /**
- * Extract dialogue exchanges from the converted system prompt.
+ * Extract dialogue exchanges from a Markdown or converted XML system prompt.
  *
  * Locates the `<voice_in_action>...</voice_in_action>` block, then parses
  * `**Title:**` + blockquote pairs inside it. Blockquotes may contain a
  * single Mimir line or a Developer/Mimir pair separated by a bare `>`.
  *
- * Throws loudly if the block can't be located — a malformed prompt should
- * fail at hook invocation rather than silently disable anchors.
+ * Throws loudly if the block can't be located. Hook adapters decide whether
+ * that should be fatal for their host protocol.
  */
-export const parseVoiceAnchors = (xml: string): VoiceAnchor[] => {
-  const blockMatch = VOICE_IN_ACTION_BLOCK.exec(xml);
+export const parseVoiceAnchors = (prompt: string): VoiceAnchor[] => {
+  const blockMatch =
+    VOICE_IN_ACTION_BLOCK.exec(prompt) ??
+    VOICE_IN_ACTION_BLOCK.exec(markdownToXml(prompt));
   if (!blockMatch) {
     throw new Error(
-      "Voice anchors: '<voice_in_action>' block not found in system prompt. " +
-        "Confirm the prompt was converted via toAnthropicXml at install time.",
+      "Voice anchors: 'Voice in Action' section not found in system prompt.",
     );
   }
 

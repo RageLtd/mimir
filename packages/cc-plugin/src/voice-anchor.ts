@@ -118,7 +118,13 @@ export const runVoiceAnchorHook = async (): Promise<number> => {
   }
 
   const promptText = await promptFile.text();
-  const library = parseVoiceAnchors(promptText);
+  let library: Anchor[];
+  try {
+    library = parseVoiceAnchors(promptText);
+  } catch (err) {
+    log.error("voice anchor parse failed", { error: errMessage(err) });
+    return 0;
+  }
   if (library.length === 0) return 0;
 
   const intervalEnv = process.env.MIMIR_ANCHOR_INTERVAL;

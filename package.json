@@ -1,7 +1,7 @@
 {
   "name": "mimir",
   "devDependencies": {
-    "@biomejs/biome": "^2.5.0",
+    "@biomejs/biome": "^2.5.2",
     "@types/bun": "latest"
   },
   "private": true,
