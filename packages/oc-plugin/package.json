@@ -1,5 +1,6 @@
 {
   "name": "@mimir/oc-plugin",
+  "license": "SEE LICENSE IN LICENSE",
   "version": "1.3.2",
   "repository": {
     "type": "git",

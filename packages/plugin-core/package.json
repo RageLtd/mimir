@@ -1,5 +1,6 @@
 {
   "name": "@mimir/plugin-core",
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "private": true,
   "description": "Backend-agnostic shared layer for Mimir's editor adapters. Consumed by @mimir/cc-plugin, @mimir/acp, and @mimir/oc-plugin.",

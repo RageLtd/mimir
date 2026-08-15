@@ -1,5 +1,6 @@
 {
   "name": "@mimir/cc-plugin",
+  "license": "SEE LICENSE IN LICENSE",
   "module": "src/cli.ts",
   "type": "module",
   "private": true,

@@ -1,5 +1,6 @@
 {
   "name": "mimir",
+  "license": "SEE LICENSE IN LICENSE",
   "devDependencies": {
     "@biomejs/biome": "^2.5.2",
     "@types/bun": "latest"
