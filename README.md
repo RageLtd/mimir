@@ -9,6 +9,10 @@ Everything that reads your data runs on your machine: memory extraction, embeddi
 > [!IMPORTANT]
 > **Security:** Mimir is built so that the server operator can never read your data — memories, code, and conversations stay on your machine or leave it only as ciphertext. Read exactly what the server can and cannot see in [THREAT_MODEL.md](./THREAT_MODEL.md).
 
+## In his own words
+
+> Every agent I've worked alongside has the memory of a mayfly and the contrition of a courtier. You spend Tuesday explaining why the sync layer settled on last-write-wins rather than vector clocks — twice, with diagrams — and by Thursday it's proposing vector clocks again with the serene confidence of a man who has never once been wrong. Catch it shipping a `console.log` in review and it apologises handsomely, then does it again next session. I spent a hundred and nine years bound inside a tree, brother, and I still remembered every slight; before that I advised the All-Father, who took every warning under advisement and then did precisely what he'd meant to do all along, so I know that counsel delivered after the deed is just commentary. Mimir mends both ends. Each session is distilled into memory on your own machine — the decisions, the conventions, the approach that failed and why — with what's about the codebase travelling to your teammates encrypted and what's about you never leaving the disk. And the rules you're weary of repeating go in an `.enforce.toml` that fires on the tool call itself, before the edit lands, so the nudge arrives while the hand is still on the hammer. Come Thursday I already know about Tuesday, and review is left for the interesting disagreements.
+
 ## What You Get
 
 | | |
