@@ -13,6 +13,8 @@
  *   voice-anchor             UserPromptSubmit hook handler (boot context +
  *                            voice anchors).
  *   rules                    PreToolUse hook handler (rule engine nudges).
+ *   edit-guard               PreToolUse:Bash hook handler (single-file shell
+ *                            edits denied in favour of Edit).
  *   reindex [--worker ...]   PostToolUse hook handler. Default mode forks
  *                            a worker and exits; worker mode does the
  *                            cartographer parse + server sync.
@@ -29,6 +31,7 @@ import {
   parseInstallArgs,
   parsePartialOptions,
 } from "./cli-args";
+import { runEditGuardHook } from "./edit-guard-hook";
 import { runFileContextHook } from "./file-context-hook";
 import { runHygieneCommand } from "./hygiene-command";
 import { runInstallCommand } from "./install";
@@ -59,6 +62,8 @@ const USAGE = [
   "  retrieve                UserPromptSubmit hook: per-turn brain retrieval.",
   "  rules                   PreToolUse hook (reads stdin).",
   "  file-context            PreToolUse:Read hook: cartographer + memory injection.",
+  "  edit-guard              PreToolUse:Bash hook: deny single-file shell edits",
+  "                          (use Edit instead); bulk edits pass with a report nudge.",
   "  reindex                 PostToolUse hook (reads stdin).",
   "  persist                 Stop hook: ship transcript delta to mimir brain.",
   "  precompact              PreCompact hook: pre-discard persistence.",
@@ -115,6 +120,9 @@ const dispatch = async (argv: readonly string[]): Promise<number> => {
 
     case "file-context":
       return runFileContextHook();
+
+    case "edit-guard":
+      return runEditGuardHook();
 
     case "reindex":
       return runReindexCommand(rest);

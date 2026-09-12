@@ -11,13 +11,17 @@ import {
   type ResolvedProject,
   resolveProjectForPath,
 } from "@mimir/plugin-core/project";
-import { type LoadError, loadRules } from "@mimir/plugin-core/rules";
+import {
+  formatRulesForPrompt,
+  type LoadError,
+  loadRules,
+  readProjectRules,
+} from "@mimir/plugin-core/rules";
 import type { OrgReplica } from "@mimir/plugin-core/store/org-replica";
 import type { UserMemoryStore } from "@mimir/plugin-core/store/user-memories";
 import { errMessage } from "@mimir/plugin-core/util";
 import type { BackendRouter } from "../backends";
 import type { CartographerManager } from "../cartographer/lifecycle";
-import { formatRulesForPrompt, readProjectRules } from "../cartographer/rules";
 import { createClientMcpManager } from "../client-mcp/manager";
 import type { MimirConfig } from "../config";
 import type { SessionStore } from "../store/sessions";
@@ -63,8 +67,9 @@ const kickOffSessionInit = (
   settleProjectId: (id: string | null) => void,
   onRuleErrors?: (errors: readonly LoadError[]) => void,
 ) => {
-  readProjectRules(projectPath)
+  readProjectRules(projectPath, { log: logger })
     .then((entries) => {
+      session.projectRuleEntries = entries;
       session.projectRules = formatRulesForPrompt(entries);
     })
     .catch((err) => logger.warn("failed to load project rules:", err));
@@ -140,6 +145,8 @@ export const createAgentCore = (
       currentMode: DEFAULT_MODE,
       title: null,
       projectRules: null,
+      projectRuleEntries: [],
+      scopedRulesSeen: new Set<string>(),
       rules: [],
       clientMcpServers,
       clientMcp: createClientMcpManager(sessionId, clientMcpServers),
@@ -229,6 +236,8 @@ export const createAgentCore = (
         undefined,
       title: persisted.title,
       projectRules: null,
+      projectRuleEntries: [],
+      scopedRulesSeen: new Set<string>(),
       rules: [],
       clientMcpServers,
       clientMcp: createClientMcpManager(persisted.session_id, clientMcpServers),

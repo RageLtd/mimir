@@ -128,13 +128,14 @@ your password manager; it is the only way to bring a new device online.
 
 ### Hooks (settings.json)
 
-Three hooks get wired into `~/.mimir/settings.json`:
+These hooks get wired into `~/.mimir/settings.json`:
 
 - **`UserPromptSubmit` → voice-anchor.** Assembles the boot-context block (user profile, recent project memories, session context) on every prompt, and every N turns (default 5, override via `MIMIR_ANCHOR_INTERVAL`) injects a `<voice_anchor>` block sampled from the system prompt's voice library. Recency-slot persona refresh that counteracts long-context drift.
 - **`PreToolUse` → rules.** Runs the rule engine against every `.claude/**/*.enforce.toml` file under the project root. On match, emits `additionalContext` with the violation message so the model sees the nudge alongside the tool call. See [Rules engine](#rules-engine).
+- **`PreToolUse` (Bash) → edit-guard.** Claude Code's auto permission mode tells the model to prefer Bash (sed, heredocs, scripts) over Edit/Write, which hides changes from the chat. This hook denies a Bash command that rewrites a single explicit file — `sed -i` on one path, a redirect or heredoc into one path, `tee` to one path, an inline `python`/`node`/`perl` snippet writing one literal path — with a reason pointing the model at the Edit tool. Bulk mechanical edits (several paths, globs, `find`/`xargs`, `git ls-files`, loops, `glob`/`os.walk` in a script) pass, with `additionalContext` asking the model to report the change set via `git diff --stat` afterwards. Read-only uses, scratch paths under `/tmp`, and anything ambiguous pass silently; a hook that blocks a legitimate command is the worse failure. Hooks run before the permission check in every mode, so the deny holds under auto. Set `MIMIR_EDIT_GUARD=0` to disable it for a session.
 - **`PostToolUse` (Edit | Write | MultiEdit) → reindex.** Spawns a detached cartographer worker that parses the changed file and updates the local cartographer index. Disabled when no cartographer binary is configured.
 
-All three hooks are scoped to `MIMIR_ACTIVE=1` sessions and no-op silently in nested `claude` subprocesses.
+All hooks are scoped to `MIMIR_ACTIVE=1` sessions and no-op silently in nested `claude` subprocesses.
 
 ### MCP servers (mcp.json)
 
@@ -197,6 +198,7 @@ packages/cc-plugin/                          ← workspace member @mimir/cc-plug
     boot-context.ts                          ← assemble user profile + memories
     voice-anchor.ts                          ← UserPromptSubmit hook
     rules-hook.ts                            ← PreToolUse hook adapter
+    edit-guard-hook.ts                       ← PreToolUse:Bash hook (single-file shell edits → Edit)
     reindex-hook.ts                          ← PostToolUse hook + detached worker
     user-memory-mcp.ts                       ← stdio MCP server
     rules/                                   ← rule engine (loader, matcher, runner)

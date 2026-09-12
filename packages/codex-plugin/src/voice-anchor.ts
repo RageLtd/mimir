@@ -19,6 +19,10 @@
 
 import { join } from "node:path";
 import { assembleBootContext } from "@mimir/plugin-core/brain/boot-context";
+import {
+  formatRulesForPrompt,
+  readProjectRules,
+} from "@mimir/plugin-core/rules";
 import { errMessage, mimirHome } from "@mimir/plugin-core/util";
 import {
   createSessionVoiceAnchor,
@@ -113,9 +117,10 @@ export const runVoiceAnchorHook = async () => {
   // Voice anchor itself never fires on turn 1 (interval defaults to 5),
   // so the two never compete for the same prompt.
   if (state.turnCount === 0) {
+    const projectPath = input.cwd ?? process.cwd();
     const boot = await assembleBootContext({
       promptText: input.prompt ?? "",
-      projectPath: input.cwd ?? process.cwd(),
+      projectPath,
       log,
     }).catch((err) => {
       log.error("assembleBootContext threw", { error: errMessage(err) });
@@ -123,6 +128,20 @@ export const runVoiceAnchorHook = async () => {
     });
     if (boot) {
       process.stdout.write(`${boot}\n\n`);
+    }
+    // Always-on project prose rules (.claude/rules/**/*.md). Codex loads
+    // the root AGENTS.md itself, so only the rules directory is read;
+    // path-scoped rules arrive via the file-context hook on reads.
+    const rules = await readProjectRules(projectPath, {
+      includeRootFiles: false,
+      log,
+    }).catch((err) => {
+      log.error("readProjectRules threw", { error: errMessage(err) });
+      return [];
+    });
+    const rulesBlock = formatRulesForPrompt(rules);
+    if (rulesBlock) {
+      process.stdout.write(`${rulesBlock}\n\n`);
     }
   }
 

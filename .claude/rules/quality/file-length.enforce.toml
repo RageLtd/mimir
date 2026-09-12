@@ -2,5 +2,7 @@ id = "quality/file-length"
 body = "./file-length.md"
 enabled = true
 event = "file"
+# Source files only — prose and generated/data files grow for other reasons.
+exclude_globs = ["*.md", "*.mdx", "*.json", "*.lock", "*.svg"]
 detector = "builtin:file-length"
 detector_args = { limit = 500 }

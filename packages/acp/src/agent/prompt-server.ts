@@ -46,7 +46,12 @@ import {
   toolKindFor,
   toolTitle,
 } from "./tool-reporting";
-import { buildLocalContextInjection, todoWriteToolDef } from "./turn-context";
+import {
+  buildLocalContextInjection,
+  placeContextInjection,
+  scopedRulesBlockForRead,
+  todoWriteToolDef,
+} from "./turn-context";
 import type { SessionState } from "./types";
 
 const logger = createChildLogger(log, "prompt-server");
@@ -87,6 +92,9 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
     promptBlocks && promptBlocks.length > 0 && hasImageContent(promptBlocks)
       ? acpBlocksToOpenAIContent(promptBlocks)
       : promptText;
+  // Index of this turn's user message — everything before it is the
+  // byte-stable history prefix the per-turn injection must not disturb.
+  const turnStart = session.messages.length;
   session.messages.push({ role: "user", content: userContent });
 
   const requestToolPermission = createRequestToolPermission(
@@ -156,13 +164,18 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
 
     // Manually drive the backend stream. `iter.next().catch(errMessage)`
     // makes abort vs real error explicit without try/catch wrapping the
-    // whole loop. The injection pair rides ahead of the session history
-    // on every invocation without ever entering session.messages.
+    // whole loop. The injection pair sits between the persisted history
+    // and the live turn on every invocation (cache-stable prefix) without
+    // ever entering session.messages.
     const iter = backend
       .run({
         prompt: promptText,
         systemPrompt,
-        messages: [...contextInjection, ...session.messages],
+        messages: placeContextInjection(
+          session.messages,
+          contextInjection,
+          turnStart,
+        ),
         tools: allTools,
         projectPath: session.projectPath,
         modelId: session.currentModelId,
@@ -379,13 +392,22 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
         supportsTerminalOutput,
       });
 
-      // Prepend any rule-violation nudge to the tool result so the
-      // model reads it before the actual output. Separator keeps the
-      // boundary visible to both the model and any human reviewing the
-      // transcript.
-      const finalResult = ruleNudge
-        ? `${ruleNudge}\n\n---\n\n${resultContent}`
-        : resultContent;
+      // Path-scoped prose rules (`paths:` frontmatter) surface the first
+      // time a matching file is read — the same moment Claude Code would
+      // load them. Each rule is injected once per session.
+      const scopedRules = scopedRulesBlockForRead(session, tc.name, tc.input);
+
+      // Prepend any rule-violation nudge (and freshly-scoped rules) to
+      // the tool result so the model reads them before the actual
+      // output. Separator keeps the boundary visible to both the model
+      // and any human reviewing the transcript.
+      const preface = [ruleNudge, scopedRules].filter(
+        (p): p is string => typeof p === "string" && p.length > 0,
+      );
+      const finalResult =
+        preface.length > 0
+          ? `${preface.join("\n\n")}\n\n---\n\n${resultContent}`
+          : resultContent;
 
       if (isFileWrite) filesModified = true;
 

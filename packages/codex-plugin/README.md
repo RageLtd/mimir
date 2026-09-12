@@ -75,10 +75,10 @@ every hook's identity hash and appends `[hooks.state]` entries with
 | Event | Subcommand | Purpose |
 | --- | --- | --- |
 | SessionStart | `session-start` | key reconcile + org sync (bounded), detached full cartographer reindex |
-| UserPromptSubmit | `voice-anchor` | first-turn boot context, periodic persona anchors |
+| UserPromptSubmit | `voice-anchor` | first-turn boot context + always-on `.claude/rules/**/*.md` block, periodic persona anchors |
 | UserPromptSubmit | `retrieve` | per-turn local replica retrieval → additionalContext |
 | PreToolUse | `rules` | `.enforce.toml` rule nudges (apply_patch fans out per file via tool-map) |
-| PreToolUse (`^Bash$`) | `file-context` | cartographer + memory injection on single-file read commands |
+| PreToolUse (`^Bash$`) | `file-context` | cartographer + memory injection on single-file read commands, plus path-scoped (`paths:` frontmatter) project rules the first time a matching file is read |
 | PostToolUse (`^apply_patch$`) | `reindex` | detached per-file cart-index upsert |
 | Stop | `persist` | rollout-delta → local extraction → replica (MIM-86) |
 | PreCompact | `precompact` | summary + fact distillation before discard |

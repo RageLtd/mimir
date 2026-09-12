@@ -4,7 +4,11 @@
 
 import type * as acp from "@agentclientprotocol/sdk";
 import type { ResolvedProject } from "@mimir/plugin-core/project";
-import type { LoadError, RuleEntry } from "@mimir/plugin-core/rules";
+import type {
+  LoadError,
+  ProjectRulesEntry,
+  RuleEntry,
+} from "@mimir/plugin-core/rules";
 import type { ClientMcpManager } from "../client-mcp/manager";
 import type { OpenAIContentPart } from "./content";
 
@@ -47,7 +51,12 @@ export type SessionState = {
   currentMode: string;
   currentThoughtLevel?: ThoughtLevel;
   title: string | null;
+  /** Always-on prose rules block, injected every turn. */
   projectRules: string | null;
+  /** Every prose rules entry, kept for path-scoped lookups on reads. */
+  projectRuleEntries: readonly ProjectRulesEntry[];
+  /** Scoped rule paths already surfaced this session (inject once). */
+  scopedRulesSeen: Set<string>;
   rules: readonly RuleEntry[];
   clientMcpServers?: readonly acp.McpServer[];
   clientSuppliedMcpServers?: readonly acp.McpServer[];

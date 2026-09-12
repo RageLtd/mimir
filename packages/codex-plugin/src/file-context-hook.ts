@@ -28,6 +28,11 @@ import {
   toProjectRelative,
 } from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
+import {
+  formatScopedRules,
+  readProjectRules,
+  scopedRulesFor,
+} from "@mimir/plugin-core/rules";
 import { readConfig } from "@mimir/plugin-core/shared-config";
 import { mimirHome } from "@mimir/plugin-core/util";
 import { readHookInput } from "./hook-input";
@@ -92,6 +97,60 @@ const writeCache = async (sessionId: string, cache: DedupCache) => {
   const path = cachePath(sessionId);
   await mkdir(dirname(path), { recursive: true }).catch(() => undefined);
   await Bun.write(path, JSON.stringify(cache));
+};
+
+// ── Path-scoped project rules (once per rule per session) ──
+
+const scopedRulesStatePath = (sessionId: string) =>
+  join(mimirHome(), "scoped-rules-state", `${sessionId}.json`);
+
+const readScopedSeen = async (sessionId: string) => {
+  const file = Bun.file(scopedRulesStatePath(sessionId));
+  if (!(await file.exists())) return new Set<string>();
+  const [err, parsed] = await attempt(
+    async () => (await file.json()) as unknown,
+  );
+  return !err && Array.isArray(parsed)
+    ? new Set(parsed.filter((p): p is string => typeof p === "string"))
+    : new Set<string>();
+};
+
+const writeScopedSeen = async (sessionId: string, seen: Set<string>) => {
+  const path = scopedRulesStatePath(sessionId);
+  await mkdir(dirname(path), { recursive: true }).catch(() => undefined);
+  await Bun.write(path, JSON.stringify([...seen]));
+};
+
+/**
+ * Scoped prose rules for the file being read that this session hasn't
+ * seen yet. Returns the block plus a commit that records them as seen —
+ * called only after the injection is actually emitted.
+ */
+const scopedRulesInjection = async (
+  cwd: string,
+  relativeFilePath: string,
+  sessionId: string,
+) => {
+  const entries = await readProjectRules(cwd, {
+    includeRootFiles: false,
+    log,
+  }).catch((err: unknown) => {
+    log.warn("readProjectRules failed", { error: String(err) });
+    return [];
+  });
+  const seen = await readScopedSeen(sessionId);
+  const fresh = scopedRulesFor(entries, relativeFilePath).filter(
+    (e) => !seen.has(e.path),
+  );
+  const block = formatScopedRules(fresh, relativeFilePath);
+  if (!block) return null;
+  return {
+    block,
+    commit: async () => {
+      for (const e of fresh) seen.add(e.path);
+      await writeScopedSeen(sessionId, seen);
+    },
+  };
 };
 
 const localFileInfo = async (
@@ -204,8 +263,45 @@ export const runFileContextHook = async () => {
   // relative form too.
   const relativeFilePath = toProjectRelative(cwd, filePath);
 
+  // Scoped rules and cartographer context are independent legs; a hook
+  // emits one JSON object, so both are computed first and emitted once.
+  const scoped = await scopedRulesInjection(cwd, relativeFilePath, sessionId);
+  const context = await fileContextInjection(
+    cwd,
+    filePath,
+    relativeFilePath,
+    projectId,
+    sessionId,
+  );
+  if (!scoped && !context) return 0;
+
+  const block = [scoped?.block, context?.block]
+    .filter((b): b is string => typeof b === "string" && b.length > 0)
+    .join("\n\n");
+  const summary =
+    context?.summary ?? `↻ Project rules scoped to ${relativeFilePath}`;
+  emitInjection(block, summary);
+
+  // Record state only AFTER emitting — if anything above failed we'd
+  // rather re-inject next time than silently skip with a stale entry.
+  await scoped?.commit();
+  await context?.commit();
+  return 0;
+};
+
+/**
+ * Cartographer file-context leg. Null when the file isn't indexed, the
+ * hash was already injected this session, or the block is empty.
+ */
+const fileContextInjection = async (
+  cwd: string,
+  filePath: string,
+  relativeFilePath: string,
+  projectId: string | null,
+  sessionId: string,
+) => {
   const info = await localFileInfo(cwd, relativeFilePath, projectId);
-  if (!info) return 0;
+  if (!info) return null;
 
   // File not in cartographer index — no contentHash, nothing to inject.
   if (!info.contentHash || info.contentHash.length === 0) {
@@ -213,7 +309,7 @@ export const runFileContextHook = async () => {
       filePath,
       relativeFilePath,
     });
-    return 0;
+    return null;
   }
 
   const cache = await readCache(sessionId);
@@ -223,7 +319,7 @@ export const runFileContextHook = async () => {
       relativeFilePath,
       hash: info.contentHash,
     });
-    return 0;
+    return null;
   }
 
   const block = buildBlock(filePath, info);
@@ -231,32 +327,30 @@ export const runFileContextHook = async () => {
     log.debug("file-info returned empty context — skipping injection", {
       filePath,
     });
-    return 0;
+    return null;
   }
 
   const dependentCount = info.dependents?.length ?? 0;
   const memoryCount = countMemories(info);
-  const summary = `↻ File context: ${dependentCount} dependents, ${memoryCount} memories`;
-
-  emitInjection(block, summary);
-
-  // Update cache only AFTER emitting — if anything above failed we'd
-  // rather re-inject next time than silently skip with a stale entry.
-  cache[relativeFilePath] = info.contentHash;
-  await writeCache(sessionId, cache);
-
-  log.info("file-context injected", {
-    sessionId,
-    filePath,
-    relativeFilePath,
-    projectId,
-    contentHash: info.contentHash,
-    symbols: info.symbols?.length ?? 0,
-    imports: info.imports?.length ?? 0,
-    dependents: dependentCount,
-    hasMemories: !!info.memories,
-    blockChars: block.length,
-  });
-
-  return 0;
+  const contentHash = info.contentHash;
+  return {
+    block,
+    summary: `↻ File context: ${dependentCount} dependents, ${memoryCount} memories`,
+    commit: async () => {
+      cache[relativeFilePath] = contentHash;
+      await writeCache(sessionId, cache);
+      log.info("file-context injected", {
+        sessionId,
+        filePath,
+        relativeFilePath,
+        projectId,
+        contentHash,
+        symbols: info.symbols?.length ?? 0,
+        imports: info.imports?.length ?? 0,
+        dependents: dependentCount,
+        hasMemories: !!info.memories,
+        blockChars: block.length,
+      });
+    },
+  };
 };

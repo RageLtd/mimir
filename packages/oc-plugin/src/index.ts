@@ -24,7 +24,12 @@ import {
 } from "@mimir/plugin-core/keys/cli";
 import { createLoggerFactory } from "@mimir/plugin-core/logger";
 import { markdownToXml } from "@mimir/plugin-core/markdown-to-xml";
-import { loadRules, runAndFormat } from "@mimir/plugin-core/rules";
+import {
+  formatRulesForPrompt,
+  loadRules,
+  readProjectRules,
+  runAndFormat,
+} from "@mimir/plugin-core/rules";
 import {
   createOrgReplica,
   defaultOrgReplicaPath,
@@ -58,6 +63,7 @@ import {
 } from "./message-inject";
 import { orgMemoryTools } from "./org-memory-tools";
 import { runFullReindex, runReindexWorker } from "./reindex";
+import { appendScopedRules, createScopedRulesSeen } from "./scoped-rules";
 import {
   cartographerTools,
   hygieneTool,
@@ -156,6 +162,20 @@ export const MimirPlugin: Plugin = async (ctx) => {
     }
   }
 
+  // 5. Project prose rules (.claude/rules/**/*.md). OpenCode loads the
+  //    root AGENTS.md itself, so only the rules directory is read here.
+  //    Always-on rules ride in the system prompt; path-scoped rules are
+  //    appended to `read` output the first time a matching file is read.
+  const projectRuleEntries = await readProjectRules(ctx.directory, {
+    includeRootFiles: false,
+    log,
+  }).catch((err) => {
+    log.error("project rules read failed", { error: errMessage(err) });
+    return [];
+  });
+  const projectRulesBlock = formatRulesForPrompt(projectRuleEntries);
+  const scopedRulesSeen = createScopedRulesSeen();
+
   const anchorIntervalEnv = process.env.MIMIR_ANCHOR_INTERVAL;
   const anchorInterval = anchorIntervalEnv
     ? Number.parseInt(anchorIntervalEnv, 10)
@@ -182,17 +202,19 @@ export const MimirPlugin: Plugin = async (ctx) => {
       mimir_hygiene: hygieneTool(),
     },
 
-    // ─── Persona system prompt ───
+    // ─── Persona system prompt + project rules ───
     //
-    // Append the Mimir persona to the system prompt on every model
-    // call. Runs before chat.params, after OpenCode's own system
-    // prompt construction. The persona is static after install, so
-    // no per-call fetch — the value is cached at plugin init.
+    // Append the Mimir persona, then the always-on project rules, to
+    // the system prompt on every model call. Runs before chat.params,
+    // after OpenCode's own system prompt construction. Both are static
+    // after init, so no per-call work — the values are cached.
     "experimental.chat.system.transform": async (_input, output) => {
-      if (systemPromptMarkdown.length === 0) return;
-      // `output.system` is a string[] — the persona is one more entry,
+      // `output.system` is a string[] — each block is one more entry,
       // not a re-stringification of the whole array.
-      output.system.push(systemPromptMarkdown);
+      if (systemPromptMarkdown.length > 0) {
+        output.system.push(systemPromptMarkdown);
+      }
+      if (projectRulesBlock) output.system.push(projectRulesBlock);
     },
 
     // ─── Turn counting + anchor cadence ───
@@ -320,6 +342,18 @@ export const MimirPlugin: Plugin = async (ctx) => {
           error: errMessage(err),
         });
       });
+      // Path-scoped prose rules for the file just read, once per session.
+      if (
+        appendScopedRules(
+          input,
+          output,
+          ctx.directory,
+          projectRuleEntries,
+          scopedRulesSeen,
+        )
+      ) {
+        log.info("scoped project rules appended", { tool: input.tool });
+      }
     },
 
     // ─── Distill before compaction ───

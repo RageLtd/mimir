@@ -8,6 +8,13 @@
 
 export { formatFindings, formatLoadErrors } from "./format";
 export { loadRules } from "./loader";
+export {
+  formatRulesForPrompt,
+  formatScopedRules,
+  type ProjectRulesEntry,
+  readProjectRules,
+  scopedRulesFor,
+} from "./project-rules";
 export { eventMatchesTool, runAndFormat, runRules } from "./runner";
 export type {
   CompiledCondition,

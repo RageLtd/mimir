@@ -7,6 +7,12 @@
  * parsing for plan-panel rendering.
  */
 
+import { toProjectRelative } from "@mimir/plugin-core/project";
+import {
+  formatScopedRules,
+  type ProjectRulesEntry,
+  scopedRulesFor,
+} from "@mimir/plugin-core/rules";
 import type { ToolDefinition } from "@mimir/plugin-core/tools/user-memory";
 import type { ChatMessage } from "./types";
 
@@ -92,9 +98,9 @@ export const parseTodos = (v: unknown) => {
 /**
  * Compose the synthetic context injection pair — the local successor to
  * the server's buildContextInjection, same "Session context / Understood."
- * format. Returns [] when there is nothing to inject. The pair is
- * prepended to the backend's message array per turn and NEVER persisted
- * into session.messages.
+ * format. Returns [] when there is nothing to inject. The pair rides in
+ * the backend's message array per turn (see placeContextInjection) and is
+ * NEVER persisted into session.messages.
  */
 export const buildLocalContextInjection = (
   contextBlock: string,
@@ -114,4 +120,54 @@ export const buildLocalContextInjection = (
     },
     { role: "assistant" as const, content: "Understood." },
   ] satisfies ChatMessage[];
+};
+
+/**
+ * Place the ephemeral injection pair AFTER the persisted history and
+ * BEFORE the current turn (the user message at `turnStart` plus any
+ * tool exchange appended since). Prior turns are a byte-stable prefix
+ * across requests, so the provider's prompt cache keeps hitting on the
+ * conversation; only the per-turn context and the live turn vary.
+ * Prepending the pair instead shifted every history byte each turn and
+ * invalidated the whole cache.
+ */
+export const placeContextInjection = (
+  messages: readonly ChatMessage[],
+  injection: readonly ChatMessage[],
+  turnStart: number,
+) => [
+  ...messages.slice(0, turnStart),
+  ...injection,
+  ...messages.slice(turnStart),
+];
+
+const READ_TOOL = "fs_read_text_file";
+
+type ScopedRulesSession = {
+  readonly projectPath: string;
+  readonly projectRuleEntries: readonly ProjectRulesEntry[];
+  readonly scopedRulesSeen: Set<string>;
+};
+
+/**
+ * Path-scoped prose rules for a file-read tool call, rendered once per
+ * rule per session. Returns null for non-read tools, reads without a
+ * path, or when every matching rule was already surfaced. Marks the
+ * returned rules as seen.
+ */
+export const scopedRulesBlockForRead = (
+  session: ScopedRulesSession,
+  toolName: string,
+  input: Record<string, unknown>,
+) => {
+  if (toolName !== READ_TOOL) return null;
+  const path = input.path;
+  if (typeof path !== "string" || path.length === 0) return null;
+  const relative = toProjectRelative(session.projectPath, path);
+  const fresh = scopedRulesFor(session.projectRuleEntries, relative).filter(
+    (e) => !session.scopedRulesSeen.has(e.path),
+  );
+  if (fresh.length === 0) return null;
+  for (const e of fresh) session.scopedRulesSeen.add(e.path);
+  return formatScopedRules(fresh, relative);
 };
