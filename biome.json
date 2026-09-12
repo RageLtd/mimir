@@ -7,7 +7,12 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!**/provider-data.json"]
+    "includes": [
+      "**",
+      "!**/provider-data.json",
+      "!.claude/rules-check.mjs",
+      "!packages/codex-plugin/.codex-plugin/plugin.json"
+    ]
   },
   "formatter": {
     "enabled": true,

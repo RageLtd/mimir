@@ -1,7 +1,7 @@
 {
   "lockVersion": 1,
   "source": "claude-rules",
-  "version": "1.0.3",
+  "version": "1.2.1",
   "files": {
     ".claude/rules-check.mjs": "sha256-683b803c84a5867784637265e0eee48b48107074c1024b4b61b2147cd6e2c03a",
     ".claude/rules/coding/constants-over-strings.md": "sha256-3cac6f177486ac5f64dfa170b93dfe023a1e50ddefcf17d6995204dce2187896",
@@ -22,11 +22,15 @@
     ".claude/rules/coding/return-types.md": "sha256-39e2d5d1474d718531d94b250392369016bcefe1ebecceb5c519df7d5263d944",
     ".claude/rules/coding/reuse-processes.md": "sha256-9daffe530d7c65ec41c4fa7173c8555543254d6457e41c2cf421b28b3d0f3468",
     ".claude/rules/coding/testing.md": "sha256-213903f8d5c075a5e5be297d55f943796b766c71bed9e582720f438f2fd142fc",
-    ".claude/rules/quality/file-length.enforce.toml": "sha256-f9b06f5e10f398913eafa50d61829c38932b020d18cf62df4e44b2233f998d5b",
+    ".claude/rules/quality/file-length.enforce.toml": "sha256-95b5bb1438a6e5adc680bf7344b49a249c2419097013acaee50cea858d88b5de",
     ".claude/rules/quality/file-length.md": "sha256-e90cce900a835acece7bd8dc007c9e9930be5ceed6501da96442596aacbc5786",
     ".claude/rules/quality/standards.md": "sha256-be1ac9ccc8c6cdf79e4e97304b6118174abc92f7a76a33ef166bf00985c58faf",
     ".claude/rules/safety/no-pipe-swallowing.enforce.toml": "sha256-3c5a1d7bff047b3886839b100f949bac0d2bc373bdc9a1612d9c6bc7f6a23aca",
     ".claude/rules/safety/no-pipe-swallowing.md": "sha256-e20665c6057daa139d3e3eb849f5ac5fffeb48b6a899cc30c5788a1c32588b94",
+    ".claude/rules/safety/pr-lifecycle.enforce.toml": "sha256-e5f2bdf8fbc0015e40d9a501d260d8b5de91476774ea86ba311056e23217e6ac",
+    ".claude/rules/safety/pr-lifecycle.md": "sha256-8ace6cc7a95eea292e64fa26969dfd0a2f6fbaf5253e2200c1aca9910196af9b",
+    ".claude/rules/safety/push-target.enforce.toml": "sha256-fbdc587bf4d9d0fd24b5e2b208d3bbdd42e11f099556f662da7400fe41f8c062",
+    ".claude/rules/safety/push-target.md": "sha256-ee6a5b4180a53938479ad91d755d56196f0de868650c13d3c4ef01172485c393",
     ".claude/rules/safety/security.md": "sha256-c03c43bb45b8850790be950d97b44b55f75f6bcf91813aed576e720fd3205b9b",
     ".claude/rules/tooling/bun-apis.md": "sha256-e908e0ff8205f636765f1a9d826654e5fda5b4f88ec53e5c4e83f30906142333",
     ".claude/rules/tooling/bun.md": "sha256-66430b81be46e1b8498f1f17eaba86c86670bc3956dfce69d224b042e77fffbf",
@@ -36,6 +40,7 @@
     ".claude/rules/workflow/codebase-map.md": "sha256-9d093cf9a32a80a728523f2ba966fdf1531b45efe5fedb84caab37de9561d51d",
     ".claude/rules/workflow/process.md": "sha256-b0195f2e6de7d29116e2e100c6e8d74a2fb05c589f69c05d9daf0a33438469e0",
     ".claude/rules/workflow/read-before-writing.md": "sha256-fc890e0f7741747f2aa017229d378dfdfbc001fc6bf444f50d733cb2ab8f3e75",
+    ".claude/rules/workflow/target-shell.md": "sha256-87577855fc2eacbbb509740453e07fe2f6b9fe290507b964385bd948cfa96009",
     ".claude/rules/workflow/verify-assumptions.md": "sha256-a73e0b0c386a98ede797dcae92debf15521bae14b9c9ac6f68e61c320d6b9f2c"
   }
 }

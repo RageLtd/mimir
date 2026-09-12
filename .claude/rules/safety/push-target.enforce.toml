@@ -1,0 +1,20 @@
+id = "safety/push-target"
+body = "./push-target.md"
+enabled = true
+event = "bash"
+message = "`${1}` targets a branch other than its own name — see the paired rule."
+
+# Two shapes of the same footgun:
+#   a colon refspec in `git push` (src:dst), and
+#   creating a branch from a remote-tracking ref, which inherits its upstream.
+[[conditions]]
+field = "command"
+operator = "regex_match"
+pattern = '''(git\s+push\s+[^\n]*\s[A-Za-z0-9._/-]+:[A-Za-z0-9._/-]+|git\s+(?:checkout|switch|worktree\s+add)\s[^\n]*-[bc]\s[^\n]*origin/)'''
+
+# Suppress the safe forms: an explicit --no-track, and push URLs whose scheme
+# separator is not a refspec colon.
+[[negative_conditions]]
+field = "command"
+operator = "regex_match"
+pattern = '''--no-track|://'''

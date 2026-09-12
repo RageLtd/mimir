@@ -2,7 +2,9 @@ id = "quality/file-length"
 body = "./file-length.md"
 enabled = true
 event = "file"
-# Source files only — prose and generated/data files grow for other reasons.
-exclude_globs = ["*.md", "*.mdx", "*.json", "*.lock", "*.svg"]
+# The paired prose rule is scoped to source files via `paths:`, but a builtin
+# detector ignores [[conditions]], so exclude_globs is its only scope: keep
+# prose, data, lockfiles, and generated declarations out.
+exclude_globs = ["*.md", "*.mdx", "*.txt", "*.json", "*.lock", "*.svg", "*.yaml", "*.yml", "*.toml", "*.d.ts"]
 detector = "builtin:file-length"
 detector_args = { limit = 500 }

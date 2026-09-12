@@ -17,9 +17,7 @@ const digest = (contents) =>
 
 const lockRaw = await readFile(lockPath, "utf8").catch(() => null);
 if (lockRaw === null) {
-  console.error(
-    "rules-check: .claude/rules-lock.json not found — run /claude-rules:update",
-  );
+  console.error("rules-check: .claude/rules-lock.json not found — run /claude-rules:update");
   process.exit(1);
 }
 
@@ -28,10 +26,9 @@ const missing = [];
 const modified = [];
 
 for (const [relativePath, expected] of Object.entries(lock.files ?? {})) {
-  const contents = await readFile(
-    join(projectRoot, relativePath),
-    "utf8",
-  ).catch(() => null);
+  const contents = await readFile(join(projectRoot, relativePath), "utf8").catch(
+    () => null,
+  );
   if (contents === null) {
     missing.push(relativePath);
     continue;
@@ -43,9 +40,7 @@ for (const [relativePath, expected] of Object.entries(lock.files ?? {})) {
 
 if (missing.length === 0 && modified.length === 0) {
   const count = Object.keys(lock.files ?? {}).length;
-  console.log(
-    `rules-check: ${count} vendored files match ${lock.source}@${lock.version}`,
-  );
+  console.log(`rules-check: ${count} vendored files match ${lock.source}@${lock.version}`);
   process.exit(0);
 }
 

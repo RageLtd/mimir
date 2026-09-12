@@ -1,0 +1,10 @@
+id = "safety/pr-lifecycle"
+body = "./pr-lifecycle.md"
+enabled = true
+event = "bash"
+message = "Reshaping a pull request (close/reopen/retarget) has side effects beyond the PR — see the paired rule."
+
+[[conditions]]
+field = "command"
+operator = "regex_match"
+pattern = '''gh\s+pr\s+(?:close|reopen)\b|gh\s+pr\s+edit\s[^\n]*--base\b'''
