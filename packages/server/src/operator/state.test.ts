@@ -264,3 +264,64 @@ describe("instance operator state", () => {
     expect(listOperatorAudit(db)[0]?.outcome).toBe("failed");
   });
 });
+
+describe("system prompt seed reconciliation", () => {
+  const reseed = (db: Database, seed: string) =>
+    migrateOperatorState(db, { systemPromptSeed: seed, now: NOW })
+      .systemPromptSeed;
+
+  test("a fresh instance is seeded; the same file is a no-op", async () => {
+    const db = new Database(":memory:");
+    const options = buildAuthOptions(db, TEST_SECRET);
+    const { runMigrations } = await getMigrations(options);
+    await runMigrations();
+    expect(reseed(db, "Seed v1")).toBe("seeded");
+    expect(readInstanceSettings(db).systemPrompt).toBe("Seed v1");
+    expect(reseed(db, "Seed v1")).toBe("unchanged");
+  });
+
+  test("a changed file replaces a prompt nobody edited", async () => {
+    const { db } = await migrated();
+    expect(reseed(db, "Seed v2")).toBe("refreshed");
+    expect(readInstanceSettings(db).systemPrompt).toBe("Seed v2");
+  });
+
+  test("a changed file never overwrites an operator edit", async () => {
+    const { auth, db } = await migrated();
+    const { userId } = await signup(db, auth, "editor@example.test");
+    grantInitialOperator(db, userId, NOW);
+    expect(
+      updateInstanceSetting(
+        db,
+        {
+          ...mutation(userId),
+          field: "system_prompt",
+          value: "Operator's prompt",
+        },
+        NOW,
+      ),
+    ).toBe("updated");
+    expect(reseed(db, "Seed v2")).toBe("kept-operator-edit");
+    expect(readInstanceSettings(db).systemPrompt).toBe("Operator's prompt");
+    // A later seed still doesn't clobber it.
+    expect(reseed(db, "Seed v3")).toBe("kept-operator-edit");
+  });
+
+  test("a prompt stored before seed tracking is adopted once", async () => {
+    const { db } = await migrated();
+    // Simulate a database written by the previous schema: prompt present,
+    // no digest recorded.
+    db.run("UPDATE instance_setting SET system_prompt_seed_digest = NULL");
+    expect(reseed(db, "Seed v2")).toBe("adopted");
+    expect(readInstanceSettings(db).systemPrompt).toBe("Seed v2");
+    expect(reseed(db, "Seed v2")).toBe("unchanged");
+  });
+
+  test("no seed file leaves the stored prompt alone", async () => {
+    const { db } = await migrated();
+    expect(migrateOperatorState(db, { now: NOW }).systemPromptSeed).toBe(
+      "none",
+    );
+    expect(readInstanceSettings(db).systemPrompt).toBe("Seed prompt");
+  });
+});

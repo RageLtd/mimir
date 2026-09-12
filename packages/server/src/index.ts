@@ -67,7 +67,7 @@ async function boot() {
       );
       process.exit(1);
     }
-    const [authErr] = await attempt(runAuthMigrations);
+    const [authErr, migrated] = await attempt(runAuthMigrations);
     if (authErr) {
       log.fatal(
         { err: authErr },
@@ -76,6 +76,20 @@ async function boot() {
       process.exit(1);
     }
     log.info({ db: config.auth.dbPath }, "auth layer enabled (better-auth)");
+    // The seed file only replaces the stored prompt when nobody edited it;
+    // say which way it went so a stale prompt in production is visible.
+    const seedOutcome = migrated?.systemPromptSeed ?? "none";
+    if (seedOutcome === "kept-operator-edit") {
+      log.warn(
+        { seed: config.systemPromptPath },
+        "system prompt seed changed but the stored prompt was edited by an operator — keeping the stored copy",
+      );
+    } else {
+      log.info(
+        { seed: config.systemPromptPath, outcome: seedOutcome },
+        "system prompt seed reconciled",
+      );
+    }
     sweepDueOrganizationDeletions();
     setInterval(sweepDueOrganizationDeletions, 60_000).unref();
 

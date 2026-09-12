@@ -197,7 +197,8 @@ export async function runAuthMigrations() {
   const systemPromptSeed = (await promptFile.exists())
     ? await promptFile.text()
     : undefined;
-  migrateOperatorState(getAuthDb(), {
+  // Returned, not logged: boot-sequence logging belongs to index.ts.
+  return migrateOperatorState(getAuthDb(), {
     bootstrapUserIds: config.operator.bootstrapUserIds,
     ...(systemPromptSeed ? { systemPromptSeed } : {}),
   });

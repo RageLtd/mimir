@@ -111,6 +111,85 @@ function nowIso(now: () => Date) {
   return now().toISOString();
 }
 
+/**
+ * What boot did with the system-prompt seed file. Returned rather than
+ * logged because the auth/instance boot path is deliberately logger-free.
+ *
+ *   none               — no seed file, nothing to do
+ *   seeded             — fresh instance, seed became the stored prompt
+ *   adopted            — stored prompt predates seed tracking; the seed
+ *                        replaced it once so file updates flow from here on
+ *   refreshed          — seed file changed and the stored prompt was still
+ *                        the previous seed, so the new seed replaced it
+ *   unchanged          — seed file matches the last applied seed
+ *   kept-operator-edit — seed file changed but an operator edited the
+ *                        stored prompt since the last seed; the edit wins
+ */
+export type SystemPromptSeedOutcome =
+  | "none"
+  | "seeded"
+  | "adopted"
+  | "refreshed"
+  | "unchanged"
+  | "kept-operator-edit";
+
+const promptDigest = (prompt: string) =>
+  new Bun.CryptoHasher("sha256").update(prompt).digest("hex");
+
+/** Add a column to an existing table when a prior schema lacked it. */
+function ensureColumn(
+  db: Database,
+  table: string,
+  column: string,
+  ddl: string,
+) {
+  const present = db
+    .query<{ name: string }, []>(`PRAGMA table_info(${table})`)
+    .all()
+    .some((c) => c.name === column);
+  if (!present) db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+}
+
+/**
+ * Reconcile the stored system prompt with the seed file. The stored copy
+ * is an operator-editable setting, so the file only replaces it when the
+ * stored copy is still exactly the seed that was last applied — an
+ * operator's edit is never overwritten by a deploy.
+ */
+function applySystemPromptSeed(
+  db: Database,
+  seed: string,
+  timestamp: string,
+): SystemPromptSeedOutcome {
+  const seedDigest = promptDigest(seed);
+  const row = db
+    .query<{ systemPrompt: string | null; seedDigest: string | null }, []>(
+      `SELECT system_prompt AS systemPrompt,
+              system_prompt_seed_digest AS seedDigest
+         FROM instance_setting WHERE id = 1`,
+    )
+    .get();
+  if (!row) throw new Error("instance settings row missing after insert");
+
+  const write = (outcome: SystemPromptSeedOutcome) => {
+    db.query(
+      `UPDATE instance_setting
+          SET system_prompt = ?, system_prompt_seed_digest = ?, updated_at = ?
+        WHERE id = 1`,
+    ).run(seed, seedDigest, timestamp);
+    return outcome;
+  };
+
+  if (row.systemPrompt === null) return write("seeded");
+  // Rows written before seed tracking carry no digest, so an operator
+  // edit is indistinguishable from a stale seed. Adopt the file once;
+  // from here on the digest makes the distinction.
+  if (row.seedDigest === null) return write("adopted");
+  if (row.seedDigest === seedDigest) return "unchanged";
+  const untouched = promptDigest(row.systemPrompt) === row.seedDigest;
+  return untouched ? write("refreshed") : "kept-operator-edit";
+}
+
 export function migrateOperatorState(
   db: Database,
   options: {
@@ -120,23 +199,19 @@ export function migrateOperatorState(
   } = {},
 ) {
   db.run(OPERATOR_STATE_SCHEMA);
+  ensureColumn(db, "instance_setting", "system_prompt_seed_digest", "TEXT");
   const now = options.now ?? (() => new Date());
   const seed = options.systemPromptSeed
     ? normalizeSystemPrompt(options.systemPromptSeed)
     : null;
   const timestamp = nowIso(now);
-  db.transaction(() => {
+  const seedOutcome = db.transaction((): SystemPromptSeedOutcome => {
     db.query(
       `INSERT OR IGNORE INTO instance_setting
         (id, instance_name, support_url, system_prompt, updated_at)
-       VALUES (1, 'Mimir', '', ?, ?)`,
-    ).run(seed, timestamp);
-    if (seed) {
-      db.query(
-        `UPDATE instance_setting SET system_prompt = ?, updated_at = ?
-          WHERE id = 1 AND system_prompt IS NULL`,
-      ).run(seed, timestamp);
-    }
+       VALUES (1, 'Mimir', '', NULL, ?)`,
+    ).run(timestamp);
+    const outcome = seed ? applySystemPromptSeed(db, seed, timestamp) : "none";
     for (const userId of new Set(options.bootstrapUserIds ?? [])) {
       if (!boundedId(userId)) continue;
       const user = db.query('SELECT id FROM "user" WHERE id = ?').get(userId);
@@ -169,7 +244,9 @@ export function migrateOperatorState(
         );
       }
     }
+    return outcome;
   })();
+  return { systemPromptSeed: seedOutcome };
 }
 
 export function grantInitialOperator(
