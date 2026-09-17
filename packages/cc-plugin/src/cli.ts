@@ -13,8 +13,11 @@
  *   voice-anchor             UserPromptSubmit hook handler (boot context +
  *                            voice anchors).
  *   rules                    PreToolUse hook handler (rule engine nudges).
- *   edit-guard               PreToolUse:Bash hook handler (single-file shell
- *                            edits denied in favour of Edit).
+ *   edit-guard               PreToolUse:Bash hook handler (shell edits denied
+ *                            in favour of Edit).
+ *   guard --role <r>         PreToolUse hook handler (role guard for workers
+ *                            and the coordinator).
+ *   verify                   SubagentStop hook handler (verify gate).
  *   reindex [--worker ...]   PostToolUse hook handler. Default mode forks
  *                            a worker and exits; worker mode does the
  *                            cartographer parse + server sync.
@@ -45,6 +48,7 @@ import { runRetrieveHook } from "./retrieve-hook";
 import { runRulesHook } from "./rules-hook";
 import { runSessionStartCommand } from "./session-start-hook";
 import { runUserMemoryMcp } from "./user-memory-mcp";
+import { runVerifyHook } from "./verify-hook";
 import { runVoiceAnchorHook } from "./voice-anchor";
 
 const USAGE = [
@@ -63,9 +67,9 @@ const USAGE = [
   "  retrieve                UserPromptSubmit hook: per-turn brain retrieval.",
   "  rules                   PreToolUse hook (reads stdin).",
   "  file-context            PreToolUse:Read hook: cartographer + memory injection.",
-  "  edit-guard              PreToolUse:Bash hook: deny single-file shell edits",
+  "  edit-guard              PreToolUse:Bash hook: deny shell edits (use Edit instead).",
   "  guard --role <r>        PreToolUse hook: role guard (impl|test|review|coordinator).",
-  "                          (use Edit instead); bulk edits pass with a report nudge.",
+  '  verify                  SubagentStop hook: verify gate for worker "done" claims.',
   "  reindex                 PostToolUse hook (reads stdin).",
   "  persist                 Stop hook: ship transcript delta to mimir brain.",
   "  precompact              PreCompact hook: pre-discard persistence.",
@@ -128,6 +132,9 @@ const dispatch = async (argv: readonly string[]): Promise<number> => {
 
     case "guard":
       return runGuardHook(rest);
+
+    case "verify":
+      return runVerifyHook();
 
     case "reindex":
       return runReindexCommand(rest);

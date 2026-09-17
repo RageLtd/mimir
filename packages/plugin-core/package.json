@@ -46,6 +46,7 @@
     "./cartographer/file-context": "./src/cartographer/file-context.ts",
     "./rules": "./src/rules/index.ts",
     "./guard": "./src/guard/index.ts",
+    "./verify": "./src/verify/index.ts",
     "./project": "./src/project/index.ts",
     "./voice-anchor": "./src/voice-anchor.ts"
   },
