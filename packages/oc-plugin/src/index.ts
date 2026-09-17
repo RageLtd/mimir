@@ -18,6 +18,7 @@
  */
 
 import { join } from "node:path";
+import { isSecretPath } from "@mimir/plugin-core/guard";
 import {
   reconcileFromSharedConfig,
   runKeysCommand,
@@ -303,6 +304,21 @@ export const MimirPlugin: Plugin = async (ctx) => {
     // call run and queues the advice for the next transform round.
     "tool.execute.before": async (input, output) => {
       const projectPath = ctx.directory;
+
+      // Secret material is off limits for every role. OpenCode has no
+      // `read` permission rule, so this is where the deny lives on this
+      // host (Claude Code gets the same list as `Read(...)` deny rules).
+      const target = output.args?.filePath;
+      if (
+        input.tool === "read" &&
+        typeof target === "string" &&
+        isSecretPath(target)
+      ) {
+        log.info("secret read blocked", { tool: input.tool });
+        throw new Error(
+          `Role guard: ${target} holds credentials. Agents never read secret material.`,
+        );
+      }
       const loaded = await loadRules(projectPath).catch((err) => {
         log.error("loadRules failed", { error: errMessage(err) });
         return null;

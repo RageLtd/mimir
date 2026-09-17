@@ -33,6 +33,7 @@ import {
 } from "./cli-args";
 import { runEditGuardHook } from "./edit-guard-hook";
 import { runFileContextHook } from "./file-context-hook";
+import { runGuardHook } from "./guard-hook";
 import { runHygieneCommand } from "./hygiene-command";
 import { runInstallCommand } from "./install";
 import { runLogMcp } from "./log-mcp";
@@ -63,6 +64,7 @@ const USAGE = [
   "  rules                   PreToolUse hook (reads stdin).",
   "  file-context            PreToolUse:Read hook: cartographer + memory injection.",
   "  edit-guard              PreToolUse:Bash hook: deny single-file shell edits",
+  "  guard --role <r>        PreToolUse hook: role guard (impl|test|review|coordinator).",
   "                          (use Edit instead); bulk edits pass with a report nudge.",
   "  reindex                 PostToolUse hook (reads stdin).",
   "  persist                 Stop hook: ship transcript delta to mimir brain.",
@@ -123,6 +125,9 @@ const dispatch = async (argv: readonly string[]): Promise<number> => {
 
     case "edit-guard":
       return runEditGuardHook();
+
+    case "guard":
+      return runGuardHook(rest);
 
     case "reindex":
       return runReindexCommand(rest);
