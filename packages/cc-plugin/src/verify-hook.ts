@@ -24,7 +24,12 @@
  */
 
 import { errMessage } from "@mimir/plugin-core/util";
-import { runVerify, type VerifyOutcome } from "@mimir/plugin-core/verify";
+import {
+  runVerify,
+  type VerifyOutcome,
+  type VerifyRole,
+} from "@mimir/plugin-core/verify";
+import { workerByName } from "@mimir/plugin-core/workers";
 import { createLogger } from "./logger";
 
 const log = createLogger("verify-hook");
@@ -119,6 +124,12 @@ const parseInput = (raw: string) =>
     .then(() => (raw.trim() ? (JSON.parse(raw) as HookInput) : {}))
     .catch(() => ({}) as HookInput);
 
+/** The worker role behind an agent type; unknown types get the strictest. */
+export const roleOf = (agentType: string | undefined) => {
+  const role: VerifyRole = workerByName(agentType ?? "")?.role ?? "impl";
+  return role;
+};
+
 const handbackMessage = (input: HookInput) => {
   const toolInput =
     input.tool_input && typeof input.tool_input === "object"
@@ -145,6 +156,7 @@ export const runVerifyHook = async () => {
     : (input.last_assistant_message ?? "");
 
   const outcome = await runVerify({
+    role: roleOf(input.agent_type),
     worktree: input.cwd ?? process.cwd(),
     lastMessage: message,
     agentId,

@@ -1,7 +1,10 @@
 {
+  "env": {
+    "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1",
+    "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "3"
+  },
   "permissions": {
     "deny": [
-      "Agent",
       "Read(./.env)",
       "Read(./.env.*)",
       "Read(**/.env)",
@@ -86,6 +89,27 @@
             "type": "command",
             "command": "{{MIMIR_CC_BIN}} guard --role coordinator",
             "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "SubagentHandback",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{MIMIR_CC_BIN}} verify",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{MIMIR_CC_BIN}} verify",
+            "timeout": 600
           }
         ]
       }

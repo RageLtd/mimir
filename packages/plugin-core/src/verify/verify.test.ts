@@ -227,6 +227,55 @@ describe("runVerify", () => {
     }
   });
 
+  test("role test: red tests are expected, so the test command is skipped", async () => {
+    const root = await seedRepo();
+    await write(
+      root,
+      "sub_test.go",
+      'package x\nimport "testing"\nfunc TestSub(t *testing.T) { if Sub(3,1) != 2 { t.Fatal("bad") } }\n',
+    );
+    const seen: string[] = [];
+    const outcome = await runVerify({
+      role: "test",
+      worktree: root,
+      lastMessage: "STATUS: done",
+      agentId: "t",
+      run: runner({ "go test ./...": { code: 1 } }, seen),
+    });
+    expect(seen).toEqual(["go build ./...", "go vet ./..."]);
+    expect(outcome.kind).toBe("pass");
+  });
+
+  test("role test: sanity still applies (a skipped test is wrong)", async () => {
+    const root = await seedRepo();
+    await write(
+      root,
+      "skip_test.go",
+      'package x\nimport "testing"\nfunc TestSkip(t *testing.T) { t.Skip("later") }\n',
+    );
+    const outcome = await runVerify({
+      role: "test",
+      worktree: root,
+      lastMessage: "STATUS: done",
+      agentId: "t2",
+      run: runner({}),
+    });
+    expect(outcome.kind).toBe("block");
+    if (outcome.kind === "block") expect(outcome.reason).toContain("skip");
+  });
+
+  test("role review: the gate does not apply", async () => {
+    const root = await seedRepo();
+    const outcome = await runVerify({
+      role: "review",
+      worktree: root,
+      lastMessage: "Findings: none.\nSTATUS: done",
+      agentId: "r",
+      run: runner({}),
+    });
+    expect(outcome).toEqual({ kind: "skip", status: "done" });
+  });
+
   test("a pass clears the loop guard", async () => {
     const root = await seedRepo();
     await write(

@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { handbackOutput, stopOutput } from "./verify-hook";
+import { handbackOutput, roleOf, stopOutput } from "./verify-hook";
+
+describe("roleOf", () => {
+  test("maps worker agent types to gate roles, unknown → impl", () => {
+    expect(roleOf("mimir-impl")).toBe("impl");
+    expect(roleOf("mimir-test")).toBe("test");
+    expect(roleOf("mimir-review")).toBe("review");
+    expect(roleOf("general-purpose")).toBe("impl");
+    expect(roleOf(undefined)).toBe("impl");
+  });
+});
 
 describe("stopOutput (SubagentStop fallback)", () => {
   test("skip → silence", () => {

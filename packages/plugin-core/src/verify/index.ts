@@ -27,4 +27,5 @@ export {
   runVerify,
   type VerifyOptions,
   type VerifyOutcome,
+  type VerifyRole,
 } from "./verify";

@@ -30,7 +30,19 @@ import { clearBlocks, MAX_BLOCKS, noteBlock } from "./loop-guard";
 import { formatBlockReason, formatPassReport } from "./report";
 import { parseStatus, type WorkerStatus } from "./status";
 
+/**
+ * Which checks apply depends on what the worker was for:
+ *   impl    — everything
+ *   test    — red-first tests are expected to fail, so the `test`
+ *             command is skipped; typecheck, check and the sanity rules
+ *             still run (a skipped or assertion-free test is still wrong)
+ *   review  — changes nothing; the gate does not apply
+ */
+export type VerifyRole = "impl" | "test" | "review";
+
 export type VerifyOptions = {
+  /** Defaults to `impl`, the strictest. */
+  readonly role?: VerifyRole;
   /** The worker's working directory (its worktree). */
   readonly worktree: string;
   /** The worker's final message; the STATUS line is parsed from it. */
@@ -63,14 +75,20 @@ export type VerifyOutcome =
 
 const COMMAND_ORDER = ["typecheck", "test", "check"] as const;
 
+const commandsFor = (role: VerifyRole) =>
+  role === "test"
+    ? COMMAND_ORDER.filter((kind) => kind !== "test")
+    : COMMAND_ORDER;
+
 const runToolchain = async (
   toolchain: ResolvedToolchain,
+  role: VerifyRole,
   run: CommandRunner,
   timeoutMs: number | undefined,
   tail: number,
 ) => {
   const runs: CommandRun[] = [];
-  for (const kind of COMMAND_ORDER) {
+  for (const kind of commandsFor(role)) {
     const command = toolchain.commands[kind];
     if (!command) continue;
     const result = await run(shellArgv(command), toolchain.root, timeoutMs);
@@ -92,8 +110,9 @@ const runToolchain = async (
 export const runVerify = async (options: VerifyOptions) => {
   const run = options.run ?? runCommand;
   const tail = options.tail ?? 40;
+  const role = options.role ?? "impl";
   const status = parseStatus(options.lastMessage);
-  if (status !== "done")
+  if (status !== "done" || role === "review")
     return { kind: "skip", status } satisfies VerifyOutcome;
 
   const block = async (reason: string) => {
@@ -141,6 +160,7 @@ export const runVerify = async (options: VerifyOptions) => {
     if (!toolchain) continue;
     const outcome = await runToolchain(
       toolchain,
+      role,
       run,
       options.commandTimeoutMs,
       tail,

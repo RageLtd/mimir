@@ -29,6 +29,17 @@ import { createLogger } from "./logger";
 
 const log = createLogger("rules-hook");
 
+const SPAWN_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task"]);
+
+/** Deny a worker spawn while the rule engine is in a broken state. */
+export const spawnDenied = (errorCount: number) => ({
+  hookSpecificOutput: {
+    hookEventName: "PreToolUse" as const,
+    permissionDecision: "deny" as const,
+    permissionDecisionReason: `Rule engine has ${errorCount} rule file(s) that failed to load — a worker would run unenforced. Fix the .enforce.toml errors (see the mimir-cc log) before delegating.`,
+  },
+});
+
 type HookInput = {
   readonly session_id?: string;
   readonly hook_event_name?: string;
@@ -103,6 +114,12 @@ export const runRulesHook = async () => {
       count: loaded.errors.length,
       first: loaded.errors[0],
     });
+    // Fail closed on delegation: a worker runs with no human watching,
+    // so a broken rule set must stop the spawn, not degrade silently.
+    if (SPAWN_TOOLS.has(ctx.toolName)) {
+      process.stdout.write(JSON.stringify(spawnDenied(loaded.errors.length)));
+      return 0;
+    }
   }
 
   const verdict = await runAndPartition(loaded.rules, ctx).catch((err) => {

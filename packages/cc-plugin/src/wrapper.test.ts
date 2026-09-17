@@ -117,6 +117,28 @@ exit 0
     expect(records[0]).toContain("ANTHROPIC_BASE_URL=unset");
   });
 
+  test("passes --agents with the file contents when agents.json exists, omits it otherwise", async () => {
+    await writeMockClaude(`#!/usr/bin/env bash
+echo "args=$*" >> "$MIMIR_LOG"
+echo "---" >> "$MIMIR_LOG"
+exit 0
+`);
+
+    await runWrapper();
+    const without = await readLog();
+    expect(without[0]).not.toContain("--agents");
+
+    await writeFile(
+      join(tmp, ".mimir", "agents.json"),
+      '{"mimir-impl":{"description":"d","prompt":"p"}}',
+    );
+    await runWrapper();
+    const withAgents = await readLog();
+    expect(withAgents[1]).toContain(
+      '--agents {"mimir-impl":{"description":"d","prompt":"p"}}',
+    );
+  });
+
   test("pre-staged marker triggers a second invocation with merged env + flags", async () => {
     await writeFile(
       markerPath,

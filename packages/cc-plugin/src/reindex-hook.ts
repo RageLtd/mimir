@@ -35,6 +35,8 @@ type HookInput = {
   readonly cwd?: string;
   readonly tool_name?: string;
   readonly tool_input?: unknown;
+  /** Present only when the hook fires inside a subagent. */
+  readonly agent_id?: string;
 };
 
 const readStdin = async (): Promise<string> => {
@@ -101,6 +103,15 @@ const runHook = async (): Promise<number> => {
   const input = safeParseHookInput(raw);
 
   if (!input.tool_name || !FILE_WRITE_TOOLS.has(input.tool_name)) return 0;
+
+  // A worker subagent edits inside an ephemeral worktree. Indexing that
+  // would overwrite the project's entries with half-finished state under
+  // the same relative paths; the SessionStart replace-mode reindex picks
+  // up whatever the coordinator merges.
+  if (input.agent_id) {
+    log.debug("subagent edit — skipping reindex", { agentId: input.agent_id });
+    return 0;
+  }
 
   const filePath = extractFilePath(input);
   if (!filePath) return 0;

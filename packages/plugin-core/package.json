@@ -47,6 +47,7 @@
     "./rules": "./src/rules/index.ts",
     "./guard": "./src/guard/index.ts",
     "./verify": "./src/verify/index.ts",
+    "./workers": "./src/workers/index.ts",
     "./project": "./src/project/index.ts",
     "./voice-anchor": "./src/voice-anchor.ts"
   },

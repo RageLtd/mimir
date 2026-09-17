@@ -39,6 +39,13 @@ BASE_ARGS=(
   --mcp-config "$HOME/.mimir/mcp.json"
   --settings "$HOME/.mimir/settings.json"
 )
+# Worker definitions (mimir-impl / mimir-test / mimir-review) written by
+# the installer. Session-scoped via --agents so they carry their own role
+# guard hooks without a workspace-trust prompt. Absent on older installs.
+MIMIR_AGENTS="$HOME/.mimir/agents.json"
+if [[ -s "$MIMIR_AGENTS" ]]; then
+  BASE_ARGS+=(--agents "$(cat "$MIMIR_AGENTS")")
+fi
 USER_ARGS=("$@")
 EXTRA_ARGS=()
 EXTRA_ENV=()
