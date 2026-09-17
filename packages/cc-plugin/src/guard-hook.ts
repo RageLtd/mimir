@@ -93,7 +93,7 @@ const coordinatorFields = async (sessionId: string, worktree: string) => {
     log.warn("git worktree list failed", { error: errMessage(err) });
     return [];
   });
-  return { planFileExists, workerWorktrees };
+  return { planFile: state.planFile, planFileExists, workerWorktrees };
 };
 
 /** Build the guard context; null means "nothing to decide" (stay silent). */

@@ -100,31 +100,28 @@ export const guardReason = async (
     return `Role guard: ${target} holds credentials. Agents never read secret material.`;
   }
 
-  const role: GuardRole | null =
-    (await roles.workerRole(input.sessionID)) ??
-    ((await readCoordinatorState(input.sessionID))?.active
-      ? "coordinator"
-      : null);
-  if (!role) return null;
+  const base = { toolName: input.tool, toolInput: args, worktree };
 
-  const coordinator =
-    role === "coordinator"
-      ? {
-          planFileExists: await Bun.file(
-            (await readCoordinatorState(input.sessionID))?.planFile ?? "",
-          ).exists(),
-          workerWorktrees: [],
-        }
-      : {};
-  const decision = guardDecision({
-    role,
-    toolName: input.tool,
-    toolInput: args,
-    worktree,
-    ...coordinator,
-  });
-  return decision.allow ? null : decision.reason;
+  const workerRole = await roles.workerRole(input.sessionID);
+  if (workerRole)
+    return denyReason(guardDecision({ ...base, role: workerRole }));
+
+  const state = await readCoordinatorState(input.sessionID);
+  if (!state?.active) return null;
+  const role: GuardRole = "coordinator";
+  return denyReason(
+    guardDecision({
+      ...base,
+      role,
+      planFile: state.planFile,
+      planFileExists: await Bun.file(state.planFile).exists(),
+      workerWorktrees: [],
+    }),
+  );
 };
+
+const denyReason = (decision: ReturnType<typeof guardDecision>) =>
+  decision.allow ? null : decision.reason;
 
 // ── After: gate on `task` ──
 
@@ -149,9 +146,8 @@ export const appendVerdict = (
     case "pass":
       return `${output}\n\n${outcome.report}`;
     case "block": {
-      const resume = childId
-        ? `The worker has stopped. Resume it with the task tool (task_id: ${childId}) and pass the reason above as its instruction.`
-        : "The worker has stopped. Resume it with the task tool and pass the reason above as its instruction.";
+      const handle = childId ? ` (task_id: ${childId})` : "";
+      const resume = `The worker has stopped. Resume it with the task tool${handle} and pass the reason above as its instruction.`;
       return `${output}\n\n${outcome.reason}\n\n${resume}`;
     }
     case "exhausted":

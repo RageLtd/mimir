@@ -8,6 +8,7 @@ export {
   extractWorkerSections,
   WORKER_SECTIONS,
 } from "./prompt";
+export { buildReviewPrompt, type ReviewPromptInput } from "./review-prompt";
 export {
   roleForAgentType,
   TEST_PATH_GLOBS,

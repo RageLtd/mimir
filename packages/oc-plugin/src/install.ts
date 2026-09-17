@@ -36,6 +36,7 @@ import agentTemplate from "../artifacts/agent-mimir.md.template" with {
 import wrapperTemplate from "../artifacts/wrapper.sh.template" with {
   type: "text",
 };
+import delegateCommand from "../commands/delegate.md" with { type: "text" };
 import installCommand from "../commands/mimir-install.md" with { type: "text" };
 import updateCommand from "../commands/mimir-update.md" with { type: "text" };
 import { renderWorkerAgents } from "./agents";
@@ -375,6 +376,21 @@ export const installMimir = async (
       written,
     };
   }
+
+  // The coordinator playbook — the same loop as Claude Code's /delegate,
+  // spoken in OpenCode's tools (task + task_id resume, mimir_delegate).
+  const delegateCommandPath = join(dirname(updateCommandPath), "delegate.md");
+  const [delegateErr] = await attempt(() =>
+    writeText(delegateCommandPath, delegateCommand),
+  );
+  if (delegateErr) {
+    return {
+      ok: false,
+      message: `Failed to write delegate slash command: ${errMessage(delegateErr)}`,
+      written,
+    };
+  }
+  written.push(delegateCommandPath);
 
   return {
     ok: true,

@@ -86,6 +86,23 @@ describe("coordinator", () => {
     expect(reasonOf(d)).toContain("delegates");
   });
 
+  test("may write its own plan file and nothing else", () => {
+    const extra = {
+      planFile: "/work/repo/.mimir/plan.md",
+      planFileExists: true,
+    };
+    expect(
+      guardDecision(
+        ctx("coordinator", "Write", { file_path: ".mimir/plan.md" }, extra),
+      ).allow,
+    ).toBe(true);
+    expect(
+      guardDecision(
+        ctx("coordinator", "Edit", { file_path: "src/a.ts" }, extra),
+      ).allow,
+    ).toBe(false);
+  });
+
   test("spawn is gated on the plan file", () => {
     const noPlan = guardDecision(ctx("coordinator", "Agent", { prompt: "x" }));
     expect(noPlan.allow).toBe(false);

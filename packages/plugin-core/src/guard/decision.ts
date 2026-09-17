@@ -51,6 +51,8 @@ export type GuardContext = {
   readonly worktree: string;
   /** Coordinator only: the session's plan file is on disk. */
   readonly planFileExists?: boolean;
+  /** Coordinator only: the plan file itself, the one file it may write. */
+  readonly planFile?: string;
   /** Coordinator only: worker worktree roots it must not read source from. */
   readonly workerWorktrees?: readonly string[];
 };
@@ -195,27 +197,35 @@ const shellDecision = (command: string, worktree: string) => {
 // ── Role rules ──
 
 const workerWriteDecision = (ctx: GuardContext, path: string | null) => {
+  const targetsTest = path !== null && isTestFile(path);
+  const targetsSource = path !== null && !isTestFile(path);
   switch (ctx.role) {
     case "impl":
-      return path !== null && isTestFile(path)
-        ? deny(
-            `Role guard: mimir-impl may not modify test files (${path}). Finish with STATUS: blocked and tell the coordinator what test change is needed.`,
-          )
-        : allow;
+      if (!targetsTest) return allow;
+      return deny(
+        `Role guard: mimir-impl may not modify test files (${path}). Finish with STATUS: blocked and tell the coordinator what test change is needed.`,
+      );
     case "test":
-      return path !== null && !isTestFile(path)
-        ? deny(
-            `Role guard: mimir-test may only modify test files, not ${path}. Finish with STATUS: blocked and describe the implementation change you need.`,
-          )
-        : allow;
+      if (!targetsSource) return allow;
+      return deny(
+        `Role guard: mimir-test may only modify test files, not ${path}. Finish with STATUS: blocked and describe the implementation change you need.`,
+      );
     case "review":
       return deny(
         "Role guard: mimir-review is read-only. Report findings in your final message instead of editing.",
       );
-    case "coordinator":
+    case "coordinator": {
+      // The plan is the coordinator's own artifact — task status, notes,
+      // decisions — and it must be able to keep it current.
+      const isPlanFile =
+        path !== null &&
+        ctx.planFile !== undefined &&
+        path === resolve(ctx.planFile);
+      if (isPlanFile) return allow;
       return deny(
-        "Role guard: the coordinator delegates, it does not implement. Spawn a worker for this change.",
+        "Role guard: the coordinator delegates, it does not implement. Spawn a worker for this change (the plan file is the one file you may edit).",
       );
+    }
     default:
       return assertNever(ctx.role);
   }

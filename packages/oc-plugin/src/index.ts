@@ -49,6 +49,7 @@ import {
 import type { Plugin } from "@opencode-ai/plugin";
 import { assembleBootContext } from "./boot-context";
 import { readConfig } from "./config";
+import { delegateTool, reviewPromptTool } from "./delegate-tools";
 import { augmentReadOutput, createFileContextCache } from "./file-context";
 import {
   extractLastUserPrompt,
@@ -210,6 +211,8 @@ export const MimirPlugin: Plugin = async (ctx) => {
       ...cartographerTools(ctx.directory),
       mimir_install: installTool(),
       mimir_hygiene: hygieneTool(),
+      mimir_delegate: delegateTool(),
+      mimir_review_prompt: reviewPromptTool(),
     },
 
     // ─── Persona system prompt + project rules ───

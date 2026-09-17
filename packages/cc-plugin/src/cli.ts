@@ -34,6 +34,7 @@ import {
   parseInstallArgs,
   parsePartialOptions,
 } from "./cli-args";
+import { runDelegateCommand, runReviewPromptCommand } from "./delegate-command";
 import { runEditGuardHook } from "./edit-guard-hook";
 import { runFileContextHook } from "./file-context-hook";
 import { runGuardHook } from "./guard-hook";
@@ -70,6 +71,10 @@ const USAGE = [
   "  edit-guard              PreToolUse:Bash hook: deny shell edits (use Edit instead).",
   "  guard --role <r>        PreToolUse hook: role guard (impl|test|review|coordinator).",
   '  verify                  SubagentStop hook: verify gate for worker "done" claims.',
+  "  delegate <start --plan <file> | status | stop>",
+  "                          Turn the coordinator role on/off for this session.",
+  "  review-prompt <worktree> [--title <t>]",
+  "                          Print the context-free review prompt for a worker's change.",
   "  reindex                 PostToolUse hook (reads stdin).",
   "  persist                 Stop hook: ship transcript delta to mimir brain.",
   "  precompact              PreCompact hook: pre-discard persistence.",
@@ -135,6 +140,12 @@ const dispatch = async (argv: readonly string[]): Promise<number> => {
 
     case "verify":
       return runVerifyHook();
+
+    case "delegate":
+      return runDelegateCommand(rest);
+
+    case "review-prompt":
+      return runReviewPromptCommand(rest);
 
     case "reindex":
       return runReindexCommand(rest);
