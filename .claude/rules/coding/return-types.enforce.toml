@@ -1,6 +1,9 @@
 id = "coding/return-types"
 body = "./return-types.md"
 enabled = true
+# The `): T =>` shape has legitimate exceptions (type predicates, contract
+# types) the regex can't tell apart — advise rather than block.
+severity = "nudge"
 event = "file"
 exclude_globs = ["*.d.ts", "*.test.*", "*.spec.*"]
 

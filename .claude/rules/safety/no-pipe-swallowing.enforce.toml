@@ -2,16 +2,25 @@ id = "safety/no-pipe-swallowing"
 body = "./no-pipe-swallowing.md"
 enabled = true
 event = "bash"
-message = "Command pipes into `${1}` — stderr will be swallowed. See the paired rule."
+message = "Command pipes into `${1}` — a failure on the left is hidden. See the paired rule."
 
+# Fires when a command that can fail is piped straight into a filter.
+#
+# The pattern walks the command from the start, treating quoted strings as
+# atomic so a `|` inside quotes (`grep "a\|b"`, `grep -E "x|y"`) can never
+# be the matched pipe. The segment feeding the pipe must not itself be a
+# filter or a read-only producer — `grep … | sed`, `cat … | head`,
+# `echo … | wc` hide nothing worth hearing about.
 [[conditions]]
 field = "command"
 operator = "regex_match"
-pattern = '''\|\s*(head|tail|grep|wc|awk|sed)\b'''
+pattern = '''^(?:[^"']|"[^"]*"|'[^']*')*?(?:^|[;&|]\s*)(?!(?:grep|egrep|fgrep|rg|sed|awk|cat|echo|printf|ls|find|sort|uniq|cut|tr|head|tail|wc|jq|column|paste|basename|dirname|readlink|xargs|tee)\b)(?:[^;&|"']|"[^"]*"|'[^']*')+\|\s*(head|tail|grep|wc|awk|sed)\b'''
 
-# Suppress when the command explicitly redirects stderr before the pipe
-# (`2>file` or `2>&1`). Same heuristic the legacy detector used.
+# Suppress when stderr is captured to a file before the pipe (`2>err.log`):
+# only stdout crosses the pipe and the failure text is preserved. `2>&1`
+# does the opposite — it feeds stderr into the filter — so it stays flagged,
+# exactly as the paired rule's "Wrong" examples show.
 [[negative_conditions]]
 field = "command"
 operator = "regex_match"
-pattern = '''2>[^&]?\S+|2>&1'''
+pattern = '''2>\s*[^&\s]\S*'''

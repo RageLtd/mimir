@@ -1,6 +1,8 @@
 id = "coding/functional-style"
 body = "./functional-style.md"
 enabled = true
+# A `class` regex is a heuristic, not a proof — advise rather than block.
+severity = "nudge"
 event = "file"
 exclude_globs = ["*.d.ts"]
 

@@ -1,6 +1,9 @@
 id = "coding/control-braces"
 body = "./control-braces.md"
 enabled = true
+# Single-line-body detection over C-family syntax is a heuristic — advise
+# rather than block.
+severity = "nudge"
 event = "file"
 exclude_globs = ["*.md", "*.toml", "*.yaml", "*.yml", "*.json"]
 message = "A single-line control body appears to omit braces at line ${line}: `${match}`"
