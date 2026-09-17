@@ -55,3 +55,42 @@ export const WORKER_DEFINITIONS: readonly WorkerDefinition[] = [
 
 export const workerByName = (name: string) =>
   WORKER_DEFINITIONS.find((w) => w.name === name) ?? null;
+
+/**
+ * The verify-gate role for an agent type. Unknown types (a host's
+ * built-in subagent, say) get `impl` — the strictest — so an unnamed
+ * worker is still gated.
+ */
+export const roleForAgentType = (agentType: string | undefined) => {
+  const role: WorkerRole = workerByName(agentType ?? "")?.role ?? "impl";
+  return role;
+};
+
+/**
+ * Test paths as host permission wildcards (`*` matches across `/`),
+ * for hosts whose native permission layer wants globs. A coarse
+ * approximation of the `test-conventions` table; the role guard is
+ * the precise layer on top.
+ */
+export const TEST_PATH_GLOBS: readonly string[] = [
+  "*.test.*",
+  "*.spec.*",
+  "*_test.go",
+  "test_*.py",
+  "*_test.py",
+  "tests/*",
+  "*/tests/*",
+  "__tests__/*",
+  "*/__tests__/*",
+  "*/src/test/*",
+  "*Test.java",
+  "*Tests.java",
+  "*Spec.kt",
+  "*Test.kt",
+  "*Spec.scala",
+  "*_test.exs",
+  "*_spec.rb",
+  "*_test.rb",
+  "*Test.cs",
+  "*Tests.cs",
+];

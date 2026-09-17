@@ -9,6 +9,8 @@ export {
   WORKER_SECTIONS,
 } from "./prompt";
 export {
+  roleForAgentType,
+  TEST_PATH_GLOBS,
   WORKER_DEFINITIONS,
   type WorkerDefinition,
   type WorkerRole,

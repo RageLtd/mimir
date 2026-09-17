@@ -105,6 +105,28 @@ export const SECRET_PATH =
 export const isSecretPath = (filePath: string) =>
   SECRET_PATH.test(filePath.split(sep).join("/"));
 
+/**
+ * The same set as host permission wildcards (`*` matches across `/`),
+ * for hosts with a native read-permission layer.
+ */
+export const SECRET_PATH_GLOBS: readonly string[] = [
+  "*.env",
+  "*.env.*",
+  "*.pem",
+  "*.p12",
+  "*.pfx",
+  "*/.ssh/*",
+  "*/.aws/*",
+  "*credentials",
+  "*credentials.*",
+  "*.netrc",
+  "*.npmrc",
+  "*.pypirc",
+  "*id_rsa*",
+  "*id_ed25519*",
+  "*id_ecdsa*",
+];
+
 // ── Shell safety (every role) ──
 
 /**

@@ -110,7 +110,7 @@ type MessagesResponse = {
   readonly error?: unknown;
 };
 
-type TranscriptClient = {
+export type TranscriptClient = {
   readonly session: {
     readonly messages: (args: {
       readonly path: { readonly id: string };
@@ -118,7 +118,7 @@ type TranscriptClient = {
   };
 };
 
-type TranscriptLogger = {
+export type TranscriptLogger = {
   readonly debug: (message: string, context?: unknown) => void;
   readonly info: (message: string, context?: unknown) => void;
   readonly warn: (message: string, context?: unknown) => void;

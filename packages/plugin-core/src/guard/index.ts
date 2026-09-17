@@ -18,4 +18,5 @@ export {
   isGuardRole,
   isSecretPath,
   SECRET_PATH,
+  SECRET_PATH_GLOBS,
 } from "./decision";

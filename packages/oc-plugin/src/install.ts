@@ -9,6 +9,7 @@
  *   ~/.mimir/logs/                   — created
  *   ~/.mimir/embedder/               — pinned llama-server + embedding model
  *   ~/.config/opencode/agents/mimir.md — the Mimir custom agent
+ *   ~/.config/opencode/agents/mimir-{impl,test,review}.md — worker agents
  *   ~/.mimir/mimir-oc.ts             — stable CLI copy of this bundle
  *   ~/.local/bin/mimir-opencode      — wrapper script (chmod 755)
  *
@@ -27,6 +28,7 @@ import { dirname, join } from "node:path";
 
 import { installEmbedderArtifacts } from "@mimir/plugin-core/brain/embedder-install";
 import { resolveCartographerBinary } from "@mimir/plugin-core/cartographer/resolve";
+import { attempt } from "@mimir/plugin-core/result";
 import { errMessage, mimirHome } from "@mimir/plugin-core/util";
 import agentTemplate from "../artifacts/agent-mimir.md.template" with {
   type: "text",
@@ -36,6 +38,7 @@ import wrapperTemplate from "../artifacts/wrapper.sh.template" with {
 };
 import installCommand from "../commands/mimir-install.md" with { type: "text" };
 import updateCommand from "../commands/mimir-update.md" with { type: "text" };
+import { renderWorkerAgents } from "./agents";
 import { type MimirConfig, readConfig, writeConfig } from "./config";
 
 const SYSTEM_PROMPT_ROUTE = "/v1/system-prompt";
@@ -316,6 +319,24 @@ export const installMimir = async (
       message: `Failed to write Mimir agent: ${errMessage(err)}`,
       written,
     };
+  }
+
+  // Worker agents (mimir-impl / mimir-test / mimir-review) — the
+  // persona-less definitions the coordinator delegates to. Same prompt
+  // source as mimir.md, so they track prompt updates.
+  for (const [file, content] of Object.entries(
+    renderWorkerAgents(promptContent),
+  )) {
+    const workerPath = join(dirname(agentPath), file);
+    const [writeErr] = await attempt(() => writeText(workerPath, content));
+    if (writeErr) {
+      return {
+        ok: false,
+        message: `Failed to write worker agent ${file}: ${errMessage(writeErr)}`,
+        written,
+      };
+    }
+    written.push(workerPath);
   }
 
   // 8. Write the wrapper script and make it executable.

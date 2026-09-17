@@ -18,11 +18,7 @@
  */
 
 import { join } from "node:path";
-import { isSecretPath } from "@mimir/plugin-core/guard";
-import {
-  reconcileFromSharedConfig,
-  runKeysCommand,
-} from "@mimir/plugin-core/keys/cli";
+import { runKeysCommand } from "@mimir/plugin-core/keys/cli";
 import { createLoggerFactory } from "@mimir/plugin-core/logger";
 import { markdownToXml } from "@mimir/plugin-core/markdown-to-xml";
 import {
@@ -40,10 +36,7 @@ import {
   createUserMemoryStore,
   type UserMemoryStore,
 } from "@mimir/plugin-core/store/user-memories";
-import {
-  runSyncCommand,
-  syncFromSharedConfig,
-} from "@mimir/plugin-core/sync/cli";
+import { runSyncCommand } from "@mimir/plugin-core/sync/cli";
 import { errMessage, mimirHome } from "@mimir/plugin-core/util";
 import {
   type VoiceAnchor as Anchor,
@@ -63,8 +56,8 @@ import {
   lastUserMessage,
 } from "./message-inject";
 import { orgMemoryTools } from "./org-memory-tools";
-import { runFullReindex, runReindexWorker } from "./reindex";
 import { appendScopedRules, createScopedRulesSeen } from "./scoped-rules";
+import { createEventHandler } from "./session-events";
 import {
   cartographerTools,
   hygieneTool,
@@ -72,6 +65,12 @@ import {
   userMemoryTools,
 } from "./tools";
 import { persistSessionTranscript } from "./transcript-persistence";
+import {
+  createSessionRoles,
+  gateTaskOutput,
+  guardReason,
+  sessionLookupFrom,
+} from "./worker-hooks";
 
 // ── Per-session state ──
 
@@ -183,6 +182,9 @@ export const MimirPlugin: Plugin = async (ctx) => {
   });
   const projectRulesBlock = formatRulesForPrompt(projectRuleEntries);
   const scopedRulesSeen = createScopedRulesSeen();
+
+  // Session → worker role, one SDK lookup per session (cached).
+  const sessionRoles = createSessionRoles(sessionLookupFrom(ctx.client));
 
   const anchorIntervalEnv = process.env.MIMIR_ANCHOR_INTERVAL;
   const anchorInterval = anchorIntervalEnv
@@ -305,19 +307,23 @@ export const MimirPlugin: Plugin = async (ctx) => {
     "tool.execute.before": async (input, output) => {
       const projectPath = ctx.directory;
 
-      // Secret material is off limits for every role. OpenCode has no
-      // `read` permission rule, so this is where the deny lives on this
-      // host (Claude Code gets the same list as `Read(...)` deny rules).
-      const target = output.args?.filePath;
-      if (
-        input.tool === "read" &&
-        typeof target === "string" &&
-        isSecretPath(target)
-      ) {
-        log.info("secret read blocked", { tool: input.tool });
-        throw new Error(
-          `Role guard: ${target} holds credentials. Agents never read secret material.`,
-        );
+      // Role guard: a `mimir-*` worker's role from its session, the
+      // coordinator's from the shared state file, secret reads for
+      // everyone. Throwing is the plugin's only deny.
+      const guard = await guardReason(
+        sessionRoles,
+        input,
+        output.args as Record<string, unknown>,
+        projectPath,
+      ).catch((err) => {
+        log.error("role guard crashed — allowing the call", {
+          error: errMessage(err),
+        });
+        return null;
+      });
+      if (guard) {
+        log.info("role guard denied", { tool: input.tool });
+        throw new Error(guard);
       }
       const loaded = await loadRules(projectPath).catch((err) => {
         log.error("loadRules failed", { error: errMessage(err) });
@@ -365,6 +371,19 @@ export const MimirPlugin: Plugin = async (ctx) => {
     // same file (with no edits between) is a no-op. Cached against
     // the cartographer's reported hash, not a local recompute.
     "tool.execute.after": async (input, output) => {
+      // Verify gate on a finished worker: OpenCode can't block a child's
+      // stop, so the verdict is appended to the `task` output the
+      // coordinator reads. A crash lets the output through untouched.
+      const gated = await gateTaskOutput(input, output, ctx.directory).catch(
+        (err) => {
+          log.error("verify gate crashed — output left as is", {
+            error: errMessage(err),
+          });
+          return null;
+        },
+      );
+      if (gated) log.info("verify gate", { kind: gated });
+
       await augmentReadOutput(
         input,
         output,
@@ -411,68 +430,17 @@ export const MimirPlugin: Plugin = async (ctx) => {
       );
     },
 
-    // ─── Cartographer reindex on file edit ───
+    // ─── Session lifecycle: reindex, boot sync, distillation ───
     //
-    // OpenCode emits a `file.edited` event whenever a tool writes to
-    // the filesystem. We respond by spawning a one-shot cartographer
-    // reindex for that file. Detached from the event handler so the
-    // model isn't waiting on a Rust subprocess + HTTP round-trip.
-    event: async ({ event }) => {
-      if (event.type === "file.edited") {
-        const filePath = event.properties.file;
-        const projectPath = ctx.directory;
-        // Fire-and-forget; reindex failures are logged but never
-        // surface as tool errors.
-        void runReindexWorker(log, config, projectPath, filePath).catch((err) =>
-          log.error("reindex worker crashed", { error: errMessage(err) }),
-        );
-        return;
-      }
-
-      if (event.type === "session.created") {
-        // Full project reindex: walk every git-tracked source file,
-        // parse each, sync as a single replace-mode payload. Detached so
-        // session startup isn't blocked; runFullReindex self-guards when
-        // no cartographer binary is configured.
-        void runFullReindex(log, config, ctx.directory).catch((err) =>
-          log.error("full reindex crashed", { error: errMessage(err) }),
-        );
-        // Silent key reconcile (MIM-87) then blind sync (MIM-88): fulfil
-        // pending wraps, pull/push org memories. Never blocks the session,
-        // never mints secrets; sync skips the embedder at boot.
-        void reconcileFromSharedConfig()
-          .then((result) => log.info("key reconcile", { ...result }))
-          .then(() => syncFromSharedConfig())
-          .then((result) => log.info("org sync", { ...result }))
-          .catch((err) =>
-            log.error("boot reconcile crashed", { error: errMessage(err) }),
-          );
-        return;
-      }
-
-      if (event.type === "session.idle") {
-        // Distill the session's new turns into the local replica
-        // (MIM-86), then push them through the blind sync relay
-        // (MIM-88). Fire-and-forget: errors are logged, never
-        // propagated. The per-session watermark makes repeat idles
-        // cheap; storeTyped dedupes; sync skips the embedder.
-        void persistSessionTranscript(
-          event.properties.sessionID,
-          ctx.directory,
-          config,
-          log,
-          ctx.client,
-        )
-          .then(() => syncFromSharedConfig())
-          .then((result) => log.info("post-distill sync", { ...result }))
-          .catch((err) =>
-            log.error("transcript persist crashed", {
-              error: errMessage(err),
-            }),
-          );
-        return;
-      }
-    },
+    // See session-events.ts. Child (worker) sessions are skipped for
+    // distillation — workers persist nothing.
+    event: createEventHandler({
+      config,
+      log,
+      directory: ctx.directory,
+      client: ctx.client,
+      sessionRoles,
+    }),
   };
 };
 

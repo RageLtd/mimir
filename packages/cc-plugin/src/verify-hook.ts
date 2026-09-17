@@ -29,7 +29,7 @@ import {
   type VerifyOutcome,
   type VerifyRole,
 } from "@mimir/plugin-core/verify";
-import { workerByName } from "@mimir/plugin-core/workers";
+import { roleForAgentType } from "@mimir/plugin-core/workers";
 import { createLogger } from "./logger";
 
 const log = createLogger("verify-hook");
@@ -126,7 +126,7 @@ const parseInput = (raw: string) =>
 
 /** The worker role behind an agent type; unknown types get the strictest. */
 export const roleOf = (agentType: string | undefined) => {
-  const role: VerifyRole = workerByName(agentType ?? "")?.role ?? "impl";
+  const role: VerifyRole = roleForAgentType(agentType);
   return role;
 };
 
