@@ -12,7 +12,15 @@
 # consumes it (reads + deletes), and re-launches claude with the marker's
 # env overrides and extra flags merged in. Crash-safe — an orphaned
 # marker is picked up on the next launch rather than dropped.
+#
+# Everything lives inside main() and the file ends with the call: bash
+# reads a script incrementally, and `mimir-cc update` rewrites this file
+# while a session launched by the old copy is still running. A function
+# body is parsed in full before it executes, so the running copy is
+# immune to the rewrite; a bare script would resume at a stale offset in
+# the new file and hit a syntax error on exit.
 
+main() {
 set -eo pipefail
 export MIMIR_ACTIVE=1
 
@@ -105,3 +113,7 @@ while true; do
 
   rm -f "$MIMIR_MARKER"
 done
+}
+
+main "$@"
+exit $?

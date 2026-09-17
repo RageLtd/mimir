@@ -117,6 +117,25 @@ exit 0
     expect(records[0]).toContain("ANTHROPIC_BASE_URL=unset");
   });
 
+  test("survives being rewritten while a launch is in flight", async () => {
+    // The mock claude overwrites the wrapper mid-run with a different,
+    // shorter script — what `mimir-cc update` does from inside a session.
+    // A bare script would resume at a stale offset and fail to parse.
+    await writeMockClaude(`#!/usr/bin/env bash
+echo "args=$*" >> "$MIMIR_LOG"
+echo "---" >> "$MIMIR_LOG"
+printf '#!/usr/bin/env bash\\necho replaced >> "$MIMIR_LOG"\\n' > "${wrapperPath}"
+exit 0
+`);
+
+    const result = await runWrapper();
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain("syntax error");
+    const records = await readLog();
+    expect(records).toHaveLength(1);
+    expect(records[0]).not.toContain("replaced");
+  });
+
   test("passes --agents with the file contents when agents.json exists, omits it otherwise", async () => {
     await writeMockClaude(`#!/usr/bin/env bash
 echo "args=$*" >> "$MIMIR_LOG"
