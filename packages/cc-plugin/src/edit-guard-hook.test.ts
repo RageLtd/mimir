@@ -91,6 +91,12 @@ describe("bulk mechanical edits are allowed with a report nudge", () => {
 
 describe("non-edits and ambiguous commands pass silently", () => {
   test.each([
+    // Fan-out over read-only commands is not an edit.
+    `for d in a b; do echo "== $d: $(git -C $d status --short)"; done`,
+    `find . -name '*.ts' -exec cat {} \\;`,
+    `git ls-files | xargs wc -l`,
+    `grep -rl foo src/ | xargs grep -n bar`,
+    `for f in src/**/*.ts; do bun test "$f"; done`,
     `sed -n '1,20p' src/app.ts`,
     `sed 's/foo/bar/' src/app.ts`,
     `cat src/app.ts`,

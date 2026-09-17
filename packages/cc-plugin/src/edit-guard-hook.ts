@@ -158,13 +158,16 @@ const collectTargets = (words: readonly string[]): Targets => {
   return { paths, wildcard };
 };
 
-/** sed -i / perl -pi: flags, then the expression, then the targets. */
+/**
+ * sed -i / perl -pi: flags, then the expression, then the targets. The
+ * editor may not be the segment's first word — `do sed -i …`,
+ * `find … -exec sed -i …`, `xargs perl -pi …` — so it is located, not
+ * assumed.
+ */
 const inPlaceTargets = (words: readonly string[]) => {
-  const [cmd, ...rest] = words;
-  if (!cmd) return null;
-  const isSed = /^sed$/.test(cmd);
-  const isPerl = /^perl$/.test(cmd);
-  if (!isSed && !isPerl) return null;
+  const at = words.findIndex((w) => w === "sed" || w === "perl");
+  if (at === -1) return null;
+  const rest = words.slice(at + 1);
   const inPlace = rest.some(
     (w) => /^-[A-Za-z]*i/.test(w) || w.startsWith("--in-place"),
   );
@@ -197,10 +200,15 @@ const inPlaceTargets = (words: readonly string[]) => {
   return collectTargets(operands);
 };
 
-/** `> file`, `>> file`, `tee file`, `tee -a file`. */
+/**
+ * `> file`, `>> file`, `tee file`, `tee -a file`. `seen` is true when a
+ * redirect or tee appeared at all, even to a `$var` target we can't name
+ * — that is the evidence a write happened, which fan-out alone is not.
+ */
 const redirectTargets = (segment: string, words: readonly string[]) => {
   const paths: string[] = [];
   let wildcard = false;
+  let seen = false;
   const add = (raw: string | undefined) => {
     if (!raw) return;
     const word = shellWords(raw)[0] ?? "";
@@ -220,16 +228,18 @@ const redirectTargets = (segment: string, words: readonly string[]) => {
   for (const m of visible.matchAll(
     /(?<![\d&<])>{1,2}\s*((?:"[^"]*"|'[^']*'|\S)+)/g,
   )) {
+    seen = true;
     add(m[1]);
   }
   const teeAt = words.indexOf("tee");
   if (teeAt !== -1) {
+    seen = true;
     for (const w of words.slice(teeAt + 1)) {
       if (w.startsWith("-")) continue;
       add(w);
     }
   }
-  return { paths, wildcard };
+  return { paths, wildcard, seen };
 };
 
 /** Inline interpreter snippets: -c/-e argument or heredoc body. */
@@ -258,10 +268,23 @@ const scriptTargets = (
   return { paths, wildcard: FAN_OUT.test(body), write: true };
 };
 
-const shapeFor = (targets: Targets, fanOut: boolean): EditShape => {
-  if (targets.wildcard || fanOut || targets.paths.length > 1) return "bulk";
-  if (targets.paths.length === 1) return "single";
-  return "none";
+/**
+ * A shape needs evidence of a write (an in-place edit, a script write,
+ * a redirect or tee). Fan-out on its own — a `for` loop, `find`, `xargs`
+ * over read-only commands — is not an edit.
+ */
+const shapeFor = (targets: Targets, fanOut: boolean, evidence: boolean) => {
+  const none: EditShape = "none";
+  if (!evidence) return none;
+  if (targets.wildcard || fanOut || targets.paths.length > 1) {
+    const bulk: EditShape = "bulk";
+    return bulk;
+  }
+  if (targets.paths.length === 1) {
+    const single: EditShape = "single";
+    return single;
+  }
+  return none;
 };
 
 export type Classification = {
@@ -285,8 +308,12 @@ export const classifyBashEdit = (command: string): Classification => {
   const fanOut = FAN_OUT.test(stripped.replace(/"[^"]*"|'[^']*'/g, '""'));
   let bulk = false;
   const singles = new Set<string>();
-  const consider = (targets: Targets, localFanOut = false) => {
-    const shape = shapeFor(targets, fanOut || localFanOut);
+  const consider = (
+    targets: Targets,
+    evidence: boolean,
+    localFanOut = false,
+  ) => {
+    const shape = shapeFor(targets, fanOut || localFanOut, evidence);
     if (shape === "bulk") bulk = true;
     else if (shape === "single") singles.add(targets.paths[0] ?? "");
   };
@@ -295,10 +322,11 @@ export const classifyBashEdit = (command: string): Classification => {
     if (!trimmed) continue;
     const words = shellWords(trimmed);
     const inPlace = inPlaceTargets(words);
-    if (inPlace) consider(inPlace);
+    if (inPlace) consider(inPlace, true);
     const script = scriptTargets(words, trimmed, heredocBodies);
-    if (script?.write) consider(script, script.wildcard);
-    consider(redirectTargets(trimmed, words));
+    if (script?.write) consider(script, true, script.wildcard);
+    const redirect = redirectTargets(trimmed, words);
+    consider(redirect, redirect.seen);
     if (bulk) break;
   }
   // Several one-file writes in one command are a bulk change too.
