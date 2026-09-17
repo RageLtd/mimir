@@ -10,9 +10,10 @@
  *   single — the command rewrites exactly one explicit file through the
  *            shell. Denied, with a reason pointing at the Edit tool.
  *   bulk   — the command fans out over many files (globs, find/xargs,
- *            loops, multiple paths, glob()/os.walk in a script). Allowed;
- *            the model is asked to report the change set afterwards
- *            because nothing of it shows in chat.
+ *            loops, multiple paths, glob()/os.walk in a script). Denied
+ *            too: a shell edit bypasses every file rule in the engine and
+ *            never shows as a diff. Mechanical sweeps go through the
+ *            project's formatter or codemod tooling, not sed.
  *   none   — not an edit, or too ambiguous to call. Silent.
  *
  * Hooks fire before the permission-mode check in every mode, so a deny
@@ -309,8 +310,8 @@ export const classifyBashEdit = (command: string): Classification => {
 const denyReason = (target: string) =>
   `Mimir edit guard: this command rewrites a single file (${target}) through the shell. Make the change with the Edit tool (or Write for a new file) so the developer sees it as a diff in chat. Shell edits are for mechanical changes across many files.`;
 
-const BULK_CONTEXT =
-  "Mimir edit guard: bulk shell edit allowed. The developer cannot see these changes in chat — after it runs, report what changed with `git diff --stat` and show one representative hunk.";
+const BULK_REASON =
+  "Mimir edit guard: this command edits files through the shell across many paths. Shell edits bypass the rule engine and never appear as diffs in chat. Make the changes with the Edit tool per file (Write for new files); for a genuinely mechanical sweep use the project's formatter or a codemod, then show `git diff --stat`.";
 
 /**
  * Hook decision for a Bash command: the JSON object to print, or null
@@ -331,7 +332,8 @@ export const decide = (command: string) => {
       return {
         hookSpecificOutput: {
           hookEventName: HOOK_EVENT,
-          additionalContext: BULK_CONTEXT,
+          permissionDecision: "deny",
+          permissionDecisionReason: BULK_REASON,
         },
       };
     case "none":
@@ -380,10 +382,7 @@ export const runEditGuardHook = async () => {
 
   const decision = decide(command);
   if (!decision) return 0;
-  log.info("edit guard fired", {
-    shape:
-      "permissionDecision" in decision.hookSpecificOutput ? "single" : "bulk",
-  });
+  log.info("edit guard fired", { shape: classifyBashEdit(command).shape });
   process.stdout.write(JSON.stringify(decision));
   return 0;
 };

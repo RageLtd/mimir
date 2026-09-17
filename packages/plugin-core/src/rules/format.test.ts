@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   applyMessageTemplate,
+  formatBlock,
   formatFindings,
   formatLoadErrors,
   renderTemplate,
@@ -18,6 +19,23 @@ const rule = (overrides: Partial<RuleEntry> = {}): RuleEntry => ({
 
 const placeholder = (expression: string) =>
   ["$", "{", expression, "}"].join("");
+
+describe("formatBlock", () => {
+  test("null on no findings; deny framing with the rule body inlined", () => {
+    expect(formatBlock([])).toBeNull();
+    const finding: Finding = {
+      rule: rule({ id: "safety/x", bodyContent: "Never do X." }),
+      violations: [{ message: "did X", line: 3 }],
+    };
+    const text = formatBlock([finding]) ?? "";
+    expect(text).toContain("Blocked by an enforced rule");
+    expect(text).toContain("was not executed");
+    expect(text).toContain("Rule: safety/x");
+    expect(text).toContain("Line 3: did X");
+    expect(text).toContain("Never do X.");
+    expect(text).toContain('severity = "nudge"');
+  });
+});
 
 describe("renderTemplate", () => {
   test("interpolates match and numbered capture placeholders", () => {

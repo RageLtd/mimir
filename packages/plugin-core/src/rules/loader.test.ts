@@ -22,6 +22,50 @@ const writeRule = async (relativePath: string, contents: string) => {
   return abs;
 };
 
+describe("loadRules — severity", () => {
+  const body = `event = "file"
+[[conditions]]
+field = "new_text"
+operator = "contains"
+pattern = "x"
+`;
+
+  test("absent severity loads as undefined (the engine treats it as block)", async () => {
+    await writeRule(".claude/a.enforce.toml", `id = "a"\n${body}`);
+    const result = await loadRules(projectRoot);
+    expect(result.errors).toHaveLength(0);
+    expect(result.rules[0]?.severity).toBeUndefined();
+  });
+
+  test("nudge and block are accepted verbatim", async () => {
+    await writeRule(
+      ".claude/n.enforce.toml",
+      `id = "n"\nseverity = "nudge"\n${body}`,
+    );
+    await writeRule(
+      ".claude/b.enforce.toml",
+      `id = "b"\nseverity = "block"\n${body}`,
+    );
+    const result = await loadRules(projectRoot);
+    expect(result.errors).toHaveLength(0);
+    const byId = new Map(result.rules.map((r) => [r.id, r.severity]));
+    expect(byId.get("n")).toBe("nudge");
+    expect(byId.get("b")).toBe("block");
+  });
+
+  test("any other severity is a load error naming the rule", async () => {
+    await writeRule(
+      ".claude/w.enforce.toml",
+      `id = "w"\nseverity = "warn"\n${body}`,
+    );
+    const result = await loadRules(projectRoot);
+    expect(result.rules).toHaveLength(0);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]?.id).toBe("w");
+    expect(result.errors[0]?.message).toContain("severity");
+  });
+});
+
 describe("loadRules — discovery", () => {
   test("returns empty when no .enforce.toml files present", async () => {
     const result = await loadRules(projectRoot);

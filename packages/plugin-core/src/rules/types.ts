@@ -26,6 +26,15 @@
 export type RuleEvent = "bash" | "file" | "stop" | "prompt" | "all";
 
 /**
+ * What a finding does to the tool call. `block` denies it with the
+ * findings as the reason; `nudge` lets it run and surfaces the findings
+ * as advice. The default is `block` — precise rules should stop bad
+ * calls, and only fuzzy style regexes opt down to `nudge` so a false
+ * positive can't wedge an agent.
+ */
+export type RuleSeverity = "nudge" | "block";
+
+/**
  * Condition operator vocabulary. Subset of hookify's operators —
  * extend as new rule patterns demand it. `regex_match` is the workhorse;
  * the others are sugar for cheaper exact matches.
@@ -69,6 +78,8 @@ export interface RuleEntry {
   readonly bodyContent?: string;
   readonly enabled: boolean;
   readonly event: RuleEvent;
+  /** Unset means `block`. See `RuleSeverity`. */
+  readonly severity?: RuleSeverity;
   /**
    * Mimir extension. Glob patterns matched against `file_path` — if any
    * match, the rule does not fire. Negation primitive that hookify's

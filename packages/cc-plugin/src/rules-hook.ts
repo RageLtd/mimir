@@ -4,13 +4,14 @@
  * Wired into ~/.mimir/settings.json as a PreToolUse hook command. CC
  * invokes it with the hook payload on stdin; we read it, run the rule
  * engine against `.claude/**\/*.enforce.toml` files in the session's
- * project root, and emit `additionalContext` (only when there's a
- * finding) so the model sees the nudge alongside the tool call.
+ * project root, and answer in the CC hook protocol:
  *
- * Equivalent to packages/acp/src/backends/claude-code/rule-hooks.ts —
- * but instead of returning to the SDK in-process, we serialise to the
- * CC hook protocol shape:
- *   { hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext } }
+ *   blocking finding → permissionDecision: "deny" with the findings as
+ *                      the reason (the call does not run)
+ *   nudge finding    → additionalContext (the call runs, advice attached)
+ *
+ * Rules block unless they opt down with `severity = "nudge"` — the same
+ * behaviour on every host, main session or subagent alike.
  *
  * Defence in depth: MIMIR_ACTIVE gate matches the voice-anchor hook,
  * so a nested `claude` subprocess inside a mimir session can't
@@ -20,7 +21,8 @@
 import {
   type DetectorContext,
   loadRules,
-  runAndFormat,
+  preToolUseOutput,
+  runAndPartition,
 } from "@mimir/plugin-core/rules";
 import { errMessage } from "@mimir/plugin-core/util";
 import { createLogger } from "./logger";
@@ -35,22 +37,20 @@ type HookInput = {
   readonly tool_input?: unknown;
 };
 
-const readStdin = async (): Promise<string> => {
+const readStdin = async () => {
   const chunks: Uint8Array[] = [];
   for await (const chunk of Bun.stdin.stream()) {
     chunks.push(chunk);
   }
-  const buf = Buffer.concat(chunks);
-  return buf.toString("utf8");
+  return Buffer.concat(chunks).toString("utf8");
 };
 
-const safeParseHookInput = (raw: string): HookInput => {
-  if (raw.trim().length === 0) return {};
-  try {
-    return JSON.parse(raw) as HookInput;
-  } catch {
-    return {};
-  }
+const safeParseHookInput = (raw: string) => {
+  if (raw.trim().length === 0) return {} as HookInput;
+  // Serialisation boundary: the hook payload arrives as untyped JSON.
+  return Promise.resolve()
+    .then(() => JSON.parse(raw) as HookInput)
+    .catch(() => ({}) as HookInput);
 };
 
 /**
@@ -64,25 +64,15 @@ const safeParseHookInput = (raw: string): HookInput => {
  * the engine's expectation for builtins like `file-length` that read
  * the on-disk file when relative paths are passed.
  */
-const buildContext = (input: HookInput): DetectorContext => ({
-  toolName: input.tool_name ?? "",
-  toolInput:
-    input.tool_input && typeof input.tool_input === "object"
-      ? (input.tool_input as Record<string, unknown>)
-      : {},
-  projectPath: input.cwd ?? process.cwd(),
-});
-
-const emitAdditionalContext = (text: string) => {
-  process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        additionalContext: text,
-      },
-    }),
-  );
-};
+export const buildContext = (input: HookInput) =>
+  ({
+    toolName: input.tool_name ?? "",
+    toolInput:
+      input.tool_input && typeof input.tool_input === "object"
+        ? (input.tool_input as Record<string, unknown>)
+        : {},
+    projectPath: input.cwd ?? process.cwd(),
+  }) satisfies DetectorContext;
 
 /**
  * Entry point invoked from cli.ts when argv[2] === "rules".
@@ -93,11 +83,11 @@ const emitAdditionalContext = (text: string) => {
  * violation. Errors get a stderr line (CC surfaces those in --debug)
  * and we return cleanly.
  */
-export const runRulesHook = async (): Promise<number> => {
+export const runRulesHook = async () => {
   if (process.env.MIMIR_ACTIVE !== "1") return 0;
 
   const raw = await readStdin();
-  const input = safeParseHookInput(raw);
+  const input = await safeParseHookInput(raw);
   const ctx = buildContext(input);
 
   if (!ctx.toolName) return 0;
@@ -115,16 +105,19 @@ export const runRulesHook = async (): Promise<number> => {
     });
   }
 
-  const nudge = await runAndFormat(loaded.rules, ctx).catch((err) => {
-    log.error("runAndFormat failed", { error: errMessage(err) });
+  const verdict = await runAndPartition(loaded.rules, ctx).catch((err) => {
+    log.error("runAndPartition failed", { error: errMessage(err) });
     return null;
   });
-  if (!nudge) return 0;
+  if (!verdict) return 0;
 
-  log.info("rule violation surfaced", {
+  const output = preToolUseOutput(verdict);
+  if (!output) return 0;
+
+  log.info(verdict.block ? "rule violation blocked" : "rule nudge surfaced", {
     toolName: ctx.toolName,
     ruleCount: loaded.rules.length,
   });
-  emitAdditionalContext(nudge);
+  process.stdout.write(JSON.stringify(output));
   return 0;
 };

@@ -27,6 +27,23 @@ export const formatFindings = (findings: ReadonlyArray<Finding>) => {
   ].join("\n");
 };
 
+/**
+ * Format blocking findings as the deny reason. Same per-finding body as
+ * the nudge, different framing: the call did not run, and the fix is a
+ * different call — not an explanation.
+ */
+export const formatBlock = (findings: ReadonlyArray<Finding>) => {
+  if (findings.length === 0) return null;
+  const blocks = findings.map(formatFinding);
+  return [
+    "⛔ Blocked by an enforced rule — this tool call was not executed:",
+    "",
+    blocks.join("\n\n"),
+    "",
+    'Change the approach so it complies, then retry. A rule that should advise rather than block sets severity = "nudge".',
+  ].join("\n");
+};
+
 const formatFinding = (finding: Finding) => {
   const header = finding.rule.body
     ? `Rule: ${finding.rule.id} (${finding.rule.body})`

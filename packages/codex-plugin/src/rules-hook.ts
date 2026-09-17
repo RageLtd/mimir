@@ -5,8 +5,10 @@
  * Codex tool call into CC-equivalent calls (apply_patch fans out to one
  * Edit/Write per touched file — tool-map.ts), run the rule engine
  * against `.claude/**\/*.enforce.toml` files in the session's project
- * root for each, and emit `additionalContext` (only when there's a
- * finding) so the model sees the nudge alongside the tool call.
+ * root for each, and answer in the CC-style hook protocol: a blocking
+ * finding denies the call with the findings as the reason, a nudge
+ * finding attaches advice. Rules block unless they set
+ * `severity = "nudge"` — the same on every host.
  *
  * Codex's shell tool is literally named "Bash" with tool_input.command,
  * so command-based detectors work with zero translation.
@@ -15,7 +17,10 @@
 import {
   type DetectorContext,
   loadRules,
-  runAndFormat,
+  mergeVerdicts,
+  preToolUseOutput,
+  type RuleVerdict,
+  runAndPartition,
 } from "@mimir/plugin-core/rules";
 import { errMessage } from "@mimir/plugin-core/util";
 import { readHookInput } from "./hook-input";
@@ -30,17 +35,6 @@ type HookInput = {
   readonly cwd?: string;
   readonly tool_name?: string;
   readonly tool_input?: unknown;
-};
-
-const emitAdditionalContext = (text: string) => {
-  process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        additionalContext: text,
-      },
-    }),
-  );
 };
 
 /**
@@ -74,29 +68,30 @@ export const runRulesHook = async () => {
     });
   }
 
-  // apply_patch can touch several files — collect every nudge so a
+  // apply_patch can touch several files — collect every verdict so a
   // multi-file patch reports each violating file, not just the first.
-  const nudges: string[] = [];
+  const verdicts: RuleVerdict[] = [];
   for (const call of calls) {
     const ctx: DetectorContext = {
       toolName: call.toolName,
       toolInput: call.toolInput,
       projectPath,
     };
-    const nudge = await runAndFormat(loaded.rules, ctx).catch((err) => {
-      log.error("runAndFormat failed", { error: errMessage(err) });
+    const verdict = await runAndPartition(loaded.rules, ctx).catch((err) => {
+      log.error("runAndPartition failed", { error: errMessage(err) });
       return null;
     });
-    if (nudge) nudges.push(nudge);
+    if (verdict) verdicts.push(verdict);
   }
-  if (nudges.length === 0) return 0;
+  const merged = mergeVerdicts(verdicts);
+  const output = preToolUseOutput(merged);
+  if (!output) return 0;
 
-  log.info("rule violation surfaced", {
+  log.info(merged.block ? "rule violation blocked" : "rule nudge surfaced", {
     toolName: input.tool_name,
     normalizedCalls: calls.length,
-    findings: nudges.length,
     ruleCount: loaded.rules.length,
   });
-  emitAdditionalContext(nudges.join("\n\n"));
+  process.stdout.write(JSON.stringify(output));
   return 0;
 };

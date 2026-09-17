@@ -75,19 +75,17 @@ describe("bulk mechanical edits are allowed with a report nudge", () => {
     expect(shape(cmd)).toBe("bulk");
   });
 
-  test("emits additionalContext, not a deny", () => {
+  test("denies, pointing at the Edit tool and codemod tooling", () => {
     const decision = decide(`sed -i 's/foo/bar/g' src/a.ts src/b.ts`);
     expect(decision?.hookSpecificOutput).toMatchObject({
       hookEventName: "PreToolUse",
+      permissionDecision: "deny",
     });
-    expect(decision?.hookSpecificOutput).not.toHaveProperty(
-      "permissionDecision",
-    );
     expect(
-      "additionalContext" in (decision?.hookSpecificOutput ?? {})
-        ? decision?.hookSpecificOutput.additionalContext
+      "permissionDecisionReason" in (decision?.hookSpecificOutput ?? {})
+        ? decision?.hookSpecificOutput.permissionDecisionReason
         : "",
-    ).toContain("git diff --stat");
+    ).toContain("Edit tool");
   });
 });
 

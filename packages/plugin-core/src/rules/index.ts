@@ -6,7 +6,12 @@
  * private to the engine.
  */
 
-export { formatFindings, formatLoadErrors } from "./format";
+export { formatBlock, formatFindings, formatLoadErrors } from "./format";
+export {
+  mergeVerdicts,
+  type PreToolUseOutput,
+  preToolUseOutput,
+} from "./hook-output";
 export { loadRules } from "./loader";
 export {
   formatRulesForPrompt,
@@ -15,7 +20,15 @@ export {
   readProjectRules,
   scopedRulesFor,
 } from "./project-rules";
-export { eventMatchesTool, runAndFormat, runRules } from "./runner";
+export {
+  eventMatchesTool,
+  isBlocking,
+  partitionFindings,
+  type RuleVerdict,
+  runAndFormat,
+  runAndPartition,
+  runRules,
+} from "./runner";
 export {
   conventionFor,
   isTestFile,
@@ -35,5 +48,6 @@ export type {
   Operator,
   RuleEntry,
   RuleEvent,
+  RuleSeverity,
   Violation,
 } from "./types";

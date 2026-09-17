@@ -3,6 +3,7 @@ import {
   compileCondition,
   eventMatchesTool,
   runAndFormat,
+  runAndPartition,
   runRules,
 } from "./runner";
 import type { CompiledCondition, DetectorContext, RuleEntry } from "./types";
@@ -241,6 +242,52 @@ describe("runRules — builtin detector", () => {
     });
     const findings = await runRules([r], ctx("Edit", { new_string: "x" }));
     expect(findings).toHaveLength(0);
+  });
+});
+
+describe("runAndPartition", () => {
+  test("unset severity blocks; nudge rules advise; clean call is null/null", async () => {
+    const conditions = await compileFor([
+      { field: "new_text", pattern: "BAD" },
+    ]);
+    const blocking = rule({ id: "b", conditions });
+    const nudging = rule({ id: "n", conditions, severity: "nudge" });
+
+    const both = await runAndPartition(
+      [blocking, nudging],
+      ctx("Edit", { new_string: "BAD" }),
+    );
+    expect(both.block).toContain("Blocked by an enforced rule");
+    expect(both.block).toContain("Rule: b");
+    expect(both.block).not.toContain("Rule: n");
+    expect(both.nudge).toContain("Rule: n");
+    expect(both.nudge).not.toContain("Rule: b");
+
+    const onlyNudge = await runAndPartition(
+      [nudging],
+      ctx("Edit", { new_string: "BAD" }),
+    );
+    expect(onlyNudge.block).toBeNull();
+    expect(onlyNudge.nudge).toContain("Rule: n");
+
+    const clean = await runAndPartition(
+      [blocking, nudging],
+      ctx("Edit", { new_string: "fine" }),
+    );
+    expect(clean).toEqual({ block: null, nudge: null });
+  });
+
+  test("explicit severity = block behaves like unset", async () => {
+    const conditions = await compileFor([
+      { field: "new_text", pattern: "BAD" },
+    ]);
+    const explicit = rule({ id: "e", conditions, severity: "block" });
+    const verdict = await runAndPartition(
+      [explicit],
+      ctx("Edit", { new_string: "BAD" }),
+    );
+    expect(verdict.block).toContain("Rule: e");
+    expect(verdict.nudge).toBeNull();
   });
 });
 

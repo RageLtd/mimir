@@ -28,7 +28,7 @@ import {
   formatRulesForPrompt,
   loadRules,
   readProjectRules,
-  runAndFormat,
+  runAndPartition,
 } from "@mimir/plugin-core/rules";
 import {
   createOrgReplica,
@@ -84,6 +84,12 @@ type SessionState = {
    * per-round keeps cadence at one tick per developer turn.
    */
   pendingAnchor: Anchor | null;
+  /**
+   * Advice from `severity = "nudge"` rules, queued by tool.execute.before
+   * (which can only allow or throw) for the next transform round to
+   * inject into the recency slot.
+   */
+  pendingNudges: string[];
 };
 
 const sessions = new Map<string, SessionState>();
@@ -101,6 +107,7 @@ const getSession = (sessionId: string, libSize: number): SessionState => {
       voiceAnchor: createSessionVoiceAnchor(sessionId, libSize),
       bootDone: false,
       pendingAnchor: null,
+      pendingNudges: [],
     };
     sessions.set(sessionId, s);
   }
@@ -279,16 +286,21 @@ export const MimirPlugin: Plugin = async (ctx) => {
         s.pendingAnchor = null;
       }
 
+      if (s.pendingNudges.length > 0) {
+        blocks.push(...s.pendingNudges);
+        s.pendingNudges = [];
+      }
+
       injectLeadingContext(output.messages, blocks);
     },
 
     // ─── Rules engine ───
     //
     // Runs on every tool call. Loads `.claude/**/*.enforce.toml` from
-    // the project root, evaluates conditions/built-ins, throws on
-    // violation. Throwing from tool.execute.before fails the tool
-    // call with the nudge as the error message — the model sees the
-    // violation alongside the call and can amend.
+    // the project root and evaluates conditions/built-ins. A blocking
+    // finding throws — that fails the tool call with the findings as
+    // the error, the only deny this hook has. A nudge finding lets the
+    // call run and queues the advice for the next transform round.
     "tool.execute.before": async (input, output) => {
       const projectPath = ctx.directory;
       const loaded = await loadRules(projectPath).catch((err) => {
@@ -303,17 +315,25 @@ export const MimirPlugin: Plugin = async (ctx) => {
         });
       }
 
-      const nudge = await runAndFormat(loaded.rules, {
+      const verdict = await runAndPartition(loaded.rules, {
         toolName: input.tool,
         toolInput: output.args as Record<string, unknown>,
         projectPath,
       }).catch((err) => {
-        log.error("runAndFormat failed", { error: errMessage(err) });
+        log.error("runAndPartition failed", { error: errMessage(err) });
         return null;
       });
-      if (nudge) {
-        log.info("rule violation surfaced", { tool: input.tool });
-        throw new Error(nudge);
+      if (!verdict) return;
+      if (verdict.nudge) {
+        log.info("rule nudge queued", { tool: input.tool });
+        getSession(
+          input.sessionID,
+          voiceAnchorLibrary.length,
+        ).pendingNudges.push(verdict.nudge);
+      }
+      if (verdict.block) {
+        log.info("rule violation blocked", { tool: input.tool });
+        throw new Error(verdict.block);
       }
     },
 

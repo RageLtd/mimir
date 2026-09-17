@@ -29,6 +29,7 @@ import type {
   Operator,
   RuleEntry,
   RuleEvent,
+  RuleSeverity,
 } from "./types";
 
 /** Glob pattern for rule discovery, relative to project root. */
@@ -49,6 +50,11 @@ const VALID_OPERATORS: ReadonlySet<Operator> = new Set([
   "contains",
   "equals",
 ]);
+
+const VALID_SEVERITIES: readonly RuleSeverity[] = ["nudge", "block"];
+
+// Inferred type predicate — the literal comparisons narrow `value`.
+const isSeverity = (value: unknown) => value === "nudge" || value === "block";
 
 /**
  * Load and validate every `.enforce.toml` under `projectPath`.
@@ -147,6 +153,14 @@ const loadOne = async (absPath: string, _projectPath: string) => {
     );
   }
 
+  if (raw.severity !== undefined && !isSeverity(raw.severity)) {
+    return failure(
+      absPath,
+      id,
+      `invalid \`severity\` value "${String(raw.severity)}" — must be one of: ${VALID_SEVERITIES.join(", ")}`,
+    );
+  }
+
   // Body resolution: relative to the .toml's directory; absent is fine.
   const bodyResult = await resolveBody(raw.body, absPath);
   if (!bodyResult.ok) {
@@ -230,6 +244,7 @@ const loadOne = async (absPath: string, _projectPath: string) => {
     bodyContent: bodyResult.content,
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : true,
     event: event as RuleEvent,
+    severity: isSeverity(raw.severity) ? raw.severity : undefined,
     excludeGlobs,
     message: typeof raw.message === "string" ? raw.message : undefined,
     detector,

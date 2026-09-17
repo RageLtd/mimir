@@ -14,7 +14,7 @@
 import * as path from "node:path";
 import { Glob } from "bun";
 import { resolveBuiltin } from "./builtins";
-import { applyMessageTemplate, formatFindings } from "./format";
+import { applyMessageTemplate, formatBlock, formatFindings } from "./format";
 import {
   type ConditionMatch,
   evaluateCondition,
@@ -185,6 +185,41 @@ export const runAndFormat = async (
 ) => {
   const findings = await runRules(rules, ctx);
   return formatFindings(findings);
+};
+
+/** Unset severity blocks — see `RuleSeverity`. */
+export const isBlocking = (rule: RuleEntry) => rule.severity !== "nudge";
+
+/** Split findings by what they do to the tool call. */
+export const partitionFindings = (findings: ReadonlyArray<Finding>) => ({
+  blocking: findings.filter((f) => isBlocking(f.rule)),
+  nudges: findings.filter((f) => !isBlocking(f.rule)),
+});
+
+/**
+ * The engine's verdict on one tool call: text for a deny reason when
+ * any blocking rule fired, text for advice when any nudge rule fired.
+ * Either may be null; both null means the call is clean.
+ */
+export type RuleVerdict = {
+  readonly block: string | null;
+  readonly nudge: string | null;
+};
+
+/**
+ * Run rules and split the result into a deny reason and advice. This
+ * is what host adapters call — `runAndFormat` remains for callers that
+ * only ever surface advice.
+ */
+export const runAndPartition = async (
+  rules: ReadonlyArray<RuleEntry>,
+  ctx: DetectorContext,
+) => {
+  const { blocking, nudges } = partitionFindings(await runRules(rules, ctx));
+  return {
+    block: formatBlock(blocking),
+    nudge: formatFindings(nudges),
+  } satisfies RuleVerdict;
 };
 
 /**
