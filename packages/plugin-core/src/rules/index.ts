@@ -16,6 +16,15 @@ export {
   scopedRulesFor,
 } from "./project-rules";
 export { eventMatchesTool, runAndFormat, runRules } from "./runner";
+export {
+  conventionFor,
+  isTestFile,
+  TEST_CONVENTIONS,
+  type TestConvention,
+  type TestLanguage,
+  type TestSignals,
+  testSignals,
+} from "./test-conventions";
 export type {
   CompiledCondition,
   Condition,

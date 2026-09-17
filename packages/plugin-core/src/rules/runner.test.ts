@@ -195,6 +195,45 @@ describe("runRules — builtin detector", () => {
     expect(findings[0]?.violations[0]?.message).toContain("8 lines");
   });
 
+  test("test-file fires on a test path and stays quiet on source", async () => {
+    const r = rule({
+      id: "test-file",
+      detector: "builtin:test-file",
+      conditions: undefined,
+    });
+    const onTest = await runRules(
+      [r],
+      ctx("Edit", { file_path: "src/a.test.ts", new_string: "x" }),
+    );
+    expect(onTest).toHaveLength(1);
+    expect(onTest[0]?.violations[0]?.message).toContain("is a test file");
+    const onSource = await runRules(
+      [r],
+      ctx("Edit", { file_path: "src/a.ts", new_string: "x" }),
+    );
+    expect(onSource).toHaveLength(0);
+  });
+
+  test("test-file negated fires on source paths", async () => {
+    const r = rule({
+      id: "not-test-file",
+      detector: "builtin:test-file",
+      detectorArgs: { negate: true },
+      conditions: undefined,
+    });
+    const onSource = await runRules(
+      [r],
+      ctx("Write", { file_path: "pkg/main.go", content: "x" }),
+    );
+    expect(onSource).toHaveLength(1);
+    expect(onSource[0]?.violations[0]?.message).toContain("is not a test file");
+    const onTest = await runRules(
+      [r],
+      ctx("Write", { file_path: "pkg/main_test.go", content: "x" }),
+    );
+    expect(onTest).toHaveLength(0);
+  });
+
   test("unknown builtin → no findings (loader catches it; runner stays defensive)", async () => {
     const r = rule({
       detector: "builtin:does-not-exist",

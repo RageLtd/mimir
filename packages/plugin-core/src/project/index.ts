@@ -36,6 +36,14 @@ export { detectGitRemote } from "./git";
 export { toProjectRelative } from "./paths";
 export type { ResolvedProject } from "./resolver";
 export { normalizeGitRemote, resolveProjectForPath } from "./resolver";
+export {
+  findPackageRoot,
+  type ResolvedToolchain,
+  resolveToolchain,
+  resolveToolchainsForFiles,
+  type ToolchainSource,
+  type VerifyCommands,
+} from "./toolchain";
 
 export const getOrResolveProjectId = async (
   serverUrl: string,

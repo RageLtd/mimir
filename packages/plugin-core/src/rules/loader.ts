@@ -18,6 +18,7 @@
 
 import * as path from "node:path";
 import { Glob } from "bun";
+import { parseToml } from "../toml";
 import { errMessage } from "../util";
 import { resolveBuiltin } from "./builtins";
 import { compileCondition } from "./runner";
@@ -48,12 +49,6 @@ const VALID_OPERATORS: ReadonlySet<Operator> = new Set([
   "contains",
   "equals",
 ]);
-
-const bunTOML = (
-  Bun as unknown as {
-    TOML: { parse(s: string): Record<string, unknown> };
-  }
-).TOML;
 
 /**
  * Load and validate every `.enforce.toml` under `projectPath`.
@@ -129,14 +124,15 @@ const loadOne = async (absPath: string, _projectPath: string) => {
     return failure(absPath, undefined, `read failed: ${text.error}`);
   }
 
-  const parsed = await Promise.resolve()
-    .then(() => ({ ok: true as const, value: bunTOML.parse(text.text) }))
-    .catch((err) => ({ ok: false as const, error: errMessage(err) }));
-  if (!parsed.ok) {
-    return failure(absPath, undefined, `TOML parse failed: ${parsed.error}`);
+  const [parseErr, raw] = parseToml(text.text);
+  if (parseErr) {
+    return failure(
+      absPath,
+      undefined,
+      `TOML parse failed: ${errMessage(parseErr)}`,
+    );
   }
 
-  const raw = parsed.value;
   const id = typeof raw.id === "string" ? raw.id : undefined;
   if (!id) {
     return failure(absPath, undefined, "missing required `id` field");

@@ -8,6 +8,7 @@
     ".": "./src/index.ts",
     "./util": "./src/util.ts",
     "./shared-config": "./src/shared-config.ts",
+    "./mimir-toml": "./src/mimir-toml.ts",
     "./result": "./src/result.ts",
     "./markdown-to-xml": "./src/markdown-to-xml.ts",
     "./anthropic-xml": "./src/anthropic-xml.ts",

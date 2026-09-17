@@ -14,6 +14,7 @@
  * the schema users will write against.
  */
 import * as path from "node:path";
+import { isTestFile } from "./test-conventions";
 import type { DetectorContext, Violation } from "./types";
 
 /**
@@ -116,6 +117,30 @@ const readFileOrNull = (filePath: string) =>
 
 const countLines = (s: string) => s.split("\n").length;
 
+// ── builtin:test-file ──
+
+/**
+ * Args:
+ *   negate: boolean — fire when the target is NOT a test file (default false)
+ *
+ * Emits one violation when the edited path is a test file per the shared
+ * test conventions — or, negated, when it isn't. Role guards use the same
+ * table directly; this exposes it to `.enforce.toml` authors.
+ */
+const testFileDetector: BuiltinDetector = async (ctx, args) => {
+  const filePath = pickFilePath(ctx);
+  if (!filePath) return [];
+  const negate = args.negate === true;
+  if (isTestFile(filePath) === negate) return [];
+  return [
+    {
+      message: negate
+        ? `${filePath} is not a test file. See the paired rule.`
+        : `${filePath} is a test file. See the paired rule.`,
+    },
+  ];
+};
+
 // ── Registry ──
 
 /**
@@ -125,6 +150,7 @@ const countLines = (s: string) => s.split("\n").length;
  */
 export const BUILTINS: ReadonlyMap<string, BuiltinDetector> = new Map([
   ["file-length", fileLengthDetector],
+  ["test-file", testFileDetector],
 ]);
 
 /**
