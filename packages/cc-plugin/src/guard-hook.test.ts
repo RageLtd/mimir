@@ -32,6 +32,8 @@ describe("roleFromInput", () => {
     expect(roleFromInput({ agent_type: "mimir-impl" })).toBe("impl");
     expect(roleFromInput({ agent_type: "mimir-test" })).toBe("test");
     expect(roleFromInput({ agent_type: "mimir-review" })).toBe("review");
+    // Plugin-shipped agents arrive as `<plugin>:<name>` in the payload.
+    expect(roleFromInput({ agent_type: "mimir-cc:mimir-test" })).toBe("test");
     expect(roleFromInput({})).toBe("coordinator");
     expect(roleFromInput({ agent_type: "Explore" })).toBeNull();
   });

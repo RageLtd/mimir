@@ -53,8 +53,15 @@ export const WORKER_DEFINITIONS: readonly WorkerDefinition[] = [
   },
 ];
 
+/**
+ * Claude Code reports plugin-shipped agents as `<plugin>:<name>` in
+ * hook payloads (`mimir-cc:mimir-test`); the bare name is what the
+ * definitions carry, so the prefix is dropped before matching.
+ */
+const bareName = (name: string) => name.slice(name.lastIndexOf(":") + 1);
+
 export const workerByName = (name: string) =>
-  WORKER_DEFINITIONS.find((w) => w.name === name) ?? null;
+  WORKER_DEFINITIONS.find((w) => w.name === bareName(name)) ?? null;
 
 /**
  * The verify-gate role for an agent type. Unknown types (a host's
