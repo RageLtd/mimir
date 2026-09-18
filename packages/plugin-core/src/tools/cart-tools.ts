@@ -130,7 +130,9 @@ const runFileInfo = async (
       symbols: [],
       imports: [],
       dependents: [],
-      error: `File not found: ${filePath}`,
+      error: filePath
+        ? `File not found: ${filePath}`
+        : "file_path is required (project-relative or absolute path)",
     };
   }
   return {

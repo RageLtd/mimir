@@ -14,7 +14,7 @@ const file = (
 });
 
 describe("buildReviewPrompt", () => {
-  test("title, cold-read instructions, diff and content — no plan", () => {
+  test("title, cold-read instructions and diff — no plan, no file bodies", () => {
     const prompt = buildReviewPrompt({
       title: "Add shout()",
       files: [
@@ -33,20 +33,15 @@ describe("buildReviewPrompt", () => {
     expect(prompt).toContain("=== greet.ts (M)");
     expect(prompt).toContain("- const old = 0;");
     expect(prompt).toContain("+ export const shout = () => 1;");
-    expect(prompt).toContain("=== greet.ts\nline1\nline2");
-    expect(prompt).toContain("=== gone.ts (deleted)");
+    expect(prompt).toContain("=== gone.ts (D)");
     expect(prompt).not.toContain("plan file");
-  });
-
-  test("file content is truncated per file", () => {
-    const after = Array.from({ length: 50 }, (_, i) => `l${i}`).join("\n");
-    const prompt = buildReviewPrompt({
-      title: "t",
-      files: [file({ path: "a.ts", after })],
-      maxLinesPerFile: 10,
-    });
-    expect(prompt).toContain("l9");
-    expect(prompt).not.toContain("\nl10\n");
-    expect(prompt).toContain("40 more lines truncated");
+    // The reviewer reads files from the worktree itself; inlining them
+    // only made the coordinator relay unchanged content.
+    expect(prompt).not.toContain("<files>");
+    expect(prompt).not.toContain("line1\nline2");
+    expect(prompt).toContain("Read the changed files from the worktree");
+    expect(prompt.indexOf("=== greet.ts")).toBeLessThan(
+      prompt.indexOf("=== gone.ts"),
+    );
   });
 });

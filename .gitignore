@@ -40,6 +40,9 @@ data/
 # local claude settings
 .claude/settings.local.json
 
+# worker worktrees (Claude Code `isolation: worktree` subagents)
+.claude/worktrees/
+
 # local docker compose override (dev builds from source instead of pulling)
 compose.override.yaml
 compose.override.yml

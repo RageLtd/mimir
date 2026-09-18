@@ -1,0 +1,23 @@
+# Mimir project configuration.
+#
+# [verify] — what the worker verify gate runs, from each package root a
+# change touches (packages/* and the repo root alike; the table layers
+# down to every package). Package-level package.json scripts only carry
+# `test`; typecheck and Biome live in the root package.json, so without
+# this table the gate resolved `test` alone and never typechecked or
+# linted a worker's change. Typecheck goes through the root script from
+# any package root: the root tsconfig.json is a base, not a project, so
+# `tsc -p` against it sweeps every package with the wrong settings. The
+# package's own name narrows it to that package (so one package's red
+# tests don't fail another's gate); at the repo root the name is not a
+# package and the script checks everything. The Biome run is read-only
+# on purpose — the gate reports, the worker fixes.
+[verify]
+test = "bun run test"
+typecheck = 'bun run --cwd "$(git rev-parse --show-toplevel)" typecheck "$(basename "$PWD")"'
+check = "bunx biome check ."
+
+[workers.models.claudeCode]
+impl = "opus"
+test = "opus"
+review = "opus"

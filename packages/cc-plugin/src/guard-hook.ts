@@ -29,6 +29,7 @@ import {
 import { errMessage } from "@mimir/plugin-core/util";
 import { workerByName } from "@mimir/plugin-core/workers";
 import { createLogger } from "./logger";
+import { bootstrapWorktree } from "./worktree-bootstrap";
 
 const log = createLogger("guard-hook");
 
@@ -140,6 +141,14 @@ export const runGuardHook = async (args: readonly string[]) => {
   const input = await parseInput(await readStdin());
   const role = parseGuardArgs(args) ?? roleFromInput(input);
   if (!role) return 0;
+  // A worker's first call inside its fresh worktree: install deps there
+  // once, before any command that would need them.
+  if (role !== "coordinator" && input.cwd) {
+    const outcome = await bootstrapWorktree(input.cwd);
+    if (outcome === "installed" || outcome === "failed") {
+      log.info("worktree bootstrap", { role, cwd: input.cwd, outcome });
+    }
+  }
   const ctx = await buildGuardContext(role, input);
   if (!ctx) return 0;
 

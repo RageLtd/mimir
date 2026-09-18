@@ -1,5 +1,61 @@
 import { describe, expect, test } from "bun:test";
-import { handbackOutput, roleOf, stopOutput } from "./verify-hook";
+import { tmpdir } from "node:os";
+import {
+  cwdMissing,
+  handbackOutput,
+  parseVerifyArgs,
+  roleOf,
+  stopOutput,
+} from "./verify-hook";
+
+describe("parseVerifyArgs (coordinator CLI mode)", () => {
+  test("no arguments → hook mode", () => {
+    expect(parseVerifyArgs([])).toBeNull();
+  });
+
+  test("--worktree alone → impl role, no agent, changes required", () => {
+    expect(parseVerifyArgs(["--worktree", "/w"])).toEqual({
+      worktree: "/w",
+      role: "impl",
+      agentId: undefined,
+      allowEmpty: false,
+    });
+  });
+
+  test("every flag, any order", () => {
+    expect(
+      parseVerifyArgs([
+        "--allow-empty",
+        "--role",
+        "test",
+        "--agent",
+        "a1e4f19f3caa94a6d",
+        "--worktree",
+        "/w",
+      ]),
+    ).toEqual({
+      worktree: "/w",
+      role: "test",
+      agentId: "a1e4f19f3caa94a6d",
+      allowEmpty: true,
+    });
+  });
+
+  test("flags without --worktree, or an unknown role, is a usage error", () => {
+    expect(typeof parseVerifyArgs(["--role", "test"])).toBe("string");
+    expect(typeof parseVerifyArgs(["--worktree", "/w", "--role", "boss"])).toBe(
+      "string",
+    );
+  });
+});
+
+describe("cwdMissing", () => {
+  test("only a named directory that no longer exists counts", () => {
+    expect(cwdMissing(undefined)).toBe(false);
+    expect(cwdMissing(tmpdir())).toBe(false);
+    expect(cwdMissing("/nonexistent/mimir-worktree-gone")).toBe(true);
+  });
+});
 
 describe("roleOf", () => {
   test("maps worker agent types to gate roles, unknown → impl", () => {

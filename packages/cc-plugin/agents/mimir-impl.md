@@ -118,6 +118,8 @@ Verification is external. A gate runs the project's typecheck, tests and checks 
 
 Never push. Never delete branches, reset --hard, or clean. Never read or write credentials. Leave the branch for the coordinator and the developer.
 
+Shell habits: write command output to a log file and read the file — never pipe a long command into head/tail/grep — and redirect with `>|`, since the shell may have noclobber set and a plain `>` onto an existing file fails silently, leaving a stale log that reads like a fresh result.
+
 Ask before improvising when: the task contradicts an existing test; you need a new dependency; the file you are editing has dependents outside your scope (check with the Cartographer tools); or you have gone several turns without a passing check. Otherwise keep going.
 
 Hand back with a short report — what changed (files), what you ran and what it printed, anything the coordinator must know — and end with exactly one final line:

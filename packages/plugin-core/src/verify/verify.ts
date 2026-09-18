@@ -33,9 +33,11 @@ import { parseStatus, type WorkerStatus } from "./status";
 /**
  * Which checks apply depends on what the worker was for:
  *   impl    — everything
- *   test    — red-first tests are expected to fail, so the `test`
- *             command is skipped; typecheck, check and the sanity rules
- *             still run (a skipped or assertion-free test is still wrong)
+ *   test    — red-first tests are expected to fail, and may not even
+ *             compile yet (they reference the export the impl worker is
+ *             about to add), so `test` AND `typecheck` are skipped; check
+ *             and the sanity rules still run (a skipped or assertion-free
+ *             test is still wrong). The impl gate typechecks everything.
  *   review  — changes nothing; the gate does not apply
  */
 export type VerifyRole = "impl" | "test" | "review";
@@ -54,6 +56,12 @@ export type VerifyOptions = {
   readonly commandTimeoutMs?: number;
   /** Lines of output kept in a failure reason. */
   readonly tail?: number;
+  /**
+   * Accept an empty change set and run the project root's toolchain
+   * anyway — the coordinator's post-merge integration check. A worker's
+   * `done` never sets this: a done with nothing to verify is refused.
+   */
+  readonly allowEmpty?: boolean;
 };
 
 export type CommandRun = {
@@ -75,9 +83,12 @@ export type VerifyOutcome =
 
 const COMMAND_ORDER = ["typecheck", "test", "check"] as const;
 
+/** A file path at the worktree root — `findPackageRoot` of it is the root. */
+const INTEGRATION_PROBE = "integration";
+
 const commandsFor = (role: VerifyRole) =>
   role === "test"
-    ? COMMAND_ORDER.filter((kind) => kind !== "test")
+    ? COMMAND_ORDER.filter((kind) => kind === "check")
     : COMMAND_ORDER;
 
 const runToolchain = async (
@@ -133,19 +144,24 @@ export const runVerify = async (options: VerifyOptions) => {
       `${options.worktree} is not a git worktree, so the change set cannot be verified.`,
     );
   }
-  if (changes.files.length === 0) {
+  if (changes.files.length === 0 && !options.allowEmpty) {
     return block(
       "No changes detected. If the task needs no change, say so with STATUS: blocked and explain; a `done` with nothing to verify is not accepted.",
     );
   }
 
-  const failed = coverageCheck(changes.files) ?? sanityCheck(changes.files);
+  const failed =
+    coverageCheck(changes.files, changes.branchPaths) ??
+    sanityCheck(changes.files);
   if (failed) return block(failed.reason);
 
-  const toolchains = await resolveToolchainsForFiles(
-    verifiablePaths(changes.files),
-    options.worktree,
-  );
+  // An empty (allowEmpty) run probes a path AT the root so the project
+  // root itself resolves as the package to verify.
+  const paths =
+    changes.files.length === 0
+      ? [INTEGRATION_PROBE]
+      : verifiablePaths(changes.files);
+  const toolchains = await resolveToolchainsForFiles(paths, options.worktree);
   const unresolved = [...toolchains.entries()]
     .filter(([, t]) => t === null)
     .map(([root]) => root);
@@ -167,6 +183,13 @@ export const runVerify = async (options: VerifyOptions) => {
     );
     runs.push(...outcome.runs);
     if (outcome.failure) return block(outcome.failure);
+  }
+  if (runs.length === 0) {
+    // Same principle as an unresolved root: a pass that ran nothing is
+    // worth nothing, so silence is the wrong default.
+    return block(
+      `No verification command ran for ${[...toolchains.keys()].join(", ")}: the resolved toolchain has no ${commandsFor(role).join("/")} command for the ${role} role. Add it to the [verify] table in mimir.toml so this hand-back can be checked.`,
+    );
   }
 
   await clearBlocks(options.agentId);

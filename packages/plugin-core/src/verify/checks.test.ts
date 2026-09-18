@@ -60,6 +60,24 @@ describe("coverageCheck", () => {
       coverageCheck([file({ path: "src/old.ts", status: "D", after: null })]),
     ).toBeNull();
   });
+
+  test("a test file committed earlier on the branch satisfies coverage", () => {
+    expect(
+      coverageCheck(
+        [file({ path: "src/a.ts", added: "x" })],
+        ["src/a.test.ts"],
+      ),
+    ).toBeNull();
+  });
+
+  test("non-test paths on the branch do not satisfy coverage", () => {
+    expect(
+      coverageCheck(
+        [file({ path: "src/a.ts", added: "x" })],
+        ["src/b.ts", "README.md"],
+      )?.check,
+    ).toBe("coverage");
+  });
 });
 
 describe("sanityCheck", () => {

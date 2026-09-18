@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { readConfig, writeConfig } from "./shared-config";
+import { readConfig, workerModelsFor, writeConfig } from "./shared-config";
 
 let previousMimirHome: string | undefined;
 let sandbox: string;
@@ -100,5 +100,124 @@ describe("shared config round-trip", () => {
   test("malformed config degrades to null", async () => {
     await Bun.write(join(sandbox, "config.json"), "not json {");
     expect(await readConfig()).toBeNull();
+  });
+});
+
+describe("workerModels (MIM-41 per-role worker models)", () => {
+  const base = {
+    serverUrl: "https://mimir.example.com",
+    userMemoryDb: "/tmp/user.db",
+  };
+
+  test("a full workerModels value survives a write/read cycle exactly", async () => {
+    await writeConfig({
+      ...base,
+      workerModels: {
+        claudeCode: { impl: "opus", test: "sonnet", review: "fable" },
+        opencode: { review: "anthropic/claude-opus-4" },
+      },
+    });
+
+    expect(await readConfig()).toEqual({
+      ...base,
+      workerModels: {
+        claudeCode: { impl: "opus", test: "sonnet", review: "fable" },
+        opencode: { review: "anthropic/claude-opus-4" },
+      },
+    });
+  });
+
+  test("read drops non-string and empty role entries, then empty namespaces", async () => {
+    await Bun.write(
+      join(sandbox, "config.json"),
+      JSON.stringify({
+        ...base,
+        workerModels: {
+          claudeCode: { impl: "", review: 42 },
+          opencode: { test: "x" },
+        },
+      }),
+    );
+
+    expect((await readConfig())?.workerModels).toEqual({
+      opencode: { test: "x" },
+    });
+  });
+
+  test("workerModels is absent (not {}) when no namespace survives", async () => {
+    await Bun.write(
+      join(sandbox, "config.json"),
+      JSON.stringify({
+        ...base,
+        workerModels: { claudeCode: { impl: 7 }, opencode: {} },
+      }),
+    );
+
+    const read = await readConfig();
+    expect(read).not.toBeNull();
+    expect(read).not.toHaveProperty("workerModels");
+  });
+
+  test("non-record shapes are dropped, not passed through", async () => {
+    const path = join(sandbox, "config.json");
+
+    await Bun.write(path, JSON.stringify({ ...base, workerModels: [] }));
+    expect(await readConfig()).not.toHaveProperty("workerModels");
+
+    await Bun.write(path, JSON.stringify({ ...base, workerModels: "opus" }));
+    expect(await readConfig()).not.toHaveProperty("workerModels");
+
+    await Bun.write(
+      path,
+      JSON.stringify({
+        ...base,
+        workerModels: { claudeCode: "opus", opencode: { review: "x" } },
+      }),
+    );
+    expect((await readConfig())?.workerModels).toEqual({
+      opencode: { review: "x" },
+    });
+  });
+
+  test("a config without workerModels reads back without the key", async () => {
+    await writeConfig(base);
+    expect(await readConfig()).not.toHaveProperty("workerModels");
+  });
+
+  describe("workerModelsFor", () => {
+    const config = {
+      ...base,
+      workerModels: {
+        claudeCode: { impl: "opus", review: "fable" },
+        opencode: { test: "anthropic/claude-sonnet-4" },
+      },
+    };
+
+    test("returns the requested host namespace", () => {
+      expect(workerModelsFor(config, "claudeCode")).toEqual({
+        impl: "opus",
+        review: "fable",
+      });
+      expect(workerModelsFor(config, "opencode")).toEqual({
+        test: "anthropic/claude-sonnet-4",
+      });
+    });
+
+    test("returns {} for a null config", () => {
+      expect(workerModelsFor(null, "claudeCode")).toEqual({});
+    });
+
+    test("returns {} when workerModels is unset", () => {
+      expect(workerModelsFor(base, "opencode")).toEqual({});
+    });
+
+    test("returns {} when the host namespace is unset", () => {
+      expect(
+        workerModelsFor(
+          { ...base, workerModels: { claudeCode: { impl: "opus" } } },
+          "opencode",
+        ),
+      ).toEqual({});
+    });
   });
 });

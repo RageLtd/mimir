@@ -135,6 +135,34 @@ describe("runVerify", () => {
     expect(seen).toEqual([]);
   });
 
+  test("red tests committed on the branch cover a source-only worker diff", async () => {
+    const root = await seedRepo();
+    await git(root, "checkout", "-q", "-b", "integration");
+    await write(
+      root,
+      "add_test.go",
+      'package x\nimport "testing"\nfunc TestAdd(t *testing.T) { if Add(1,2) != 3 { t.Fatal("bad") } }\nfunc TestAddZero(t *testing.T) { if Add(0,0) != 0 { t.Fatal("bad") } }\n',
+    );
+    await git(root, "add", ".");
+    await git(root, "commit", "-q", "-m", "tests (red)");
+    const wt = join(root, ".claude", "worktrees", "impl");
+    await git(root, "worktree", "add", "-q", "-b", "impl", wt);
+    await write(
+      wt,
+      "add.go",
+      "package x\nfunc Add(a, b int) int { return a + b + 0 }\n",
+    );
+    const seen: string[] = [];
+    const outcome = await runVerify({
+      worktree: wt,
+      lastMessage: "STATUS: done",
+      agentId: "a",
+      run: runner({}, seen),
+    });
+    expect(outcome.kind).toBe("pass");
+    expect(seen.length).toBeGreaterThan(0);
+  });
+
   test("clean change with a test → commands run in order → pass with report", async () => {
     const root = await seedRepo();
     await write(
@@ -242,7 +270,9 @@ describe("runVerify", () => {
       agentId: "t",
       run: runner({ "go test ./...": { code: 1 } }, seen),
     });
-    expect(seen).toEqual(["go build ./...", "go vet ./..."]);
+    // Red-first tests may not even compile yet (a new export under test), so
+    // typecheck is skipped for the test role along with the test command.
+    expect(seen).toEqual(["go vet ./..."]);
     expect(outcome.kind).toBe("pass");
   });
 
@@ -262,6 +292,45 @@ describe("runVerify", () => {
     });
     expect(outcome.kind).toBe("block");
     if (outcome.kind === "block") expect(outcome.reason).toContain("skip");
+  });
+
+  test("no verification command ran → block (a pass that checked nothing is worthless)", async () => {
+    const root = await seedRepo();
+    // Explicit config with only `test`: the test role skips it, leaving nothing.
+    await write(root, "mimir.toml", '[verify]\ntest = "run-tests"\n');
+    await write(
+      root,
+      "add_test.go",
+      'package x\nimport "testing"\nfunc TestAdd(t *testing.T) { if Add(1,2) != 3 { t.Fatal("bad") } }\nfunc TestMore(t *testing.T) { if Add(2,2) != 4 { t.Fatal("bad") } }\n',
+    );
+    const seen: string[] = [];
+    const outcome = await runVerify({
+      role: "test",
+      worktree: root,
+      lastMessage: "STATUS: done",
+      agentId: "none",
+      run: runner({}, seen),
+    });
+    expect(seen).toEqual([]);
+    expect(outcome.kind).toBe("block");
+    if (outcome.kind === "block")
+      expect(outcome.reason).toContain("No verification command ran");
+  });
+
+  test("allowEmpty: a clean tree runs the project root's toolchain and passes", async () => {
+    const root = await seedRepo();
+    const seen: string[] = [];
+    const outcome = await runVerify({
+      allowEmpty: true,
+      worktree: root,
+      lastMessage: "STATUS: done",
+      agentId: "integration",
+      run: runner({}, seen),
+    });
+    expect(seen).toEqual(["go build ./...", "go test ./...", "go vet ./..."]);
+    expect(outcome.kind).toBe("pass");
+    if (outcome.kind === "pass")
+      expect(outcome.report).toContain("Changed files (0)");
   });
 
   test("role review: the gate does not apply", async () => {

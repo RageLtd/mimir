@@ -30,6 +30,7 @@ import { installEmbedderArtifacts } from "@mimir/plugin-core/brain/embedder-inst
 import { resolveCartographerBinary } from "@mimir/plugin-core/cartographer/resolve";
 import { attempt } from "@mimir/plugin-core/result";
 import { errMessage, mimirHome } from "@mimir/plugin-core/util";
+import { resolveWorkerModels } from "@mimir/plugin-core/workers";
 import agentTemplate from "../artifacts/agent-mimir.md.template" with {
   type: "text",
 };
@@ -324,9 +325,11 @@ export const installMimir = async (
 
   // Worker agents (mimir-impl / mimir-test / mimir-review) — the
   // persona-less definitions the coordinator delegates to. Same prompt
-  // source as mimir.md, so they track prompt updates.
+  // source as mimir.md, so they track prompt updates. Models come from
+  // config.json (just written above) overlaid by the user-level
+  // mimir.toml — these files are global, so no project layer applies.
   for (const [file, content] of Object.entries(
-    renderWorkerAgents(promptContent),
+    renderWorkerAgents(promptContent, await resolveWorkerModels("opencode")),
   )) {
     const workerPath = join(dirname(agentPath), file);
     const [writeErr] = await attempt(() => writeText(workerPath, content));

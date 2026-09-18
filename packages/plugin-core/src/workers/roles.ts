@@ -10,9 +10,11 @@
  * definition only names it.
  */
 
-import type { GuardRole } from "../guard/decision";
+import type { WorkerRole } from "../shared-config";
 
-export type WorkerRole = Exclude<GuardRole, "coordinator">;
+// The config schema owns the role names; the guard's call sites hold the
+// definitions to its GuardRole, so a divergence fails to compile there.
+export type { WorkerRole };
 
 export type WorkerDefinition = {
   /** Agent name as the host sees it (`mimir-impl`). */

@@ -71,6 +71,9 @@ const USAGE = [
   "  edit-guard              PreToolUse:Bash hook: deny shell edits (use Edit instead).",
   "  guard --role <r>        PreToolUse hook: role guard (impl|test|review|coordinator).",
   '  verify                  SubagentStop hook: verify gate for worker "done" claims.',
+  "  verify --worktree <path> [--role impl|test] [--agent <id>] [--allow-empty]",
+  "                          Run the gate by hand: re-check a retained worktree, or",
+  "                          (--allow-empty) the merged tree as the integration check.",
   "  delegate <start --plan <file> | status | stop>",
   "                          Turn the coordinator role on/off for this session.",
   "  review-prompt <worktree> [--title <t>]",
@@ -139,7 +142,7 @@ const dispatch = async (argv: readonly string[]): Promise<number> => {
       return runGuardHook(rest);
 
     case "verify":
-      return runVerifyHook();
+      return runVerifyHook(rest);
 
     case "delegate":
       return runDelegateCommand(rest);

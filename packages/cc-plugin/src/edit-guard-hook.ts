@@ -202,8 +202,10 @@ const inPlaceTargets = (words: readonly string[]) => {
 
 /**
  * `> file`, `>> file`, `tee file`, `tee -a file`. `seen` is true when a
- * redirect or tee appeared at all, even to a `$var` target we can't name
- * — that is the evidence a write happened, which fan-out alone is not.
+ * redirect or tee targeted anything that is not scratch, even a `$var`
+ * we can't name — that is the evidence a write happened, which fan-out
+ * alone is not. Scratch targets (/tmp, the session scratchpad) never
+ * count: a loop that only writes logs there is a measurement.
  */
 const redirectTargets = (segment: string, words: readonly string[]) => {
   const paths: string[] = [];
@@ -212,8 +214,9 @@ const redirectTargets = (segment: string, words: readonly string[]) => {
   const add = (raw: string | undefined) => {
     if (!raw) return;
     const word = shellWords(raw)[0] ?? "";
-    if (!word || word.startsWith("&") || !isPathLike(word) || isScratch(word))
-      return;
+    if (!word || word.startsWith("&") || isScratch(word)) return;
+    seen = true;
+    if (!isPathLike(word)) return;
     if (WILDCARD.test(word)) wildcard = true;
     else paths.push(word);
   };
@@ -228,12 +231,10 @@ const redirectTargets = (segment: string, words: readonly string[]) => {
   for (const m of visible.matchAll(
     /(?<![\d&<])>{1,2}\s*((?:"[^"]*"|'[^']*'|\S)+)/g,
   )) {
-    seen = true;
     add(m[1]);
   }
   const teeAt = words.indexOf("tee");
   if (teeAt !== -1) {
-    seen = true;
     for (const w of words.slice(teeAt + 1)) {
       if (w.startsWith("-")) continue;
       add(w);

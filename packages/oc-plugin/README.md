@@ -78,6 +78,40 @@ The first successful install writes two slash commands to `~/.config/opencode/co
 - **`/mimir-install`** — write the Mimir runtime state (system prompt, config, pinned local embedder, stable CLI bundle, custom agent, wrapper script, slash commands).
 - **`/mimir-update`** — re-fetch the system prompt, rewrite the local config, and download or verify the pinned local embedder. The install is idempotent.
 
+## Worker models
+
+The install also writes the worker agents the coordinator delegates to — `mimir-impl.md`, `mimir-test.md`, and `mimir-review.md` alongside `mimir.md`. Each runs on the session's default agent model unless `~/.mimir/config.json` pins it under `workerModels.opencode`:
+
+```jsonc
+{
+  "workerModels": {
+    "opencode": {
+      "impl": "anthropic/claude-sonnet-4",
+      "test": "openai/gpt-5-mini",
+      "review": "anthropic/claude-opus-4"
+    }
+  }
+}
+```
+
+Values are `provider/model` ids from the provider registry. Every role is optional: a role left out renders its agent without a `model` key, so it falls back to the default agent model. The sibling `workerModels.claudeCode` namespace holds the Claude Code aliases (`opus`, `sonnet`) — the two hosts name models differently, so each keeps its own map. Re-run `/mimir-install` (or `/mimir-update`) after editing the key: the pins are baked into the agent files at install time.
+
+The same pins can live in `~/.mimir/mimir.toml`, which wins over `config.json` role by role — the natural home when your OpenCode setup runs non-Anthropic models:
+
+```toml
+[workers.models.opencode]
+impl = "ollama/qwen3"
+test = "ollama/qwen3"
+review = "lmstudio/devstral"
+```
+
+Only the user-level file applies here: the agent files are global (`~/.config/opencode/agents/`), so a project's `./mimir.toml` cannot pin them per project yet.
+
+Two things worth knowing before you edit the file by hand:
+
+- **Bad keys are deleted, not just ignored.** Unknown host or role keys, empty strings, and non-string values are dropped when the config is read, which reads as "no override" rather than an error — and because the installer rewrites `config.json` from that sanitised read, the next `/mimir-install` or `/mimir-update` removes them from the file for good. A typo like `"claude-code"` survives only until the next install.
+- **Model ids are not validated at install time.** The installer never checks an `opencode` value against the provider registry, so a wrong or misspelled `provider/model` id is written into the agent file unchanged. The failure surfaces inside OpenCode when that worker first runs, not during the install.
+
 ## Wrapper script
 
 `~/.local/bin/mimir-opencode` sets `MIMIR_ACTIVE=1` and execs `opencode` so any state checks in the plugin can distinguish a real Mimir session from a nested `opencode` subprocess.

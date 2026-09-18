@@ -7,6 +7,11 @@
  * branched from it), joined to the worker's HEAD by merge-base. When
  * the worker runs in the main worktree itself, base is HEAD and the
  * diff is simply the uncommitted work.
+ *
+ * Branch paths: what the integration branch itself committed between
+ * trunk and that base. The playbook lands red tests as their own commit
+ * before the impl worker starts, so the worker's diff is source-only by
+ * design — the coverage check needs to see those earlier commits.
  */
 
 import { join, relative, resolve } from "node:path";
@@ -31,7 +36,12 @@ export type ChangedFile = {
 export type ChangeSet = {
   readonly base: string;
   readonly files: readonly ChangedFile[];
+  /** Paths committed on the branch between trunk and `base`; empty on trunk. */
+  readonly branchPaths: readonly string[];
 };
+
+/** Trunk candidates, first that resolves wins. */
+const TRUNK_REFS = ["main", "master"] as const;
 
 const git = async (run: CommandRunner, cwd: string, ...args: string[]) => {
   const result = await run(["git", ...args], cwd);
@@ -57,6 +67,41 @@ export const resolveBase = async (run: CommandRunner, worktree: string) => {
     await git(run, worktree, "merge-base", "HEAD", mainHead)
   )?.trim();
   return base && base.length > 0 ? base : head;
+};
+
+/** merge-base(base, trunk) for the first trunk ref that exists; null without one. */
+const resolveTrunkBase = async (
+  run: CommandRunner,
+  worktree: string,
+  base: string,
+) => {
+  for (const ref of TRUNK_REFS) {
+    const found = (await git(run, worktree, "merge-base", base, ref))?.trim();
+    if (found && found.length > 0) return found;
+  }
+  return null;
+};
+
+/** Paths the branch committed between trunk and `base`. */
+const collectBranchPaths = async (
+  run: CommandRunner,
+  worktree: string,
+  base: string,
+) => {
+  const trunkBase = await resolveTrunkBase(run, worktree, base);
+  if (!trunkBase || trunkBase === base) return [];
+  const names = await git(
+    run,
+    worktree,
+    "diff",
+    "--name-only",
+    trunkBase,
+    base,
+  );
+  return (names ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
 };
 
 const parseNameStatus = (text: string) => {
@@ -138,5 +183,6 @@ export const collectChanges = async (run: CommandRunner, worktree: string) => {
       after,
     });
   }
-  return { base, files } satisfies ChangeSet;
+  const branchPaths = await collectBranchPaths(run, worktree, base);
+  return { base, files, branchPaths } satisfies ChangeSet;
 };

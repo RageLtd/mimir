@@ -3,6 +3,7 @@
  * import from here to render their native agent files.
  */
 
+export { resolveWorkerModels, workerModelsFromToml } from "./models";
 export {
   buildWorkerPrompt,
   extractWorkerSections,

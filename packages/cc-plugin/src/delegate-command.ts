@@ -19,8 +19,15 @@ import {
   readCoordinatorState,
   writeCoordinatorState,
 } from "@mimir/plugin-core/guard";
+import {
+  formatWorkerModels,
+  type WorkerRoleModels,
+} from "@mimir/plugin-core/shared-config";
 import { collectChanges, runCommand } from "@mimir/plugin-core/verify";
-import { buildReviewPrompt } from "@mimir/plugin-core/workers";
+import {
+  buildReviewPrompt,
+  resolveWorkerModels,
+} from "@mimir/plugin-core/workers";
 
 export const SESSION_ENV = "CLAUDE_CODE_SESSION_ID";
 
@@ -61,11 +68,21 @@ const sessionId = () => {
   return id;
 };
 
-const describeState = async (session: string, planFile: string) => {
+// Re-exported so the playbook's one line stays reachable from the command
+// module it is printed by; the formatting itself is editor-agnostic and
+// lives in plugin-core.
+export { formatWorkerModels };
+
+export const describeState = async (
+  session: string,
+  planFile: string,
+  models: WorkerRoleModels,
+) => {
   const exists = await Bun.file(planFile).exists();
   const lines = [
     `delegation active for session ${session}`,
     `plan: ${planFile}`,
+    formatWorkerModels(models),
   ];
   if (!exists) {
     lines.push(
@@ -74,6 +91,9 @@ const describeState = async (session: string, planFile: string) => {
   }
   return lines.join("\n");
 };
+
+// The project root is the Bash cwd — the playbook runs this from the repo.
+const claudeCodeModels = () => resolveWorkerModels("claudeCode", process.cwd());
 
 export const runDelegateCommand = async (args: readonly string[]) => {
   const parsed = parseDelegateArgs(args);
@@ -95,7 +115,9 @@ export const runDelegateCommand = async (args: readonly string[]) => {
         active: true,
         planFile: parsed.planFile,
       });
-      console.log(await describeState(session, parsed.planFile));
+      console.log(
+        await describeState(session, parsed.planFile, await claudeCodeModels()),
+      );
       return 0;
     }
     case "status": {
@@ -104,7 +126,9 @@ export const runDelegateCommand = async (args: readonly string[]) => {
         console.log(`no active delegation for session ${session}`);
         return 0;
       }
-      console.log(await describeState(session, state.planFile));
+      console.log(
+        await describeState(session, state.planFile, await claudeCodeModels()),
+      );
       return 0;
     }
     case "stop": {

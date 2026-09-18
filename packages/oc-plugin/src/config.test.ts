@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import type { WorkerModels } from "@mimir/plugin-core/shared-config";
 import { readConfig, writeConfig } from "./config";
 
 // config.ts resolves its path via mimirHome(), which honours MIMIR_HOME.
@@ -86,5 +87,83 @@ describe("readConfig", () => {
       cartographerBinary: "/bin/carto",
       provider: "anthropic",
     });
+  });
+});
+
+describe("workerModels (MIM-41 per-role worker models)", () => {
+  const base = {
+    serverUrl: "http://localhost:8080",
+    userMemoryDb: "/db.sqlite",
+  };
+
+  test("a full workerModels value survives a write/read cycle exactly", async () => {
+    // Typed as the shared WorkerModels so oc-plugin's MimirConfig is
+    // held to plugin-core's shape rather than a local redeclaration.
+    const workerModels: WorkerModels = {
+      claudeCode: { impl: "opus", test: "sonnet", review: "fable" },
+      opencode: {
+        impl: "anthropic/claude-sonnet-4",
+        test: "openai/gpt-5-mini",
+        review: "anthropic/claude-opus-4",
+      },
+    };
+    await writeConfig({ ...base, workerModels });
+
+    expect(await readConfig()).toEqual({ ...base, workerModels });
+  });
+
+  test("read drops non-string and empty role entries, then empty namespaces", async () => {
+    await writeConfigFile(
+      JSON.stringify({
+        ...base,
+        workerModels: {
+          claudeCode: { impl: "", review: 42 },
+          opencode: { test: "anthropic/claude-sonnet-4" },
+        },
+      }),
+    );
+
+    expect((await readConfig())?.workerModels).toEqual({
+      opencode: { test: "anthropic/claude-sonnet-4" },
+    });
+  });
+
+  test("workerModels is absent (not {}) when no namespace survives", async () => {
+    await writeConfigFile(
+      JSON.stringify({
+        ...base,
+        workerModels: { claudeCode: { impl: 7 }, opencode: {} },
+      }),
+    );
+
+    const read = await readConfig();
+    expect(read).not.toBeNull();
+    expect(read).not.toHaveProperty("workerModels");
+  });
+
+  test("non-record shapes are dropped, not passed through", async () => {
+    await writeConfigFile(JSON.stringify({ ...base, workerModels: [] }));
+    expect(await readConfig()).not.toHaveProperty("workerModels");
+
+    await writeConfigFile(JSON.stringify({ ...base, workerModels: "opus" }));
+    expect(await readConfig()).not.toHaveProperty("workerModels");
+
+    await writeConfigFile(
+      JSON.stringify({
+        ...base,
+        workerModels: {
+          claudeCode: "opus",
+          opencode: { review: "anthropic/claude-opus-4" },
+        },
+      }),
+    );
+    expect((await readConfig())?.workerModels).toEqual({
+      opencode: { review: "anthropic/claude-opus-4" },
+    });
+  });
+
+  test("a config without workerModels reads back without the key", async () => {
+    await writeConfig(base);
+    expect(await readConfig()).not.toHaveProperty("workerModels");
   });
 });

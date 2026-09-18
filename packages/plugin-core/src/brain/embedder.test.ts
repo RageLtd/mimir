@@ -5,7 +5,14 @@
  * path. The real-binary leg is the MIM-85 live smoke, not a unit test.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +27,10 @@ import {
   embedTexts,
   getOrStartEmbedder,
 } from "./embedder";
+
+// Stub HTTP round-trips starve under `bun test --parallel`; the runner's 5s
+// default is too tight.
+setDefaultTimeout(30_000);
 
 // Env isolation (MIM-74 lesson: save/restore so a developer's real env
 // can't bend assertions).
@@ -49,16 +60,43 @@ const DIMS = EMBEDDER_MODEL.dimensions;
 const vectorOf = (fill: number, dims: number = DIMS) =>
   new Array(dims).fill(fill);
 
-/** Stub llama-server: healthy /health plus a configurable embeddings leg. */
+type EmbedOpts = {
+  readonly spawnWaitMs?: number;
+  readonly healthTimeoutMs?: number;
+};
+/** Generous probe window so stub-backed cases stop depending on the
+ *  embedder's default /health timeout under `--parallel` load. */
+const STUB_OPTS: EmbedOpts = { spawnWaitMs: 10_000, healthTimeoutMs: 30_000 };
+/** Wide enough to ride out SLOW_HEALTH_MS, narrow enough to keep the
+ *  per-test timeout honest. */
+const SLOW_HEALTH_OPTS: EmbedOpts = {
+  spawnWaitMs: 10_000,
+  healthTimeoutMs: 10_000,
+};
+/** Longer than the embedder's built-in /health timeout — proves the option
+ *  is honored rather than the default. */
+const SLOW_HEALTH_MS = 2_500;
+const SLOW_HEALTH_TEST_TIMEOUT_MS = 20_000;
+/** Typed against the options parameter `createEmbedQuery` grows; a
+ *  zero-parameter function is assignable here, so the file typechecks
+ *  before the option exists and the cases go red at runtime instead. */
+const embedQueryWith: (
+  opts?: EmbedOpts,
+) => ReturnType<typeof createEmbedQuery> = createEmbedQuery;
+
+/** Stub llama-server: healthy /health (optionally delayed) plus a
+ *  configurable embeddings leg. */
 const withStub = async (
   embeddings: (body: { input: string[] }) => Response | Promise<Response>,
   fn: (port: number) => Promise<void>,
+  healthDelayMs = 0,
 ) => {
   const server = Bun.serve({
     port: 0,
     fetch: async (req) => {
       const url = new URL(req.url);
       if (url.pathname === "/health") {
+        if (healthDelayMs > 0) await Bun.sleep(healthDelayMs);
         return Response.json({ status: "ok" });
       }
       if (url.pathname === "/v1/embeddings") {
@@ -106,7 +144,9 @@ describe("getOrStartEmbedder", () => {
     await withStub(
       () => okEmbeddings([]),
       async (port) => {
-        expect(await getOrStartEmbedder()).toBe(`http://127.0.0.1:${port}`);
+        expect(await getOrStartEmbedder(STUB_OPTS)).toBe(
+          `http://127.0.0.1:${port}`,
+        );
       },
     );
   });
@@ -134,7 +174,7 @@ describe("embedTexts", () => {
           ],
         }),
       async () => {
-        const result = await embedTexts(["first", "second"]);
+        const result = await embedTexts(["first", "second"], STUB_OPTS);
         expect(result).not.toBeNull();
         expect(result?.[0]?.[0]).toBe(1);
         expect(result?.[1]?.[0]).toBe(2);
@@ -146,7 +186,7 @@ describe("embedTexts", () => {
     await withStub(
       () => okEmbeddings([vectorOf(1, 64)]),
       async () => {
-        expect(await embedTexts(["text"])).toBeNull();
+        expect(await embedTexts(["text"], STUB_OPTS)).toBeNull();
       },
     );
   });
@@ -155,7 +195,7 @@ describe("embedTexts", () => {
     await withStub(
       () => okEmbeddings([vectorOf(1)]),
       async () => {
-        expect(await embedTexts(["a", "b"])).toBeNull();
+        expect(await embedTexts(["a", "b"], STUB_OPTS)).toBeNull();
       },
     );
   });
@@ -164,10 +204,26 @@ describe("embedTexts", () => {
     await withStub(
       () => new Response("boom", { status: 500 }),
       async () => {
-        expect(await embedTexts(["text"])).toBeNull();
+        expect(await embedTexts(["text"], STUB_OPTS)).toBeNull();
       },
     );
   });
+
+  test(
+    "a slow /health probe within healthTimeoutMs still resolves the embedder",
+    async () => {
+      await withStub(
+        () => okEmbeddings([vectorOf(1)]),
+        async () => {
+          const result = await embedTexts(["text"], SLOW_HEALTH_OPTS);
+          expect(result).toHaveLength(1);
+          expect(result?.[0]).toHaveLength(DIMS);
+        },
+        SLOW_HEALTH_MS,
+      );
+    },
+    SLOW_HEALTH_TEST_TIMEOUT_MS,
+  );
 });
 
 describe("createEmbedQuery", () => {
@@ -175,13 +231,29 @@ describe("createEmbedQuery", () => {
     await withStub(
       () => okEmbeddings([vectorOf(0.5)]),
       async () => {
-        const embedQuery = createEmbedQuery();
+        const embedQuery = embedQueryWith(STUB_OPTS);
         const vector = await embedQuery("what changed in auth?");
         expect(vector).toHaveLength(DIMS);
         expect(vector?.[0]).toBe(0.5);
       },
     );
   });
+
+  test(
+    "createEmbedQuery accepts healthTimeoutMs",
+    async () => {
+      await withStub(
+        () => okEmbeddings([vectorOf(0.5)]),
+        async () => {
+          const embedQuery = embedQueryWith(SLOW_HEALTH_OPTS);
+          const vector = await embedQuery("what changed in auth?");
+          expect(vector).toHaveLength(DIMS);
+        },
+        SLOW_HEALTH_MS,
+      );
+    },
+    SLOW_HEALTH_TEST_TIMEOUT_MS,
+  );
 
   test("null when the embedder is unreachable", async () => {
     process.env.MIMIR_EMBEDDER_PORT = "45991";

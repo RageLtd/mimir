@@ -4,7 +4,14 @@
  * playbook embed-source rule, embedder-down degradation, and idempotency.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +22,10 @@ import {
 } from "../store/org-replica";
 import { backfillEmbeddings } from "./backfill";
 import { EMBEDDER_MODEL } from "./embedder";
+
+// Stub HTTP round-trips starve under `bun test --parallel`; the runner's 5s
+// default is too tight.
+setDefaultTimeout(30_000);
 
 const SAVED_KEYS = ["MIMIR_EMBEDDER_PORT", "MIMIR_HOME"] as const;
 let savedEnv: Record<string, string | undefined>;

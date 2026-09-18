@@ -10,6 +10,7 @@
     "includes": [
       "**",
       "!**/provider-data.json",
+      "!.claude/worktrees",
       "!.claude/rules-check.mjs",
       "!packages/codex-plugin/.codex-plugin/plugin.json"
     ]

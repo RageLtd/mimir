@@ -12,6 +12,9 @@ on:
     branches: [main]
     paths:
       - "packages/server/**"
+      # The server build resolves the workspace graph, and plugin-core is a
+      # dependency — core changes must rebuild the image too (MIM-96).
+      - "packages/plugin-core/**"
       - "package.json"
       - "bun.lock"
   # Note: this workflow is deliberately NOT in its own paths filter — editing the

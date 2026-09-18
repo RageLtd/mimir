@@ -14,6 +14,7 @@
 
 import { SECRET_PATH_GLOBS } from "@mimir/plugin-core/guard";
 import { markdownToXml } from "@mimir/plugin-core/markdown-to-xml";
+import type { WorkerRoleModels } from "@mimir/plugin-core/shared-config";
 import {
   buildWorkerPrompt,
   TEST_PATH_GLOBS,
@@ -75,12 +76,18 @@ const renderRules = (name: string, rules: Rules) =>
     "\n",
   );
 
-/** Frontmatter for one worker. */
-export const renderWorkerFrontmatter = (worker: WorkerDefinition) =>
+/** Frontmatter for one worker. `model` (MIM-41) pins this agent to one
+ *  provider/model id; omitted entirely when unset, so OpenCode falls back
+ *  to the session's default agent model. */
+export const renderWorkerFrontmatter = (
+  worker: WorkerDefinition,
+  model?: string,
+) =>
   [
     "---",
     `description: ${JSON.stringify(worker.description)}`,
     "mode: subagent",
+    ...(model ? [`model: ${JSON.stringify(model)}`] : []),
     `steps: ${worker.maxTurns}`,
     "permission:",
     "  task: deny",
@@ -99,14 +106,24 @@ export const renderWorkerFrontmatter = (worker: WorkerDefinition) =>
 export const renderWorkerAgent = (
   worker: WorkerDefinition,
   promptMarkdown: string,
+  model?: string,
 ) =>
-  `${renderWorkerFrontmatter(worker)}\n\n${buildWorkerPrompt(markdownToXml(promptMarkdown), worker)}\n`;
+  `${renderWorkerFrontmatter(worker, model)}\n\n${buildWorkerPrompt(markdownToXml(promptMarkdown), worker)}\n`;
 
-/** Every worker, keyed by filename (`mimir-impl.md`). */
-export const renderWorkerAgents = (promptMarkdown: string) => {
+/** Every worker, keyed by filename (`mimir-impl.md`). `models` is the
+ *  opencode namespace of the config's per-role worker models (MIM-41);
+ *  a role it omits renders without a model key. */
+export const renderWorkerAgents = (
+  promptMarkdown: string,
+  models: WorkerRoleModels = {},
+) => {
   const files: Record<string, string> = {};
   for (const worker of WORKER_DEFINITIONS) {
-    files[`${worker.name}.md`] = renderWorkerAgent(worker, promptMarkdown);
+    files[`${worker.name}.md`] = renderWorkerAgent(
+      worker,
+      promptMarkdown,
+      models[worker.role],
+    );
   }
   return files;
 };

@@ -20,6 +20,18 @@ import { join } from "node:path";
 import { attempt } from "./result";
 import { expandHomePath, mimirHome } from "./util";
 
+/** Worker roles the delegate loop spawns (mimir-impl / mimir-test /
+ *  mimir-review). Each may be pinned to its own model per host. */
+export const WORKER_ROLES = ["impl", "test", "review"] as const;
+export type WorkerRole = (typeof WORKER_ROLES)[number];
+/** Host namespaces for per-role models — model ids differ per editor
+ *  (CC aliases like "opus" vs OpenCode's "provider/model"), so each host
+ *  keeps its own map. */
+export const WORKER_HOSTS = ["claudeCode", "opencode"] as const;
+export type WorkerHost = (typeof WORKER_HOSTS)[number];
+export type WorkerRoleModels = { readonly [R in WorkerRole]?: string };
+export type WorkerModels = { readonly [H in WorkerHost]?: WorkerRoleModels };
+
 export type MimirConfig = {
   readonly serverUrl: string;
   readonly userMemoryDb: string;
@@ -43,10 +55,45 @@ export type MimirConfig = {
   readonly extractionBaseUrl?: string;
   readonly extractionModel?: string;
   readonly extractionApiKey?: string;
+  /** MIM-41 per-role worker models, namespaced by host. readConfig keeps
+   *  only known host/role keys with non-empty string values and silently
+   *  drops the rest — a typo like "claude-code" reads as "no overrides",
+   *  the same treatment every other bad value gets. Absent after
+   *  readConfig when nothing survives (writeConfig persists whatever it
+   *  is handed, {} included); see workerModelsFor. */
+  readonly workerModels?: WorkerModels;
 };
 
 const optionalString = (value: unknown) =>
   typeof value === "string" && value.length > 0 ? value : undefined;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** Keeps only the known keys whose picked value is defined; undefined
+ *  when nothing survives so the caller's conditional spread drops the key. */
+const pickDefined = <K extends string, V>(
+  keys: readonly K[],
+  value: unknown,
+  pick: (entry: unknown) => V | undefined,
+) => {
+  if (!isRecord(value)) return undefined;
+  const picked: { [P in K]?: V } = {};
+  for (const key of keys) {
+    const entry = pick(value[key]);
+    if (entry !== undefined) picked[key] = entry;
+  }
+  return Object.keys(picked).length > 0 ? picked : undefined;
+};
+
+/** One host's role table from an untyped value; `{}` when nothing survives. */
+export const workerRoleModelsFrom = (value: unknown) =>
+  pickDefined(WORKER_ROLES, value, optionalString) ?? NO_WORKER_MODELS;
+
+const optionalWorkerModels = (value: unknown) =>
+  pickDefined(WORKER_HOSTS, value, (host) =>
+    pickDefined(WORKER_ROLES, host, optionalString),
+  );
 
 const configPath = () => join(mimirHome(), "config.json");
 
@@ -83,6 +130,7 @@ export const readConfig = async () => {
   const extractionBaseUrl = optionalString(parsed.extractionBaseUrl);
   const extractionModel = optionalString(parsed.extractionModel);
   const extractionApiKey = optionalString(parsed.extractionApiKey);
+  const workerModels = optionalWorkerModels(parsed.workerModels);
   return {
     serverUrl: parsed.serverUrl,
     userMemoryDb: expandHomePath(parsed.userMemoryDb),
@@ -98,7 +146,38 @@ export const readConfig = async () => {
     ...(extractionBaseUrl ? { extractionBaseUrl } : {}),
     ...(extractionModel ? { extractionModel } : {}),
     ...(extractionApiKey ? { extractionApiKey } : {}),
+    ...(workerModels ? { workerModels } : {}),
   };
+};
+
+// Frozen: one shared instance reaches every caller, and `readonly` only
+// stops direct writes — Object.assign on it would pollute later reads.
+const NO_WORKER_MODELS: WorkerRoleModels = Object.freeze({});
+
+/**
+ * Per-role worker models for one host (MIM-41). Always an object so callers
+ * index by role without null checks — an unconfigured host, an unset
+ * workerModels, or a missing config all read as "no overrides".
+ */
+export const workerModelsFor = (config: MimirConfig | null, host: WorkerHost) =>
+  config?.workerModels?.[host] ?? NO_WORKER_MODELS;
+
+const WORKER_MODELS_PREFIX = "worker models: ";
+
+/**
+ * One line naming the model pinned to each worker role, always in
+ * impl/test/review order so a reader parses it the same way whatever order
+ * the config happened to declare.
+ */
+export const formatWorkerModels = (models: WorkerRoleModels) => {
+  const pinned = WORKER_ROLES.flatMap((role) => {
+    const model = models[role];
+    return model ? [`${role}=${model}`] : [];
+  });
+  if (pinned.length === 0) {
+    return `${WORKER_MODELS_PREFIX}default (same model for every role)`;
+  }
+  return `${WORKER_MODELS_PREFIX}${pinned.join(" ")}`;
 };
 
 /**

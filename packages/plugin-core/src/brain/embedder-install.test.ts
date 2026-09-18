@@ -6,7 +6,14 @@
  * install's job, not a unit test's.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,6 +28,10 @@ import {
   platformAssetSuffix,
   sha256File,
 } from "./embedder-install";
+
+// Stub HTTP round-trips starve under `bun test --parallel`; the runner's 5s
+// default is too tight.
+setDefaultTimeout(30_000);
 
 let savedHome: string | undefined;
 

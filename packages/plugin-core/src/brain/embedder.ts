@@ -50,6 +50,9 @@ const LOCALHOST = "127.0.0.1";
  *  pooling, each input must fit in a single physical batch, and memory-sized
  *  texts run to a few thousand tokens. */
 const BATCH_SIZE = "8192";
+/** Per-probe /health budget. Hooks keep this default; batch callers widen
+ *  it via `healthTimeoutMs` — like `spawnWaitMs`, the right timeout is
+ *  call-site policy, not module policy. */
 const HEALTH_TIMEOUT_MS = 1_500;
 const EMBED_TIMEOUT_MS = 30_000;
 /** Patient default — backfill and other batch callers ride out a cold
@@ -60,6 +63,11 @@ const SPAWN_WAIT_MS = 60_000;
  *  turn degrades to FTS-only and the next turn finds a warm server. */
 const QUERY_SPAWN_WAIT_MS = 5_000;
 const SPAWN_POLL_INTERVAL_MS = 300;
+
+export type EmbedderOpts = {
+  readonly spawnWaitMs?: number;
+  readonly healthTimeoutMs?: number;
+};
 
 export const embedderPort = () => {
   const fromEnv = Number.parseInt(process.env.MIMIR_EMBEDDER_PORT ?? "", 10);
@@ -78,10 +86,10 @@ const logErr = (msg: string) => {
 
 // ── Lifecycle: get-or-start ──
 
-const probeHealthy = async (baseUrl: string) => {
+const probeHealthy = async (baseUrl: string, healthTimeoutMs: number) => {
   const [err, res] = await attempt(() =>
     fetch(`${baseUrl}/health`, {
-      signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(healthTimeoutMs),
     }),
   );
   return err === null && res.ok;
@@ -120,11 +128,20 @@ const spawnEmbedder = () => {
   proc.unref();
 };
 
-const waitHealthy = async (baseUrl: string, timeoutMs: number) => {
-  const deadline = Date.now() + timeoutMs;
+const waitHealthy = async (
+  baseUrl: string,
+  spawnWaitMs: number,
+  healthTimeoutMs: number,
+) => {
+  const deadline = Date.now() + spawnWaitMs;
+  const remaining = () => Math.max(0, deadline - Date.now());
+  // Clamp each probe and sleep to what is left so spawnWaitMs is a real
+  // bound, not a floor that a last probe can overrun by healthTimeoutMs.
   while (Date.now() < deadline) {
-    if (await probeHealthy(baseUrl)) return true;
-    await Bun.sleep(SPAWN_POLL_INTERVAL_MS);
+    if (await probeHealthy(baseUrl, Math.min(healthTimeoutMs, remaining()))) {
+      return true;
+    }
+    await Bun.sleep(Math.min(SPAWN_POLL_INTERVAL_MS, remaining()));
   }
   return false;
 };
@@ -135,12 +152,11 @@ const waitHealthy = async (baseUrl: string, timeoutMs: number) => {
  * race (port already bound by a sibling hook's spawn) self-resolves — the
  * loser's process exits, waitHealthy sees the winner.
  */
-export const getOrStartEmbedder = async (
-  opts: { readonly spawnWaitMs?: number } = {},
-) => {
+export const getOrStartEmbedder = async (opts: EmbedderOpts = {}) => {
   const spawnWaitMs = opts.spawnWaitMs ?? SPAWN_WAIT_MS;
+  const healthTimeoutMs = opts.healthTimeoutMs ?? HEALTH_TIMEOUT_MS;
   const baseUrl = embedderBaseUrl();
-  if (await probeHealthy(baseUrl)) return baseUrl;
+  if (await probeHealthy(baseUrl, healthTimeoutMs)) return baseUrl;
   if (!(await embedderInstalled())) {
     logErr(
       "not installed — run `mimir-cc update` to fetch the model + binary; retrieval degrades to text-only",
@@ -148,7 +164,7 @@ export const getOrStartEmbedder = async (
     return null;
   }
   spawnEmbedder();
-  if (await waitHealthy(baseUrl, spawnWaitMs)) return baseUrl;
+  if (await waitHealthy(baseUrl, spawnWaitMs, healthTimeoutMs)) return baseUrl;
   logErr(
     `spawned llama-server but /health never came ok within ${spawnWaitMs}ms`,
   );
@@ -168,7 +184,7 @@ type EmbeddingsResponse = {
  */
 export const embedTexts = async (
   texts: readonly string[],
-  opts: { readonly spawnWaitMs?: number } = {},
+  opts: EmbedderOpts = {},
 ) => {
   if (texts.length === 0) return [];
   const baseUrl = await getOrStartEmbedder(opts);
@@ -216,10 +232,15 @@ export const embedTexts = async (
 
 /** The `EmbedQuery` seam implementation — plug into retrieve/tools/hooks.
  *  Inferred shape matches `EmbedQuery`; call sites typed against the seam
- *  verify the fit where it matters. Query-path spawn wait by default. */
-export const createEmbedQuery = () => async (text: string) => {
-  const vectors = await embedTexts([text], {
-    spawnWaitMs: QUERY_SPAWN_WAIT_MS,
-  });
-  return vectors?.[0] ?? null;
-};
+ *  verify the fit where it matters. Query-path spawn wait by default;
+ *  `opts` overrides it and the /health budget for callers with other
+ *  latency needs. */
+export const createEmbedQuery =
+  (opts: EmbedderOpts = {}) =>
+  async (text: string) => {
+    const vectors = await embedTexts([text], {
+      spawnWaitMs: opts.spawnWaitMs ?? QUERY_SPAWN_WAIT_MS,
+      healthTimeoutMs: opts.healthTimeoutMs,
+    });
+    return vectors?.[0] ?? null;
+  };

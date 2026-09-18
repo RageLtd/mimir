@@ -4,7 +4,7 @@
  * keyed vs keyless endpoints, and failure degradation to [].
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   buildExtractionText,
   type ConversationMessage,
@@ -12,6 +12,10 @@ import {
   extractFromConversation,
   extractMemories,
 } from "./extract";
+
+// Stub HTTP round-trips starve under `bun test --parallel`; the runner's 5s
+// default is too tight.
+setDefaultTimeout(30_000);
 
 type Captured = {
   auth: string | null;

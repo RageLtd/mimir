@@ -71,6 +71,9 @@ describe("bulk mechanical edits are allowed with a report nudge", () => {
     `python3 - <<'PY'\nimport glob\nfor p in glob.glob("src/**/*.ts", recursive=True):\n    s = open(p).read().replace("a", "b")\n    open(p, "w").write(s)\nPY`,
     `python3 -c "import os\nfor root, _, files in os.walk('src'):\n  open(os.path.join(root, files[0]), 'w').write('x')"`,
     `echo a > src/a.ts; echo b > src/b.ts`,
+    // A loop writing to a variable target is still a fan-out edit.
+    `for f in src/*.ts; do cat "$f" > "$f.bak"; done`,
+    `for f in src/*.ts; do sed 's/a/b/' "$f" | tee "$OUT/$f"; done`,
   ])("%s", (cmd) => {
     expect(shape(cmd)).toBe("bulk");
   });
@@ -104,6 +107,10 @@ describe("non-edits and ambiguous commands pass silently", () => {
     `bun test 2>&1`,
     `bun run build > /tmp/mimir-build.log 2>&1`,
     `git diff > /dev/null`,
+    // Fan-out that only writes scratch logs is a measurement, not an edit.
+    `for i in 1 2 3; do bun run test > /tmp/mimir-run-$i.txt 2>&1; echo "run $i $?"; done`,
+    `rm -f /private/tmp/claude-501/s/flake.txt; for i in 1 2; do bun test >> /private/tmp/claude-501/s/flake.txt 2>&1; done`,
+    `find . -name '*.log' | tee /tmp/mimir-logs.txt`,
     `awk '$3 > 100 { print $1 }' data.csv`,
     `python3 -c "print(1 > 0)"`,
     `python3 -c "import json; print(json.load(open('package.json'))['name'])"`,

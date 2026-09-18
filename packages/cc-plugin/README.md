@@ -168,6 +168,37 @@ Two non-hook keys land alongside the hooks:
 - **`disableAgentView: true`.** Claude Code's agent view (`←` on an empty prompt) re-spawns the session as a fresh `claude` process carrying only `--settings`, `--mcp-config` and `--permission-mode` — the persona (`--system-prompt-file`) is dropped. Off, the wrapper's flags stay in force for the life of the session.
 - **`worktree.baseRef: "head"`.** Worker worktrees branch from the current `HEAD` rather than the remote default branch, so a worker sees the coordinator's integration branch instead of `main`.
 
+### Runtime config (config.json)
+
+`~/.mimir/config.json` is the shared runtime config every distribution reads (see [`packages/plugin-core/README.md`](../plugin-core/README.md#shared-config)). One key is delegation-specific:
+
+```json
+{
+  "workerModels": {
+    "claudeCode": { "impl": "opus", "test": "opus", "review": "opus" },
+    "opencode": { "impl": "anthropic/claude-opus-4-5" }
+  }
+}
+```
+
+Each host namespace pins a model per worker role. `claudeCode` values are Agent-tool tiers — `sonnet`, `opus`, `haiku`, `fable`; `opencode` values are `provider/model` ids. A missing key, namespace or role means that role runs on the coordinator's own model. `delegate start` reports what it resolved on a `worker models:` line — `delegate status` prints the same line — and the `/delegate` playbook passes each named model on that role's spawns.
+
+Left unset, every worker inherits the coordinator's model. That matters when the coordinator runs a premium tier: three workers on Fable exhaust a subscription's budget fast, on work the coordinator never reads in full. Pin the `claudeCode` roles to `opus` in that case. If the coordinator is already on `opus` or something cheaper, pinning changes nothing or costs more — leave it unset. The installed `settings.json` also sets `CLAUDE_CODE_SUBAGENT_MODEL=opus`, so any other subagent (Explore, the docs guide) defaults to `opus` rather than the coordinator's model; a per-spawn `model` still wins.
+
+The same table can live in `mimir.toml` — developer intent rather than installer state, layered user (`~/.mimir/mimir.toml`) then project (`./mimir.toml`), and it wins over `config.json` role by role:
+
+```toml
+[workers.models.claudeCode]
+review = "sonnet"          # only the review role changes; impl/test stay on config.json
+
+[workers.models.opencode]
+impl = "ollama/qwen3"      # an OpenCode project on local models
+```
+
+A project's `mimir.toml` is committable, so a repo can pin its own worker models for everyone who delegates in it.
+
+Nothing prompts for `workerModels`: set it by hand-editing `~/.mimir/config.json`. The edit survives `/mimir-update`, which merges the installer's keys over the existing config rather than replacing it.
+
 ### Workers (plugin `agents/`)
 
 The three delegation workers — `mimir-impl`, `mimir-test`, `mimir-review` — ship as subagent files in this plugin's `agents/` directory, not in `~/.mimir`. The plugin directory is what Claude Code re-reads on `/reload-plugins`, on an agent-view respawn and on a desktop resume, so the workers survive all three; definitions passed on argv survive none of them. Each file is rendered from `packages/server/system-prompt.md` by `bun run --cwd packages/cc-plugin agents:render` (the "how to do work" sections plus a role contract, no persona) and committed; `agents.test.ts` fails when the committed files drift from the renderer, so re-render after editing the seed or `plugin-core/src/workers`. The worker prompt therefore tracks the plugin release, not the served prompt.

@@ -26,13 +26,13 @@ const PACKAGES = [
 async function main() {
   const filter = Bun.argv[2];
 
+  // A name that isn't a package (the verify gate passes `basename $PWD`,
+  // which is the repo name at the root) means the whole workspace.
   if (filter && !PACKAGES.includes(filter)) {
-    console.error(`Unknown package: ${filter}`);
-    console.error(`Available: ${PACKAGES.join(", ")}`);
-    process.exit(1);
+    console.log(`${filter} is not a package — typechecking all of them`);
   }
 
-  const packages = filter ? [filter] : PACKAGES;
+  const packages = filter && PACKAGES.includes(filter) ? [filter] : PACKAGES;
 
   let passed = 0;
   const failures: string[] = [];

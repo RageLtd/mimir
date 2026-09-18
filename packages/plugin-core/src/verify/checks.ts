@@ -7,7 +7,10 @@
  *   counts   — test functions before → after, for the report
  *
  * "Test added" is a path match OR an added test marker in the diff
- * content, because Rust tests live inline under `#[cfg(test)]`.
+ * content, because Rust tests live inline under `#[cfg(test)]`. A test
+ * file the integration branch already committed (red-first, before the
+ * impl worker started) counts for coverage too — that is the playbook's
+ * normal shape, not an exception.
  */
 
 import {
@@ -34,10 +37,13 @@ const addsTests = (file: ChangedFile) => {
   return (testSignals(file.path, file.added)?.tests ?? 0) > 0;
 };
 
-export const coverageCheck = (files: readonly ChangedFile[]) => {
+export const coverageCheck = (
+  files: readonly ChangedFile[],
+  branchPaths: readonly string[] = [],
+) => {
   const source = files.filter(isSource);
   if (source.length === 0) return null;
-  if (files.some(addsTests)) return null;
+  if (files.some(addsTests) || branchPaths.some(isTestFile)) return null;
   return {
     check: "coverage",
     reason: `No test coverage for the change. Source changed with no test added or modified: ${source.map((f) => f.path).join(", ")}. Add or update tests that exercise this change (a failing test first, then the fix).`,

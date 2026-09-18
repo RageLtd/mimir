@@ -20,11 +20,21 @@
  * boilerplate with no STATUS line, so the gate skips there and never
  * runs twice.
  *
- * Always exits 0. A crashing gate must never wedge a worker.
+ * Always exits 0 as a hook. A crashing gate must never wedge a worker.
+ *
+ * Coordinator CLI mode — `mimir-cc verify --worktree <path> [--role
+ * impl|test] [--agent <id>] [--allow-empty]` — runs the same gate on
+ * demand and prints the report: re-check a retained worktree after an
+ * exogenous failure (a flaky test, a rate limit), or with `--allow-empty`
+ * run the merged tree's toolchain as the post-merge integration check.
+ * Exit 0 on pass, 1 on block.
  */
 
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { errMessage } from "@mimir/plugin-core/util";
 import {
+  clearBlocks,
   runVerify,
   type VerifyOutcome,
   type VerifyRole,
@@ -130,6 +140,76 @@ export const roleOf = (agentType: string | undefined) => {
   return role;
 };
 
+/**
+ * A hook payload naming a cwd that no longer exists: the coordinator
+ * already collected and removed the worktree, and this is a late re-fire
+ * (SubagentStop after the hand-back). Nothing there to verify.
+ */
+export const cwdMissing = (cwd?: string) =>
+  cwd !== undefined && !existsSync(cwd);
+
+const CLI_ROLES: readonly VerifyRole[] = ["impl", "test"];
+const CLI_AGENT_ID = "coordinator";
+const CLI_USAGE =
+  "usage: mimir-cc verify --worktree <path> [--role impl|test] [--agent <id>] [--allow-empty]";
+
+export type VerifyCliArgs = {
+  readonly worktree: string;
+  readonly role: VerifyRole;
+  readonly agentId: string | undefined;
+  readonly allowEmpty: boolean;
+};
+
+const flagValue = (args: readonly string[], flag: string) => {
+  const at = args.indexOf(flag);
+  return at === -1 ? undefined : args[at + 1];
+};
+
+/** Null → hook mode (stdin). A string is the usage error. */
+export const parseVerifyArgs = (args: readonly string[]) => {
+  if (args.length === 0) return null;
+  const worktree = flagValue(args, "--worktree");
+  if (!worktree) return CLI_USAGE;
+  const roleFlag = flagValue(args, "--role") ?? "impl";
+  const role = CLI_ROLES.find((r) => r === roleFlag);
+  if (!role) return CLI_USAGE;
+  return {
+    worktree,
+    role,
+    agentId: flagValue(args, "--agent"),
+    allowEmpty: args.includes("--allow-empty"),
+  } satisfies VerifyCliArgs;
+};
+
+const runVerifyCli = async (args: VerifyCliArgs) => {
+  const agentId = args.agentId ?? CLI_AGENT_ID;
+  // A worker's block count is its own; the coordinator's shared id
+  // starts clean every time so old runs can't exhaust a new one.
+  if (!args.agentId) await clearBlocks(agentId);
+  const outcome = await runVerify({
+    role: args.role,
+    worktree: resolve(args.worktree),
+    lastMessage: "STATUS: done",
+    agentId,
+    allowEmpty: args.allowEmpty,
+    commandTimeoutMs: COMMAND_TIMEOUT_MS,
+  });
+  switch (outcome.kind) {
+    case "pass":
+      console.log(outcome.report);
+      return 0;
+    case "block":
+    case "exhausted":
+      console.log(outcome.reason);
+      return 1;
+    case "skip":
+      console.error("verify: nothing to do");
+      return 1;
+    default:
+      return assertNever(outcome);
+  }
+};
+
 const handbackMessage = (input: HookInput) => {
   const toolInput =
     input.tool_input && typeof input.tool_input === "object"
@@ -138,12 +218,26 @@ const handbackMessage = (input: HookInput) => {
   return typeof toolInput.message === "string" ? toolInput.message : "";
 };
 
-export const runVerifyHook = async () => {
+export const runVerifyHook = async (args: readonly string[] = []) => {
+  const cli = parseVerifyArgs(args);
+  if (typeof cli === "string") {
+    console.error(cli);
+    return 1;
+  }
+  if (cli) return runVerifyCli(cli);
+
   if (process.env.MIMIR_ACTIVE !== "1") return 0;
   const input = await parseInput(await readStdin());
   const agentId = input.agent_id;
   if (!agentId) {
     log.debug("verify: no agent_id — not inside a subagent, skipping");
+    return 0;
+  }
+  if (cwdMissing(input.cwd)) {
+    log.info("verify: worktree already collected — skipping late re-fire", {
+      agentId,
+      cwd: input.cwd,
+    });
     return 0;
   }
 

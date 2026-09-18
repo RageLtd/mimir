@@ -5,13 +5,24 @@
  * failure stores nothing.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrgReplica } from "../store/org-replica";
 import type { ExtractionConfig } from "./extract";
 import { summarizeToReplica } from "./summarize";
+
+// Stub HTTP round-trips starve under `bun test --parallel`; the runner's 5s
+// default is too tight.
+setDefaultTimeout(30_000);
 
 let savedHome: string | undefined;
 

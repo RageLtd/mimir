@@ -120,3 +120,59 @@ describe("collectChanges", () => {
     expect((await collectChanges(runCommand, root))?.files).toEqual([]);
   });
 });
+
+/** Trunk `main` plus an `integration` branch carrying one committed test change. */
+const seedIntegrationBranch = async () => {
+  const root = await seedRepo();
+  await git(root, "checkout", "-q", "-b", "integration");
+  await write(
+    root,
+    "src/a.test.ts",
+    'test("a", () => { expect(a).toBe(2); });\n',
+  );
+  await git(root, "add", ".");
+  await git(root, "commit", "-q", "-m", "tests (red)");
+  return root;
+};
+
+describe("collectChanges branchPaths", () => {
+  test("files committed on the integration branch since trunk, worker in a linked worktree", async () => {
+    const root = await seedIntegrationBranch();
+    const wt = join(root, ".claude", "worktrees", "w4");
+    await git(root, "worktree", "add", "-q", "-b", "w4", wt);
+    await write(wt, "src/a.ts", "export const a = 2;\n");
+
+    const changes = await collectChanges(runCommand, wt);
+    expect(changes?.files.map((f) => f.path)).toEqual(["src/a.ts"]);
+    expect(changes?.branchPaths).toEqual(["src/a.test.ts"]);
+  });
+
+  test("same when the worker runs in the main worktree on the integration branch", async () => {
+    const root = await seedIntegrationBranch();
+    await write(root, "src/a.ts", "export const a = 2;\n");
+
+    const changes = await collectChanges(runCommand, root);
+    expect(changes?.files.map((f) => f.path)).toEqual(["src/a.ts"]);
+    expect(changes?.branchPaths).toEqual(["src/a.test.ts"]);
+  });
+
+  test("empty when the base sits on trunk", async () => {
+    const root = await seedRepo();
+    const wt = join(root, ".claude", "worktrees", "w5");
+    await git(root, "worktree", "add", "-q", "-b", "w5", wt);
+    await write(wt, "src/e.ts", "export const e = 5;\n");
+    expect((await collectChanges(runCommand, wt))?.branchPaths).toEqual([]);
+  });
+
+  test("empty when the repo has no trunk branch at all", async () => {
+    const root = await mkTmp();
+    await git(root, "init", "-q", "-b", "trunkless");
+    await git(root, "config", "user.email", "t@example.com");
+    await git(root, "config", "user.name", "t");
+    await write(root, "src/a.ts", "export const a = 1;\n");
+    await git(root, "add", ".");
+    await git(root, "commit", "-q", "-m", "base");
+    await write(root, "src/a.ts", "export const a = 2;\n");
+    expect((await collectChanges(runCommand, root))?.branchPaths).toEqual([]);
+  });
+});
