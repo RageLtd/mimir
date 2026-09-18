@@ -124,6 +124,29 @@ fallback are documented once in
 `mimir keys setup` prints your **device secret exactly once** — store it in
 your password manager; it is the only way to bring a new device online.
 
+## Resuming and Remote Control
+
+Everything that makes a session Mimir — persona, hooks, MCP servers, worker
+definitions — is passed by the `mimir` wrapper at launch. Claude Code has no
+settings key that replaces the system prompt, so a session only stays Mimir
+while it runs under the wrapper's flags. In practice:
+
+- **Resume through the wrapper.** `mimir --continue` and `mimir --resume <id>`
+  pass straight through to `claude` with every flag intact. A bare
+  `claude --resume`, or resuming from the Claude desktop app, reopens the
+  transcript without the persona or the workers.
+- **Remote Control, interactive mode, works as-is.** `mimir --rc` (or `/rc`
+  inside a running session) attaches Remote Control to the already-running
+  process, so claude.ai/code and the mobile app drive the same Mimir session,
+  flags and all. Keep the process alive — tmux over ssh, say — and accept the
+  workspace-trust dialog in that directory once beforehand.
+- **Remote Control server mode is not supported.** `claude remote-control`
+  spawns fresh sessions and refuses wrapper flags such as `--settings`, so the
+  sessions it creates are plain Claude Code. Making that mode Mimir would mean
+  a launcher-independent install (hooks in `~/.claude/settings.json`,
+  user-scope MCP, workers as `~/.claude/agents/*.md`, an additive rather than
+  replacement persona) — a separate piece of work.
+
 ## What the install lands
 
 ### Hooks (settings.json)
@@ -137,6 +160,13 @@ These hooks get wired into `~/.mimir/settings.json`:
 - **`PostToolUse` (Edit | Write | MultiEdit) → reindex.** Spawns a detached cartographer worker that parses the changed file and updates the local cartographer index. Disabled when no cartographer binary is configured.
 
 All hooks are scoped to `MIMIR_ACTIVE=1` sessions and no-op silently in nested `claude` subprocesses.
+
+### Settings (settings.json)
+
+Two non-hook keys land alongside the hooks:
+
+- **`disableAgentView: true`.** Claude Code's agent view (`←` on an empty prompt) re-spawns the session as a fresh `claude` process carrying only `--settings`, `--mcp-config` and `--permission-mode` — the persona (`--system-prompt-file`) and the worker definitions (`--agents`) are dropped, and `/delegate` fails with `Agent type 'mimir-test' not found`. Off, the wrapper's flags stay in force for the life of the session.
+- **`worktree.baseRef: "head"`.** Worker worktrees branch from the current `HEAD` rather than the remote default branch, so a worker sees the coordinator's integration branch instead of `main`.
 
 ### MCP servers (mcp.json)
 

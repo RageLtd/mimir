@@ -178,7 +178,9 @@ const shellDecision = (command: string, worktree: string) => {
     );
   }
   if (GIT_BRANCH_DELETE.test(command)) {
-    return deny("Role guard: agents don't delete branches (`git branch -D`).");
+    return deny(
+      "Role guard: agents never force-delete branches (`git branch -D`). A merged branch deletes with `-d`; if git refuses, the branch holds unmerged work — stop and report it.",
+    );
   }
   if (GIT_CLEAN_FORCE.test(command)) {
     return deny(

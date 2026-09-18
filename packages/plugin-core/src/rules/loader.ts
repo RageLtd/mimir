@@ -16,6 +16,7 @@
  * Bun's built-in TOML parser handles parsing — no extra dependency.
  */
 
+import { access } from "node:fs/promises";
 import * as path from "node:path";
 import { Glob } from "bun";
 import { parseToml } from "../toml";
@@ -70,6 +71,7 @@ export const loadRules = async (projectPath: string) => {
   const rules: RuleEntry[] = [];
   const errors: LoadError[] = [];
   const seenIds = new Set<string>();
+  const checkoutCache = new Map<string, Promise<boolean>>();
 
   // `dot: true` is required because the discovery root lives under
   // `.claude/`. Bun's Glob (like most modern globs) skips dot-prefixed
@@ -91,6 +93,9 @@ export const loadRules = async (projectPath: string) => {
     dot: true,
     followSymlinks: true,
   })) {
+    if (await insideNestedCheckout(relativePath, projectPath, checkoutCache)) {
+      continue;
+    }
     const absPath = path.join(projectPath, relativePath);
     const result = await loadOne(absPath, projectPath);
     if (!result.ok) {
@@ -110,6 +115,37 @@ export const loadRules = async (projectPath: string) => {
   }
 
   return { rules, errors } as const;
+};
+
+/**
+ * True when a `.git` entry (a file for a linked worktree, a directory
+ * for a clone) sits strictly between the project root and the match.
+ * That marks a nested checkout — Claude Code's `.claude/worktrees/agent-*`
+ * worker worktrees, say — whose rules are the project's own seen a
+ * second time. Loading them reports every id as a duplicate, and the
+ * fail-closed spawn gate then refuses every worker.
+ */
+const insideNestedCheckout = async (
+  relativePath: string,
+  projectPath: string,
+  cache: Map<string, Promise<boolean>>,
+) => {
+  const dir = path.dirname(relativePath);
+  if (dir === ".") return false;
+  const segments = dir.split(path.sep);
+  for (let depth = 1; depth <= segments.length; depth++) {
+    const candidate = path.join(projectPath, ...segments.slice(0, depth));
+    let known = cache.get(candidate);
+    if (!known) {
+      known = access(path.join(candidate, ".git")).then(
+        () => true,
+        () => false,
+      );
+      cache.set(candidate, known);
+    }
+    if (await known) return true;
+  }
+  return false;
 };
 
 /**

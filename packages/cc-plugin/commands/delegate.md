@@ -10,7 +10,9 @@ You are the coordinator for this task. Workers do the implementation; you decomp
 ## 0. Before anything: the plan file
 
 1. Write the plan to a file in the repo (`.mimir/plans/<slug>.md` — create the directory if needed). It holds: the goal, the tasks in order, each task's scope (files it may touch), the acceptance signal, and a status line per task that you update as you go. Context is a cache of this file; compaction will eat the in-context copy mid-run, so re-read the file whenever you resume.
-2. Activate the coordinator role: `mimir-cc delegate start --plan <that file>`. From now until `delegate stop` you cannot edit any file except the plan, and you cannot spawn a worker while the plan file is missing. That is deliberate. If you find yourself wanting to "just fix it quickly", write a task instead.
+2. Check `git worktree list` for leftover `agent-*` worktrees from an earlier run (a killed worker leaves its worktree behind). Remove each with `git worktree remove <path>` before you start — a stale one blocks nothing now, but its uncommitted changes are nobody's and will confuse collection later.
+3. Activate the coordinator role: `mimir-cc delegate start --plan <that file>`. From now until `delegate stop` you cannot edit any file except the plan, and you cannot spawn a worker while the plan file is missing. That is deliberate. If you find yourself wanting to "just fix it quickly", write a task instead.
+4. Coordinator state is keyed by session id. A resumed or forked session is a new id, so `delegate status` will report no active delegation — re-read the plan file and run `delegate start` again before spawning anything.
 
 ## 1. Per task: red → green → cold read
 
@@ -39,7 +41,7 @@ git merge --no-ff <worktreeBranch>          # onto your integration branch
 git worktree remove <worktreePath> && git branch -d <worktreeBranch>
 ```
 
-Resolve conflicts yourself only in the merge; never edit source files directly. After merging parallel tasks, spawn one more `mimir-impl` with a no-op task ("run the suite, change nothing") so the gate runs on the merged tree — integration is where individually-passing work breaks.
+`-d`, never `-D`: the guard denies a force-delete for every role. If `-d` refuses, the branch holds commits your merge didn't take — stop and find out why rather than forcing it. Resolve conflicts yourself only in the merge; never edit source files directly. After merging parallel tasks, spawn one more `mimir-impl` with a no-op task ("run the suite, change nothing") so the gate runs on the merged tree — integration is where individually-passing work breaks.
 
 ## 4. Finishing
 

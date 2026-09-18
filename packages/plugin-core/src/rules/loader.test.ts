@@ -158,6 +158,32 @@ pattern = "LINKED"
     const result = await loadRules(projectRoot);
     expect(result.rules).toHaveLength(0);
   });
+
+  test("skips rules inside a nested checkout instead of reporting duplicates", async () => {
+    const rule = `id = "coding/a"
+event = "file"
+[[conditions]]
+field = "new_text"
+operator = "contains"
+pattern = "x"
+`;
+    await writeRule(".claude/rules/a.enforce.toml", rule);
+    // A Claude Code worker worktree: a full copy of the project under
+    // .claude/worktrees/<agent>, marked by the gitdir pointer file.
+    const worktree = ".claude/worktrees/agent-1";
+    await writeRule(`${worktree}/.claude/rules/a.enforce.toml`, rule);
+    await fs.writeFile(
+      path.join(projectRoot, worktree, ".git"),
+      "gitdir: /elsewhere/.git/worktrees/agent-1\n",
+    );
+
+    const result = await loadRules(projectRoot);
+    expect(result.errors).toHaveLength(0);
+    expect(result.rules).toHaveLength(1);
+    expect(result.rules[0]?.sourcePath).toBe(
+      path.join(projectRoot, ".claude/rules/a.enforce.toml"),
+    );
+  });
 });
 
 describe("loadRules — body resolution", () => {
