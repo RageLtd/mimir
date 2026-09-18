@@ -15,6 +15,7 @@ import {
   guardOutput,
   parseGuardArgs,
   parseWorktreeList,
+  roleFromInput,
 } from "./guard-hook";
 
 describe("parseGuardArgs", () => {
@@ -23,6 +24,16 @@ describe("parseGuardArgs", () => {
     expect(parseGuardArgs(["--role", "coordinator"])).toBe("coordinator");
     expect(parseGuardArgs(["--role", "boss"])).toBeNull();
     expect(parseGuardArgs([])).toBeNull();
+  });
+});
+
+describe("roleFromInput", () => {
+  test("worker agent_type → its role; none → coordinator; other → null", () => {
+    expect(roleFromInput({ agent_type: "mimir-impl" })).toBe("impl");
+    expect(roleFromInput({ agent_type: "mimir-test" })).toBe("test");
+    expect(roleFromInput({ agent_type: "mimir-review" })).toBe("review");
+    expect(roleFromInput({})).toBe("coordinator");
+    expect(roleFromInput({ agent_type: "Explore" })).toBeNull();
   });
 });
 

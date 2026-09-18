@@ -126,15 +126,15 @@ your password manager; it is the only way to bring a new device online.
 
 ## Resuming and Remote Control
 
-Everything that makes a session Mimir — persona, hooks, MCP servers, worker
-definitions — is passed by the `mimir` wrapper at launch. Claude Code has no
-settings key that replaces the system prompt, so a session only stays Mimir
-while it runs under the wrapper's flags. In practice:
+Everything that makes a session Mimir — persona, hooks, MCP servers — is
+passed by the `mimir` wrapper at launch (the workers ride along in the plugin
+itself). Claude Code has no settings key that replaces the system prompt, so a
+session only stays Mimir while it runs under the wrapper's flags. In practice:
 
 - **Resume through the wrapper.** `mimir --continue` and `mimir --resume <id>`
   pass straight through to `claude` with every flag intact. A bare
   `claude --resume`, or resuming from the Claude desktop app, reopens the
-  transcript without the persona or the workers.
+  transcript without the persona, hooks or MCP servers.
 - **Remote Control, interactive mode, works as-is.** `mimir --rc` (or `/rc`
   inside a running session) attaches Remote Control to the already-running
   process, so claude.ai/code and the mobile app drive the same Mimir session,
@@ -144,8 +144,8 @@ while it runs under the wrapper's flags. In practice:
   spawns fresh sessions and refuses wrapper flags such as `--settings`, so the
   sessions it creates are plain Claude Code. Making that mode Mimir would mean
   a launcher-independent install (hooks in `~/.claude/settings.json`,
-  user-scope MCP, workers as `~/.claude/agents/*.md`, an additive rather than
-  replacement persona) — a separate piece of work.
+  user-scope MCP, an additive rather than replacement persona) — a separate
+  piece of work.
 
 ## What the install lands
 
@@ -156,7 +156,7 @@ These hooks get wired into `~/.mimir/settings.json`:
 - **`UserPromptSubmit` → voice-anchor.** Assembles the boot-context block (user profile, recent project memories, session context) on every prompt, and every N turns (default 5, override via `MIMIR_ANCHOR_INTERVAL`) injects a `<voice_anchor>` block sampled from the system prompt's voice library. Recency-slot persona refresh that counteracts long-context drift.
 - **`PreToolUse` → rules.** Runs the rule engine against every `.claude/**/*.enforce.toml` file under the project root. On match, emits `additionalContext` with the violation message so the model sees the nudge alongside the tool call. See [Rules engine](#rules-engine).
 - **`PreToolUse` (Bash) → edit-guard.** Claude Code's auto permission mode tells the model to prefer Bash (sed, heredocs, scripts) over Edit/Write, which hides changes from the chat. This hook denies a Bash command that rewrites a single explicit file — `sed -i` on one path, a redirect or heredoc into one path, `tee` to one path, an inline `python`/`node`/`perl` snippet writing one literal path — with a reason pointing the model at the Edit tool. Bulk mechanical edits (several paths, globs, `find`/`xargs`, `git ls-files`, loops, `glob`/`os.walk` in a script) are denied too — a shell edit bypasses every file rule in the engine and never shows as a diff; the reason points at the Edit tool per file, or the project's formatter/codemod for a genuine sweep. Read-only uses, scratch paths under `/tmp`, and anything ambiguous pass silently; a hook that blocks a legitimate command is the worse failure. Hooks run before the permission check in every mode, so the deny holds under auto. Set `MIMIR_EDIT_GUARD=0` to disable it for a session.
-- **`PreToolUse` → `guard --role <impl|test|review|coordinator>`.** The role guard for autonomous workers. Worker roles are wired from each worker definition's frontmatter `hooks`; the `coordinator` role is wired here in settings.json and stays silent unless the delegation skill has written an active coordinator state for the session (`~/.mimir/agents/<session>.json`). Denies: `impl` writing test files, `test` writing anything else, `review` writing at all, the coordinator writing files, spawning a worker before its plan file exists, or reading implementation inside a worker worktree. Every role: `git push`, `git reset --hard`, `git branch -D`, `git clean -f`, `rm -r` outside the agent's worktree, and any read or write of secret material (`.env*`, keys, `~/.ssh`, `~/.aws`…). The same secret paths are also `Read(...)` deny rules in the installed settings, so Bash `cat` is covered too. The decision is `guardDecision` in plugin-core; this hook only builds the context and speaks the hook protocol.
+- **`PreToolUse` → `guard`.** The role guard for autonomous workers. One hook covers every role: a settings-level `PreToolUse` fires inside subagents too, and there the payload's `agent_type` names the worker, so `mimir-impl`/`mimir-test`/`mimir-review` map to their roles, no `agent_type` is the main session (`coordinator`), and any other subagent is left alone. The coordinator role stays silent unless the delegation skill has written an active coordinator state for the session (`~/.mimir/agents/<session>.json`). Denies: `impl` writing test files, `test` writing anything else, `review` writing at all, the coordinator writing files, spawning a worker before its plan file exists, or reading implementation inside a worker worktree. Every role: `git push`, `git reset --hard`, `git branch -D`, `git clean -f`, `rm -r` outside the agent's worktree, and any read or write of secret material (`.env*`, keys, `~/.ssh`, `~/.aws`…). The same secret paths are also `Read(...)` deny rules in the installed settings, so Bash `cat` is covered too. The decision is `guardDecision` in plugin-core; this hook only builds the context and speaks the hook protocol.
 - **`PostToolUse` (Edit | Write | MultiEdit) → reindex.** Spawns a detached cartographer worker that parses the changed file and updates the local cartographer index. Disabled when no cartographer binary is configured.
 
 All hooks are scoped to `MIMIR_ACTIVE=1` sessions and no-op silently in nested `claude` subprocesses.
@@ -165,8 +165,14 @@ All hooks are scoped to `MIMIR_ACTIVE=1` sessions and no-op silently in nested `
 
 Two non-hook keys land alongside the hooks:
 
-- **`disableAgentView: true`.** Claude Code's agent view (`←` on an empty prompt) re-spawns the session as a fresh `claude` process carrying only `--settings`, `--mcp-config` and `--permission-mode` — the persona (`--system-prompt-file`) and the worker definitions (`--agents`) are dropped, and `/delegate` fails with `Agent type 'mimir-test' not found`. Off, the wrapper's flags stay in force for the life of the session.
+- **`disableAgentView: true`.** Claude Code's agent view (`←` on an empty prompt) re-spawns the session as a fresh `claude` process carrying only `--settings`, `--mcp-config` and `--permission-mode` — the persona (`--system-prompt-file`) is dropped. Off, the wrapper's flags stay in force for the life of the session.
 - **`worktree.baseRef: "head"`.** Worker worktrees branch from the current `HEAD` rather than the remote default branch, so a worker sees the coordinator's integration branch instead of `main`.
+
+### Workers (plugin `agents/`)
+
+The three delegation workers — `mimir-impl`, `mimir-test`, `mimir-review` — ship as subagent files in this plugin's `agents/` directory, not in `~/.mimir`. The plugin directory is what Claude Code re-reads on `/reload-plugins`, on an agent-view respawn and on a desktop resume, so the workers survive all three; definitions passed on argv survive none of them. Each file is rendered from `packages/server/system-prompt.md` by `bun run --cwd packages/cc-plugin agents:render` (the "how to do work" sections plus a role contract, no persona) and committed; `agents.test.ts` fails when the committed files drift from the renderer, so re-render after editing the seed or `plugin-core/src/workers`. The worker prompt therefore tracks the plugin release, not the served prompt.
+
+Plugin agents cannot carry frontmatter hooks, so the role guard is the settings-level `guard` hook above. That also means a plain `claude` session with the plugin enabled can spawn the workers unguarded — the prompt states the role, nothing enforces it there.
 
 ### MCP servers (mcp.json)
 

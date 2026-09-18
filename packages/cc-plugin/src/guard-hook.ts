@@ -1,11 +1,17 @@
 /**
- * Role guard — PreToolUse hook, `mimir-cc guard --role <impl|test|review|coordinator>`.
+ * Role guard — PreToolUse hook, `mimir-cc guard [--role <r>]`.
  *
- * Worker roles are wired from each worker definition's frontmatter
- * `hooks`, so the role is static per agent. The coordinator role is
- * wired in settings.json for the main session and is silent unless the
- * delegation skill has written an active coordinator state for this
- * session — so ordinary Mimir sessions never feel it.
+ * One settings.json hook covers every role: a settings-level PreToolUse
+ * fires inside subagents too, and there the payload carries
+ * `agent_type`, so the role is read from it — a worker's agent name maps
+ * to its role, no `agent_type` is the main session (coordinator), and
+ * any other subagent is left alone. Plugin-shipped agents cannot carry
+ * frontmatter hooks, which is why the role isn't wired per definition.
+ * `--role` remains as an explicit override.
+ *
+ * The coordinator role is silent unless the delegation skill has written
+ * an active coordinator state for this session — so ordinary Mimir
+ * sessions never feel it.
  *
  * The decision itself is `guardDecision` in plugin-core; this file only
  * builds the context from the CC payload (worktree = cwd, plan-file
@@ -21,6 +27,7 @@ import {
   readCoordinatorState,
 } from "@mimir/plugin-core/guard";
 import { errMessage } from "@mimir/plugin-core/util";
+import { workerByName } from "@mimir/plugin-core/workers";
 import { createLogger } from "./logger";
 
 const log = createLogger("guard-hook");
@@ -30,6 +37,7 @@ type HookInput = {
   readonly cwd?: string;
   readonly tool_name?: string;
   readonly tool_input?: unknown;
+  readonly agent_type?: string;
 };
 
 /** `--role <r>` from argv. Null when missing or unknown. */
@@ -37,6 +45,15 @@ export const parseGuardArgs = (args: readonly string[]) => {
   const at = args.indexOf("--role");
   const role = at === -1 ? undefined : args[at + 1];
   return isGuardRole(role) ? role : null;
+};
+
+/**
+ * Role from the payload: a known worker's role, the coordinator when
+ * the call comes from the main session, null for any other subagent.
+ */
+export const roleFromInput = (input: HookInput) => {
+  if (input.agent_type === undefined) return "coordinator" as const;
+  return workerByName(input.agent_type)?.role ?? null;
 };
 
 /**
@@ -120,12 +137,9 @@ export const buildGuardContext = async (role: GuardRole, input: HookInput) => {
 
 export const runGuardHook = async (args: readonly string[]) => {
   if (process.env.MIMIR_ACTIVE !== "1") return 0;
-  const role = parseGuardArgs(args);
-  if (!role) {
-    log.error("guard: missing or unknown --role", { args: [...args] });
-    return 0;
-  }
   const input = await parseInput(await readStdin());
+  const role = parseGuardArgs(args) ?? roleFromInput(input);
+  if (!role) return 0;
   const ctx = await buildGuardContext(role, input);
   if (!ctx) return 0;
 

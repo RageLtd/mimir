@@ -16,7 +16,7 @@
  * ship beside it.
  */
 
-import { chmod, copyFile, mkdir } from "node:fs/promises";
+import { chmod, copyFile, mkdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { toAnthropicXml } from "@mimir/plugin-core/anthropic-xml";
@@ -35,7 +35,6 @@ import wrapperTemplate from "../artifacts/wrapper.sh.template" with {
 import ensureBinaryScript from "../scripts/ensure-binary.sh" with {
   type: "text",
 };
-import { renderAgentsJson } from "./agents";
 import { extractionConfig, readConfig, writeConfig } from "./config";
 
 // `as const` keeps the discriminant literal so the ok/err union
@@ -244,7 +243,6 @@ export const runInstall = async (
   const promptPath = join(home, "system-prompt.md");
   const mcpPath = join(home, "mcp.json");
   const settingsPath = join(home, "settings.json");
-  const agentsPath = join(home, "agents.json");
   const wrapperPath = join(binDir, "mimir");
   const selfPath = join(binDir, "mimir-cc");
 
@@ -261,10 +259,9 @@ export const runInstall = async (
   await writeText(promptPath, xml);
   await writeText(mcpPath, templates.mcp);
   await writeText(settingsPath, templates.settings);
-  // Worker definitions derive from the same prompt: the "how to do work"
-  // sections plus a role contract, no persona. The wrapper passes this
-  // file as `--agents` so the workers exist for every Mimir session.
-  await writeText(agentsPath, renderAgentsJson(xml, selfPath));
+  // Workers moved into the plugin's agents/ directory; the wrapper no
+  // longer reads this file, so an update retires it.
+  await rm(join(home, "agents.json"), { force: true });
   await writeExecutable(wrapperPath, wrapperTemplate);
   // The wrapper self-updates the binary on launch by running this from
   // ~/.mimir, so it must not depend on the plugin clone still being present.
@@ -351,7 +348,6 @@ export const runInstallCommand = async (opts: InstallOptions) => {
       `  System prompt:  ${home}/system-prompt.md  (version ${version})`,
       `  MCP config:     ${home}/mcp.json`,
       `  Hook settings:  ${home}/settings.json`,
-      `  Workers:        ${home}/agents.json  (mimir-impl, mimir-test, mimir-review)`,
       `  Runtime config: ${home}/config.json`,
       `  User memories:  ${opts.userMemoryDb ?? join(home, "user-memories.db")}`,
       `  Embedder:       ${embedderDir()}  (llama.cpp + pinned GGUF)`,

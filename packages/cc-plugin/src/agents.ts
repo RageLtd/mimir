@@ -1,69 +1,67 @@
 /**
- * Claude Code worker definitions — the `--agents` JSON the wrapper
- * passes at launch, written to ~/.mimir/agents.json by the installer.
+ * Claude Code worker definitions — the subagent markdown files shipped
+ * in the plugin's `agents/` directory. `scripts/render-agents.ts` renders
+ * them from the server's system-prompt seed; the files are committed and
+ * `agents.test.ts` fails when they drift from the renderer.
  *
- * CLI-defined agents run their frontmatter hooks without the workspace
- * trust dialog, which is why the role guard is wired here per agent
- * rather than in settings.json: the role is static per definition.
+ * Shipped in the plugin rather than passed as `--agents`: the plugin
+ * directory is what Claude Code re-reads on `/reload-plugins`, on an
+ * agent-view respawn and on a desktop resume, and argv survives none of
+ * them. Plugin agents cannot carry frontmatter hooks, so the role guard
+ * is not wired here — the settings-level `mimir-cc guard` hook derives
+ * the role from the payload's `agent_type`.
  *
  * `isolation: "worktree"` gives each worker its own checkout so parallel
  * workers can't collide and the verify gate can diff against a clean
  * base. No `model` field: every role runs the session's model (MIM-41).
  */
 
+import { resolve } from "node:path";
+import { toAnthropicXml } from "@mimir/plugin-core/anthropic-xml";
 import {
   buildWorkerPrompt,
   WORKER_DEFINITIONS,
+  type WorkerDefinition,
 } from "@mimir/plugin-core/workers";
 
-const GUARD_TIMEOUT_S = 5;
+/** The seed the server boots its stored prompt from. */
+export const PROMPT_SEED = resolve(
+  import.meta.dir,
+  "..",
+  "..",
+  "server",
+  "system-prompt.md",
+);
 
-export type CcAgentDefinition = {
-  readonly description: string;
-  readonly prompt: string;
-  readonly maxTurns: number;
-  readonly isolation: "worktree";
-  readonly disallowedTools?: readonly string[];
-  readonly hooks: {
-    readonly PreToolUse: readonly {
-      readonly hooks: readonly {
-        readonly type: "command";
-        readonly command: string;
-        readonly timeout: number;
-      }[];
-    }[];
-  };
+/** Where Claude Code discovers a plugin's agents. */
+export const AGENTS_DIR = resolve(import.meta.dir, "..", "agents");
+
+/**
+ * One worker as a subagent markdown file. Frontmatter fields follow the
+ * plugins reference: `disallowedTools` is a comma-separated list, the
+ * description is JSON-quoted so its punctuation survives YAML.
+ */
+export const renderAgentMarkdown = (
+  worker: WorkerDefinition,
+  promptXml: string,
+) => {
+  const frontmatter = [
+    `name: ${worker.name}`,
+    `description: ${JSON.stringify(worker.description)}`,
+    `maxTurns: ${worker.maxTurns}`,
+    "isolation: worktree",
+    ...(worker.disallowedTools.length > 0
+      ? [`disallowedTools: ${worker.disallowedTools.join(", ")}`]
+      : []),
+  ];
+  return `---\n${frontmatter.join("\n")}\n---\n\n${buildWorkerPrompt(promptXml, worker)}\n`;
 };
 
-/** Render every worker into the `--agents` map. */
-export const renderAgents = (promptXml: string, selfPath: string) => {
-  const agents: Record<string, CcAgentDefinition> = {};
-  for (const worker of WORKER_DEFINITIONS) {
-    agents[worker.name] = {
-      description: worker.description,
-      prompt: buildWorkerPrompt(promptXml, worker),
-      maxTurns: worker.maxTurns,
-      isolation: "worktree",
-      ...(worker.disallowedTools.length > 0
-        ? { disallowedTools: worker.disallowedTools }
-        : {}),
-      hooks: {
-        PreToolUse: [
-          {
-            hooks: [
-              {
-                type: "command",
-                command: `${selfPath} guard --role ${worker.role}`,
-                timeout: GUARD_TIMEOUT_S,
-              },
-            ],
-          },
-        ],
-      },
-    };
-  }
-  return agents;
+/** Every worker rendered from the seed, keyed by file name. */
+export const renderSeedAgents = async () => {
+  const xml = toAnthropicXml(await Bun.file(PROMPT_SEED).text());
+  return WORKER_DEFINITIONS.map((worker) => ({
+    file: `${worker.name}.md`,
+    content: renderAgentMarkdown(worker, xml),
+  }));
 };
-
-export const renderAgentsJson = (promptXml: string, selfPath: string) =>
-  `${JSON.stringify(renderAgents(promptXml, selfPath), null, 2)}\n`;
