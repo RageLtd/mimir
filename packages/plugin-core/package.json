@@ -35,6 +35,8 @@
     "./engine/turn": "./src/engine/turn/index.ts",
     "./engine/log": "./src/engine/log.ts",
     "./engine/redact": "./src/engine/redact.ts",
+    "./toml": "./src/toml.ts",
+    "./mcp/config-file": "./src/mcp/config-file.ts",
     "./mcp/local-tools-server": "./src/mcp/local-tools-server.ts",
     "./mcp/logs-server": "./src/mcp/logs-server.ts",
     "./tools/user-memory": "./src/tools/user-memory.ts",

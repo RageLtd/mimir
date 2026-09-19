@@ -1,0 +1,20 @@
+{
+  "name": "@mimir/cli",
+  "license": "SEE LICENSE IN LICENSE",
+  "module": "src/main.ts",
+  "type": "module",
+  "private": true,
+  "description": "Mimir as a standalone terminal app on the Claude Agent SDK: a behaviour core (store, workers, config, permissions) with pluggable frontends (OpenTUI, print, and later an IPC bridge for the GPUI host).",
+  "bin": {
+    "mimir-cli": "./src/main.ts"
+  },
+  "scripts": {
+    "start": "bun src/main.ts",
+    "test": "bun test --parallel src"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "catalog:protocol",
+    "@mimir/plugin-core": "workspace:*",
+    "@opentui/core": "^0.5.11"
+  }
+}

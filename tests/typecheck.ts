@@ -21,6 +21,7 @@ const PACKAGES = [
   "cc-plugin",
   "oc-plugin",
   "codex-plugin",
+  "cli",
 ];
 
 async function main() {
