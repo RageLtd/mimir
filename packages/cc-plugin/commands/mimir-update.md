@@ -4,7 +4,7 @@ argument-hint: "[server-url]"
 allowed-tools: ["Bash", "AskUserQuestion"]
 ---
 
-You are re-installing the Mimir runtime. In alpha this is identical to `install` — it overwrites every file the original install landed. State files in `~/.mimir/voice-state/` and the log file at `~/.mimir/logs/mimir-cc.log` are left alone.
+You are re-installing the Mimir runtime. This is identical to `install` — it overwrites every file the original install landed. State files in `~/.mimir/voice-state/` and the log file at `~/.mimir/logs/mimir-cc.log` are left alone.
 
 Carry out the following steps in order.
 

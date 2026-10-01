@@ -17,7 +17,7 @@ If `$ARGUMENTS` is empty, call `AskUserQuestion` with one question:
 - question: `Which mimir-server should this install point at?`
 - header: `Server URL`
 - options:
-  - label: `https://mimir.rageltd.ca`, description: `Default — the shared alpha server`
+  - label: `https://mimir.rageltd.ca`, description: `Default — the shared server`
   - label: `http://localhost:8080`, description: `Local dev server on this machine`
 
 Use the user's selection (or their "Other" custom input) as the server URL. Bind the result to `<url>` for later steps.
@@ -67,7 +67,7 @@ Run the plugin's binary fetcher. It detects the platform, downloads the matching
 "${CLAUDE_PLUGIN_ROOT}/scripts/ensure-binary.sh"
 ```
 
-This needs the GitHub CLI (`gh`) installed and authenticated as an account with read access to `RageLtd/mimir` — alpha testers are repo collaborators, so they qualify. If `gh` is absent it falls back to `curl` + `$GITHUB_TOKEN`. Surface the script's output verbatim. If it exits non-zero — unsupported platform, no repo access, or no network and no existing binary — stop and let the user resolve the cause before retrying.
+This needs the GitHub CLI (`gh`) installed and authenticated as an account with read access to `RageLtd/mimir` — repo collaborators qualify. If `gh` is absent it falls back to `curl` + `$GITHUB_TOKEN`. Surface the script's output verbatim. If it exits non-zero — unsupported platform, no repo access, or no network and no existing binary — stop and let the user resolve the cause before retrying.
 
 > **Developing the plugin locally?** Skip this step and build from source instead: `cd "${CLAUDE_PLUGIN_ROOT}" && ./build.sh`, then in Step 6 run `"${CLAUDE_PLUGIN_ROOT}/dist/<platform>/mimir-cc" install ...` instead of the installed binary. A marketplace clone can't build (it lacks the monorepo's dependency catalogs), which is why the default path downloads a released binary. Once you've installed once, `scripts/dev-install.sh` is the fast iterate loop — it builds, atomically swaps the binary in, and pins dev mode so the updater won't overwrite your build.
 

@@ -60,20 +60,20 @@ if [ -f "${DEV_PIN}" ]; then
   exit 0
 fi
 
-# --- platform detection (alpha ships darwin-arm64 + linux-x64 only) ----------
+# --- platform detection (darwin-arm64 + linux-x64 only) ----------
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 case "${OS}" in
   Darwin)
     case "${ARCH}" in
       arm64) PLATFORM="darwin-arm64" ;;
-      *) echo "[mimir] Unsupported macOS arch: ${ARCH} (alpha is darwin-arm64 only)" >&2; exit 1 ;;
+      *) echo "[mimir] Unsupported macOS arch: ${ARCH} (darwin-arm64 only)" >&2; exit 1 ;;
     esac
     ;;
   Linux)
     case "${ARCH}" in
       x86_64|amd64) PLATFORM="linux-x64" ;;
-      *) echo "[mimir] Unsupported Linux arch: ${ARCH} (alpha is linux-x64 only)" >&2; exit 1 ;;
+      *) echo "[mimir] Unsupported Linux arch: ${ARCH} (linux-x64 only)" >&2; exit 1 ;;
     esac
     ;;
   *)

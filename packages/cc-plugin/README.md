@@ -1,6 +1,6 @@
 # @mimir/cc-plugin
 
-Alpha-stage Claude Code plugin that runs vanilla Claude Code as Mimir: the plugin ships the lifecycle hooks and local MCP servers, the installer lands the persona and the binary behind them. Two ways in — the **Claude desktop app** (or a plain `claude`) in any project where the plugin is enabled, or the `mimir` **wrapper** in a terminal. Sidesteps Anthropic's SDK-usage caps by routing Mimir through the Claude Code subscription path instead of the Agent SDK.
+Claude Code plugin that runs vanilla Claude Code as Mimir: the plugin ships the lifecycle hooks and local MCP servers, the installer lands the persona and the binary behind them. Two ways in — the **Claude desktop app** (or a plain `claude`) in any project where the plugin is enabled, or the `mimir` **wrapper** in a terminal. Sidesteps Anthropic's SDK-usage caps by routing Mimir through the Claude Code subscription path instead of the Agent SDK.
 
 ## Architecture
 
@@ -49,13 +49,13 @@ For Mimir to stay out of other projects, the plugin must **not** be enabled in `
 - **No `/switch-model`.** Only the wrapper can relaunch under another model; the command says so when run from the app.
 - **Nested sessions.** A `claude` spawned from inside an enabled project also has the plugin enabled, so its hooks fire there too.
 
-## Install (alpha testers)
+## Install
 
 There are two ways in. The **marketplace path** is the normal one — no clone, no local build; Claude Code pulls the plugin from GitHub and `/mimir-install` downloads a prebuilt binary. The **from-source path** is only for hacking on the plugin itself. Both converge on `/mimir-install`.
 
 ### Prerequisites
 
-- **The GitHub CLI (`gh`), authenticated.** Release binaries live in the **private** `RageLtd/mimir` repo, and `/mimir-install` fetches them with your own `gh` credentials — so you need read access (alpha testers are repo collaborators, which qualifies) and an active login:
+- **The GitHub CLI (`gh`), authenticated.** Release binaries live in the **private** `RageLtd/mimir` repo, and `/mimir-install` fetches them with your own `gh` credentials — so you need read access (repo collaborators qualify) and an active login:
 
   ```bash
   gh auth login
@@ -117,7 +117,7 @@ Only needed if you're working on the plugin itself. It lives as the `@mimir/cc-p
 
 ## Supported platforms
 
-Alpha ships `darwin-arm64` and `linux-x64` binaries only. Other platforms will error out of `/mimir-install`.
+Releases ship `darwin-arm64` and `linux-x64` binaries only. Other platforms will error out of `/mimir-install`.
 
 ## Command surface
 

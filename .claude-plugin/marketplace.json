@@ -4,7 +4,7 @@
     "name": "RageLtd"
   },
   "metadata": {
-    "description": "Local marketplace for the mimir-cc plugin (alpha — install from a clone of the mimir monorepo)."
+    "description": "Local marketplace for the mimir-cc plugin — install from a clone of the mimir monorepo."
   },
   "plugins": [
     {
