@@ -35,6 +35,8 @@ The wrapper invokes `claude --system-prompt-file ... --settings ...` so the Mimi
 
 The desktop app's Code tab spawns `claude` with no flags, so a session can only become Mimir through what Claude Code loads on its own. The plugin carries the hooks and MCP servers; the persona arrives as the **Mimir output style** the installer writes to `~/.claude/output-styles/mimir.md`. Both load wherever the plugin is enabled, and nothing else changes on the machine.
 
+The same route covers **Zed's Claude Code agent**: its `claude-code-acp` adapter drives the real binary through the Agent SDK with user, project and local settings loaded, so an enabled project comes up as Mimir there too (verified live with adapter 0.85.0). The hooks' `↻` status lines are suppressed for SDK-driven hosts, which render a `systemMessage` as a notice glued onto the reply; the terminal TUI and the desktop app render it as a proper status line and keep it.
+
 Enable it per project:
 
 ```bash

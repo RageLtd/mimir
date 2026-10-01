@@ -30,6 +30,7 @@ import {
 import { attempt } from "@mimir/plugin-core/result";
 import { mimirHome } from "@mimir/plugin-core/util";
 import { readConfig } from "./config";
+import { noticeFor } from "./host";
 import { createLogger } from "./logger";
 
 const log = createLogger("file-context-hook");
@@ -184,7 +185,10 @@ const emitInjection = (block: string, summary: string) => {
         hookEventName: "PreToolUse",
         additionalContext: block,
       },
-      systemMessage: summary,
+      // The "↻ File context" status line is for hosts that render it
+      // (terminal TUI, desktop app); SDK-driven hosts such as Zed glue a
+      // systemMessage onto the reply (host.ts).
+      ...noticeFor(summary),
     }),
   );
 };

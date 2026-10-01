@@ -9,7 +9,9 @@
  *     block, hidden from the developer's transcript view but visible to
  *     the model.
  *   - systemMessage — a tiny "↻ Retrieved N memories / M summaries"
- *     indicator displayed to the developer (NOT seen by the model).
+ *     indicator displayed to the developer (NOT seen by the model). Only
+ *     where the host renders it as a status line (terminal TUI, desktop
+ *     app); SDK-driven hosts such as Zed glue it onto the reply (host.ts).
  *
  * Empty or missing replica → inject nothing (same contract as an empty
  * retrieval). Run scripts/import-replica.ts to seed it; MIM-86 makes it
@@ -36,6 +38,7 @@ import {
 } from "@mimir/plugin-core/store/org-replica";
 import { errMessage, mimirHome } from "@mimir/plugin-core/util";
 import { readConfig } from "./config";
+import { noticeFor } from "./host";
 import { createLogger } from "./logger";
 
 const log = createLogger("retrieve-hook");
@@ -84,7 +87,9 @@ const emitInjection = (
         hookEventName: "UserPromptSubmit",
         additionalContext: block,
       },
-      systemMessage: `↻ Retrieved ${memoryCount} memories / ${summaryCount} summaries (local)`,
+      ...noticeFor(
+        `↻ Retrieved ${memoryCount} memories / ${summaryCount} summaries (local)`,
+      ),
     }),
   );
 };
