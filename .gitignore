@@ -51,7 +51,10 @@ compose.override.yml
 *.db
 *.db-shm
 *.db-wal
+# Developers' local MCP config at the repo root — but the cc-plugin's
+# .mcp.json is a shipped plugin manifest (its MCP servers), not local state.
 .mcp.json
+!packages/cc-plugin/.mcp.json
 
 # Docs
 docs/

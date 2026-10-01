@@ -8,8 +8,8 @@
  * directory is what Claude Code re-reads on `/reload-plugins`, on an
  * agent-view respawn and on a desktop resume, and argv survives none of
  * them. Plugin agents cannot carry frontmatter hooks, so the role guard
- * is not wired here — the settings-level `mimir-cc guard` hook derives
- * the role from the payload's `agent_type`.
+ * is not wired here — the plugin's PreToolUse `mimir-cc guard` hook
+ * (hooks/hooks.json) derives the role from the payload's `agent_type`.
  *
  * `isolation: "worktree"` gives each worker its own checkout so parallel
  * workers can't collide and the verify gate can diff against a clean

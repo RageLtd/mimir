@@ -1,35 +1,61 @@
 # @mimir/cc-plugin
 
-Alpha-stage Claude Code plugin that installs the Mimir persona, MCP wiring, and lifecycle hooks onto your machine, then exposes a `mimir` wrapper command that launches vanilla Claude Code as Mimir. Sidesteps Anthropic's SDK-usage caps by routing Mimir through the Claude Code subscription path instead of the Agent SDK.
+Claude Code plugin that runs vanilla Claude Code as Mimir: the plugin ships the lifecycle hooks and local MCP servers, the installer lands the persona and the binary behind them. Two ways in — the **Claude desktop app** (or a plain `claude`) in any project where the plugin is enabled, or the `mimir` **wrapper** in a terminal. Sidesteps Anthropic's SDK-usage caps by routing Mimir through the Claude Code subscription path instead of the Agent SDK.
 
 ## Architecture
 
-The plugin's only job is to land files. Once `/mimir-install` has run, the runtime lives entirely under `~/.mimir/` and `~/.local/bin/{mimir,mimir-cc}`; the plugin itself can be uninstalled and `mimir` will keep working.
+Everything a session needs to be Mimir loads from two places: the plugin directory (hooks, MCP servers, workers, commands) and the files `/mimir-install` lands (persona, wrapper, binary, runtime config). The plugin must stay enabled wherever Mimir runs — Claude Code scopes plugin enablement per settings file, and that scoping is the per-project switch (see [Claude desktop app](#claude-desktop-app)).
 
 ```
+<plugin root>/                 ← what Claude Code loads where the plugin is enabled
+  hooks/hooks.json             ← lifecycle hooks, each `MIMIR_ACTIVE=1 "$HOME/.local/bin/mimir-cc" <sub>`
+  .mcp.json                    ← mimir-local + mimir-logs stdio servers (the installed binary)
+  agents/                      ← delegation workers
+  commands/                    ← slash commands
+
 ~/.local/bin/
-  mimir                  ← wrapper script: exec claude with persona/MCP/hook flags
-  mimir-cc               ← compiled binary: install + hook handlers + user-memory MCP
+  mimir                  ← wrapper script: claude --system-prompt-file + --settings, model-switch loop
+  mimir-cc               ← compiled binary: install + hook handlers + MCP servers + enable/disable
+
+~/.claude/output-styles/
+  mimir.md               ← the persona as the "Mimir" output style — what a desktop-app session selects
 
 ~/.mimir/
-  system-prompt.md       ← fetched from mimir-server, XML-converted at install
-  mcp.json               ← MCP server config (mimir-local + mimir-logs stdio, optional cartographer)
-  settings.json          ← hook config (voice-anchor, rules, reindex)
+  system-prompt.md       ← fetched from mimir-server, XML-converted at install (wrapper sessions)
+  settings.json          ← wrapper-only settings (subagent env, deny list, outputStyle off)
   config.json            ← runtime config consumed by the binary (server URL, DB path, cartographer path)
-  user-memories.db       ← SQLite store backing the user-memory stdio MCP
+  user-memories.db       ← SQLite store backing the mimir-local MCP
   voice-state/           ← per-session anchor counters
   logs/mimir-cc.log      ← rolled append-only log from every hook + worker invocation
 ```
 
-The wrapper invokes `claude --system-prompt-file ... --mcp-config ... --settings ...` so the Mimir persona replaces CC's default system prompt while the user's existing global CC settings stay untouched. `MIMIR_ACTIVE=1` is exported so hooks can distinguish a real Mimir turn from a nested `claude` subprocess that happens to inherit the same settings file.
+The wrapper invokes `claude --system-prompt-file ... --settings ...` so the Mimir persona replaces CC's default system prompt while the user's existing global CC settings stay untouched; hooks and MCP servers come from the plugin in every launch path. `MIMIR_ACTIVE=1` is set inline on each plugin hook (and exported by the wrapper) so the binary's gates pass.
 
-## Install (alpha testers)
+## Claude desktop app
+
+The desktop app's Code tab spawns `claude` with no flags, so a session can only become Mimir through what Claude Code loads on its own. The plugin carries the hooks and MCP servers; the persona arrives as the **Mimir output style** the installer writes to `~/.claude/output-styles/mimir.md`. Both load wherever the plugin is enabled, and nothing else changes on the machine.
+
+Enable it per project:
+
+```bash
+~/.local/bin/mimir-cc enable      # from inside the project; `disable` reverses it
+```
+
+This merges into the project's `.claude/settings.local.json` — per-user, gitignored, and copied into the worktrees the desktop app creates — the plugin enablement, `"outputStyle": "Mimir"`, and the slice of the wrapper's settings a flag-less session would otherwise lack (subagent env, worktree base ref, secret-file deny list). `disable` removes exactly those entries and keeps anything you added or changed since. `/mimir-install` offers to enable the project it runs in; after that, run the binary from any session's Bash, since the plugin's slash commands aren't loaded in a project where it is disabled.
+
+For Mimir to stay out of other projects, the plugin must **not** be enabled in `~/.claude/settings.json` — `enable` prints a note when it is. The trade-offs against the wrapper:
+
+- **Persona strength.** An output style replaces Claude Code's software-engineering instructions with Mimir's but keeps the rest of the default prompt (tool policy, safety, a tone section) — roughly the size of Mimir's own prompt again. Claude Code frames the style as the authority on how to respond, and the `<model_override>` block says the persona wins where the two differ, but it is not the wholesale replacement the wrapper gets. Persona fidelity in the app is the thing to measure.
+- **No `/switch-model`.** Only the wrapper can relaunch under another model; the command says so when run from the app.
+- **Nested sessions.** A `claude` spawned from inside an enabled project also has the plugin enabled, so its hooks fire there too.
+
+## Install
 
 There are two ways in. The **marketplace path** is the normal one — no clone, no local build; Claude Code pulls the plugin from GitHub and `/mimir-install` downloads a prebuilt binary. The **from-source path** is only for hacking on the plugin itself. Both converge on `/mimir-install`.
 
 ### Prerequisites
 
-- **The GitHub CLI (`gh`), authenticated.** Release binaries live in the **private** `RageLtd/mimir` repo, and `/mimir-install` fetches them with your own `gh` credentials — so you need read access (alpha testers are repo collaborators, which qualifies) and an active login:
+- **The GitHub CLI (`gh`), authenticated.** Release binaries live in the **private** `RageLtd/mimir` repo, and `/mimir-install` fetches them with your own `gh` credentials — so you need read access (repo collaborators qualify) and an active login:
 
   ```bash
   gh auth login
@@ -60,11 +86,11 @@ There are two ways in. The **marketplace path** is the normal one — no clone, 
    /mimir-install
    ```
 
-   It asks for three things — the mimir-server URL (default `https://mimir.rageltd.ca`), the user-memory SQLite DB path (default `~/.mimir/user-memories.db`), and the cartographer binary path (default: skip, which leaves the reindex hook off). Then `ensure-binary.sh` downloads the matching `mimir-cc-<platform>` asset from `RageLtd/mimir` releases, re-signs it on macOS to clear Bun's broken adhoc signature, and the installer writes out `~/.mimir/` plus the wrapper.
+   It asks for the mimir-server URL (default `https://mimir.rageltd.ca`), the user-memory SQLite DB path (default `~/.mimir/user-memories.db`), and whether the server needs an API key (read from `MIMIR_API_KEY`, never pasted). Then `ensure-binary.sh` downloads the matching `mimir-cc-<platform>` asset from `RageLtd/mimir` releases, re-signs it on macOS to clear Bun's broken adhoc signature, and the installer writes out `~/.mimir/`, the Mimir output style, and the wrapper — downloading the latest cartographer release and the embedder artifacts along the way.
 
-4. Exit Claude Code and run `mimir` from any terminal.
+4. Either let `/mimir-install` enable the project you're in and open a new desktop-app (or plain `claude`) session there, or run `mimir` from any terminal for the wrapper path.
 
-To track a newer release later, run `/plugin marketplace update rageltd` to refresh the pinned tag, then `/mimir-update` to re-fetch the binary and re-land the runtime (without arguments it reuses the server URL stored in `~/.mimir/mcp.json`). `ensure-binary.sh` also runs on every `mimir` launch, so simply starting the wrapper usually pulls the latest release on its own — unless you've pinned a dev build (see below).
+To track a newer release later, run `/plugin marketplace update rageltd` to refresh the pinned tag, then `/mimir-update` to re-fetch the binary and re-land the runtime (without arguments it reuses the server URL stored in `~/.mimir/config.json`). `ensure-binary.sh` also runs on every `mimir` launch, so simply starting the wrapper usually pulls the latest release on its own — unless you've pinned a dev build (see below).
 
 ### From source (contributors)
 
@@ -91,7 +117,7 @@ Only needed if you're working on the plugin itself. It lives as the `@mimir/cc-p
 
 ## Supported platforms
 
-Alpha ships `darwin-arm64` and `linux-x64` binaries only. Other platforms will error out of `/mimir-install`.
+Releases ship `darwin-arm64` and `linux-x64` binaries only. Other platforms will error out of `/mimir-install`.
 
 ## Command surface
 
@@ -99,9 +125,10 @@ Slash commands inside Claude Code:
 
 | Command | What it does |
 |---------|--------------|
-| `/mimir-install` | Land the runtime — binary, system prompt, MCP config, hooks, wrapper |
-| `/mimir-update` | Re-fetch the binary and re-land the runtime. Without arguments it reuses the server URL from `~/.mimir/mcp.json` |
-| `/switch-model` | Stage `~/.mimir/next-session.json` so the wrapper relaunches on a different model. The next session starts fresh — continuity bridges through a project-memory checkpoint, because extended-thinking signatures don't survive cross-backend transcript replay |
+| `/mimir-install` | Land the runtime — binary, system prompt, output style, cartographer, wrapper — and offer to enable the current project |
+| `/mimir-update` | Re-fetch the binary and re-land the runtime. Without arguments it reuses the server URL from `~/.mimir/config.json` |
+| `/mimir-disable` | Turn Mimir off for the current project (reverses `mimir-cc enable`) |
+| `/switch-model` | Stage `~/.mimir/next-session.json` so the wrapper relaunches on a different model. Wrapper sessions only. The next session starts fresh — continuity bridges through a project-memory checkpoint, because extended-thinking signatures don't survive cross-backend transcript replay |
 | `/run-hygiene` | Sweep the local replica. Dry-run by default; `--live` applies |
 
 Terminal subcommands on the `mimir-cc` binary — hooks aside, these are the
@@ -109,6 +136,7 @@ human-driven ones:
 
 | Subcommand | What it does |
 |------------|--------------|
+| `mimir-cc enable [--project DIR] [--plugin KEY]` | Turn Mimir on for a project (desktop app path); `disable` reverses it |
 | `mimir keys <status\|setup\|adopt\|rotate\|recovery-setup\|recover>` | E2E key ceremonies against an auth-enabled server |
 | `mimir sync` | Pull + apply + push org memories, including the embedding backfill |
 | `mimir-cc hygiene [--live] [--model <id>]` | The same local sweep `/run-hygiene` drives |
@@ -126,44 +154,47 @@ your password manager; it is the only way to bring a new device online.
 
 ## Resuming and Remote Control
 
-Everything that makes a session Mimir — persona, hooks, MCP servers — is
-passed by the `mimir` wrapper at launch (the workers ride along in the plugin
-itself). Claude Code has no settings key that replaces the system prompt, so a
-session only stays Mimir while it runs under the wrapper's flags. In practice:
+Hooks and MCP servers come from the plugin, so any session in an enabled
+project has them however it was started. Only the full persona prompt is
+wrapper-specific; elsewhere the persona is the Mimir output style. In practice:
 
-- **Resume through the wrapper.** `mimir --continue` and `mimir --resume <id>`
-  pass straight through to `claude` with every flag intact. A bare
-  `claude --resume`, or resuming from the Claude desktop app, reopens the
-  transcript without the persona, hooks or MCP servers.
+- **Resume through the wrapper** to keep the full prompt. `mimir --continue`
+  and `mimir --resume <id>` pass straight through to `claude` with every flag
+  intact. A bare `claude --resume`, or resuming from the Claude desktop app,
+  reopens the transcript with the plugin's hooks and MCP servers and, in an
+  enabled project, the output-style persona.
 - **Remote Control, interactive mode, works as-is.** `mimir --rc` (or `/rc`
   inside a running session) attaches Remote Control to the already-running
   process, so claude.ai/code and the mobile app drive the same Mimir session,
   flags and all. Keep the process alive — tmux over ssh, say — and accept the
   workspace-trust dialog in that directory once beforehand.
-- **Remote Control server mode is not supported.** `claude remote-control`
-  spawns fresh sessions and refuses wrapper flags such as `--settings`, so the
-  sessions it creates are plain Claude Code. Making that mode Mimir would mean
-  a launcher-independent install (hooks in `~/.claude/settings.json`,
-  user-scope MCP, an additive rather than replacement persona) — a separate
-  piece of work.
+- **Remote Control server mode** (`claude remote-control`) spawns fresh
+  sessions without wrapper flags; in an enabled project they behave like
+  desktop-app sessions.
 
 ## What the install lands
 
-### Hooks (settings.json)
+### Hooks (plugin `hooks/hooks.json`)
 
-These hooks get wired into `~/.mimir/settings.json`:
+These hooks ship in the plugin and fire wherever it is enabled. Each command is `MIMIR_ACTIVE=1 "$HOME/.local/bin/mimir-cc" <subcommand>` — the installed binary, with the gate every handler checks set inline. `manifests.test.ts` pins each subcommand to the CLI's dispatch table.
 
+- **`SessionStart` → session-start.** On startup or resume: silent key reconcile and blind org sync (bounded), then a detached full re-index of the project into the local cartographer index.
 - **`UserPromptSubmit` → voice-anchor.** Assembles the boot-context block (user profile, recent project memories, session context) on every prompt, and every N turns (default 5, override via `MIMIR_ANCHOR_INTERVAL`) injects a `<voice_anchor>` block sampled from the system prompt's voice library. Recency-slot persona refresh that counteracts long-context drift.
+- **`UserPromptSubmit` → retrieve.** Per-turn brain retrieval: the relevant project memories, summaries and playbooks for the prompt, injected as `additionalContext`.
+- **`PreToolUse` (Read) → file-context.** Enriches a file read with its cartographer info (symbols, imports, dependents) and related memories from the local index and replica.
 - **`PreToolUse` → rules.** Runs the rule engine against every `.claude/**/*.enforce.toml` file under the project root. On match, emits `additionalContext` with the violation message so the model sees the nudge alongside the tool call. See [Rules engine](#rules-engine).
 - **`PreToolUse` (Bash) → edit-guard.** Claude Code's auto permission mode tells the model to prefer Bash (sed, heredocs, scripts) over Edit/Write, which hides changes from the chat. This hook denies a Bash command that rewrites a single explicit file — `sed -i` on one path, a redirect or heredoc into one path, `tee` to one path, an inline `python`/`node`/`perl` snippet writing one literal path — with a reason pointing the model at the Edit tool. Bulk mechanical edits (several paths, globs, `find`/`xargs`, `git ls-files`, loops, `glob`/`os.walk` in a script) are denied too — a shell edit bypasses every file rule in the engine and never shows as a diff; the reason points at the Edit tool per file, or the project's formatter/codemod for a genuine sweep. Read-only uses, scratch paths under `/tmp`, and anything ambiguous pass silently; a hook that blocks a legitimate command is the worse failure. Hooks run before the permission check in every mode, so the deny holds under auto. Set `MIMIR_EDIT_GUARD=0` to disable it for a session.
-- **`PreToolUse` → `guard`.** The role guard for autonomous workers. One hook covers every role: a settings-level `PreToolUse` fires inside subagents too, and there the payload's `agent_type` names the worker, so `mimir-impl`/`mimir-test`/`mimir-review` map to their roles, no `agent_type` is the main session (`coordinator`), and any other subagent is left alone. The coordinator role stays silent unless the delegation skill has written an active coordinator state for the session (`~/.mimir/agents/<session>.json`). Denies: `impl` writing test files, `test` writing anything else, `review` writing at all, the coordinator writing files, spawning a worker before its plan file exists, or reading implementation inside a worker worktree. Every role: `git push`, `git reset --hard`, `git branch -D`, `git clean -f`, `rm -r` outside the agent's worktree, and any read or write of secret material (`.env*`, keys, `~/.ssh`, `~/.aws`…). The same secret paths are also `Read(...)` deny rules in the installed settings, so Bash `cat` is covered too. The decision is `guardDecision` in plugin-core; this hook only builds the context and speaks the hook protocol.
-- **`PostToolUse` (Edit | Write | MultiEdit) → reindex.** Spawns a detached cartographer worker that parses the changed file and updates the local cartographer index. Disabled when no cartographer binary is configured.
+- **`PreToolUse` → `guard`.** The role guard for autonomous workers. One hook covers every role: a plugin-level `PreToolUse` fires inside subagents too, and there the payload's `agent_type` names the worker, so `mimir-impl`/`mimir-test`/`mimir-review` map to their roles, no `agent_type` is the main session (`coordinator`), and any other subagent is left alone. The coordinator role stays silent unless the delegation skill has written an active coordinator state for the session (`~/.mimir/agents/<session>.json`). Denies: `impl` writing test files, `test` writing anything else, `review` writing at all, the coordinator writing files, spawning a worker before its plan file exists, or reading implementation inside a worker worktree. Every role: `git push`, `git reset --hard`, `git branch -D`, `git clean -f`, `rm -r` outside the agent's worktree, and any read or write of secret material (`.env*`, keys, `~/.ssh`, `~/.aws`…). The same secret paths are also `Read(...)` deny rules in the installed settings, so Bash `cat` is covered too. The decision is `guardDecision` in plugin-core; this hook only builds the context and speaks the hook protocol.
+- **`PreToolUse` (SubagentHandback) and `SubagentStop` → verify.** The gate on a worker's "done" claim: re-checks the worker's worktree before the hand-back is accepted.
+- **`PostToolUse` (Edit | Write | MultiEdit) → reindex.** Spawns a detached cartographer worker that parses the changed file and updates the local cartographer index.
+- **`Stop` → persist.** Ships the transcript delta to the local brain for memory extraction and summarisation.
+- **`PreCompact` (auto, manual) → precompact.** Persists what is about to be discarded before Claude Code compacts the context.
 
-All hooks are scoped to `MIMIR_ACTIVE=1` sessions and no-op silently in nested `claude` subprocesses.
+### Settings (`~/.mimir/settings.json`, wrapper only)
 
-### Settings (settings.json)
+The wrapper passes this file with `--settings`. Besides the subagent env and the secret-file deny list it carries three keys:
 
-Two non-hook keys land alongside the hooks:
+- **`outputStyle: "default"`.** An output style is still appended when `--system-prompt-file` replaces the prompt (verified empirically), so a wrapper session in an enabled project would otherwise carry the persona twice. Command-line settings outrank project settings, so this switches the Mimir style off under the wrapper only.
 
 - **`disableAgentView: true`.** Claude Code's agent view (`←` on an empty prompt) re-spawns the session as a fresh `claude` process carrying only `--settings`, `--mcp-config` and `--permission-mode` — the persona (`--system-prompt-file`) is dropped. Off, the wrapper's flags stay in force for the life of the session.
 - **`worktree.baseRef: "head"`.** Worker worktrees branch from the current `HEAD` rather than the remote default branch, so a worker sees the coordinator's integration branch instead of `main`.
@@ -203,13 +234,16 @@ Nothing prompts for `workerModels`: set it by hand-editing `~/.mimir/config.json
 
 The three delegation workers — `mimir-impl`, `mimir-test`, `mimir-review` — ship as subagent files in this plugin's `agents/` directory, not in `~/.mimir`. The plugin directory is what Claude Code re-reads on `/reload-plugins`, on an agent-view respawn and on a desktop resume, so the workers survive all three; definitions passed on argv survive none of them. Each file is rendered from `packages/server/system-prompt.md` by `bun run --cwd packages/cc-plugin agents:render` (the "how to do work" sections plus a role contract, no persona) and committed; `agents.test.ts` fails when the committed files drift from the renderer, so re-render after editing the seed or `plugin-core/src/workers`. The worker prompt therefore tracks the plugin release, not the served prompt.
 
-Plugin agents cannot carry frontmatter hooks, so the role guard is the settings-level `guard` hook above. That also means a plain `claude` session with the plugin enabled can spawn the workers unguarded — the prompt states the role, nothing enforces it there.
+Plugin agents cannot carry frontmatter hooks, so the role guard is the plugin's `guard` hook above — which, now that the hooks ship in the plugin, also fires in a plain `claude` or desktop-app session with the plugin enabled, so the workers are guarded there too.
 
-### MCP servers (mcp.json)
+### MCP servers (plugin `.mcp.json`)
 
-- **`mimir-local`** (stdio, always present). The `mimir-cc user-memory-mcp` subcommand. Exposes the local memory brain: developer-scoped memory + profile tools (`user_memory_*`, `user_profile_*`) over `~/.mimir/user-memories.db`, and project memory + playbook tools (`project_memory_*`, `project_playbook_*`) over the local org replica. Tools arrive prefixed as `mcp__mimir-local__*`.
-- **`mimir-logs`** (stdio, always present). The `mimir-cc log-mcp` subcommand — reads the local plugin logs for self-debugging. Tools arrive prefixed as `mcp__mimir-logs__*`.
-- **`cartographer`** (stdio, optional). The cartographer binary in `--parse-only` mode. Enabled when `--cartographer PATH` was passed at install time. Tools arrive prefixed as `mcp__cartographer__*`.
+Both servers ship in the plugin and run the installed binary (`${HOME}/.local/bin/mimir-cc`, expanded by Claude Code). Because the plugin provides them, Claude Code prefixes their tools with the plugin and server names.
+
+- **`mimir-local`**. The `mimir-cc user-memory-mcp` subcommand. Exposes the local memory brain: developer-scoped memory + profile tools (`user_memory_*`, `user_profile_*`), project memory + playbook tools (`project_memory_*`, `project_playbook_*`) over the local org replica, and the Cartographer tools over the local index. Tools arrive prefixed as `mcp__plugin_mimir-cc_mimir-local__*`. The user-memory DB path resolves from `MIMIR_USER_MEMORY_DB`, then `userMemoryDb` in `~/.mimir/config.json`, then `~/.mimir/user-memories.db`.
+- **`mimir-logs`**. The `mimir-cc log-mcp` subcommand — reads the local plugin logs for self-debugging. Tools arrive prefixed as `mcp__plugin_mimir-cc_mimir-logs__*`.
+
+The standalone `cartographer --parse-only` MCP server the wrapper used to pass is gone. Nothing in Mimir referenced it, and without a database that mode could only parse files, not answer structure queries. The cartographer binary is still used — as a parser subprocess the reindex and session-start hooks spawn to populate the local index that `mimir-local` serves from.
 
 ## Rules engine
 
@@ -238,7 +272,7 @@ State lives per-session at `~/.mimir/voice-state/<session-id>.json`. The hash-of
 
 ## Cartographer reindex
 
-When `--cartographer PATH` was provided at install, the `PostToolUse` reindex hook fires on every Edit/Write/MultiEdit. The hook itself is a fast detached fork — spawns `mimir-cc reindex --worker <project> <file>` and exits 0 immediately so the next CC turn isn't blocked on a Rust binary plus an HTTP round-trip.
+The installer always lands a cartographer binary: the latest `RageLtd/cartographer` GitHub release, downloaded into `~/.mimir/bin` and refreshed on `update` when a newer release exists. Nothing already on the machine is picked up — a binary Mimir didn't fetch is one it can't keep current; `--cartographer PATH` is the only override (a local build, say). With it in place the `PostToolUse` reindex hook fires on every Edit/Write/MultiEdit. The hook itself is a fast detached fork — spawns `mimir-cc reindex --worker <project> <file>` and exits 0 immediately so the next CC turn isn't blocked on a Rust binary.
 
 The worker spawns cartographer in `--parse-only` mode, parses the changed file, hashes the contents (SHA-256), and writes the result to the local cartographer index — nothing leaves the machine (MIM-91). Failures get logged but never block the user's tool call.
 
@@ -256,25 +290,24 @@ bun run --filter @mimir/cc-plugin build  # or: cd packages/cc-plugin && ./build.
 ```
 packages/cc-plugin/                          ← workspace member @mimir/cc-plugin
   .claude-plugin/plugin.json                 ← plugin manifest (marketplace.json lives at monorepo root)
-  commands/{mimir-install,mimir-update,switch-model}.md   ← slash commands
-  src/
+  .mcp.json                                  ← plugin-shipped MCP servers (mimir-local, mimir-logs)
+  hooks/hooks.json                           ← plugin-shipped lifecycle hooks
+  commands/{mimir-install,mimir-update,mimir-disable,switch-model,...}.md   ← slash commands
+  agents/                                    ← delegation workers (rendered from the prompt seed)
+  src/                                       ← thin Claude Code wiring; the brain, stores, rules engine,
+                                                cartographer client and MCP servers live in plugin-core
     cli.ts                                   ← subcommand dispatcher
-    install.ts                               ← fetch + convert + write
-    config.ts                                ← read/write ~/.mimir/config.json
-    logger.ts                                ← append-only structured logger
-    markdown-to-xml.ts                       ← canonical prompt → Anthropic XML
-    boot-context.ts                          ← assemble user profile + memories
-    voice-anchor.ts                          ← UserPromptSubmit hook
-    rules-hook.ts                            ← PreToolUse hook adapter
-    edit-guard-hook.ts                       ← PreToolUse:Bash hook (single-file shell edits → Edit)
-    reindex-hook.ts                          ← PostToolUse hook + detached worker
-    user-memory-mcp.ts                       ← stdio MCP server
-    rules/                                   ← rule engine (loader, matcher, runner)
-    cartographer/                            ← cartographer MCP client + sync
-    store/                                   ← user-memory SQLite store
-    tools/                                   ← user-memory MCP tool definitions
+    cli-args.ts                              ← install/update argument parsing
+    install.ts                               ← fetch + convert + write (persona, output style, wrapper)
+    project-settings.ts                      ← `enable` / `disable`: the per-project switch
+    config.ts, logger.ts, boot-context.ts    ← shims binding plugin-core's shared modules to this host
+    session-start-hook.ts, voice-anchor.ts, retrieve-hook.ts, file-context-hook.ts,
+    rules-hook.ts, edit-guard-hook.ts, guard-hook.ts, verify-hook.ts,
+    reindex-hook.ts, persist-hook.ts, precompact-hook.ts   ← one adapter per hook in hooks/hooks.json
+    user-memory-mcp.ts, log-mcp.ts           ← entry points for the two plugin MCP servers
+    delegate-command.ts, hygiene-command.ts, backfill-command.ts   ← human-driven subcommands
+    agents.ts, worktree-bootstrap.ts, transcript-delta.ts
   artifacts/                                 ← templates bundled into the binary
-    mcp.json.template
     settings.json.template
     wrapper.sh.template
   dist/                                      ← gitignored, populated by ./build.sh

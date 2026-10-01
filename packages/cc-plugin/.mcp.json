@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "mimir-local": {
+      "command": "${HOME}/.local/bin/mimir-cc",
+      "args": ["user-memory-mcp"]
+    },
+    "mimir-logs": {
+      "command": "${HOME}/.local/bin/mimir-cc",
+      "args": ["log-mcp"]
+    }
+  }
+}

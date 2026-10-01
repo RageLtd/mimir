@@ -1,14 +1,17 @@
 /**
  * Install subcommand — lands every Mimir runtime artifact on the user's
- * machine. After this runs, the plugin itself is no longer required; the
- * `mimir` wrapper script + ~/.mimir/ contents are self-sufficient.
+ * machine. Hooks and MCP servers ship inside the plugin (hooks/hooks.json,
+ * .mcp.json), so the install lands only what has to be rendered per
+ * machine: the persona, the wrapper's settings, the runtime config, and
+ * the binaries.
  *
  * Steps in order:
  *   1. Validate the mimir-server URL.
  *   2. Fetch the canonical system prompt from /v1/system-prompt.
  *   3. Convert it to Anthropic-optimised XML (toAnthropicXml).
- *   4. Materialise ~/.mimir/{system-prompt.md, mcp.json, settings.json,
- *      config.json}.
+ *   4. Materialise ~/.mimir/{system-prompt.md, settings.json, config.json}
+ *      and the "Mimir" output style under Claude Code's config dir — the
+ *      persona a desktop-app session selects per project (`mimir-cc enable`).
  *   5. Materialise ~/.local/bin/{mimir, mimir-cc}.
  *
  * Templates are bundled into the compiled binary as text imports so the
@@ -23,9 +26,7 @@ import { toAnthropicXml } from "@mimir/plugin-core/anthropic-xml";
 import { embedderDir } from "@mimir/plugin-core/brain/embedder";
 import { installEmbedderArtifacts } from "@mimir/plugin-core/brain/embedder-install";
 import { resolveCartographerBinary } from "@mimir/plugin-core/cartographer/resolve";
-import { defaultOrgReplicaPath } from "@mimir/plugin-core/store/org-replica";
 import { mimirHome } from "@mimir/plugin-core/util";
-import mcpTemplate from "../artifacts/mcp.json.template" with { type: "text" };
 import settingsTemplate from "../artifacts/settings.json.template" with {
   type: "text",
 };
@@ -36,6 +37,7 @@ import ensureBinaryScript from "../scripts/ensure-binary.sh" with {
   type: "text",
 };
 import { extractionConfig, readConfig, writeConfig } from "./config";
+import { claudeConfigDir, OUTPUT_STYLE_NAME } from "./project-settings";
 
 // `as const` keeps the discriminant literal so the ok/err union
 // discriminates without a return annotation blinding the compiler.
@@ -166,51 +168,27 @@ export type InstallOptions = {
 };
 
 /**
- * Render the mcp.json template, conditionally injecting the cartographer
- * entry. We splice the JSON before serialising rather than running string
- * replacements on a template that would leave an orphan comma — the
- * template's placeholder gets replaced with either a valid block + trailing
- * comma or removed entirely.
+ * The persona as a Claude Code output style. A custom style replaces
+ * Claude Code's software-engineering instructions with its body while the
+ * rest of the default prompt stays — the closest a flag-less session (the
+ * desktop app) gets to the wrapper's full replacement. Not forced for the
+ * plugin: a forced style would also stack onto wrapper sessions, which
+ * already carry the prompt via --system-prompt-file. Projects select it
+ * through `mimir-cc enable`.
  */
-const renderMcp = (opts: {
-  readonly serverUrl: string;
-  readonly userMemoryDb: string;
-  readonly cartographerBinary?: string;
-  readonly apiKey?: string;
-  readonly selfPath: string;
-}) => {
-  let rendered = mcpTemplate
-    .replaceAll("{{MIMIR_CC_BIN}}", opts.selfPath)
-    .replaceAll("{{USER_MEMORY_DB}}", opts.userMemoryDb)
-    // Org replica (MIM-84): fixed default path, env-overridable at runtime —
-    // no install flag until someone actually needs a custom location.
-    .replaceAll("{{ORG_REPLICA_DB}}", defaultOrgReplicaPath());
+export const renderOutputStyle = (xml: string) =>
+  [
+    "---",
+    `name: ${OUTPUT_STYLE_NAME}`,
+    "description: Mimir persona — served by mimir-server, installed by mimir-cc. Select per project with `mimir-cc enable`.",
+    "---",
+    "",
+    xml,
+    "",
+  ].join("\n");
 
-  if (opts.cartographerBinary) {
-    rendered = rendered.replace(
-      "{{CARTOGRAPHER_BLOCK}}",
-      `"cartographer": { "command": "${opts.cartographerBinary}", "args": ["--parse-only"] },\n    `,
-    );
-  } else {
-    rendered = rendered.replace("{{CARTOGRAPHER_BLOCK}}", "");
-  }
-
-  return rendered;
-};
-
-const renderSettings = (opts: { readonly selfPath: string }) =>
-  settingsTemplate.replaceAll("{{MIMIR_CC_BIN}}", opts.selfPath);
-
-const buildTemplates = (opts: {
-  readonly serverUrl: string;
-  readonly userMemoryDb: string;
-  readonly cartographerBinary?: string;
-  readonly apiKey?: string;
-  readonly selfPath: string;
-}) => ({
-  mcp: renderMcp(opts),
-  settings: renderSettings({ selfPath: opts.selfPath }),
-});
+const outputStylePath = () =>
+  join(claudeConfigDir(), "output-styles", "mimir.md");
 
 export const runInstall = async (
   opts: InstallOptions,
@@ -219,16 +197,17 @@ export const runInstall = async (
   const urlResult = validateUrl(opts.serverUrl);
   if (!urlResult.ok) return urlResult;
 
-  // Resolve the cartographer binary BEFORE any network work: an explicit
+  // Resolve the cartographer binary BEFORE the server fetch: an explicit
   // --cartographer path is validated (a typo'd path used to install
-  // "successfully" with the index legs permanently dark), an omitted one
-  // auto-detects from $PATH, and only a declined prompt disables indexing.
+  // "successfully" with the index legs permanently dark); otherwise the
+  // latest GitHub release is downloaded into ~/.mimir/bin. Indexing is
+  // always on.
   const carto = await resolveCartographerBinary({
     ...(opts.cartographerBinary ? { requested: opts.cartographerBinary } : {}),
+    log,
   });
   if (!carto.ok) return err(carto.error);
-  const cartographerBinary = carto.binary ?? undefined;
-  if (carto.binary === null) log(`Cartographer: ${carto.reason}`);
+  const cartographerBinary = carto.binary;
 
   const promptResult = await fetchSystemPrompt(urlResult.value, opts.apiKey);
   if (!promptResult.ok) return promptResult;
@@ -241,27 +220,22 @@ export const runInstall = async (
   const userMemoryDb = opts.userMemoryDb ?? join(home, "user-memories.db");
 
   const promptPath = join(home, "system-prompt.md");
-  const mcpPath = join(home, "mcp.json");
   const settingsPath = join(home, "settings.json");
+  const stylePath = outputStylePath();
   const wrapperPath = join(binDir, "mimir");
   const selfPath = join(binDir, "mimir-cc");
-
-  const templates = buildTemplates({
-    serverUrl: opts.serverUrl,
-    userMemoryDb,
-    cartographerBinary,
-    apiKey: opts.apiKey,
-    selfPath,
-  });
 
   const ensureBinaryPath = join(home, "ensure-binary.sh");
 
   await writeText(promptPath, xml);
-  await writeText(mcpPath, templates.mcp);
-  await writeText(settingsPath, templates.settings);
-  // Workers moved into the plugin's agents/ directory; the wrapper no
-  // longer reads this file, so an update retires it.
+  await writeText(stylePath, renderOutputStyle(xml));
+  await writeText(settingsPath, settingsTemplate);
+  // Retired files an update removes: workers moved into the plugin's
+  // agents/ directory; MCP servers moved into the plugin's .mcp.json (a
+  // stale mcp.json is harmless — the wrapper no longer passes it — but
+  // leaving it invites someone to edit the wrong file).
   await rm(join(home, "agents.json"), { force: true });
+  await rm(join(home, "mcp.json"), { force: true });
   await writeExecutable(wrapperPath, wrapperTemplate);
   // The wrapper self-updates the binary on launch by running this from
   // ~/.mimir, so it must not depend on the plugin clone still being present.
@@ -276,7 +250,7 @@ export const runInstall = async (
     ...(existingConfig ?? {}),
     serverUrl: opts.serverUrl.replace(/\/+$/, ""),
     userMemoryDb,
-    ...(cartographerBinary ? { cartographerBinary } : {}),
+    cartographerBinary,
     ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
     ...(opts.providerApiKey ? { providerApiKey: opts.providerApiKey } : {}),
     ...(opts.provider ? { provider: opts.provider } : {}),
@@ -301,6 +275,7 @@ export const runInstall = async (
   return ok({
     home,
     binDir,
+    stylePath,
     version: promptResult.value.version,
     cartographerBinary,
   });
@@ -325,10 +300,8 @@ export const runInstallCommand = async (opts: InstallOptions) => {
     return 1;
   }
 
-  const { home, binDir, version, cartographerBinary } = result.value;
-  const carto = cartographerBinary
-    ? `  Cartographer:   ${cartographerBinary}`
-    : `  Cartographer:   (not configured — auto-reindex disabled)`;
+  const { home, binDir, stylePath, version, cartographerBinary } = result.value;
+  const carto = `  Cartographer:   ${cartographerBinary}`;
 
   // Effective extraction status AFTER config write (env wins over
   // config) — the brain silently distills nothing without it, so the
@@ -346,8 +319,8 @@ export const runInstallCommand = async (opts: InstallOptions) => {
       `Mimir installed.`,
       ``,
       `  System prompt:  ${home}/system-prompt.md  (version ${version})`,
-      `  MCP config:     ${home}/mcp.json`,
-      `  Hook settings:  ${home}/settings.json`,
+      `  Output style:   ${stylePath}  ("${OUTPUT_STYLE_NAME}")`,
+      `  Settings:       ${home}/settings.json  (wrapper sessions)`,
       `  Runtime config: ${home}/config.json`,
       `  User memories:  ${opts.userMemoryDb ?? join(home, "user-memories.db")}`,
       `  Embedder:       ${embedderDir()}  (llama.cpp + pinned GGUF)`,
@@ -358,9 +331,14 @@ export const runInstallCommand = async (opts: InstallOptions) => {
       `  Updater:        ${home}/ensure-binary.sh`,
       `  Logs:           ${home}/logs/mimir-cc.log`,
       ``,
-      `Make sure ${binDir} is on your PATH, then exit Claude Code and run`,
-      `  mimir`,
-      `to start a Mimir session.`,
+      `Hooks and MCP servers ship inside the mimir-cc plugin, so a session is`,
+      `Mimir wherever that plugin is enabled. Two ways in:`,
+      ``,
+      `  Claude desktop app / plain claude:  run \`${binDir}/mimir-cc enable\``,
+      `      in a project to turn Mimir on there (and only there), then open`,
+      `      a new session in it.`,
+      `  Terminal:  make sure ${binDir} is on your PATH and run \`mimir\` —`,
+      `      full persona prompt plus /switch-model.`,
     ].join("\n"),
   );
   return 0;

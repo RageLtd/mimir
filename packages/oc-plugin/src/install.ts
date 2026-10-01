@@ -49,7 +49,6 @@ const defaultInstallDependencies = {
   installEmbedderArtifacts,
   resolveCartographerBinary,
 };
-const skipInteractiveCartographerPrompt = async () => null;
 
 type SystemPromptResponse = {
   readonly content?: unknown;
@@ -151,24 +150,17 @@ export const installMimir = async (
     };
   }
 
-  // 2. Resolve Cartographer before network or filesystem writes. Preserve a
-  //    valid path another Mimir distribution already recorded; otherwise
-  //    auto-detect from PATH or ~/.local/bin for editor-launched OpenCode
-  //    processes with a reduced environment.
+  // 2. Resolve Cartographer before network or filesystem writes. An explicit
+  //    override is asserted; otherwise the latest GitHub release is
+  //    downloaded into ~/.mimir/bin. Indexing is always on.
   const existingConfig = await readConfig();
-  const requestedCartographer =
-    opts.cartographerBinary ?? existingConfig?.cartographerBinary;
   const carto = await dependencies.resolveCartographerBinary({
-    ...(requestedCartographer ? { requested: requestedCartographer } : {}),
-    // OpenCode invokes this in-process from a tool call. The shared CLI
-    // resolver's terminal prompt would block the agent loop here; users can
-    // pass an explicit override through the tool when auto-detection misses.
-    promptForPath: skipInteractiveCartographerPrompt,
+    ...(opts.cartographerBinary ? { requested: opts.cartographerBinary } : {}),
   });
   if (!carto.ok) {
     return { ok: false, message: carto.error, written };
   }
-  const cartographerBinary = carto.binary ?? undefined;
+  const cartographerBinary = carto.binary;
 
   // 3. Resolve and check the API key. Cloud server requires it; some
   //    self-hosted servers don't. We pass it through regardless; a
@@ -399,7 +391,7 @@ export const installMimir = async (
     ok: true,
     message: [
       `Mimir installed (system prompt version ${promptVersion}).`,
-      `Cartographer: ${cartographerBinary ?? "not found — code indexing disabled"}`,
+      `Cartographer: ${cartographerBinary}`,
       `Embedder: ${embedderLog.at(-1) ?? "artifacts ready"}`,
       "",
       "Wrote:",

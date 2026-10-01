@@ -18,10 +18,10 @@ Use these values:
 
 - **Server URL** — default `https://mimir.rageltd.ca` (the cloud host). A self-hosted install would use a different URL.
 - **User memory DB path** — optional override. Omit it to use the default absolute path under `~/.mimir`; do not pass the literal string `~/.mimir/user-memories.db`.
-- **Cartographer binary path** — optional override only. The install tool auto-detects `cartographer` from `PATH`, then checks `~/.local/bin/cartographer` for editor-launched environments with a reduced `PATH`. Do not ask for this path unless the user wants to override detection.
+- **Cartographer binary path** — optional override only. The install tool downloads the latest `RageLtd/cartographer` release into `~/.mimir/bin` and keeps it current. Do not ask for this path unless the user wants to use a specific binary, such as a local build.
 - **API key** — defaults to the `MIMIR_API_KEY` env var. Rarely needs to be passed explicitly.
 
-Use the defaults unless the user has already supplied an override. Omit `userMemoryDb` to select its default rather than spelling the default with `~`. Do not ask for a Cartographer path: omit it and let the tool detect the binary. Only pass `cartographerBinary` when the user explicitly supplied a path.
+Use the defaults unless the user has already supplied an override. Omit `userMemoryDb` to select its default rather than spelling the default with `~`. Do not ask for a Cartographer path: omit it and let the tool download the binary. Only pass `cartographerBinary` when the user explicitly supplied a path.
 
 ## Run the install
 
