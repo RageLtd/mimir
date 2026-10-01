@@ -82,7 +82,7 @@ Requires an authenticated `gh` CLI and `~/.local/bin` on your `PATH`. Inside Cla
 /mimir-install
 ```
 
-The installer downloads the prebuilt `mimir-cc` binary, writes the runtime under `~/.mimir/`, and lands a `mimir` wrapper that launches Claude Code as Mimir. Exit Claude Code, then run `mimir` from any terminal.
+The installer downloads the prebuilt `mimir-cc` binary, writes the runtime under `~/.mimir/`, installs the persona as a Claude Code output style, and lands a `mimir` wrapper. Two ways to run it: in the **Claude desktop app** (or a plain `claude`), enable Mimir per project with `mimir-cc enable` — the plugin's hooks and MCP servers load wherever it is enabled, and nowhere else; or run `mimir` from a terminal for the full persona prompt and `/switch-model`.
 
 → Walkthrough, from-source path, hook and MCP reference, troubleshooting: [`packages/cc-plugin/README.md`](packages/cc-plugin/README.md)
 
@@ -236,7 +236,7 @@ Everything else — bind address, database paths, operator tokens, system-prompt
 | Package | Description |
 |---------|-------------|
 | [`plugin-core`](packages/plugin-core/README.md) | Shared layer: memory brain, inference engine, keys, sync, rules, cartographer |
-| [`cc-plugin`](packages/cc-plugin/README.md) | Claude Code plugin — persona, hooks, MCP wiring, the `mimir` wrapper |
+| [`cc-plugin`](packages/cc-plugin/README.md) | Claude Code plugin — persona, hooks, MCP servers, per-project enablement for the desktop app, the `mimir` wrapper |
 | [`acp`](packages/acp/README.md) | ACP agent — full local agent for ACP editors (Zed) |
 | [`oc-plugin`](packages/oc-plugin/README.md) | OpenCode plugin — persona, tools, hooks, the `mimir-opencode` wrapper |
 | [`codex-plugin`](packages/codex-plugin/README.md) | OpenAI Codex CLI plugin — persona, lifecycle hooks in a dedicated `CODEX_HOME`, the `mimir-codex` wrapper |

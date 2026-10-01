@@ -86,7 +86,7 @@ There are two ways in. The **marketplace path** is the normal one — no clone, 
    /mimir-install
    ```
 
-   It asks for three things — the mimir-server URL (default `https://mimir.rageltd.ca`), the user-memory SQLite DB path (default `~/.mimir/user-memories.db`), and the cartographer binary path (default: skip, which leaves the reindex hook off). Then `ensure-binary.sh` downloads the matching `mimir-cc-<platform>` asset from `RageLtd/mimir` releases, re-signs it on macOS to clear Bun's broken adhoc signature, and the installer writes out `~/.mimir/` plus the wrapper.
+   It asks for the mimir-server URL (default `https://mimir.rageltd.ca`), the user-memory SQLite DB path (default `~/.mimir/user-memories.db`), and whether the server needs an API key (read from `MIMIR_API_KEY`, never pasted). Then `ensure-binary.sh` downloads the matching `mimir-cc-<platform>` asset from `RageLtd/mimir` releases, re-signs it on macOS to clear Bun's broken adhoc signature, and the installer writes out `~/.mimir/`, the Mimir output style, and the wrapper — downloading the latest cartographer release and the embedder artifacts along the way.
 
 4. Either let `/mimir-install` enable the project you're in and open a new desktop-app (or plain `claude`) session there, or run `mimir` from any terminal for the wrapper path.
 
@@ -125,7 +125,7 @@ Slash commands inside Claude Code:
 
 | Command | What it does |
 |---------|--------------|
-| `/mimir-install` | Land the runtime — binary, system prompt, MCP config, hooks, wrapper |
+| `/mimir-install` | Land the runtime — binary, system prompt, output style, cartographer, wrapper — and offer to enable the current project |
 | `/mimir-update` | Re-fetch the binary and re-land the runtime. Without arguments it reuses the server URL from `~/.mimir/config.json` |
 | `/mimir-disable` | Turn Mimir off for the current project (reverses `mimir-cc enable`) |
 | `/switch-model` | Stage `~/.mimir/next-session.json` so the wrapper relaunches on a different model. Wrapper sessions only. The next session starts fresh — continuity bridges through a project-memory checkpoint, because extended-thinking signatures don't survive cross-backend transcript replay |
@@ -178,11 +178,17 @@ wrapper-specific; elsewhere the persona is the Mimir output style. In practice:
 
 These hooks ship in the plugin and fire wherever it is enabled. Each command is `MIMIR_ACTIVE=1 "$HOME/.local/bin/mimir-cc" <subcommand>` — the installed binary, with the gate every handler checks set inline. `manifests.test.ts` pins each subcommand to the CLI's dispatch table.
 
+- **`SessionStart` → session-start.** On startup or resume: silent key reconcile and blind org sync (bounded), then a detached full re-index of the project into the local cartographer index.
 - **`UserPromptSubmit` → voice-anchor.** Assembles the boot-context block (user profile, recent project memories, session context) on every prompt, and every N turns (default 5, override via `MIMIR_ANCHOR_INTERVAL`) injects a `<voice_anchor>` block sampled from the system prompt's voice library. Recency-slot persona refresh that counteracts long-context drift.
+- **`UserPromptSubmit` → retrieve.** Per-turn brain retrieval: the relevant project memories, summaries and playbooks for the prompt, injected as `additionalContext`.
+- **`PreToolUse` (Read) → file-context.** Enriches a file read with its cartographer info (symbols, imports, dependents) and related memories from the local index and replica.
 - **`PreToolUse` → rules.** Runs the rule engine against every `.claude/**/*.enforce.toml` file under the project root. On match, emits `additionalContext` with the violation message so the model sees the nudge alongside the tool call. See [Rules engine](#rules-engine).
 - **`PreToolUse` (Bash) → edit-guard.** Claude Code's auto permission mode tells the model to prefer Bash (sed, heredocs, scripts) over Edit/Write, which hides changes from the chat. This hook denies a Bash command that rewrites a single explicit file — `sed -i` on one path, a redirect or heredoc into one path, `tee` to one path, an inline `python`/`node`/`perl` snippet writing one literal path — with a reason pointing the model at the Edit tool. Bulk mechanical edits (several paths, globs, `find`/`xargs`, `git ls-files`, loops, `glob`/`os.walk` in a script) are denied too — a shell edit bypasses every file rule in the engine and never shows as a diff; the reason points at the Edit tool per file, or the project's formatter/codemod for a genuine sweep. Read-only uses, scratch paths under `/tmp`, and anything ambiguous pass silently; a hook that blocks a legitimate command is the worse failure. Hooks run before the permission check in every mode, so the deny holds under auto. Set `MIMIR_EDIT_GUARD=0` to disable it for a session.
 - **`PreToolUse` → `guard`.** The role guard for autonomous workers. One hook covers every role: a plugin-level `PreToolUse` fires inside subagents too, and there the payload's `agent_type` names the worker, so `mimir-impl`/`mimir-test`/`mimir-review` map to their roles, no `agent_type` is the main session (`coordinator`), and any other subagent is left alone. The coordinator role stays silent unless the delegation skill has written an active coordinator state for the session (`~/.mimir/agents/<session>.json`). Denies: `impl` writing test files, `test` writing anything else, `review` writing at all, the coordinator writing files, spawning a worker before its plan file exists, or reading implementation inside a worker worktree. Every role: `git push`, `git reset --hard`, `git branch -D`, `git clean -f`, `rm -r` outside the agent's worktree, and any read or write of secret material (`.env*`, keys, `~/.ssh`, `~/.aws`…). The same secret paths are also `Read(...)` deny rules in the installed settings, so Bash `cat` is covered too. The decision is `guardDecision` in plugin-core; this hook only builds the context and speaks the hook protocol.
-- **`PostToolUse` (Edit | Write | MultiEdit) → reindex.** Spawns a detached cartographer worker that parses the changed file and updates the local cartographer index. Disabled when no cartographer binary is configured.
+- **`PreToolUse` (SubagentHandback) and `SubagentStop` → verify.** The gate on a worker's "done" claim: re-checks the worker's worktree before the hand-back is accepted.
+- **`PostToolUse` (Edit | Write | MultiEdit) → reindex.** Spawns a detached cartographer worker that parses the changed file and updates the local cartographer index.
+- **`Stop` → persist.** Ships the transcript delta to the local brain for memory extraction and summarisation.
+- **`PreCompact` (auto, manual) → precompact.** Persists what is about to be discarded before Claude Code compacts the context.
 
 ### Settings (`~/.mimir/settings.json`, wrapper only)
 
@@ -266,7 +272,7 @@ State lives per-session at `~/.mimir/voice-state/<session-id>.json`. The hash-of
 
 ## Cartographer reindex
 
-The installer always lands a cartographer binary: the latest `RageLtd/cartographer` GitHub release, downloaded into `~/.mimir/bin` and refreshed on `update` when a newer release exists. Nothing already on the machine is picked up — a binary Mimir didn't fetch is one it can't keep current; `--cartographer PATH` is the only override (a local build, say). With it in place the `PostToolUse` reindex hook fires on every Edit/Write/MultiEdit. The hook itself is a fast detached fork — spawns `mimir-cc reindex --worker <project> <file>` and exits 0 immediately so the next CC turn isn't blocked on a Rust binary plus an HTTP round-trip.
+The installer always lands a cartographer binary: the latest `RageLtd/cartographer` GitHub release, downloaded into `~/.mimir/bin` and refreshed on `update` when a newer release exists. Nothing already on the machine is picked up — a binary Mimir didn't fetch is one it can't keep current; `--cartographer PATH` is the only override (a local build, say). With it in place the `PostToolUse` reindex hook fires on every Edit/Write/MultiEdit. The hook itself is a fast detached fork — spawns `mimir-cc reindex --worker <project> <file>` and exits 0 immediately so the next CC turn isn't blocked on a Rust binary.
 
 The worker spawns cartographer in `--parse-only` mode, parses the changed file, hashes the contents (SHA-256), and writes the result to the local cartographer index — nothing leaves the machine (MIM-91). Failures get logged but never block the user's tool call.
 
@@ -287,23 +293,20 @@ packages/cc-plugin/                          ← workspace member @mimir/cc-plug
   .mcp.json                                  ← plugin-shipped MCP servers (mimir-local, mimir-logs)
   hooks/hooks.json                           ← plugin-shipped lifecycle hooks
   commands/{mimir-install,mimir-update,mimir-disable,switch-model,...}.md   ← slash commands
-  src/
+  agents/                                    ← delegation workers (rendered from the prompt seed)
+  src/                                       ← thin Claude Code wiring; the brain, stores, rules engine,
+                                                cartographer client and MCP servers live in plugin-core
     cli.ts                                   ← subcommand dispatcher
+    cli-args.ts                              ← install/update argument parsing
     install.ts                               ← fetch + convert + write (persona, output style, wrapper)
     project-settings.ts                      ← `enable` / `disable`: the per-project switch
-    config.ts                                ← read/write ~/.mimir/config.json
-    logger.ts                                ← append-only structured logger
-    markdown-to-xml.ts                       ← canonical prompt → Anthropic XML
-    boot-context.ts                          ← assemble user profile + memories
-    voice-anchor.ts                          ← UserPromptSubmit hook
-    rules-hook.ts                            ← PreToolUse hook adapter
-    edit-guard-hook.ts                       ← PreToolUse:Bash hook (single-file shell edits → Edit)
-    reindex-hook.ts                          ← PostToolUse hook + detached worker
-    user-memory-mcp.ts                       ← stdio MCP server
-    rules/                                   ← rule engine (loader, matcher, runner)
-    cartographer/                            ← cartographer MCP client + sync
-    store/                                   ← user-memory SQLite store
-    tools/                                   ← user-memory MCP tool definitions
+    config.ts, logger.ts, boot-context.ts    ← shims binding plugin-core's shared modules to this host
+    session-start-hook.ts, voice-anchor.ts, retrieve-hook.ts, file-context-hook.ts,
+    rules-hook.ts, edit-guard-hook.ts, guard-hook.ts, verify-hook.ts,
+    reindex-hook.ts, persist-hook.ts, precompact-hook.ts   ← one adapter per hook in hooks/hooks.json
+    user-memory-mcp.ts, log-mcp.ts           ← entry points for the two plugin MCP servers
+    delegate-command.ts, hygiene-command.ts, backfill-command.ts   ← human-driven subcommands
+    agents.ts, worktree-bootstrap.ts, transcript-delta.ts
   artifacts/                                 ← templates bundled into the binary
     settings.json.template
     wrapper.sh.template
