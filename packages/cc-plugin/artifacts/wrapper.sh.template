@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 #
-# mimir — launch vanilla Claude Code with the Mimir persona, MCP config,
-# and lifecycle hooks installed by mimir-cc-plugin. The MIMIR_ACTIVE flag
-# lets hooks distinguish a real Mimir turn from a nested `claude`
-# subprocess that happens to inherit the same settings file.
+# mimir — launch vanilla Claude Code with the Mimir persona as the full
+# system prompt plus the installed settings file. MCP servers and lifecycle
+# hooks come from the mimir-cc plugin itself (its .mcp.json and
+# hooks/hooks.json), so they are the same whether a session starts here,
+# from the Claude desktop app, or from a plain `claude` in a project where
+# the plugin is enabled. MIMIR_ACTIVE is exported for anything that still
+# reads it; the plugin's hooks set it inline.
 #
 # This script is a launch-and-check-marker loop rather than a single
 # `exec` so the plugin can switch backing models mid-session: the plugin
@@ -44,7 +47,6 @@ fi
 MIMIR_MARKER="$HOME/.mimir/next-session.json"
 BASE_ARGS=(
   --system-prompt-file "$HOME/.mimir/system-prompt.md"
-  --mcp-config "$HOME/.mimir/mcp.json"
   --settings "$HOME/.mimir/settings.json"
 )
 USER_ARGS=("$@")

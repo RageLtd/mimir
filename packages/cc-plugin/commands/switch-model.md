@@ -1,10 +1,24 @@
 ---
 description: Switch the model backing this session — pick a non-Anthropic model routed through mimir-server, or return to subscription Anthropic
 argument-hint: "[model-id]"
-allowed-tools: ["Bash", "AskUserQuestion", "Write", "Read", "mcp__mimir__project_memory_store"]
+allowed-tools: ["Bash", "AskUserQuestion", "Write", "Read", "mcp__plugin_mimir-cc_mimir-local__project_memory_store"]
 ---
 
 You are switching the model backing for this Claude Code session. The mechanism is the wrapper-managed marker file at `~/.mimir/next-session.json`: you write the marker, tell the user to exit, and the wrapper script picks the marker up on claude's exit and re-launches under the requested model.
+
+## Step 0 — confirm this session can be relaunched
+
+Only the `mimir` wrapper consumes the marker. Check how this session was launched:
+
+```bash
+echo "entrypoint=${CLAUDE_CODE_ENTRYPOINT:-cli} wrapper=${MIMIR_ACTIVE:-0}"
+```
+
+If `entrypoint` is `claude-desktop`, or `wrapper` is not `1`, stop and tell the user:
+
+> Model switching needs the `mimir` wrapper — it relaunches Claude Code with the marker's model and env, and this session wasn't started by it (the Claude desktop app spawns `claude` itself, with no flags). To switch models, open a terminal and run `mimir`; the desktop app stays on the model in your Claude Code settings.
+
+Do not write the marker in that case — nothing would consume it, and the next wrapper launch would pick up a stale one.
 
 The next session starts FRESH — no `--continue`. Anthropic's extended-thinking signatures don't survive cross-backend mutation of the local transcript, so we don't replay it. Continuity bridges via Goldfish instead: you write a comprehensive session checkpoint to project memory before staging the marker, and the incoming session's start-up hook retrieves it as boot context.
 
@@ -108,7 +122,7 @@ Otherwise this is a mimir-server-routed model. Set `<env>` to:
 
 ## Step 4 — checkpoint the session to Goldfish
 
-Before staging the marker, write a comprehensive session-state checkpoint to project memory so the next session can pick up the thread. Call `mcp__mimir__project_memory_store` with content that opens with the literal prefix `Session checkpoint (model switch <fromModel> → <model>):` followed by prose covering:
+Before staging the marker, write a comprehensive session-state checkpoint to project memory so the next session can pick up the thread. Call `mcp__plugin_mimir-cc_mimir-local__project_memory_store` with content that opens with the literal prefix `Session checkpoint (model switch <fromModel> → <model>):` followed by prose covering:
 
 - The investigation or task currently in flight — what we set out to do and where we got to.
 - Decisions made and reasoning behind them (especially anything we'd lose if forgotten).

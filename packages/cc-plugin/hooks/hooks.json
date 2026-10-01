@@ -1,0 +1,142 @@
+{
+  "description": "Mimir lifecycle hooks — fire in every session where the mimir-cc plugin is enabled. MIMIR_ACTIVE=1 is set inline so the binary's gates pass without the wrapper.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MIMIR_ACTIVE=1 \"$HOME/.local/bin/mimir-cc\" session-start",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MIMIR_ACTIVE=1 \"$HOME/.local/bin/mimir-cc\" voice-anchor",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MIMIR_ACTIVE=1 \"$HOME/.local/bin/mimir-cc\" retrieve",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MIMIR_ACTIVE=1 \"$HOME/.local/bin/mimir-cc\" rules",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MIMIR_ACTIVE=1 \"$HOME/.local/bin/mimir-cc\" file-context",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MIMIR_ACTIVE=1 \"$HOME/.local/bin/mimir-cc\" edit-guard",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MIMIR_ACTIVE=1 \"$HOME/.local/bin/mimir-cc\" guard",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "SubagentHandback",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MIMIR_ACTIVE=1 \"$HOME/.local/bin/mimir-cc\" verify",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MIMIR_ACTIVE=1 \"$HOME/.local/bin/mimir-cc\" verify",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MIMIR_ACTIVE=1 \"$HOME/.local/bin/mimir-cc\" reindex",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MIMIR_ACTIVE=1 \"$HOME/.local/bin/mimir-cc\" persist",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MIMIR_ACTIVE=1 \"$HOME/.local/bin/mimir-cc\" precompact",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "manual",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MIMIR_ACTIVE=1 \"$HOME/.local/bin/mimir-cc\" precompact",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

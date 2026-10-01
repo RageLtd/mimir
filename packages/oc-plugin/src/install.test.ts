@@ -28,12 +28,13 @@ const OPENCODE_IMPL_MODEL = "anthropic/claude-opus-4";
 const OPENCODE_TEST_MODEL = "ollama/qwen3";
 const CLAUDE_CODE_IMPL_MODEL = "opus";
 
+// Resolution always lands on a binary now (it downloads as a last resort);
+// these tests only care that install proceeds past it.
 const noCartographer = {
   installEmbedderArtifacts: async () => null,
   resolveCartographerBinary: async () => ({
     ok: true as const,
-    binary: null,
-    reason: "not found",
+    binary: "/stub/cartographer",
   }),
 };
 

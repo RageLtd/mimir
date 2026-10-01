@@ -65,7 +65,7 @@ describe("mergeUpdateOptions", () => {
     expect("error" in merged).toBe(true);
   });
 
-  test("preserves stored fields, including extraction", async () => {
+  test("preserves stored fields, including extraction — but not the cartographer path", async () => {
     await writeConfig({
       serverUrl: SERVER_URL,
       userMemoryDb: join(mimirHomeDir, "user-memories.db"),
@@ -74,10 +74,12 @@ describe("mergeUpdateOptions", () => {
       extractionModel: "ornith:35b",
     });
     const merged = await mergeUpdateOptions({});
+    // Only an explicit --cartographer flag names a binary; the installer
+    // otherwise downloads the latest release. Carrying the stored path
+    // here would assert it like a flag and fail `update` on a moved binary.
     expect(merged).toEqual({
       serverUrl: SERVER_URL,
       userMemoryDb: join(mimirHomeDir, "user-memories.db"),
-      cartographerBinary: "/usr/local/bin/cartographer",
       extractionBaseUrl: "http://ollama.local/",
       extractionModel: "ornith:35b",
     });

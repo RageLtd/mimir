@@ -8,8 +8,11 @@
  *                              --user-memory-db <path>
  *                              --cartographer <path>
  *   update [server-url]      Re-run install. If the URL is omitted, recovers
- *                            it from ~/.mimir/mcp.json so testers don't have
- *                            to remember it.
+ *                            it from ~/.mimir/config.json so testers don't
+ *                            have to remember it.
+ *   enable | disable         Turn Mimir on/off for one project by toggling
+ *                            the plugin + output style in its
+ *                            .claude/settings.local.json (desktop app path).
  *   voice-anchor             UserPromptSubmit hook handler (boot context +
  *                            voice anchors).
  *   rules                    PreToolUse hook handler (rule engine nudges).
@@ -44,6 +47,7 @@ import { runLogMcp } from "./log-mcp";
 import { flushLogs } from "./logger";
 import { runPersistHook } from "./persist-hook";
 import { runPreCompactHook } from "./precompact-hook";
+import { runDisableCommand, runEnableCommand } from "./project-settings";
 import { runReindexCommand } from "./reindex-hook";
 import { runRetrieveHook } from "./retrieve-hook";
 import { runRulesHook } from "./rules-hook";
@@ -64,6 +68,13 @@ const USAGE = [
   "                          key/id/model from $MIMIR_PROVIDER_API_KEY,",
   "                          $MIMIR_PROVIDER, $MIMIR_SMALL_MODEL (MIM-74).",
   "  update [server-url]     Re-install (uses existing config if URL omitted).",
+  "  enable [--project DIR] [--plugin KEY]",
+  "                          Turn Mimir on for a project (default: cwd): enables the",
+  "                          plugin and the Mimir output style in its",
+  "                          .claude/settings.local.json. How the Claude desktop app",
+  "                          and plain `claude` sessions become Mimir.",
+  "  disable [--project DIR] [--plugin KEY]",
+  "                          Reverse `enable` for a project.",
   "  voice-anchor            UserPromptSubmit hook (reads stdin).",
   "  retrieve                UserPromptSubmit hook: per-turn brain retrieval.",
   "  rules                   PreToolUse hook (reads stdin).",
@@ -122,6 +133,12 @@ const dispatch = async (argv: readonly string[]): Promise<number> => {
       }
       return runInstallCommand(merged);
     }
+
+    case "enable":
+      return runEnableCommand(rest);
+
+    case "disable":
+      return runDisableCommand(rest);
 
     case "voice-anchor":
       return runVoiceAnchorHook();

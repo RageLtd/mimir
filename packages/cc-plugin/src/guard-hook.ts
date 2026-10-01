@@ -1,8 +1,8 @@
 /**
  * Role guard — PreToolUse hook, `mimir-cc guard [--role <r>]`.
  *
- * One settings.json hook covers every role: a settings-level PreToolUse
- * fires inside subagents too, and there the payload carries
+ * One plugin hook (hooks/hooks.json) covers every role: a PreToolUse
+ * registered that way fires inside subagents too, and there the payload carries
  * `agent_type`, so the role is read from it — a worker's agent name maps
  * to its role, no `agent_type` is the main session (coordinator), and
  * any other subagent is left alone. Plugin-shipped agents cannot carry

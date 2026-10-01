@@ -236,8 +236,10 @@ export const mergeUpdateOptions = async (partial: PartialOptions) => {
   }
 
   const userMemoryDb = partial.userMemoryDb ?? existing?.userMemoryDb;
-  const cartographerBinary =
-    partial.cartographerBinary ?? existing?.cartographerBinary;
+  // The stored cartographer path is deliberately NOT carried into the
+  // options: only an explicit --cartographer flag names a binary; otherwise
+  // the installer re-downloads the latest release into ~/.mimir/bin.
+  const cartographerBinary = partial.cartographerBinary;
   const apiKey = partial.apiKey ?? envApiKey() ?? existing?.apiKey;
   const providerApiKey =
     partial.providerApiKey ?? envProviderApiKey() ?? existing?.providerApiKey;

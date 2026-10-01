@@ -210,16 +210,17 @@ export const runInstall = async (
   const urlResult = validateUrl(opts.serverUrl);
   if (!urlResult.ok) return urlResult;
 
-  // Resolve the cartographer binary BEFORE any network work: an explicit
+  // Resolve the cartographer binary BEFORE the server fetch: an explicit
   // --cartographer path is validated (a typo'd path used to install
-  // "successfully" with the index legs permanently dark), an omitted one
-  // auto-detects from $PATH, and only a declined prompt disables indexing.
+  // "successfully" with the index legs permanently dark); otherwise the
+  // latest GitHub release is downloaded into ~/.mimir/bin. Indexing is
+  // always on.
   const carto = await resolveCartographerBinary({
     ...(opts.cartographerBinary ? { requested: opts.cartographerBinary } : {}),
+    log,
   });
   if (!carto.ok) return err(carto.error);
-  const cartographerBinary = carto.binary ?? undefined;
-  if (carto.binary === null) log(`Cartographer: ${carto.reason}`);
+  const cartographerBinary = carto.binary;
 
   const promptResult = await fetchSystemPrompt(urlResult.value, opts.apiKey);
   if (!promptResult.ok) return promptResult;
@@ -342,9 +343,7 @@ export const runInstallCommand = async (opts: InstallOptions) => {
 
   const { codexHome, binDir, version, hooksTrusted, cartographerBinary } =
     result.value;
-  const carto = cartographerBinary
-    ? `  Cartographer:   ${cartographerBinary}`
-    : `  Cartographer:   (not configured — auto-reindex disabled)`;
+  const carto = `  Cartographer:   ${cartographerBinary}`;
 
   // Effective extraction status AFTER config write (env wins over
   // config) — the brain silently distills nothing without it, so the

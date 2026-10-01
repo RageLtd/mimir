@@ -18,7 +18,7 @@ Otherwise, check whether `~/.mimir/config.json` exists:
 test -f "$HOME/.mimir/config.json" && echo found || echo missing
 ```
 
-If it exists, you'll run `update` with no URL argument in Step 3 — the binary recovers the URL (and preserves the existing `userMemoryDb` and `cartographerBinary` settings) from the config. Bind `<url>` to empty and continue to Step 2.
+If it exists, you'll run `update` with no URL argument in Step 3 — the binary recovers the URL (and preserves the existing `userMemoryDb`; the cartographer binary in `~/.mimir/bin` is refreshed when a newer release is out) from the config. Bind `<url>` to empty and continue to Step 2.
 
 If the config file does not exist, call `AskUserQuestion` to obtain the URL exactly as `/mimir-install` does (default `https://mimir.rageltd.ca`, alternative `http://localhost:8080`). You may also want to re-prompt for DB path and cartographer binary if the user is moving from a pre-config-file install — but treat this as the rare case.
 
@@ -56,6 +56,8 @@ Show the binary's output verbatim.
 
 If the binary exited zero, tell the user:
 
-> Mimir updated. Restart any running `mimir` sessions to pick up the new system prompt and config.
+> Mimir updated. Start a new session to pick up the new persona and config — the `mimir` wrapper reads the system prompt at launch, and desktop-app / plain `claude` sessions read the "Mimir" output style at start.
+>
+> Updating from an install that predates the plugin-shipped hooks? The old `~/.mimir/mcp.json` is removed and `~/.mimir/settings.json` no longer carries hooks — both now come from the plugin, so nothing fires twice.
 
 If the binary exited non-zero, surface its error output without invented remediations.

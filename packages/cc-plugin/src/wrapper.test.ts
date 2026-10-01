@@ -47,9 +47,13 @@ const writeUpdater = async (script: string) => {
 };
 
 const runWrapper = async (args: string[] = []) => {
+  // The assertions check that a launch WITHOUT a marker leaves
+  // ANTHROPIC_BASE_URL unset, so the test runner's own value (the Claude
+  // desktop app exports one) must not leak into the mock.
+  const { ANTHROPIC_BASE_URL: _, ...inherited } = process.env;
   const proc = Bun.spawn(["bash", wrapperPath, ...args], {
     env: {
-      ...process.env,
+      ...inherited,
       HOME: tmp,
       PATH: `${mockClaudeDir}:${process.env.PATH ?? ""}`,
       MIMIR_LOG: logPath,
@@ -81,7 +85,6 @@ beforeEach(async () => {
   // Touch the files BASE_ARGS reference so the wrapper has something
   // to point at even though the mock claude ignores them.
   await writeFile(join(tmp, ".mimir", "system-prompt.md"), "");
-  await writeFile(join(tmp, ".mimir", "mcp.json"), "{}");
   await writeFile(join(tmp, ".mimir", "settings.json"), "{}");
 
   markerPath = join(tmp, ".mimir", "next-session.json");

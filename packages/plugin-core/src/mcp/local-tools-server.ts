@@ -19,14 +19,17 @@
  * stdout chatter would corrupt the JSON-RPC stream and crash the
  * connection).
  *
- * Env: MIMIR_USER_MEMORY_DB — absolute path to the user-memory SQLite db.
+ * Env: MIMIR_USER_MEMORY_DB — user-memory SQLite db (default: the
+ *      `userMemoryDb` in ~/.mimir/config.json, then ~/.mimir/user-memories.db).
  *      MIMIR_ORG_REPLICA_DB — org replica path (default ~/.mimir/org-replica.db).
  *
  * The subcommand stays `user-memory-mcp` so existing installs keep working;
  * only the MCP server key and serverInfo say "mimir-local".
  */
 
+import { join } from "node:path";
 import { createEmbedQuery } from "../brain/embedder";
+import { readConfig } from "../shared-config";
 import {
   createOrgReplica,
   defaultOrgReplicaPath,
@@ -47,7 +50,7 @@ import {
   executeUserMemoryTool,
   userMemoryToolDefs,
 } from "../tools/user-memory";
-import { errMessage } from "../util";
+import { errMessage, mimirHome } from "../util";
 
 // ── JSON-RPC types ──
 
@@ -85,12 +88,20 @@ const respondError = (
  * teardown path; if Bun terminates before that runs, SQLite's WAL journal
  * survives without corruption.
  */
+/**
+ * User-memory DB location: env first (an editor's MCP config can still
+ * pin it), then the install-time choice in ~/.mimir/config.json, then
+ * the canonical default. The plugin-shipped `.mcp.json` carries no env —
+ * Claude Code can't template a per-install path into it — so the config
+ * fallback is what a desktop-app session resolves through.
+ */
+export const resolveUserMemoryDb = async () =>
+  process.env.MIMIR_USER_MEMORY_DB ??
+  (await readConfig())?.userMemoryDb ??
+  join(mimirHome(), "user-memories.db");
+
 export const runLocalToolsMcp = async () => {
-  const dbPath = process.env.MIMIR_USER_MEMORY_DB;
-  if (!dbPath) {
-    process.stderr.write("MIMIR_USER_MEMORY_DB is required\n");
-    return 1;
-  }
+  const dbPath = await resolveUserMemoryDb();
   const replicaPath =
     process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath();
 
