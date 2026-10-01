@@ -36,8 +36,6 @@ Both default options resolve to the same path; the second is there to flag the s
 
 ## Step 3 — API key
 
-(The cartographer binary needs no question: the installer downloads the latest release of `RageLtd/cartographer` into `~/.mimir/bin` and keeps it current on update. Only pass `--cartographer PATH` in Step 5 if the user explicitly asks to use a specific binary, such as a local build.)
-
 Call `AskUserQuestion`:
 
 - question: `Does this mimir-server require an API key?`
