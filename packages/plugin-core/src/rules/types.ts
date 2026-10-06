@@ -76,6 +76,8 @@ export interface RuleEntry {
   readonly body?: string;
   /** Pre-loaded body file content. Loader populates; runner doesn't re-read. */
   readonly bodyContent?: string;
+  /** Positive file scope from the paired Markdown body's `paths` frontmatter. */
+  readonly paths?: readonly string[];
   readonly enabled: boolean;
   readonly event: RuleEvent;
   /** Unset means `block`. See `RuleSeverity`. */

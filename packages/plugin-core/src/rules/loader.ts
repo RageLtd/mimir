@@ -22,6 +22,7 @@ import { Glob } from "bun";
 import { parseToml } from "../toml";
 import { errMessage } from "../util";
 import { resolveBuiltin } from "./builtins";
+import { parseRuleFile } from "./project-rules";
 import { compileCondition } from "./runner";
 import type {
   CompiledCondition,
@@ -278,6 +279,7 @@ const loadOne = async (absPath: string, _projectPath: string) => {
     id,
     body: bodyResult.body,
     bodyContent: bodyResult.content,
+    paths: bodyResult.paths,
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : true,
     event: event as RuleEvent,
     severity: isSeverity(raw.severity) ? raw.severity : undefined,
@@ -301,7 +303,12 @@ const loadOne = async (absPath: string, _projectPath: string) => {
  */
 const resolveBody = async (rawBody: unknown, tomlPath: string) => {
   if (rawBody === undefined) {
-    return { ok: true as const, body: undefined, content: undefined };
+    return {
+      ok: true as const,
+      body: undefined,
+      content: undefined,
+      paths: undefined,
+    };
   }
   if (typeof rawBody !== "string") {
     return {
@@ -327,7 +334,13 @@ const resolveBody = async (rawBody: unknown, tomlPath: string) => {
       error: `body file unreadable at ${absBody}: ${read.error}`,
     };
   }
-  return { ok: true as const, body: absBody, content: read.content };
+  const parsed = parseRuleFile(read.content);
+  return {
+    ok: true as const,
+    body: absBody,
+    content: parsed.body,
+    paths: parsed.paths,
+  };
 };
 
 /**

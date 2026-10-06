@@ -20,6 +20,7 @@ import {
   evaluateCondition,
   resolveField,
 } from "./matcher";
+import { matchesScope } from "./project-rules";
 import type {
   CompiledCondition,
   DetectorContext,
@@ -107,6 +108,21 @@ export const runRules = async (
   for (const rule of rules) {
     if (!rule.enabled) continue;
     if (!eventMatchesTool(rule.event, ctx.toolName)) continue;
+
+    if (rule.paths) {
+      const filePath = resolveField("file_path", ctx);
+      if (!filePath) continue;
+      const relativePath = path
+        .relative(
+          path.resolve(ctx.projectPath),
+          path.resolve(ctx.projectPath, filePath),
+        )
+        .split(path.sep)
+        .join("/");
+      if (!rule.paths.some((pattern) => matchesScope(pattern, relativePath))) {
+        continue;
+      }
+    }
 
     if (rule.excludeGlobs && rule.excludeGlobs.length > 0) {
       const filePath = resolveField("file_path", ctx);

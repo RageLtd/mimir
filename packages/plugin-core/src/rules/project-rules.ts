@@ -191,7 +191,7 @@ export const formatRulesForPrompt = (entries: readonly ProjectRulesEntry[]) => {
  * slash is a basename pattern and matches at any depth; a pattern with a
  * slash is anchored to the project-relative path.
  */
-const matchesScope = (pattern: string, relativeFilePath: string) => {
+export const matchesScope = (pattern: string, relativeFilePath: string) => {
   const glob = new Glob(pattern);
   if (glob.match(relativeFilePath)) return true;
   return !pattern.includes("/") && glob.match(basename(relativeFilePath));
