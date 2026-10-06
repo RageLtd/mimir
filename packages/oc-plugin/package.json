@@ -11,14 +11,14 @@
   "module": "dist/mimir-oc.ts",
   "devDependencies": {
     "@mimir/plugin-core": "workspace:*",
-    "@opencode-ai/plugin": "^1.17.13",
-    "@opencode-ai/sdk": "^1.17.13"
+    "@opencode/ai": "^2.0.24",
+    "@opencode/plugin": "^2.0.24"
   },
   "exports": {
     ".": "./dist/mimir-oc.ts",
     "./server": "./dist/mimir-oc.ts"
   },
-  "description": "Mimir persona and runtime for OpenCode. Bundled into a single self-contained TS file at dist/mimir-oc.ts and distributed via GitHub Packages as @RageLtd/mimir-oc — `opencode plugin --global @RageLtd/mimir-oc` handles the package install.",
+  "description": "Mimir persona and runtime for OpenCode V2. Bundled into a single self-contained TS file at dist/mimir-oc.ts and distributed via GitHub Packages as @RageLtd/mimir-oc — `opencode plugin add @RageLtd/mimir-oc` handles the package install.",
   "files": [
     "dist"
   ],

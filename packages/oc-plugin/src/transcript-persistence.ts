@@ -6,7 +6,7 @@
  *
  * OpenCode's message store is the source of truth — no JSONL coalescing
  * needed (unlike the cc-plugin's transcript-delta). The watermark is an
- * in-memory per-session message count: the plugin lives in-process for
+ * in-memory per-session last processed message ID: the plugin lives in-process for
  * the whole session, so it survives across `session.idle` fires. A
  * process restart re-extracts the conversation once; storeTyped's
  * vector dedupe absorbs the repeats.
@@ -34,8 +34,8 @@ import { extractionConfig, type MimirConfig } from "./config";
 
 // ── ModelMessage shape ──
 //
-// The mimir-server's persist endpoint accepts the AI SDK's
-// ModelMessage shape. We don't import the type from the AI SDK
+// Local extraction accepts the AI SDK's ModelMessage shape.
+// We don't import the type from the AI SDK
 // directly — the type is purely structural and the import would
 // pull @ai-sdk/provider-utils into the published bundle. Defining
 // it locally keeps the bundle small and the contract obvious.
@@ -55,66 +55,39 @@ type ModelMessage =
 
 // ── OpenCode SDK types (narrow) ──
 //
-// The OpenCode SDK is auto-generated; we only touch the fields we
-// actually use. Type-checking the return value of `client.session.messages`
-// is more brittle than re-declaring the narrow shape we need.
+// V2 context records are readonly discriminated records, not V1
+// { info, parts } envelopes. Only the fields extraction consumes live here.
 
-type OpenCodeTextPart = { type: "text"; text?: string };
-type OpenCodeToolPart = {
-  type: "tool";
-  callID?: string;
-  name?: string;
-  input?: Record<string, unknown>;
-};
-type OpenCodePart = OpenCodeTextPart | OpenCodeToolPart | { type: string };
+type OpenCodePart =
+  | { readonly type: "text" | "reasoning"; readonly text: string }
+  | {
+      readonly type: "tool";
+      readonly id: string;
+      readonly name: string;
+      readonly state: {
+        readonly input: Readonly<Record<string, unknown>> | string;
+      };
+    };
 
-// Resolved variants — the fields we require are present and string-typed.
-// The type guards below narrow to these so downstream reads need no `as`
-// cast and no `| undefined` on callID/name/text.
-type ResolvedTextPart = { type: "text"; text: string };
-type ResolvedToolPart = {
-  type: "tool";
-  callID: string;
-  name: string;
-  input?: Record<string, unknown>;
-};
-
-const isTextPart = (p: OpenCodePart): p is ResolvedTextPart =>
-  p.type === "text" && "text" in p && typeof p.text === "string";
-
-const isToolPart = (p: OpenCodePart): p is ResolvedToolPart =>
-  p.type === "tool" &&
-  "callID" in p &&
-  typeof p.callID === "string" &&
-  "name" in p &&
-  typeof p.name === "string";
-
-type OpenCodeMessageInfo = {
-  id: string;
-  sessionID: string;
-  role: "user" | "assistant" | "tool";
-};
-
-type OpenCodeMessage = { info: OpenCodeMessageInfo; parts: OpenCodePart[] };
+type OpenCodeMessage =
+  | { readonly id: string; readonly type: "user"; readonly text: string }
+  | {
+      readonly id: string;
+      readonly type: "assistant";
+      readonly content: readonly OpenCodePart[];
+    }
+  | { readonly id: string; readonly type: string };
 
 // ── OpenCode client shape (narrow) ──
 //
-// We only need `session.messages`. The plugin entry passes the full
-// SDK client through; the narrow type here documents what we touch.
-// The real SDK wraps every response as `{ data, error } & { request,
-// response }`, so `messages` resolves to the wrapped envelope — we unwrap
-// `.data` (and surface `.error`) before iterating.
-
-type MessagesResponse = {
-  readonly data?: readonly OpenCodeMessage[];
-  readonly error?: unknown;
-};
+// The plugin entry passes ctx directly. V2 returns records directly and
+// rejects failed requests, with no data/error response wrapper.
 
 export type TranscriptClient = {
   readonly session: {
-    readonly messages: (args: {
-      readonly path: { readonly id: string };
-    }) => Promise<MessagesResponse>;
+    readonly context: (args: {
+      readonly sessionID: string;
+    }) => Promise<readonly OpenCodeMessage[]>;
   };
 };
 
@@ -126,38 +99,29 @@ export type TranscriptLogger = {
 };
 
 /**
- * Convert OpenCode's `{ info, parts }` shape into the AI SDK's
- * ModelMessage. Returns null for messages we don't persist (tool
- * role, empty assistant turns, etc.) — caller filters those out.
+ * Convert OpenCode's V2 context record into the AI SDK's
+ * ModelMessage. Returns null for auxiliary records and empty turns.
  */
 export const convertMessage = (msg: OpenCodeMessage) => {
-  if (msg.info.role === "user") {
-    // User text lives in the message's text parts — NOT in
-    // `info.summary.body`, which is the compaction summary and is unset
-    // for ordinary turns. Reading summary.body persisted every user turn
-    // empty; read the parts, same as the assistant branch.
-    const text = msg.parts
-      .filter(isTextPart)
-      .map((part) => part.text)
-      .join("\n")
-      .trim();
+  if (msg.type === "user" && "text" in msg) {
+    const text = msg.text.trim();
     if (text.length === 0) return null;
     const out: ModelMessage = { role: "user", content: text };
     return out;
   }
-  if (msg.info.role === "assistant") {
+  if (msg.type === "assistant" && "content" in msg) {
     const content: AssistantContent[] = [];
-    for (const part of msg.parts) {
-      if (isTextPart(part)) {
+    for (const part of msg.content) {
+      if (part.type === "text") {
         content.push({ type: "text", text: part.text });
         continue;
       }
-      if (isToolPart(part)) {
+      if (part.type === "tool" && typeof part.state.input !== "string") {
         content.push({
           type: "tool-call",
-          toolCallId: part.callID,
+          toolCallId: part.id,
           toolName: part.name,
-          input: part.input ?? {},
+          input: { ...part.state.input },
         });
       }
       // reasoning, files, step markers, retries, compaction, etc.
@@ -167,14 +131,15 @@ export const convertMessage = (msg: OpenCodeMessage) => {
     const out: ModelMessage = { role: "assistant", content };
     return out;
   }
-  // role === "tool" and any other future roles: auxiliary, skip.
+  // Compaction, idle, system updates, etc. are auxiliary; skip.
   return null;
 };
 
-// Per-session extraction watermark: count of RAW OpenCode messages already
-// consumed. Module-level because the plugin is a single in-process instance
-// for the session's lifetime. Exported for tests only.
-export const _extractionWatermarks = new Map<string, number>();
+// Stable record IDs survive appends; a checkpoint missing after compaction
+// restarts extraction at the beginning of the replacement context.
+export const _extractionWatermarks = new Map<string, string>();
+const pendingPersistence = new Map<string, Promise<void>>();
+const extractionOperations = { extractionConfig, extractFromConversation };
 
 /**
  * Fetch the session's transcript from OpenCode, take the delta since the
@@ -182,15 +147,16 @@ export const _extractionWatermarks = new Map<string, number>();
  * user-configured extraction endpoint. Fire-and-forget: errors are
  * logged but never propagated.
  */
-export const persistSessionTranscript = async (
+const persistTranscript = async (
   sessionID: string,
   projectPath: string,
   config: MimirConfig,
   log: TranscriptLogger,
   client: TranscriptClient,
+  ops: typeof extractionOperations,
 ) => {
-  const [fetchErr, result] = await attempt(() =>
-    client.session.messages({ path: { id: sessionID } }),
+  const [fetchErr, messages] = await attempt(() =>
+    client.session.context({ sessionID }),
   );
   if (fetchErr) {
     log.error("transcript fetch failed", {
@@ -199,16 +165,13 @@ export const persistSessionTranscript = async (
     });
     return;
   }
-  if (result.error) {
-    log.error("transcript fetch returned error", {
-      sessionID,
-      error: String(result.error),
-    });
-    return;
-  }
-  const messages = result.data ?? [];
-  const watermark = _extractionWatermarks.get(sessionID) ?? 0;
-  const delta = messages.slice(watermark);
+  const watermark = _extractionWatermarks.get(sessionID);
+  const checkpoint = messages.findIndex((message) => message.id === watermark);
+  const delta = messages.slice(checkpoint + 1);
+  const newWatermark = messages.at(-1)?.id;
+  const advance = () => {
+    if (newWatermark) _extractionWatermarks.set(sessionID, newWatermark);
+  };
 
   if (delta.length === 0) {
     log.debug("session idle — no new messages since watermark", {
@@ -226,18 +189,18 @@ export const persistSessionTranscript = async (
 
   if (modelMessages.length === 0) {
     // Nothing convertible — advance past the noise so it isn't rescanned.
-    _extractionWatermarks.set(sessionID, messages.length);
+    advance();
     log.debug("session idle — no convertible messages in delta", {
       sessionID,
     });
     return;
   }
 
-  const extraction = await extractionConfig();
+  const extraction = await ops.extractionConfig();
   if (!extraction) {
     // No endpoint will ever consume this delta — advance so it can't
     // accumulate forever. Loud once per idle in the log.
-    _extractionWatermarks.set(sessionID, messages.length);
+    advance();
     log.warn(
       "extraction unconfigured (MIMIR_EXTRACTION_BASE_URL / extractionBaseUrl) — session not distilled",
       { sessionID, messages: modelMessages.length },
@@ -245,7 +208,7 @@ export const persistSessionTranscript = async (
     return;
   }
 
-  const outcome = await extractFromConversation(extraction, modelMessages);
+  const outcome = await ops.extractFromConversation(extraction, modelMessages);
   if (!outcome.ok) {
     log.error("extraction failed — keeping watermark for retry", {
       sessionID,
@@ -256,7 +219,7 @@ export const persistSessionTranscript = async (
   }
 
   if (outcome.skipped) {
-    _extractionWatermarks.set(sessionID, messages.length);
+    advance();
     log.debug("extraction skipped", { sessionID, reason: outcome.skipped });
     return;
   }
@@ -298,18 +261,45 @@ export const persistSessionTranscript = async (
   }
   replica.close();
 
-  _extractionWatermarks.set(sessionID, messages.length);
+  advance();
 
   log.info("session distilled locally", {
     sessionID,
     project: projectPath,
     projectId,
     watermark,
-    newWatermark: messages.length,
+    newWatermark,
     messagesInDelta: modelMessages.length,
     extracted: outcome.memories.length,
     stored,
     duplicates,
     model: extraction.model,
   });
+};
+
+/** Idle and precompaction share a queue so neither extracts the same delta concurrently. */
+export const persistSessionTranscript = (
+  sessionID: string,
+  projectPath: string,
+  config: MimirConfig,
+  log: TranscriptLogger,
+  client: TranscriptClient,
+  ops: typeof extractionOperations = extractionOperations,
+) => {
+  const pending = (pendingPersistence.get(sessionID) ?? Promise.resolve())
+    .then(() =>
+      persistTranscript(sessionID, projectPath, config, log, client, ops),
+    )
+    .catch((err) =>
+      log.error("transcript persist failed", {
+        sessionID,
+        error: errMessage(err),
+      }),
+    );
+  pendingPersistence.set(sessionID, pending);
+  void pending.then(() => {
+    if (pendingPersistence.get(sessionID) === pending)
+      pendingPersistence.delete(sessionID);
+  });
+  return pending;
 };

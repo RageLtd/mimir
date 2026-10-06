@@ -58,9 +58,29 @@ afterEach(async () => {
 
 describe("installMimir", () => {
   test("exposes mimir_install before shared config exists", async () => {
-    const hooks = await Reflect.apply(MimirPlugin, undefined, []);
+    const names: string[] = [];
+    await Reflect.apply(MimirPlugin.setup, undefined, [
+      {
+        location: { directory: root },
+        tool: {
+          transform: async (
+            transform: (editor: {
+              add: (tool: { name: string }) => void;
+            }) => void,
+          ) => {
+            transform({
+              add: (tool) => {
+                names.push(tool.name);
+              },
+            });
+            return { dispose: async () => {} };
+          },
+        },
+      },
+    ]);
 
-    expect(Object.keys(hooks.tool ?? {})).toEqual(["mimir_install"]);
+    expect(MimirPlugin.id).toBe("mimir");
+    expect(names).toEqual(["mimir_install"]);
   });
 
   test("preserves OpenCode registration and bootstraps reusable commands", async () => {

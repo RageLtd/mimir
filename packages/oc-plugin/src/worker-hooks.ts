@@ -1,13 +1,13 @@
 /**
  * OpenCode wiring for workers — the precise role guard before every
- * tool call, and the verify gate on the parent's `task` result.
+ * tool call, and the verify gate on the parent's `subagent` result.
  *
- * OpenCode has no per-agent hooks and no worktree isolation, so both
- * live in the one plugin and key off the session: a child session
+ * Both hooks live in the one plugin and key off the session:
+ * a child session
  * (`parentID` set) whose `agent` is a `mimir-*` worker gets that role's
  * guard; a session with an active coordinator state gets the
  * coordinator's. The gate runs in the *parent's* `tool.execute.after`
- * for `task`, because OpenCode can't block a child's stop — the verdict
+ * for `subagent`, because OpenCode can't block a child's stop — the verdict
  * is appended to the tool output the coordinator reads.
  */
 
@@ -31,46 +31,46 @@ export type SessionLookup = (sessionID: string) => Promise<SessionInfo | null>;
 
 type SessionClient = {
   readonly session: {
-    readonly get: (opts: {
-      path: { id: string };
-    }) => Promise<{ data?: SessionInfo; error?: unknown }>;
+    readonly get: (opts: { sessionID: string }) => Promise<SessionInfo>;
   };
 };
 
 /** Narrow the SDK's `session.get` to the two fields the guard needs. */
 export const sessionLookupFrom = (client: SessionClient) => {
   const lookup: SessionLookup = (sessionID) =>
-    client.session
-      .get({ path: { id: sessionID } })
-      .then((r) =>
-        r.data ? { parentID: r.data.parentID, agent: r.data.agent } : null,
-      )
-      .catch(() => null);
+    client.session.get({ sessionID }).catch(() => null);
   return lookup;
 };
 
 /**
- * Cached per-session facts. A session's parent and agent never change,
- * so one lookup per session for the plugin's lifetime.
+ * Cache successful session facts; agent-selected/deleted events invalidate
+ * them. Transient lookup failures must be retried on the next tool call.
  */
 export const createSessionRoles = (lookup: SessionLookup) => {
   const cache = new Map<string, Promise<SessionInfo | null>>();
   const info = (sessionID: string) => {
     let pending = cache.get(sessionID);
     if (!pending) {
-      pending = lookup(sessionID);
+      pending = lookup(sessionID).catch(() => null);
       cache.set(sessionID, pending);
+      const current = pending;
+      void pending.then((result) => {
+        if (!result && cache.get(sessionID) === current)
+          cache.delete(sessionID);
+      });
     }
     return pending;
   };
   return {
+    invalidate: (sessionID: string) => cache.delete(sessionID),
     isChild: async (sessionID: string) =>
       (await info(sessionID))?.parentID !== undefined,
     /** The worker role for a child session running a `mimir-*` agent. */
-    workerRole: async (sessionID: string) => {
+    workerRole: async (sessionID: string, agent?: string) => {
       const s = await info(sessionID);
-      if (!s?.parentID || !s.agent) return null;
-      return workerByName(s.agent)?.role ?? null;
+      const activeAgent = agent ?? s?.agent;
+      if (!s?.parentID || !activeAgent) return null;
+      return workerByName(activeAgent)?.role ?? null;
     },
   };
 };
@@ -87,22 +87,35 @@ export type SessionRoles = ReturnType<typeof createSessionRoles>;
  */
 export const guardReason = async (
   roles: SessionRoles,
-  input: { readonly tool: string; readonly sessionID: string },
+  input: {
+    readonly tool: string;
+    readonly sessionID: string;
+    readonly agent?: string;
+  },
   args: Readonly<Record<string, unknown>>,
   worktree: string,
 ) => {
-  const target = args.filePath;
+  const target = args.filePath ?? args.file_path ?? args.path;
   if (
-    input.tool === "read" &&
+    (input.tool === "read" || input.tool === "Read") &&
     typeof target === "string" &&
     isSecretPath(target)
   ) {
     return `Role guard: ${target} holds credentials. Agents never read secret material.`;
   }
 
-  const base = { toolName: input.tool, toolInput: args, worktree };
+  // Shared guards use legacy cross-host tool names internally.
+  const toolName =
+    input.tool === "subagent"
+      ? "task"
+      : input.tool === "shell"
+        ? "bash"
+        : input.tool === "patch"
+          ? "apply_patch"
+          : input.tool;
+  const base = { toolName, toolInput: args, worktree };
 
-  const workerRole = await roles.workerRole(input.sessionID);
+  const workerRole = await roles.workerRole(input.sessionID, input.agent);
   if (workerRole)
     return denyReason(guardDecision({ ...base, role: workerRole }));
 
@@ -123,9 +136,9 @@ export const guardReason = async (
 const denyReason = (decision: ReturnType<typeof guardDecision>) =>
   decision.allow ? null : decision.reason;
 
-// ── After: gate on `task` ──
+// ── After: gate on `subagent` ──
 
-const TASK_TOOL = "task";
+const SUBAGENT_TOOL = "subagent";
 
 const childSessionId = (metadata: unknown) => {
   if (typeof metadata !== "object" || metadata === null) return null;
@@ -134,7 +147,7 @@ const childSessionId = (metadata: unknown) => {
   return typeof id === "string" ? id : null;
 };
 
-/** How the verdict reaches the coordinator: appended to the task output. */
+/** How the verdict reaches the coordinator: appended to the subagent output. */
 export const appendVerdict = (
   output: string,
   outcome: VerifyOutcome,
@@ -146,8 +159,8 @@ export const appendVerdict = (
     case "pass":
       return `${output}\n\n${outcome.report}`;
     case "block": {
-      const handle = childId ? ` (task_id: ${childId})` : "";
-      const resume = `The worker has stopped. Resume it with the task tool${handle} and pass the reason above as its instruction.`;
+      const handle = childId ? ` (sessionID: ${childId})` : "";
+      const resume = `The worker has stopped. Resume it with the subagent tool${handle} and pass the reason above as its prompt.`;
       return `${output}\n\n${outcome.reason}\n\n${resume}`;
     }
     case "exhausted":
@@ -172,9 +185,9 @@ const defaultGateDeps: GateDeps = {
 };
 
 /**
- * Run the gate on a finished `task` and rewrite its output in place.
+ * Run the gate on a finished `subagent` and rewrite its output in place.
  * Returns the outcome kind for logging, or null when the tool wasn't
- * `task`.
+ * `subagent` (or it returned a running background session).
  */
 export const gateTaskOutput = async (
   input: {
@@ -186,13 +199,19 @@ export const gateTaskOutput = async (
   worktree: string,
   deps: GateDeps = defaultGateDeps,
 ) => {
-  if (input.tool !== TASK_TOOL) return null;
+  if (input.tool !== SUBAGENT_TOOL) return null;
+  if (
+    typeof output.metadata === "object" &&
+    output.metadata !== null &&
+    "status" in output.metadata &&
+    output.metadata.status === "running"
+  )
+    return null;
   const args =
     typeof input.args === "object" && input.args !== null
       ? (input.args as Record<string, unknown>)
       : {};
-  const agentType =
-    typeof args.subagent_type === "string" ? args.subagent_type : undefined;
+  const agentType = typeof args.agent === "string" ? args.agent : undefined;
   const childId = childSessionId(output.metadata);
   const outcome = await deps.verify({
     role: roleForAgentType(agentType),

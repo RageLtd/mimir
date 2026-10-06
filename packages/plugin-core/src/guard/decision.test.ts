@@ -221,6 +221,33 @@ describe("shell safety (every role)", () => {
       guardDecision(ctx("impl", "terminal", { command: "git push" })).allow,
     ).toBe(false);
   });
+
+  test("recursive-delete resolution honors shell cwd without expanding ownership", () => {
+    expect(
+      guardDecision(
+        ctx("impl", "Bash", {
+          command: "rm -rf victim",
+          cwd: "/outside",
+        }),
+      ).allow,
+    ).toBe(false);
+    expect(
+      guardDecision(
+        ctx("impl", "Bash", {
+          command: "rm -rf ../../repo",
+          cwd: "/work/repo/src",
+        }),
+      ).allow,
+    ).toBe(false);
+    expect(
+      guardDecision(
+        ctx("impl", "Bash", {
+          command: "rm -rf victim",
+          cwd: "/work/repo/src",
+        }),
+      ).allow,
+    ).toBe(true);
+  });
 });
 
 describe("secrets (every role)", () => {

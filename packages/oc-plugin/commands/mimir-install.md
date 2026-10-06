@@ -1,5 +1,5 @@
 ---
-description: Write the Mimir runtime state (system prompt, config, pinned local embedder, OpenCode agent, wrapper script, slash commands) to the user's home directory. Run after installing the plugin via `opencode plugin --global @RageLtd/mimir-oc`.
+description: Write the Mimir runtime state (system prompt, config, pinned local embedder, OpenCode agent, wrapper script, slash commands) to the user's home directory. Run after installing the plugin via `opencode plugin add @RageLtd/mimir-oc`.
 ---
 
 You are helping the user set up the Mimir runtime state on their machine.
@@ -10,7 +10,7 @@ The Mimir npm plugin is already installed and OpenCode is in PATH. This command 
 
 1. **`MIMIR_API_KEY`** in the environment. The cloud server's `/v1/system-prompt` endpoint requires a bearer token. The install tool will surface a clear error if it's absent — if so, tell the user to `export MIMIR_API_KEY=...` and re-run.
 
-If the user has not yet installed the plugin package itself, that's a separate step. Point them at `opencode plugin --global @RageLtd/mimir-oc` and the `~/.npmrc` GitHub Packages configuration in the README. But that step is *not* your concern for this command.
+If the user has not yet installed the plugin package itself, that's a separate step. Point them at `opencode plugin add @RageLtd/mimir-oc` and the `~/.npmrc` GitHub Packages configuration in the README. But that step is *not* your concern for this command.
 
 ## Resolve the parameters
 

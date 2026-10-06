@@ -4,7 +4,7 @@ description: Re-fetch the Mimir system prompt, update the local config, and veri
 
 You are helping the user update Mimir to pick up the latest server-side changes.
 
-The update is the same operation as `/mimir-install`, just scoped to the runtime state. It also downloads or verifies the pinned llama-server release and embedding model. The npm package registration in OpenCode's config is not touched; update the package separately with `opencode plugin --global --force @RageLtd/mimir-oc`.
+The update is the same operation as `/mimir-install`, just scoped to the runtime state. It also downloads or verifies the pinned llama-server release and embedding model. The npm package registration in OpenCode's config is not touched; update the package separately with `opencode plugin update @RageLtd/mimir-oc`.
 
 ## Before you start
 

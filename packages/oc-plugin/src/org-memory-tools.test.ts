@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   createOrgReplica,
   type OrgReplica,
 } from "@mimir/plugin-core/store/org-replica";
 import { orgMemoryToolNames } from "@mimir/plugin-core/tools/org-memory";
+import type { ToolContext } from "@opencode/plugin/promise/tool";
 import { orgMemoryTools } from "./org-memory-tools";
 
 let replica: OrgReplica;
@@ -11,27 +12,36 @@ let replica: OrgReplica;
 beforeEach(() => {
   replica = createOrgReplica(":memory:");
 });
+afterEach(() => replica.close());
 
 const noEmbedding = async (_text: string) => null;
-const context = {
-  sessionID: "test-session",
-  messageID: "test-message",
-  agent: "mimir",
-  directory: "/tmp/project",
-  worktree: "/tmp/project",
-  abort: new AbortController().signal,
-  callID: "test-call",
-  extra: {},
-  metadata: () => {},
-  ask: async () => {},
+const context: ToolContext = {
+  // IDs are opaque protocol strings, restored at the serialization boundary.
+  ...JSON.parse(
+    '{"sessionID":"test-session","messageID":"test-message","agent":"mimir","id":"test-call"}',
+  ),
+  signal: new AbortController().signal,
+  progress: async () => {},
 };
-const outputText = (result: string | { output: string }) =>
-  typeof result === "string" ? result : result.output;
+const outputText = (result: { content: string }) => result.content;
 
 describe("orgMemoryTools", () => {
   test("registers the complete project-memory and playbook surface", () => {
     const tools = orgMemoryTools(replica, noEmbedding);
     expect(Object.keys(tools).sort()).toEqual([...orgMemoryToolNames].sort());
+    for (const definition of Object.values(tools)) {
+      expect(definition.input.type).toBe("object");
+      expect(definition.input.additionalProperties).toBe(false);
+      expect(JSON.parse(JSON.stringify(definition.input))).toEqual(
+        definition.input,
+      );
+    }
+    expect(tools.project_memory_store.input.required).toEqual(["content"]);
+    expect(tools.project_playbook_store.input.required).toEqual([
+      "name",
+      "trigger",
+      "content",
+    ]);
   });
 
   test("delegates project-memory calls to the local replica", async () => {
@@ -61,8 +71,18 @@ describe("orgMemoryTools", () => {
   test("gracefully degrades when the replica cannot be opened", async () => {
     const tools = orgMemoryTools(null, noEmbedding);
     const result = await tools.project_memory_list.execute({}, context);
+    expect(Object.keys(result)).toEqual(["content"]);
     expect(outputText(result)).toBe(
       "Project memory unavailable: local replica not initialised.",
     );
+  });
+  test("rejects malformed writes before changing the replica", async () => {
+    const tools = orgMemoryTools(replica, noEmbedding);
+    await expect(
+      tools.project_memory_store.execute({ content: 42 }, context),
+    ).rejects.toThrow("Invalid tool argument: content");
+    await expect(
+      tools.project_memory_delete.execute({}, context),
+    ).rejects.toThrow("Invalid tool argument: id");
   });
 });

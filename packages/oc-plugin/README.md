@@ -1,6 +1,12 @@
 # @RageLtd/mimir-oc
 
-Mimir persona and runtime as an OpenCode plugin. Distributed via GitHub Packages as `@RageLtd/mimir-oc`; OpenCode installs it natively with `opencode plugin --global @RageLtd/mimir-oc`. The bundle is a single self-contained TS file (`dist/mimir-oc.ts`); the shared `@mimir/plugin-core` layer is inlined at build time, so the installed plugin has no runtime dependencies on the user's machine beyond OpenCode itself.
+Mimir persona and runtime as an OpenCode plugin. Distributed via GitHub Packages as `@RageLtd/mimir-oc`; OpenCode installs it natively with `opencode plugin add @RageLtd/mimir-oc`. The bundle is a single self-contained TS file (`dist/mimir-oc.ts`); the shared `@mimir/plugin-core` layer is inlined at build time, so the installed plugin has no runtime dependencies on the user's machine beyond OpenCode itself.
+
+## OpenCode compatibility
+
+This entrypoint targets **OpenCode V2**, using `@opencode/plugin` and `@opencode/ai` 2.0.24 APIs. It exports the same `Plugin.define({ id: "mimir", setup })` definition as both the default export and `MimirPlugin`; it is not a V1 callable plugin. Tools register through `ctx.tool.transform`, session/tool hooks through their domain APIs, and unload aborts the event subscription and closes local stores.
+
+V2's native configuration key is `plugins`; supported legacy `plugin` configuration is normalized by OpenCode without rewriting the file. Existing agents and commands can stay in place. Upgrade the plugin package for V2 rather than merely renaming a V1 plugin entry. The runtime installer does not rewrite global OpenCode settings.
 
 ## Capabilities
 
@@ -22,7 +28,7 @@ The plugin is distributed via GitHub Packages. Configure the registry, install t
 
 ### 1. Configure the GitHub Packages registry (one-time)
 
-Add the `@RageLtd` scope to your `~/.npmrc`. OpenCode 1.17.15's plugin installer uses npm's Arborist and npm configuration; it does not read `~/.bunfig.toml`:
+Add the `@RageLtd` scope to your `~/.npmrc` for GitHub Packages authentication:
 
 ```ini
 @RageLtd:registry=https://npm.pkg.github.com
@@ -38,12 +44,12 @@ export GITHUB_PACKAGES_TOKEN=ghp_...
 ### 2. Install the plugin
 
 ```bash
-opencode plugin --global @RageLtd/mimir-oc
+opencode plugin add @RageLtd/mimir-oc
 ```
 
-This is the OpenCode-native install — it resolves `@RageLtd/mimir-oc` through OpenCode's npm installer, adds it to the global OpenCode configuration's `plugin: [...]` field, and loads the plugin on next OpenCode startup. Without `--global`, OpenCode installs the plugin into the current project's configuration instead.
+This is the OpenCode-native install — it resolves `@RageLtd/mimir-oc`, registers it in global OpenCode configuration, and loads the plugin on next OpenCode startup. To update an existing registration, run `opencode plugin update @RageLtd/mimir-oc`.
 
-OpenCode supports both `~/.config/opencode/opencode.json` and `~/.config/opencode/opencode.jsonc` and merges them. Keep the `plugin` key in only one of them: if both files define it, one array can override the other. The Mimir runtime installer deliberately edits neither file.
+OpenCode supports both `~/.config/opencode/opencode.json` and `~/.config/opencode/opencode.jsonc` and merges them. Keep package registration in one file to avoid conflicting `plugins` (or legacy `plugin`) entries. The Mimir runtime installer deliberately edits neither file.
 
 Versions through `1.1.0` wrote a retired local-plugin reference during runtime installation. If `/mimir-install` is visible but reports that `mimir_install` is not exposed, inspect the effective configuration:
 
@@ -51,7 +57,7 @@ Versions through `1.1.0` wrote a retired local-plugin reference during runtime i
 opencode debug config
 ```
 
-Replace every legacy `file://~/.config/opencode/plugins/mimir-oc.ts` plugin entry with `@RageLtd/mimir-oc`, keeping the `plugin` key in only one global config file, then restart OpenCode. The slash command is discovered from `commands/` independently of the plugin, so seeing the command does not prove the package loaded.
+Replace every legacy `file://~/.config/opencode/plugins/mimir-oc.ts` plugin entry with `@RageLtd/mimir-oc`, keeping package registration in only one global config file, then restart OpenCode. The slash command is discovered from `commands/` independently of the plugin, so seeing the command does not prove the package loaded.
 
 You can verify by running `opencode` and checking that the Mimir tools (`user_memory_*`, `user_profile_*`, `mimir_install`) appear in the model's tool manifest.
 
@@ -65,7 +71,7 @@ opencode
 > Call the mimir_install tool using the default server URL.
 ```
 
-The `mimir_install` tool writes the runtime state: the system prompt fetched from the server, `~/.mimir/config.json`, the pinned llama-server release and embedding model under `~/.mimir/embedder/`, a stable CLI copy of the package at `~/.mimir/mimir-oc.ts`, the OpenCode custom agent at `~/.config/opencode/agents/mimir.md`, the wrapper script at `~/.local/bin/mimir-opencode`, and the slash commands at `~/.config/opencode/commands/`. The first install downloads roughly 640 MB for the embedding model; later installs verify and reuse it. The tool auto-detects Cartographer from `PATH` or `~/.local/bin/cartographer`, preserving an existing configured path when present. It does not rewrite OpenCode's config; `opencode plugin --global` owns the package registration.
+The `mimir_install` tool writes the runtime state: the system prompt fetched from the server, `~/.mimir/config.json`, the pinned llama-server release and embedding model under `~/.mimir/embedder/`, a stable CLI copy of the package at `~/.mimir/mimir-oc.ts`, the OpenCode custom agent at `~/.config/opencode/agents/mimir.md`, the wrapper script at `~/.local/bin/mimir-opencode`, and the slash commands at `~/.config/opencode/commands/`. The first install downloads roughly 640 MB for the embedding model; later installs verify and reuse it. The tool auto-detects Cartographer from `PATH` or `~/.local/bin/cartographer`, preserving an existing configured path when present. It does not rewrite OpenCode's config; `opencode plugin add` owns the package registration.
 
 OpenCode versions through `1.1.0` wrote their wrapper to `~/.local/bin/mimir`, colliding with the Claude Code launcher. The corrected installer leaves that shared path untouched. If `1.1.0` already replaced it, run `mimir-cc update` once after installing this version to restore the Claude Code wrapper.
 
@@ -128,10 +134,18 @@ The wrapper also dispatches the E2E key ceremonies and manual sync without enter
 ```bash
 # from the monorepo root
 bun install
-bun run --filter @mimir/oc-plugin build
+bun run test:oc-plugin
+bun run typecheck
+bun run --cwd packages/oc-plugin build
+bun packages/oc-plugin/scripts/smoke.ts
+bun packages/oc-plugin/scripts/smoke.ts --built
 ```
 
 The bundled output is at `packages/oc-plugin/dist/mimir-oc.ts` — that's the artifact that ships to GitHub Packages.
+
+The startup test (`src/index.test.ts`) runs the source smoke in a separate Bun process, isolated from parallel tests. `--built` checks the actual distributable after building, without installing it or changing OpenCode configuration. Smoke captures V2 tool transforms and hook registrations, then checks first-run install availability, system text parts, boot context, retry-safe voice-anchor cadence, Python/TypeScript rule scoping, structured read-result augmentation from a real local cart index, local pre-compaction extraction, and subscription cancellation on unload.
+
+Every smoke run uses a disposable `MIMIR_HOME`, temporary SQLite databases, and a loopback stub for project resolution and extraction. It does not invoke installation, download models, or write production runtime state. This is a mocked-host integration check, not a live OpenCode/model end-to-end test; actual event delivery and cartographer subprocess reindexing are not exercised.
 
 ## Release
 
@@ -158,4 +172,4 @@ git push origin main
 #       Release on the new tag.
 ```
 
-The in-monorepo package name (`@mimir/oc-plugin`) is renamed to the public scope (`@RageLtd/mimir-oc`) at publish time — only the published artifact carries the public name; the monorepo keeps its workspace-style name. The GitHub Release is for visibility — there's no asset to attach, the install is via `opencode plugin --global @RageLtd/mimir-oc`.
+The in-monorepo package name (`@mimir/oc-plugin`) is renamed to the public scope (`@RageLtd/mimir-oc`) at publish time — only the published artifact carries the public name; the monorepo keeps its workspace-style name. The GitHub Release is for visibility — there's no asset to attach, the install is via `opencode plugin add @RageLtd/mimir-oc`.

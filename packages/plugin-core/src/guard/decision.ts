@@ -145,7 +145,7 @@ const RM_RECURSIVE = /\brm\s+((?:-\S+\s+)+)([^;&|]*)/g;
 const stripQuotes = (word: string) => word.replace(/^['"]|['"]$/g, "");
 
 /** `rm -r` targets that escape the worktree (scratch dirs are fine). */
-const rmEscapes = (command: string, worktree: string) => {
+const rmEscapes = (command: string, worktree: string, cwd: string) => {
   const scratch = [tmpdir(), "/tmp", "/private/tmp"];
   for (const match of command.matchAll(RM_RECURSIVE)) {
     const flags = match[1] ?? "";
@@ -156,7 +156,7 @@ const rmEscapes = (command: string, worktree: string) => {
       if (raw.includes("$") || raw === "/" || raw === "~" || raw === "~/") {
         return raw;
       }
-      const abs = resolve(worktree, expandHomePath(raw));
+      const abs = resolve(cwd, expandHomePath(raw));
       const insideWorktree =
         abs !== resolve(worktree) && isInside(abs, worktree);
       const inScratch = scratch.some((s) => isInside(abs, s));
@@ -166,7 +166,7 @@ const rmEscapes = (command: string, worktree: string) => {
   return null;
 };
 
-const shellDecision = (command: string, worktree: string) => {
+const shellDecision = (command: string, worktree: string, cwd: string) => {
   if (GIT_PUSH.test(command)) {
     return deny(
       "Role guard: agents never push. Leave the branch for the coordinator and the developer to publish.",
@@ -187,7 +187,7 @@ const shellDecision = (command: string, worktree: string) => {
       "Role guard: `git clean -f` deletes untracked files nobody reviewed. List them instead and report.",
     );
   }
-  const escaped = rmEscapes(command, worktree);
+  const escaped = rmEscapes(command, worktree, cwd);
   if (escaped !== null) {
     return deny(
       `Role guard: recursive delete of \`${escaped}\` reaches outside this agent's worktree (${worktree}). Delete only inside the worktree or under the system temp dir.`,
@@ -274,7 +274,12 @@ export const guardDecision = (ctx: GuardContext) => {
   if (isShell(ctx.toolName)) {
     const command = ctx.toolInput.command;
     if (typeof command === "string") {
-      const verdict = shellDecision(command, ctx.worktree);
+      const rawCwd = ctx.toolInput.cwd ?? ctx.toolInput.workdir;
+      const cwd =
+        typeof rawCwd === "string"
+          ? resolve(ctx.worktree, expandHomePath(rawCwd))
+          : ctx.worktree;
+      const verdict = shellDecision(command, ctx.worktree, cwd);
       if (!verdict.allow) return verdict;
     }
   }

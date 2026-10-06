@@ -17,6 +17,7 @@ import {
   gateTaskOutput,
   guardReason,
   type SessionInfo,
+  sessionLookupFrom,
 } from "./worker-hooks";
 
 const dirs: string[] = [];
@@ -47,6 +48,36 @@ const rolesFor = (
   });
 
 describe("createSessionRoles", () => {
+  test("V2 lookup returns direct session info and retries failed lookups", async () => {
+    const calls: string[] = [];
+    const roles = createSessionRoles(
+      sessionLookupFrom({
+        session: {
+          get: async ({ sessionID }) => {
+            calls.push(sessionID);
+            if (calls.length === 1) throw new Error("offline");
+            return { parentID: "main", agent: "mimir-test" };
+          },
+        },
+      }),
+    );
+    expect(await roles.workerRole("w")).toBeNull();
+    expect(await roles.workerRole("w")).toBe("test");
+    expect(calls).toEqual(["w", "w"]);
+    roles.invalidate("w");
+    expect(await roles.isChild("w")).toBe(true);
+    expect(calls).toHaveLength(3);
+  });
+
+  test("a rejected lookup is not cached", async () => {
+    let calls = 0;
+    const roles = createSessionRoles(async () => {
+      if (++calls === 1) throw new Error("offline");
+      return { parentID: "main" };
+    });
+    expect(await roles.isChild("w")).toBe(false);
+    expect(await roles.isChild("w")).toBe(true);
+  });
   test("child + mimir agent → role; main session → none; lookups cached", async () => {
     const calls: string[] = [];
     const roles = rolesFor(
@@ -70,6 +101,34 @@ describe("createSessionRoles", () => {
 describe("guardReason", () => {
   const WT = "/work/repo";
 
+  test("active tool-hook agent overrides cached agent, including nonworker agents", async () => {
+    const roles = rolesFor({ w: { parentID: "main", agent: "mimir-impl" } });
+    expect(
+      await guardReason(
+        roles,
+        { tool: "edit", sessionID: "w", agent: "mimir-test" },
+        { filePath: "a.ts" },
+        WT,
+      ),
+    ).toContain("mimir-test");
+    expect(
+      await guardReason(
+        roles,
+        { tool: "edit", sessionID: "w", agent: "general" },
+        { filePath: "a.test.ts" },
+        WT,
+      ),
+    ).toBeNull();
+    expect(
+      await guardReason(
+        roles,
+        { tool: "shell", sessionID: "w", agent: "mimir-impl" },
+        { command: "git push" },
+        WT,
+      ),
+    ).toContain("never push");
+  });
+
   test("secret reads denied for any session", async () => {
     const roles = rolesFor({ main: {} });
     const reason = await guardReason(
@@ -79,6 +138,22 @@ describe("guardReason", () => {
       WT,
     );
     expect(reason).toContain("credentials");
+    expect(
+      await guardReason(
+        roles,
+        { tool: "Read", sessionID: "main" },
+        { file_path: ".env" },
+        WT,
+      ),
+    ).toContain("credentials");
+    expect(
+      await guardReason(
+        roles,
+        { tool: "read", sessionID: "main" },
+        { path: ".env" },
+        WT,
+      ),
+    ).toContain("credentials");
   });
 
   test("worker role enforced from the session's agent", async () => {
@@ -88,6 +163,14 @@ describe("guardReason", () => {
         roles,
         { tool: "edit", sessionID: "w" },
         { filePath: "a.test.ts" },
+        WT,
+      ),
+    ).toContain("mimir-impl");
+    expect(
+      await guardReason(
+        roles,
+        { tool: "patch", sessionID: "w" },
+        { filePath: "a.test.ts", patchText: "patch" },
         WT,
       ),
     ).toContain("mimir-impl");
@@ -125,7 +208,7 @@ describe("guardReason", () => {
     expect(
       await guardReason(
         roles,
-        { tool: "task", sessionID: "main" },
+        { tool: "subagent", sessionID: "main" },
         { prompt: "x" },
         WT,
       ),
@@ -142,7 +225,7 @@ describe("guardReason", () => {
     expect(
       await guardReason(
         roles,
-        { tool: "task", sessionID: "main" },
+        { tool: "subagent", sessionID: "main" },
         { prompt: "x" },
         WT,
       ),
@@ -163,7 +246,8 @@ describe("appendVerdict", () => {
       { kind: "block", reason: "no", blocks: 1 },
       "child-1",
     );
-    expect(blocked).toContain("task_id: child-1");
+    expect(blocked).toContain("sessionID: child-1");
+    expect(blocked).toContain("subagent tool");
     expect(blocked).toContain("no");
     const done = appendVerdict(
       "out",
@@ -175,6 +259,24 @@ describe("appendVerdict", () => {
 });
 
 describe("gateTaskOutput", () => {
+  test("does not gate a running background subagent", async () => {
+    expect(
+      await gateTaskOutput(
+        { tool: "subagent", callID: "c", args: { agent: "mimir-test" } },
+        {
+          output: "working",
+          metadata: { status: "running", sessionID: "child" },
+        },
+        "/wt",
+        {
+          verify: async () => {
+            throw new Error("must not verify running worker");
+          },
+          commandTimeoutMs: 1,
+        },
+      ),
+    ).toBeNull();
+  });
   test("ignores non-task tools", async () => {
     const output = { output: "x", metadata: {} };
     expect(
@@ -195,13 +297,13 @@ describe("gateTaskOutput", () => {
     };
     const output = {
       output: "done\n\nSTATUS: done",
-      metadata: { sessionId: "child-9" },
+      metadata: { sessionID: "child-9", status: "completed" },
     };
     const kind = await gateTaskOutput(
       {
-        tool: "task",
+        tool: "subagent",
         callID: "call-1",
-        args: { subagent_type: "mimir-test", prompt: "p" },
+        args: { agent: "mimir-test", prompt: "p" },
       },
       output,
       "/wt",

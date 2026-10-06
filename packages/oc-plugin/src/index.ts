@@ -5,10 +5,7 @@
  * self-contained TS file) and installed at the user's
  * `~/.config/opencode/plugins/`. OpenCode loads it on every startup.
  *
- * Shared state is captured in the closure returned from the Plugin
- * function: the user-memory store, the parsed voice-anchor library,
- * per-session caches, and the file logger. OpenCode invokes the
- * returned `Hooks` callbacks as the user interacts.
+ * Each V2 setup owns its stores, session state, hooks and event subscription.
  *
  * Each handler delegates to the shared `@mimir/plugin-core` layer
  * where possible. The work that lives here is the OpenCode-specific
@@ -17,7 +14,7 @@
  * detached-cartographer-worker pattern for reindex.
  */
 
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { runKeysCommand } from "@mimir/plugin-core/keys/cli";
 import { createLoggerFactory } from "@mimir/plugin-core/logger";
 import { markdownToXml } from "@mimir/plugin-core/markdown-to-xml";
@@ -46,19 +43,16 @@ import {
   parseVoiceAnchors,
   type VoiceAnchorState,
 } from "@mimir/plugin-core/voice-anchor";
-import type { Plugin } from "@opencode-ai/plugin";
+import { Plugin } from "@opencode/plugin";
 import { assembleBootContext } from "./boot-context";
 import { readConfig } from "./config";
 import { delegateTool, reviewPromptTool } from "./delegate-tools";
 import { augmentReadOutput, createFileContextCache } from "./file-context";
-import {
-  extractLastUserPrompt,
-  injectLeadingContext,
-  lastUserMessage,
-} from "./message-inject";
+import { extractLastUserPrompt, injectLeadingContext } from "./message-inject";
 import { orgMemoryTools } from "./org-memory-tools";
 import { appendScopedRules, createScopedRulesSeen } from "./scoped-rules";
 import { createEventHandler } from "./session-events";
+import { normalizeToolCalls } from "./tool-map";
 import {
   cartographerTools,
   hygieneTool,
@@ -66,6 +60,7 @@ import {
   userMemoryTools,
 } from "./tools";
 import { persistSessionTranscript } from "./transcript-persistence";
+import { appendToolText, toolInput, toolText } from "./v2-tool-results";
 import {
   createSessionRoles,
   gateTaskOutput,
@@ -80,28 +75,24 @@ type SessionState = {
   /** True after the first developer turn for this session. */
   bootDone: boolean;
   /**
-   * Anchor chosen by `chat.message` (per developer turn) for the next
-   * transform round to inject and clear. Advancing per-turn but injecting
+   * Anchor chosen by prompt admission (per developer turn) for the next
+   * context round to inject and clear. Advancing per-turn but injecting
    * per-round keeps cadence at one tick per developer turn.
    */
   pendingAnchor: Anchor | null;
   /**
-   * Advice from `severity = "nudge"` rules, queued by tool.execute.before
-   * (which can only allow or throw) for the next transform round to
+   * Advice from `severity = "nudge"` rules, queued before tool execution
+   * (which can only allow or throw) for the next context round to
    * inject into the recency slot.
    */
   pendingNudges: string[];
 };
 
-const sessions = new Map<string, SessionState>();
-
-// Per-session file-context cache, keyed by file path. One Map for
-// the lifetime of the plugin entry (== lifetime of the OpenCode
-// process) — entries accumulate across session.idle events, get
-// invalidated by the cartographer's content_hash.
-const fileContextCache = createFileContextCache();
-
-const getSession = (sessionId: string, libSize: number): SessionState => {
+const getSession = (
+  sessions: Map<string, SessionState>,
+  sessionId: string,
+  libSize: number,
+) => {
   let s = sessions.get(sessionId);
   if (!s) {
     s = {
@@ -117,128 +108,136 @@ const getSession = (sessionId: string, libSize: number): SessionState => {
 
 // ── Plugin entry ──
 
-export const MimirPlugin: Plugin = async (ctx) => {
-  // 1. Read config. The install tool must exist before config does:
-  //    first-run installation is initiated by asking OpenCode to call
-  //    `mimir_install`; that tool creates the runtime config and the
-  //    reusable slash commands. Returning an empty plugin here made the
-  //    documented install path impossible on a clean machine.
-  const config = await readConfig();
-  if (!config) {
-    return { tool: { mimir_install: installTool() } };
-  }
-
-  // 2. Set up logger. Writes to ~/.mimir/logs/mimir-oc.log with the
-  //    previous-log rotation. Mirrors the cc-plugin's pattern.
-  const log = createLoggerFactory(
-    "mimir-oc.log",
-    "mimir-oc.prev.log",
-  ).createLogger("mimir-oc");
-
-  // 3. Open the local memory stores: developer facts in user-memories.db,
-  //    project memories and playbooks in the org replica.
-  let userMemoryStore: UserMemoryStore | null = null;
-  try {
-    userMemoryStore = createUserMemoryStore(config.userMemoryDb);
-  } catch (err) {
-    log.warn("user-memory store open failed", { error: errMessage(err) });
-  }
-
-  let orgReplica: OrgReplica | null = null;
-  try {
-    orgReplica = createOrgReplica(
-      process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
-    );
-  } catch (err) {
-    log.warn("org replica open failed", { error: errMessage(err) });
-  }
-
-  // 4. Load the persona system prompt and parse voice anchors. The
-  //    raw markdown is what we append to the system prompt; the XML
-  //    form is what the anchor parser needs. Both are cached.
-  const promptPath = join(mimirHome(), "system-prompt.md");
-  const promptFile = Bun.file(promptPath);
-  let systemPromptMarkdown = "";
-  let voiceAnchorLibrary: Anchor[] = [];
-  if (await promptFile.exists()) {
-    systemPromptMarkdown = await promptFile.text();
-    try {
-      const promptXml = markdownToXml(systemPromptMarkdown);
-      voiceAnchorLibrary = parseVoiceAnchors(promptXml);
-    } catch (err) {
-      log.warn("voice anchor parse failed", { error: errMessage(err) });
+export const MimirPlugin = Plugin.define({
+  id: "mimir",
+  async setup(ctx) {
+    const directory = ctx.location.directory;
+    const sessions = new Map<string, SessionState>();
+    const fileContextCaches = new Map<
+      string,
+      ReturnType<typeof createFileContextCache>
+    >();
+    // 1. Read config. The install tool must exist before config does:
+    //    first-run installation is initiated by asking OpenCode to call
+    //    `mimir_install`; that tool creates the runtime config and the
+    //    reusable slash commands. Returning an empty plugin here made the
+    //    documented install path impossible on a clean machine.
+    const config = await readConfig();
+    if (!config) {
+      const install = installTool();
+      await ctx.tool.transform((editor) =>
+        editor.add({ name: "mimir_install", ...install }),
+      );
+      return;
     }
-  }
+    const projectRoot = ctx.location.project.directory;
 
-  // 5. Project prose rules (.claude/rules/**/*.md). OpenCode loads the
-  //    root AGENTS.md itself, so only the rules directory is read here.
-  //    Always-on rules ride in the system prompt; path-scoped rules are
-  //    appended to `read` output the first time a matching file is read.
-  const projectRuleEntries = await readProjectRules(ctx.directory, {
-    includeRootFiles: false,
-    log,
-  }).catch((err) => {
-    log.error("project rules read failed", { error: errMessage(err) });
-    return [];
-  });
-  const projectRulesBlock = formatRulesForPrompt(projectRuleEntries);
-  const scopedRulesSeen = createScopedRulesSeen();
+    // 2. Set up logger. Writes to ~/.mimir/logs/mimir-oc.log with the
+    //    previous-log rotation. Mirrors the cc-plugin's pattern.
+    const log = createLoggerFactory(
+      "mimir-oc.log",
+      "mimir-oc.prev.log",
+    ).createLogger("mimir-oc");
 
-  // Session → worker role, one SDK lookup per session (cached).
-  const sessionRoles = createSessionRoles(sessionLookupFrom(ctx.client));
+    // 3. Open the local memory stores: developer facts in user-memories.db,
+    //    project memories and playbooks in the org replica.
+    let userMemoryStore: UserMemoryStore | null = null;
+    try {
+      userMemoryStore = createUserMemoryStore(config.userMemoryDb);
+    } catch (err) {
+      log.warn("user-memory store open failed", { error: errMessage(err) });
+    }
 
-  const anchorIntervalEnv = process.env.MIMIR_ANCHOR_INTERVAL;
-  const anchorInterval = anchorIntervalEnv
-    ? Number.parseInt(anchorIntervalEnv, 10)
-    : 5;
-  const ANCHOR_INTERVAL =
-    Number.isFinite(anchorInterval) && anchorInterval > 0 ? anchorInterval : 5;
+    let orgReplica: OrgReplica | null = null;
+    try {
+      orgReplica = createOrgReplica(
+        process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
+      );
+    } catch (err) {
+      log.warn("org replica open failed", { error: errMessage(err) });
+    }
 
-  return {
-    // ─── Memory + install tools ───
-    //
-    // In-process custom tools (no MCP round-trip). User memory, project
-    // memory, and playbooks match what the cc-plugin exposes via stdio MCP.
-    // The install tool is the runtime half of the slash command at
-    // `commands/mimir-install.md` — the model calls it with the user's
-    // chosen parameters and the tool writes the config files.
-    //
-    // Memory tools graceful-degrade when a store is unavailable; the install
-    // tool checks for the plugin bundle + MIMIR_API_KEY first.
-    tool: {
+    // 4. Load the persona system prompt and parse voice anchors. The
+    //    raw markdown is what we append to the system prompt; the XML
+    //    form is what the anchor parser needs. Both are cached.
+    const promptPath = join(mimirHome(), "system-prompt.md");
+    const promptFile = Bun.file(promptPath);
+    let systemPromptMarkdown = "";
+    let voiceAnchorLibrary: Anchor[] = [];
+    if (await promptFile.exists()) {
+      systemPromptMarkdown = await promptFile.text();
+      try {
+        const promptXml = markdownToXml(systemPromptMarkdown);
+        voiceAnchorLibrary = parseVoiceAnchors(promptXml);
+      } catch (err) {
+        log.warn("voice anchor parse failed", { error: errMessage(err) });
+      }
+    }
+
+    // 5. Project prose rules (.claude/rules/**/*.md). OpenCode loads the
+    //    root AGENTS.md itself, so only the rules directory is read here.
+    //    Always-on rules ride in the system prompt; path-scoped rules are
+    //    appended to `read` output the first time a matching file is read.
+    const projectRuleEntries = await readProjectRules(projectRoot, {
+      includeRootFiles: false,
+      log,
+    }).catch((err) => {
+      log.error("project rules read failed", { error: errMessage(err) });
+      return [];
+    });
+    const projectRulesBlock = formatRulesForPrompt(projectRuleEntries);
+    const scopedRulesSeen = createScopedRulesSeen();
+
+    // Session → worker role; active tool agents are supplied by V2 hook events.
+    const sessionRoles = createSessionRoles(sessionLookupFrom(ctx));
+
+    const anchorIntervalEnv = process.env.MIMIR_ANCHOR_INTERVAL;
+    const anchorInterval = anchorIntervalEnv
+      ? Number.parseInt(anchorIntervalEnv, 10)
+      : 5;
+    const ANCHOR_INTERVAL =
+      Number.isFinite(anchorInterval) && anchorInterval > 0
+        ? anchorInterval
+        : 5;
+
+    // V2 tool transforms replay synchronously; store setup stays outside them.
+    const tools = {
       ...userMemoryTools(userMemoryStore),
       ...orgMemoryTools(orgReplica),
-      ...cartographerTools(ctx.directory),
+      ...cartographerTools(projectRoot),
       mimir_install: installTool(),
       mimir_hygiene: hygieneTool(),
-      mimir_delegate: delegateTool(),
-      mimir_review_prompt: reviewPromptTool(),
-    },
+      mimir_delegate: delegateTool(directory),
+      mimir_review_prompt: reviewPromptTool(directory),
+    };
+    await ctx.tool.transform((editor) => {
+      for (const [name, definition] of Object.entries(tools))
+        editor.add({ name, ...definition });
+    });
 
-    // ─── Persona system prompt + project rules ───
-    //
-    // Append the Mimir persona, then the always-on project rules, to
-    // the system prompt on every model call. Runs before chat.params,
-    // after OpenCode's own system prompt construction. Both are static
-    // after init, so no per-call work — the values are cached.
-    "experimental.chat.system.transform": async (_input, output) => {
-      // `output.system` is a string[] — each block is one more entry,
-      // not a re-stringification of the whole array.
+    // V2 splits primary, generate, title and compaction model requests.
+    const appendSystem = (output: {
+      system: { type: "text"; text: string }[];
+    }) => {
       if (systemPromptMarkdown.length > 0) {
-        output.system.push(systemPromptMarkdown);
+        output.system.push({ type: "text", text: systemPromptMarkdown });
       }
-      if (projectRulesBlock) output.system.push(projectRulesBlock);
-    },
+      if (projectRulesBlock)
+        output.system.push({ type: "text", text: projectRulesBlock });
+    };
+    await ctx.session.hook("generate", appendSystem);
+    await ctx.session.hook("title", appendSystem);
 
-    // ─── Turn counting + anchor cadence ───
-    //
-    // chat.message fires once per developer turn. Advance the anchor
-    // rotation here (per-turn cadence) and stash the anchor to inject;
-    // the transform hook — which fires once per LLM round, several times
-    // per turn — only injects the pending anchor, so the cadence stays
-    // one tick per developer turn rather than one per round.
-    "chat.message": async (input) => {
-      const s = getSession(input.sessionID, voiceAnchorLibrary.length);
+    // Admission can be retried, so a message ID advances cadence only once.
+    const admitted = new Set<string>();
+    await ctx.session.hook("prompt", async (input) => {
+      if (admitted.has(input.messageID)) return;
+      admitted.add(input.messageID);
+      const s = getSession(
+        sessions,
+        input.sessionID,
+        voiceAnchorLibrary.length,
+      );
       const step = nextAnchor(
         s.voiceAnchor,
         voiceAnchorLibrary,
@@ -246,25 +245,12 @@ export const MimirPlugin: Plugin = async (ctx) => {
       );
       s.voiceAnchor = step.next;
       if (step.inject) s.pendingAnchor = step.anchor;
-    },
+    });
 
-    // ─── Voice anchor + retrieval injection ───
-    //
-    // Runs before every LLM call. On the right cadence, prepends a
-    // <voice_anchor> block to the most recent user message so the
-    // recency slot carries the persona's voice.
-    //
-    // First-turn detection: when the session hasn't seen a developer
-    // prompt yet, emit the boot-context block (user profile + prior
-    // session context) so the model reads it as the leading content
-    // of its first user turn. The cc-plugin's voice-anchor handles
-    // this; we do the same.
-    "experimental.chat.messages.transform": async (_input, output) => {
-      // This hook's input is `{}` — no sessionID. Derive it from the
-      // messages themselves (every Message carries sessionID).
-      const sessionId = lastUserMessage(output.messages)?.info.sessionID;
-      if (!sessionId) return;
-      const s = getSession(sessionId, voiceAnchorLibrary.length);
+    await ctx.session.hook("context", async (output) => {
+      appendSystem(output);
+      const sessionId = output.sessionID;
+      const s = getSession(sessions, sessionId, voiceAnchorLibrary.length);
 
       // Injected blocks lead the recency slot in order: boot first (only
       // once, on the session's first turn), then any pending voice anchor.
@@ -277,7 +263,7 @@ export const MimirPlugin: Plugin = async (ctx) => {
         // ready for injection.
         const boot = await assembleBootContext({
           promptText: extractLastUserPrompt(output.messages),
-          projectPath: ctx.directory,
+          projectPath: projectRoot,
           config,
           userMemoryStore,
         }).catch((err) => {
@@ -298,35 +284,35 @@ export const MimirPlugin: Plugin = async (ctx) => {
       }
 
       injectLeadingContext(output.messages, blocks);
-    },
+    });
 
-    // ─── Rules engine ───
-    //
-    // Runs on every tool call. Loads `.claude/**/*.enforce.toml` from
-    // the project root and evaluates conditions/built-ins. A blocking
-    // finding throws — that fails the tool call with the findings as
-    // the error, the only deny this hook has. A nudge finding lets the
-    // call run and queues the advice for the next transform round.
-    "tool.execute.before": async (input, output) => {
-      const projectPath = ctx.directory;
+    // Blocking findings throw; nudge findings wait for the next context hook.
+    await ctx.tool.hook("execute.before", async (input) => {
+      const projectPath = projectRoot;
+      const calls = normalizeToolCalls(input.tool, input.input, directory);
 
       // Role guard: a `mimir-*` worker's role from its session, the
       // coordinator's from the shared state file, secret reads for
       // everyone. Throwing is the plugin's only deny.
-      const guard = await guardReason(
-        sessionRoles,
-        input,
-        output.args as Record<string, unknown>,
-        projectPath,
-      ).catch((err) => {
-        log.error("role guard crashed — allowing the call", {
-          error: errMessage(err),
+      for (const call of calls) {
+        const guard = await guardReason(
+          sessionRoles,
+          { ...input, tool: call.toolName },
+          {
+            ...call.toolInput,
+            filePath: call.toolInput.file_path ?? call.toolInput.path,
+          },
+          projectPath,
+        ).catch((err) => {
+          log.error("role guard crashed — allowing the call", {
+            error: errMessage(err),
+          });
+          return null;
         });
-        return null;
-      });
-      if (guard) {
-        log.info("role guard denied", { tool: input.tool });
-        throw new Error(guard);
+        if (guard) {
+          log.info("role guard denied", { tool: input.tool });
+          throw new Error(guard);
+        }
       }
       const loaded = await loadRules(projectPath).catch((err) => {
         log.error("loadRules failed", { error: errMessage(err) });
@@ -340,44 +326,58 @@ export const MimirPlugin: Plugin = async (ctx) => {
         });
       }
 
-      const verdict = await runAndPartition(loaded.rules, {
-        toolName: input.tool,
-        toolInput: output.args as Record<string, unknown>,
-        projectPath,
-      }).catch((err) => {
-        log.error("runAndPartition failed", { error: errMessage(err) });
-        return null;
-      });
-      if (!verdict) return;
-      if (verdict.nudge) {
-        log.info("rule nudge queued", { tool: input.tool });
-        getSession(
-          input.sessionID,
-          voiceAnchorLibrary.length,
-        ).pendingNudges.push(verdict.nudge);
+      for (const call of calls) {
+        const verdict = await runAndPartition(loaded.rules, {
+          ...call,
+          projectPath,
+        }).catch((err) => {
+          log.error("runAndPartition failed", { error: errMessage(err) });
+          return null;
+        });
+        if (!verdict) continue;
+        if (verdict.nudge) {
+          log.info("rule nudge queued", { tool: input.tool });
+          getSession(
+            sessions,
+            input.sessionID,
+            voiceAnchorLibrary.length,
+          ).pendingNudges.push(verdict.nudge);
+        }
+        if (verdict.block) {
+          log.info("rule violation blocked", { tool: input.tool });
+          throw new Error(verdict.block);
+        }
       }
-      if (verdict.block) {
-        log.info("rule violation blocked", { tool: input.tool });
-        throw new Error(verdict.block);
-      }
-    },
+    });
 
-    // ─── File-context on Read ───
-    //
-    // After every `read` tool call, fetch cartographer file-info and
-    // append a `<file_context>` block to the output. The cartographer
-    // already has symbols, imports, dependents, and related memories
-    // for any indexed file — the model gets a richer picture of what
-    // it's reading without the read tool itself having to know.
-    //
-    // The cache is per-session and content-hash-keyed: re-reading the
-    // same file (with no edits between) is a no-op. Cached against
-    // the cartographer's reported hash, not a local recompute.
-    "tool.execute.after": async (input, output) => {
+    // Only completed tool results have mutable, model-visible content in V2.
+    await ctx.tool.hook("execute.after", async (event) => {
+      if (event.status !== "completed") return;
+      const args = toolInput(event.input);
+      const rawPath = args.filePath ?? args.path;
+      const input = {
+        tool: event.tool,
+        sessionID: event.sessionID,
+        callID: event.id,
+        args: {
+          ...args,
+          filePath:
+            typeof rawPath === "string" ? resolve(directory, rawPath) : rawPath,
+        },
+      };
+      const original = toolText(event.result);
+      const output = {
+        title: event.tool,
+        output: original,
+        metadata: event.result.metadata ?? {},
+      };
+      const fileContextCache =
+        fileContextCaches.get(event.sessionID) ?? createFileContextCache();
+      fileContextCaches.set(event.sessionID, fileContextCache);
       // Verify gate on a finished worker: OpenCode can't block a child's
       // stop, so the verdict is appended to the `task` output the
       // coordinator reads. A crash lets the output through untouched.
-      const gated = await gateTaskOutput(input, output, ctx.directory).catch(
+      const gated = await gateTaskOutput(input, output, projectRoot).catch(
         (err) => {
           log.error("verify gate crashed — output left as is", {
             error: errMessage(err),
@@ -390,7 +390,7 @@ export const MimirPlugin: Plugin = async (ctx) => {
       await augmentReadOutput(
         input,
         output,
-        ctx.directory,
+        projectRoot,
         config,
         log,
         fileContextCache,
@@ -405,47 +405,69 @@ export const MimirPlugin: Plugin = async (ctx) => {
         appendScopedRules(
           input,
           output,
-          ctx.directory,
+          projectRoot,
           projectRuleEntries,
           scopedRulesSeen,
         )
       ) {
         log.info("scoped project rules appended", { tool: input.tool });
       }
-    },
+      if (output.output !== original) {
+        event.result = appendToolText(
+          event.result,
+          output.output.slice(original.length),
+        );
+      }
+    });
 
-    // ─── Distill before compaction ───
-    //
-    // Fires before OpenCode summarizes the session away. Extract the
-    // remaining delta into the local replica first so the facts survive
-    // the discard — the parity of cc-plugin's PreCompact hook. Awaited
-    // (not fire-and-forget) so extraction completes before the discard;
-    // the watermark makes overlap with the session.idle pass cheap.
-    "experimental.session.compacting": async (input) => {
+    // Distill before the compaction request discards the remaining transcript.
+    await ctx.session.hook("compaction", async (input) => {
+      appendSystem(input);
+      if (await sessionRoles.isChild(input.sessionID)) return;
       await persistSessionTranscript(
         input.sessionID,
-        ctx.directory,
+        projectRoot,
         config,
         log,
-        ctx.client,
+        ctx,
       ).catch((err) =>
         log.error("precompact persist crashed", { error: errMessage(err) }),
       );
-    },
+    });
 
     // ─── Session lifecycle: reindex, boot sync, distillation ───
     //
     // See session-events.ts. Child (worker) sessions are skipped for
     // distillation — workers persist nothing.
-    event: createEventHandler({
+    const handleEvent = createEventHandler({
       config,
       log,
-      directory: ctx.directory,
-      client: ctx.client,
+      directory,
+      projectPath: projectRoot,
+      client: ctx,
       sessionRoles,
-    }),
-  };
-};
+    });
+    const controller = new AbortController();
+    void (async () => {
+      for await (const event of ctx.event.subscribe({
+        signal: controller.signal,
+      })) {
+        await handleEvent(event);
+      }
+    })().catch((err) => {
+      if (!controller.signal.aborted)
+        log.error("event subscription failed", { error: errMessage(err) });
+    });
+    return () => {
+      controller.abort();
+      userMemoryStore?.close();
+      orgReplica?.close();
+      sessions.clear();
+      fileContextCaches.clear();
+      scopedRulesSeen.clear();
+    };
+  },
+});
 
 export default MimirPlugin;
 

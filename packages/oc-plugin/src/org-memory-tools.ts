@@ -5,7 +5,7 @@ import {
   executeOrgMemoryTool,
   orgMemoryToolDefs,
 } from "@mimir/plugin-core/tools/org-memory";
-import { tool } from "@opencode-ai/plugin";
+import { tool } from "./tool-factory";
 
 const description = (name: string) =>
   orgMemoryToolDefs.find((def) => def.function.name === name)?.function
@@ -27,11 +27,12 @@ export const orgMemoryTools = (
     project_memory_search: tool({
       description: description("project_memory_search"),
       args: {
-        query: tool.schema.string().describe("Search query"),
-        limit: tool.schema
-          .number()
-          .optional()
-          .describe("Maximum results (default: 10)"),
+        query: { type: "string", description: "Search query" },
+        limit: {
+          type: "number",
+          description: "Maximum results (default: 10)",
+          optional: true,
+        },
       },
       execute: (args) => execute("project_memory_search", args),
     }),
@@ -39,11 +40,12 @@ export const orgMemoryTools = (
     project_memory_store: tool({
       description: description("project_memory_store"),
       args: {
-        content: tool.schema.string().describe("The fact to remember"),
-        project: tool.schema
-          .string()
-          .optional()
-          .describe("Optional project identifier"),
+        content: { type: "string", description: "The fact to remember" },
+        project: {
+          type: "string",
+          description: "Optional project identifier",
+          optional: true,
+        },
       },
       execute: (args) => execute("project_memory_store", args),
     }),
@@ -51,8 +53,8 @@ export const orgMemoryTools = (
     project_memory_update: tool({
       description: description("project_memory_update"),
       args: {
-        id: tool.schema.string().describe("Memory ID to update"),
-        content: tool.schema.string().describe("New memory content"),
+        id: { type: "string", description: "Memory ID to update" },
+        content: { type: "string", description: "New memory content" },
       },
       execute: (args) => execute("project_memory_update", args),
     }),
@@ -60,10 +62,11 @@ export const orgMemoryTools = (
     project_memory_list: tool({
       description: description("project_memory_list"),
       args: {
-        limit: tool.schema
-          .number()
-          .optional()
-          .describe("Maximum memories (default: 20)"),
+        limit: {
+          type: "number",
+          description: "Maximum memories (default: 20)",
+          optional: true,
+        },
       },
       execute: (args) => execute("project_memory_list", args),
     }),
@@ -71,7 +74,7 @@ export const orgMemoryTools = (
     project_memory_delete: tool({
       description: description("project_memory_delete"),
       args: {
-        id: tool.schema.string().describe("Memory ID to delete"),
+        id: { type: "string", description: "Memory ID to delete" },
       },
       execute: (args) => execute("project_memory_delete", args),
     }),
@@ -79,13 +82,14 @@ export const orgMemoryTools = (
     project_playbook_store: tool({
       description: description("project_playbook_store"),
       args: {
-        name: tool.schema.string().describe("Short playbook label"),
-        trigger: tool.schema.string().describe("When the playbook applies"),
-        content: tool.schema.string().describe("The playbook body"),
-        project: tool.schema
-          .string()
-          .optional()
-          .describe("Optional project identifier"),
+        name: { type: "string", description: "Short playbook label" },
+        trigger: { type: "string", description: "When the playbook applies" },
+        content: { type: "string", description: "The playbook body" },
+        project: {
+          type: "string",
+          description: "Optional project identifier",
+          optional: true,
+        },
       },
       execute: (args) => execute("project_playbook_store", args),
     }),
@@ -99,8 +103,12 @@ export const orgMemoryTools = (
     project_playbook_load: tool({
       description: description("project_playbook_load"),
       args: {
-        name: tool.schema.string().optional().describe("Playbook name"),
-        id: tool.schema.string().optional().describe("Playbook memory ID"),
+        name: { type: "string", description: "Playbook name", optional: true },
+        id: {
+          type: "string",
+          description: "Playbook memory ID",
+          optional: true,
+        },
       },
       execute: (args) => execute("project_playbook_load", args),
     }),
@@ -108,11 +116,27 @@ export const orgMemoryTools = (
     project_playbook_update: tool({
       description: description("project_playbook_update"),
       args: {
-        name: tool.schema.string().optional().describe("Current playbook name"),
-        id: tool.schema.string().optional().describe("Playbook memory ID"),
-        newName: tool.schema.string().optional().describe("New playbook name"),
-        trigger: tool.schema.string().optional().describe("New trigger"),
-        content: tool.schema.string().optional().describe("New playbook body"),
+        name: {
+          type: "string",
+          description: "Current playbook name",
+          optional: true,
+        },
+        id: {
+          type: "string",
+          description: "Playbook memory ID",
+          optional: true,
+        },
+        newName: {
+          type: "string",
+          description: "New playbook name",
+          optional: true,
+        },
+        trigger: { type: "string", description: "New trigger", optional: true },
+        content: {
+          type: "string",
+          description: "New playbook body",
+          optional: true,
+        },
       },
       execute: (args) => execute("project_playbook_update", args),
     }),
@@ -120,8 +144,12 @@ export const orgMemoryTools = (
     project_playbook_delete: tool({
       description: description("project_playbook_delete"),
       args: {
-        name: tool.schema.string().optional().describe("Playbook name"),
-        id: tool.schema.string().optional().describe("Playbook memory ID"),
+        name: { type: "string", description: "Playbook name", optional: true },
+        id: {
+          type: "string",
+          description: "Playbook memory ID",
+          optional: true,
+        },
       },
       execute: (args) => execute("project_playbook_delete", args),
     }),

@@ -1,247 +1,406 @@
 #!/usr/bin/env bun
-/**
- * Live smoke for the OpenCode plugin — loads the REAL plugin entry and
- * drives each hook against a local stub mimir-server, asserting the
- * runtime behaviours the type system can't prove:
- *
- *   1. persona appears in the system prompt
- *   2. voice anchor injects on cadence into the recency slot (as a text
- *      part on the last user message)
- *   3. <file_context> appears after a `read`
- *   4. the compacting hook distills the session into the LOCAL replica
- *      (MIM-86) via the stubbed extraction endpoint
- *   5. reindex on file.edited degrades gracefully with no cartographer binary
- *
- * No network to prod: MIMIR_HOME points at a throwaway dir, serverUrl
- * points at the in-process stub (project resolve + cartographer +
- * extraction chat/completions), and the org replica is a temp SQLite.
- * Run: `bun packages/oc-plugin/scripts/smoke.ts`.
- */
-
-// biome-ignore-all lint/suspicious/noExplicitAny: this harness simulates
-// OpenCode's PluginInput and hook-input protocol shapes, constructing only
-// the fields the hooks read — the full runtime types are the host's contract.
-
-import { mkdtemp, writeFile } from "node:fs/promises";
+/** V2 startup + hook smoke. All state and HTTP endpoints are disposable. */
+// biome-ignore-all lint/suspicious/noExplicitAny: partial host protocol mock; deliberately fails on unexpected capabilities.
+import { strict as assert } from "node:assert";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { attempt } from "@mimir/plugin-core/result";
+import { createCartIndex } from "@mimir/plugin-core/store/cart-index";
+import { createOrgReplica } from "@mimir/plugin-core/store/org-replica";
+import { Message } from "@opencode/ai";
 
-const results: { name: string; ok: boolean; detail: string }[] = [];
-const check = (name: string, ok: boolean, detail = "") =>
-  results.push({ name, ok, detail });
+const home = await mkdtemp(join(tmpdir(), "mimir-oc-v2-smoke-"));
+process.env.MIMIR_HOME = home;
+process.env.MIMIR_ORG_REPLICA_DB = join(home, "org.db");
+process.env.MIMIR_CART_INDEX_DB = join(home, "cart.db");
+process.env.MIMIR_ANCHOR_INTERVAL = "2";
+delete process.env.MIMIR_ACTIVE;
+delete process.env.MIMIR_API_KEY;
+// Also isolate OpenCode config discovery and any embedder health probe.
+process.env.XDG_CONFIG_HOME = join(home, "xdg");
 
-// ── Stub mimir-server (+ extraction endpoint) ──
+const requests: string[] = [];
 const server = Bun.serve({
+  hostname: "127.0.0.1",
   port: 0,
   async fetch(req) {
-    const url = new URL(req.url);
-    await req.json().catch(() => ({}));
-    if (url.pathname === "/v1/projects/resolve") {
-      return Response.json({ id: "proj-smoke", localPath: "/tmp/x" });
-    }
-    if (url.pathname === "/v1/cartographer/file-info") {
-      return Response.json({
-        contentHash: "hash-1",
-        symbols: [{ kind: "const", name: "smokeFn", line: 7 }],
-        imports: [],
-        dependents: [],
-        memories: null,
-      });
-    }
-    // MIM-86: local extraction dials an OpenAI-compatible endpoint —
-    // the stub returns one canned memory.
-    if (url.pathname === "/v1/chat/completions") {
+    const path = new URL(req.url).pathname;
+    requests.push(path);
+    if (path === "/v1/projects/resolve")
+      return Response.json({ id: "proj-smoke", localPath: home });
+    if (path === "/v1/chat/completions")
       return Response.json({
         choices: [{ message: { content: '["smoke fact extracted locally"]' } }],
       });
-    }
     return new Response("not found", { status: 404 });
   },
 });
-const serverUrl = `http://localhost:${server.port}`;
-
-// ── Temp MIMIR_HOME with config + real system prompt ──
-const home = await mkdtemp(join(tmpdir(), "mimir-oc-smoke-"));
-process.env.MIMIR_HOME = home;
-process.env.MIMIR_ANCHOR_INTERVAL = "2"; // anchor fires on turn 2, after boot
-// MIM-86 local distillation: extraction dials the stub, replica is a temp
-// SQLite. Embedder defaults apply — warm llama-server embeds for real,
-// cold degrades to unembedded stores (backfill's job).
+const serverUrl = `http://127.0.0.1:${server.port}`;
 process.env.MIMIR_EXTRACTION_BASE_URL = serverUrl;
 process.env.MIMIR_EXTRACTION_MODEL = "smoke-model";
-process.env.MIMIR_ORG_REPLICA_DB = join(home, "org-replica.db");
-await writeFile(
-  join(home, "config.json"),
-  JSON.stringify({ serverUrl, userMemoryDb: join(home, "mem.db") }),
-);
-// Copy the installed persona prompt so voice anchors parse from the real thing.
-const realPrompt = Bun.file(
-  join(process.env.HOME ?? "", ".mimir/system-prompt.md"),
-);
-const promptText = (await realPrompt.exists())
-  ? await realPrompt.text()
-  : "# Mimir\n\n<voice_in_action>\n\n**Test:**\n\n> Mimir: Aye.\n\n</voice_in_action>";
-await writeFile(join(home, "system-prompt.md"), promptText);
+process.env.MIMIR_EMBEDDER_PORT = String(server.port);
 
-// ── Fake OpenCode ctx ──
-const userMsg = (id: string, text: string) => ({
-  info: { id, sessionID: "sess-smoke", role: "user" },
-  parts: [
-    {
-      id: `${id}-p`,
-      sessionID: "sess-smoke",
-      messageID: id,
-      type: "text",
-      text,
-    },
-  ],
-});
-const assistantMsg = (id: string, text: string) => ({
-  info: { id, sessionID: "sess-smoke", role: "assistant" },
-  parts: [
-    {
-      id: `${id}-t`,
-      sessionID: "sess-smoke",
-      messageID: id,
-      type: "text",
-      text,
-    },
-    {
-      id: `${id}-tool`,
-      sessionID: "sess-smoke",
-      messageID: id,
-      type: "tool",
-      callID: "c1",
-      name: "read",
-      input: { filePath: "/x.ts" },
-    },
-  ],
-});
-// Two user turns and enough rendered text to clear the extraction gates
-// (≥2 user turns, ≥200 chars).
-const transcriptFixture = [
-  userMsg(
-    "u1",
-    "my real question about how the gateway service handles large aggregation queries when the timeout is set too low for ClickHouse",
-  ),
-  assistantMsg(
-    "a1",
-    "the gateway proxy timeout was thirty seconds which is too low for large aggregations — raised it to one hundred twenty seconds and added a per-query timeout parameter",
-  ),
-  userMsg("u2", "that fixed it, thanks — write that down for next time"),
+const transcript = [
+  {
+    id: "u1",
+    type: "user",
+    text: "How does the gateway service handle large aggregation queries when the timeout is set too low for ClickHouse?",
+  },
+  {
+    id: "a1",
+    type: "assistant",
+    content: [
+      {
+        type: "text",
+        text: "The gateway proxy timeout was thirty seconds which is too low for large aggregations. We raised it to one hundred twenty seconds and added a per-query timeout parameter.",
+      },
+      {
+        type: "tool",
+        id: "call-1",
+        name: "read",
+        state: { status: "completed", input: { path: join(home, "x.ts") } },
+      },
+    ],
+  },
+  {
+    id: "u2",
+    type: "user",
+    text: "That fixed it, thanks. Write that down for next time.",
+  },
 ];
 
-const ctx = {
-  directory: home,
-  client: {
-    session: {
-      messages: async () => ({ data: transcriptFixture, error: undefined }),
+function mockContext(directory = home) {
+  const sessionHooks = new Map<string, (event: any) => any>();
+  const toolHooks = new Map<string, (event: any) => any>();
+  const tools = new Map<string, any>();
+  let signal: AbortSignal | undefined;
+  const registration = { dispose: async () => {} };
+  const ctx: any = {
+    location: {
+      directory,
+      project: { id: "proj-smoke", directory: home, canonical: home },
     },
-  },
-};
-
-const { MimirPlugin } = await import("../src/index.ts");
-const hooks = await MimirPlugin(ctx as any);
-
-// ── 1. Persona in system prompt ──
-const sysOut = { system: ["opencode default prompt"] };
-await hooks["experimental.chat.system.transform"]?.(
-  { model: {} } as any,
-  sysOut,
-);
-check(
-  "persona appears in system prompt",
-  sysOut.system.length === 2 && sysOut.system[1] === promptText,
-  `system[] length=${sysOut.system.length}`,
-);
-
-// ── 2. Voice anchor cadence into recency slot ──
-const anchorTexts: string[] = [];
-for (let turn = 1; turn <= 2; turn++) {
-  await hooks["chat.message"]?.({ sessionID: "sess-smoke" } as any, {} as any);
-  const messages = [userMsg(`turn${turn}`, `question ${turn}`)];
-  await hooks["experimental.chat.messages.transform"]?.({} as any, {
-    messages,
-  });
-  // Injected parts land at the FRONT of the last user message.
-  const injected = messages[0].parts
-    .filter((p: { type: string }) => p.type === "text")
-    .map((p: { text: string }) => p.text);
-  anchorTexts.push(...injected);
+    session: {
+      get: async ({ sessionID }: { sessionID: string }) => ({
+        id: sessionID,
+        agent: "mimir",
+        ...(sessionID === "worker" ? { parentID: "sess-smoke" } : {}),
+      }),
+      context: async () => transcript,
+      hook: async (name: string, hook: (event: any) => any) => {
+        assert(!sessionHooks.has(name), `duplicate session hook: ${name}`);
+        sessionHooks.set(name, hook);
+        return registration;
+      },
+    },
+    tool: {
+      transform: async (transform: (editor: any) => void) => {
+        transform({
+          add: (definition: any) => tools.set(definition.name, definition),
+        });
+        return registration;
+      },
+      hook: async (name: string, hook: (event: any) => any) => {
+        assert(!toolHooks.has(name), `duplicate tool hook: ${name}`);
+        toolHooks.set(name, hook);
+        return registration;
+      },
+    },
+    event: {
+      async *subscribe(options: { signal: AbortSignal }) {
+        signal = options.signal;
+        await new Promise<void>((resolve) => {
+          if (options.signal.aborted) resolve();
+          else
+            options.signal.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+        });
+      },
+    },
+  };
+  const invoke = async (
+    hooks: Map<string, (event: any) => any>,
+    name: string,
+    event: any,
+  ) => {
+    const hook = hooks.get(name);
+    assert(hook, `missing hook: ${name}`);
+    await hook(event);
+  };
+  return {
+    ctx,
+    tools,
+    sessionHooks,
+    toolHooks,
+    invoke,
+    get signal() {
+      return signal;
+    },
+  };
 }
-const sawBoot = anchorTexts.some(
-  (t) => t.includes("<conversation_context>") || t.includes("<user_"),
-);
-const sawAnchor = anchorTexts.some((t) => t.includes("<voice_anchor>"));
-check(
-  "boot context injected on first turn",
-  sawBoot,
-  `blocks: ${anchorTexts.length}`,
-);
-check("voice anchor injected on cadence (interval=2)", sawAnchor, "");
 
-// ── 3. <file_context> after a read ──
-const readOut = { title: "x.ts", output: "the file body", metadata: {} };
-await hooks["tool.execute.after"]?.(
-  {
-    tool: "read",
+let cleanup: (() => void) | undefined;
+try {
+  const entry = Bun.argv.includes("--built")
+    ? "../dist/mimir-oc.ts"
+    : "../src/index.ts";
+  const pluginModule = await import(entry);
+  const plugin = pluginModule.default;
+  assert.equal(plugin.id, "mimir");
+  assert.equal(typeof plugin.setup, "function");
+  assert.equal(plugin, pluginModule.MimirPlugin);
+
+  const fresh = mockContext();
+  await plugin.setup(fresh.ctx);
+  assert.deepEqual([...fresh.tools.keys()], ["mimir_install"]);
+  assert.equal(typeof fresh.tools.get("mimir_install").execute, "function");
+  assert.equal(fresh.sessionHooks.size, 0);
+  assert.equal(fresh.signal, undefined);
+  console.log("PASS V2 definition + config-missing install registration");
+
+  const prompt =
+    "# Identity and Voice\n\n## Voice in Action\n\n**Test:**\n\n> Developer: Ship it.\n>\n> Mimir: Aye.\n\n## Voice Principles\n\nStay grounded.";
+  await writeFile(join(home, "system-prompt.md"), prompt);
+  await writeFile(
+    join(home, "config.json"),
+    JSON.stringify({
+      serverUrl,
+      userMemoryDb: join(home, "user.db"),
+      localCartographerPath: join(home, "missing-cartographer"),
+    }),
+  );
+  await mkdir(join(home, ".claude/rules"), { recursive: true });
+  await writeFile(
+    join(home, ".claude/rules/smoke.md"),
+    '---\npaths: ["*.ts"]\n---\n# Smoke rule\nNo classes.\n',
+  );
+  await writeFile(
+    join(home, ".claude/rules/smoke.enforce.toml"),
+    `id = "smoke/no-class"
+body = "./smoke.md"
+enabled = true
+severity = "block"
+event = "file"
+message = "TypeScript classes are denied by smoke rule"
+[[conditions]]
+field = "new_text"
+operator = "regex_match"
+pattern = 'class SongSource'
+`,
+  );
+  await writeFile(join(home, "x.ts"), "export const smokeFn = 1;\n");
+  const index = createCartIndex(process.env.MIMIR_CART_INDEX_DB);
+  index.syncFiles(
+    home,
+    [
+      {
+        path: "x.ts",
+        language: "typescript",
+        content_hash: "smoke-hash",
+        imports: [],
+        exports: ["smokeFn"],
+        symbols: [{ kind: "const", name: "smokeFn", line: 1, column: 0 }],
+      },
+    ],
+    "replace",
+  );
+  index.close();
+
+  const nestedDirectory = join(home, "packages/api");
+  await mkdir(nestedDirectory, { recursive: true });
+  const host = mockContext(nestedDirectory);
+  cleanup = await plugin.setup(host.ctx);
+  assert.equal(typeof cleanup, "function");
+  assert.deepEqual([...host.sessionHooks.keys()].sort(), [
+    "compaction",
+    "context",
+    "generate",
+    "prompt",
+    "title",
+  ]);
+  assert.deepEqual([...host.toolHooks.keys()].sort(), [
+    "execute.after",
+    "execute.before",
+  ]);
+  for (const name of [
+    "mimir_install",
+    "user_memory_search",
+    "user_memory_store",
+    "user_profile_get",
+    "mimir_delegate",
+  ]) {
+    assert.equal(typeof host.tools.get(name)?.execute, "function", name);
+    assert(host.tools.get(name)?.input, `${name} must use a V2 input schema`);
+  }
+  for (const name of ["generate", "title"]) {
+    const event = {
+      sessionID: "sess-smoke",
+      system: [{ type: "text", text: "host prompt" }],
+    };
+    await host.invoke(host.sessionHooks, name, event);
+    assert(event.system.some((part) => part.text === prompt));
+  }
+  console.log("PASS V2 hooks, tools, and system text parts");
+
+  for (let turn = 1; turn <= 2; turn++) {
+    const admission = {
+      sessionID: "sess-smoke",
+      messageID: `turn-${turn}`,
+      prompt: { text: `question ${turn}` },
+      delivery: "steer",
+      metadata: {},
+    };
+    await host.invoke(host.sessionHooks, "prompt", admission);
+    // Duplicate admission must not advance the anchor twice.
+    await host.invoke(host.sessionHooks, "prompt", admission);
+    const request = {
+      sessionID: admission.sessionID,
+      system: [],
+      messages: [
+        Message.make({
+          id: admission.messageID,
+          role: "user",
+          content: [Message.text(admission.prompt.text)],
+        }),
+      ],
+    };
+    await host.invoke(host.sessionHooks, "context", request);
+    const text = request.messages
+      .flatMap((m) =>
+        m.content.filter((p) => p.type === "text").map((p) => p.text),
+      )
+      .join("\n");
+    assert.equal(text.includes("<boot_context>"), turn === 1);
+    assert.equal(text.includes("<voice_anchor>"), turn === 2);
+    const repeat = {
+      ...request,
+      messages: [
+        Message.make({ role: "user", content: [Message.text("continuation")] }),
+      ],
+    };
+    await host.invoke(host.sessionHooks, "context", repeat);
+    assert(!JSON.stringify(repeat.messages).includes("<voice_anchor>"));
+  }
+  console.log("PASS boot context and retry-safe persona anchor cadence");
+
+  const before = (file: string) => ({
     sessionID: "sess-smoke",
-    callID: "c1",
-    args: { filePath: "/x.ts" },
-  } as any,
-  readOut,
-);
-check(
-  "<file_context> appended after read",
-  readOut.output.includes("<file_context") &&
-    readOut.output.includes("smokeFn"),
-  "",
-);
+    id: "edit-1",
+    tool: "edit",
+    input: {
+      path: file,
+      oldString: "",
+      newString: "class SongSource {}",
+    },
+  });
+  await host.invoke(host.toolHooks, "execute.before", before("../../x.py"));
+  await assert.rejects(
+    () => host.invoke(host.toolHooks, "execute.before", before("../../x.ts")),
+    /TypeScript classes are denied/,
+  );
+  await host.invoke(host.toolHooks, "execute.before", {
+    sessionID: "sess-smoke",
+    id: "shell-1",
+    tool: "shell",
+    input: { command: "true" },
+  });
+  const patch = (file: string) => ({
+    sessionID: "sess-smoke",
+    id: "patch-1",
+    tool: "patch",
+    input: {
+      patchText: `*** Begin Patch\n*** Add File: ${join(home, file)}\n+class SongSource {}\n*** End Patch`,
+    },
+  });
+  await host.invoke(host.toolHooks, "execute.before", patch("added.py"));
+  await assert.rejects(
+    () => host.invoke(host.toolHooks, "execute.before", patch("added.ts")),
+    /TypeScript classes are denied/,
+  );
+  console.log("PASS rule scope: Python allowed, TypeScript denied");
 
-// ── 4. Compacting hook distills into the LOCAL replica (MIM-86) ──
-await hooks["experimental.session.compacting"]?.(
-  { sessionID: "sess-smoke" } as any,
-  {
-    context: [],
-  } as any,
-);
-const { createOrgReplica } = await import(
-  "@mimir/plugin-core/store/org-replica"
-);
-const replica = createOrgReplica(process.env.MIMIR_ORG_REPLICA_DB ?? "");
-const distilled = replica.searchByText("smoke fact", 5);
-replica.close();
-check(
-  "compacting hook distills session into local replica",
-  distilled.length > 0 &&
-    distilled.some((m) => m.content.includes("smoke fact")),
-  `replica hits: ${distilled.length}`,
-);
+  await assert.rejects(
+    () =>
+      host.invoke(host.toolHooks, "execute.before", {
+        sessionID: "worker",
+        agent: "mimir-impl",
+        id: "outside-shell",
+        tool: "shell",
+        input: { command: "rm -rf victim", workdir: "/outside" },
+      }),
+    /outside this agent's worktree/,
+  );
+  await assert.rejects(
+    () =>
+      host.invoke(host.toolHooks, "execute.before", {
+        sessionID: "worker",
+        agent: "mimir-impl",
+        id: "test-move",
+        tool: "patch",
+        input: {
+          patchText: `*** Begin Patch\n*** Update File: ${join(home, "x.test.ts")}\n*** Move to: ${join(home, "moved.ts")}\n@@\n-old\n+new\n*** End Patch`,
+        },
+      }),
+    /may not modify test files/,
+  );
+  console.log("PASS native shell workdir and patch move source guards");
 
-// ── 5. Reindex degrades gracefully with no cartographer binary ──
-const [editErr] = await attempt(async () =>
-  hooks.event?.({
-    event: { type: "file.edited", properties: { file: "x.ts" } },
-  } as any),
-);
-const [createErr] = await attempt(async () =>
-  hooks.event?.({ event: { type: "session.created", properties: {} } } as any),
-);
-check(
-  "reindex events handled without crash (no binary)",
-  !editErr && !createErr,
-  "",
-);
+  const filePart = {
+    type: "file",
+    uri: "file:///smoke.png",
+    mime: "image/png",
+  };
+  const after: any = {
+    sessionID: "sess-smoke",
+    id: "read-1",
+    tool: "read",
+    input: { path: "../../x.ts" },
+    status: "completed",
+    result: {
+      content: [{ type: "text", text: "file body" }, filePart],
+      metadata: { smoke: true },
+      output: { preserved: true },
+    },
+  };
+  await host.invoke(host.toolHooks, "execute.after", after);
+  assert(JSON.stringify(after.result.content).includes("<file_context"));
+  assert(JSON.stringify(after.result.content).includes("smokeFn"));
+  assert(JSON.stringify(after.result.content).includes("# Smoke rule"));
+  assert.deepEqual(after.result.metadata, { smoke: true });
+  assert.deepEqual(after.result.output, { preserved: true });
+  assert.deepEqual(after.result.content[1], filePart);
+  assert(!requests.includes("/v1/cartographer/file-info"));
+  console.log(
+    "PASS structured read result augmented from real local cart index",
+  );
 
-// ── Report ──
-server.stop(true);
-console.log("\n─── oc-plugin live smoke ───");
-let allOk = true;
-for (const r of results) {
-  const mark = r.ok ? "PASS" : "FAIL";
-  if (!r.ok) allOk = false;
-  console.log(`  [${mark}] ${r.name}${r.detail ? ` — ${r.detail}` : ""}`);
+  await host.invoke(host.sessionHooks, "compaction", {
+    sessionID: "sess-smoke",
+    system: [],
+    messages: [],
+  });
+  const replica = createOrgReplica(process.env.MIMIR_ORG_REPLICA_DB);
+  const hits = replica.searchByText("smoke fact", 5);
+  replica.close();
+  assert(
+    hits.some((memory) =>
+      memory.content.includes("smoke fact extracted locally"),
+    ),
+  );
+  assert(requests.includes("/v1/chat/completions"));
+  console.log(
+    "PASS compaction extracts V2 persisted records into local replica",
+  );
+
+  assert(host.signal && !host.signal.aborted);
+  cleanup?.();
+  cleanup = undefined;
+  assert(host.signal.aborted);
+  console.log("PASS unload aborts the event subscription");
+  console.log("ALL V2 SMOKE CHECKS PASSED");
+} finally {
+  cleanup?.();
+  server.stop(true);
+  await rm(home, { recursive: true, force: true });
 }
-console.log(allOk ? "\nALL SMOKE CHECKS PASSED" : "\nSMOKE FAILURES ABOVE");
-process.exit(allOk ? 0 : 1);

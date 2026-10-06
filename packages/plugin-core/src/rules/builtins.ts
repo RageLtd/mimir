@@ -38,11 +38,18 @@ export type BuiltinDetector = (
  * post-edit line count exceeds `limit`.
  */
 const fileLengthDetector: BuiltinDetector = async (ctx, args) => {
+  if (ctx.toolInput.deleted === true) return [];
   const limit = typeof args.limit === "number" ? args.limit : 500;
   const filePath = pickFilePath(ctx);
   if (!filePath) return [];
 
-  const projected = await projectedLineCount(ctx, filePath);
+  // A move is scoped to its destination, but its pre-edit content lives at source.
+  const source = ctx.toolInput.projection_source_path;
+  const projectionPath =
+    typeof source === "string"
+      ? path.resolve(ctx.projectPath, source)
+      : filePath;
+  const projected = await projectedLineCount(ctx, projectionPath);
   if (projected === null || projected <= limit) return [];
 
   return [

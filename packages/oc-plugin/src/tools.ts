@@ -34,18 +34,19 @@ import type { UserMemoryStore } from "@mimir/plugin-core/store/user-memories";
 import { executeCartTool } from "@mimir/plugin-core/tools/cart-tools";
 import { executeUserMemoryTool } from "@mimir/plugin-core/tools/user-memory";
 import { mimirHome } from "@mimir/plugin-core/util";
-import { tool } from "@opencode-ai/plugin";
 import { extractionConfig } from "./config";
 import { installMimir } from "./install";
+import { tool } from "./tool-factory";
 
 export const userMemoryTools = (store: UserMemoryStore | null) => ({
   user_memory_search: tool({
     description:
       "Search facts about the developer themselves — preferences, setup, opinions, life circumstances, past decisions they've made, frustrations. Use when the developer mentions something about their workflow, environment, or history that might have context worth recalling, when a preference they've expressed before seems relevant to the current task, or when you want to check whether you already know something about them before asking. This store is user-scoped across all projects — use project_memory_search for facts about the current codebase instead.",
     args: {
-      query: tool.schema
-        .string()
-        .describe("Search query to match against stored memories"),
+      query: {
+        type: "string",
+        description: "Search query to match against stored memories",
+      },
     },
     async execute(args) {
       if (!store) {
@@ -63,11 +64,11 @@ export const userMemoryTools = (store: UserMemoryStore | null) => ({
     description:
       "Store a new fact about the developer. Call proactively whenever they reveal something about themselves — preferences, opinions, life circumstances, health conditions, frustrations, personal history, technical decisions, or anything worth remembering next session. No explicit 'remember this' required; if it's worth knowing across future sessions, store it now. User-scoped across all projects — facts about the current codebase belong in project_memory_store instead.",
     args: {
-      content: tool.schema
-        .string()
-        .describe(
+      content: {
+        type: "string",
+        description:
           "The fact to remember — a single, self-contained statement (e.g. 'Has ADHD', 'Frustrated with current employer', 'Prefers dark themes', 'Partner is pregnant')",
-        ),
+      },
     },
     async execute(args) {
       if (!store) {
@@ -99,7 +100,7 @@ export const userMemoryTools = (store: UserMemoryStore | null) => ({
     description:
       "Delete a developer memory by ID. Use when a stored fact is no longer accurate, has been superseded, or the developer asks you to forget it. Confirm the content with them before calling unless they explicitly requested deletion.",
     args: {
-      id: tool.schema.number().int().describe("The ID of the memory to delete"),
+      id: { type: "integer", description: "The ID of the memory to delete" },
     },
     async execute(args) {
       if (!store) {
@@ -131,11 +132,11 @@ export const userMemoryTools = (store: UserMemoryStore | null) => ({
     description:
       "Add an entry to the developer's profile. Use for stable identity facts: name, role, location, health conditions, communication preferences, editor/tool setup, household details, hobbies, philosophical outlook — anything that defines who they are rather than what happened in a specific session. Ephemeral facts belong in user_memory_store instead.",
     args: {
-      content: tool.schema
-        .string()
-        .describe(
+      content: {
+        type: "string",
+        description:
           "The profile fact to store (e.g. 'Name: Alex', 'Has ADHD — prefers direct communication', 'HEMA practitioner', 'Lives in Vancouver with partner and dog')",
-        ),
+      },
     },
     async execute(args) {
       if (!store) {
@@ -153,10 +154,10 @@ export const userMemoryTools = (store: UserMemoryStore | null) => ({
     description:
       "Remove a profile entry by ID. Use when a profile fact is outdated, wrong, or the developer corrects it. Find the target ID via user_profile_get.",
     args: {
-      id: tool.schema
-        .number()
-        .int()
-        .describe("The ID of the profile entry to remove"),
+      id: {
+        type: "integer",
+        description: "The ID of the profile entry to remove",
+      },
     },
     async execute(args) {
       if (!store) {
@@ -185,29 +186,29 @@ export const installTool = () =>
     description:
       "Install Mimir for OpenCode. Writes the system prompt, shared Mimir config, pinned local embedder, custom agent, wrapper script, and reusable slash commands to the user's home directory. Auto-detects Cartographer when no override is passed. The npm plugin package must already be installed through OpenCode. The cloud server requires MIMIR_API_KEY in the environment; check that first before calling.",
     args: {
-      serverUrl: tool.schema
-        .string()
-        .describe(
+      serverUrl: {
+        type: "string",
+        description:
           "Base URL of the mimir-server (e.g. 'https://mimir.rageltd.ca')",
-        ),
-      userMemoryDb: tool.schema
-        .string()
-        .optional()
-        .describe(
+      },
+      userMemoryDb: {
+        type: "string",
+        description:
           "Optional filesystem path for the SQLite user-memory store. Omit to use the default absolute path under ~/.mimir; home-relative paths are expanded before use.",
-        ),
-      cartographerBinary: tool.schema
-        .string()
-        .optional()
-        .describe(
+        optional: true,
+      },
+      cartographerBinary: {
+        type: "string",
+        description:
           "Optional absolute path to the cartographer Rust binary. Omit to auto-detect it from PATH or ~/.local/bin/cartographer.",
-        ),
-      apiKey: tool.schema
-        .string()
-        .optional()
-        .describe(
+        optional: true,
+      },
+      apiKey: {
+        type: "string",
+        description:
           "Mimir server API key. Defaults to $MIMIR_API_KEY from the environment.",
-        ),
+        optional: true,
+      },
     },
     async execute(args) {
       const result = await installMimir({
@@ -237,13 +238,15 @@ export const cartographerTools = (projectPath: string) => ({
     description:
       "Search indexed codebase for files by path or symbol name. Omit project to auto-detect.",
     args: {
-      query: tool.schema
-        .string()
-        .describe("Search query — matches file paths and symbol names"),
-      limit: tool.schema
-        .number()
-        .optional()
-        .describe("Maximum results (default: 10)"),
+      query: {
+        type: "string",
+        description: "Search query — matches file paths and symbol names",
+      },
+      limit: {
+        type: "number",
+        description: "Maximum results (default: 10)",
+        optional: true,
+      },
     },
     async execute(args) {
       const result = await executeCartTool("cartographer_search", {
@@ -259,9 +262,10 @@ export const cartographerTools = (projectPath: string) => ({
     description:
       "Get file details: symbols, imports, and dependents. Omit project to auto-detect.",
     args: {
-      file_path: tool.schema
-        .string()
-        .describe("Path to the file (project-relative or absolute)"),
+      file_path: {
+        type: "string",
+        description: "Path to the file (project-relative or absolute)",
+      },
     },
     async execute(args) {
       const result = await executeCartTool("cartographer_file_info", {
@@ -276,17 +280,21 @@ export const cartographerTools = (projectPath: string) => ({
     description:
       "Walk import graph from entry points. Returns dependencies and dependents up to depth.",
     args: {
-      entry_points: tool.schema
-        .array(tool.schema.string())
-        .describe("File paths or search terms to start from"),
-      max_depth: tool.schema
-        .number()
-        .optional()
-        .describe("Maximum hops (default: 2)"),
-      max_results: tool.schema
-        .number()
-        .optional()
-        .describe("Maximum files (default: 20)"),
+      entry_points: {
+        type: "array",
+        description: "File paths or search terms to start from",
+        items: { type: "string" },
+      },
+      max_depth: {
+        type: "number",
+        description: "Maximum hops (default: 2)",
+        optional: true,
+      },
+      max_results: {
+        type: "number",
+        description: "Maximum files (default: 20)",
+        optional: true,
+      },
     },
     async execute(args) {
       const result = await executeCartTool("cartographer_query", {
@@ -348,18 +356,18 @@ export const hygieneTool = () =>
     description:
       "Run a memory hygiene sweep over the local memory replica — consolidate near-duplicate memories, demote contradicted facts, prune stale ones. Dry-run by default (reports what WOULD change without mutating); pass live: true only when the user explicitly asked to apply. Can take a few minutes.",
     args: {
-      live: tool.schema
-        .boolean()
-        .optional()
-        .describe(
+      live: {
+        type: "boolean",
+        description:
           "Arm the sweep (mutates the memory store). Omit for a dry run.",
-        ),
-      model: tool.schema
-        .string()
-        .optional()
-        .describe(
+        optional: true,
+      },
+      model: {
+        type: "string",
+        description:
           "Judgment model id override. Defaults to the configured extraction model.",
-        ),
+        optional: true,
+      },
     },
     async execute(args) {
       const base = await extractionConfig();
