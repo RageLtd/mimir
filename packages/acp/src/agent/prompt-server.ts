@@ -38,6 +38,7 @@ import { createChildLogger, log } from "../utils/log";
 import { sharedEmbedQuery } from "./brain";
 import { clientToolDefs } from "./client-tools";
 import { acpBlocksToOpenAIContent, hasImageContent } from "./content";
+import { buildRuntimePrompt } from "./environment";
 import { emitAgentText } from "./lifecycle-helpers";
 import { dispatchToolCall } from "./tool-dispatch";
 import {
@@ -124,6 +125,10 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
     ...clientMcpTools,
     todoWriteToolDef,
   ];
+  const runtimePrompt = buildRuntimePrompt(
+    systemPrompt,
+    allTools.map((tool) => tool.function.name),
+  );
 
   // Per-turn local context assembly: replica retrieval (hybrid — the
   // shared embedder supplies the vector leg, FTS-only when it's
@@ -170,7 +175,7 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
     const iter = backend
       .run({
         prompt: promptText,
-        systemPrompt,
+        systemPrompt: runtimePrompt,
         messages: placeContextInjection(
           session.messages,
           contextInjection,

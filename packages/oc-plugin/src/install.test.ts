@@ -57,6 +57,35 @@ afterEach(async () => {
 });
 
 describe("installMimir", () => {
+  test("keeps the canonical persona byte-exact without touching another host's prompt", async () => {
+    const persona = await Bun.file(
+      new URL("../../server/system-prompt.md", import.meta.url),
+    ).text();
+    const ccPrompt = join(root, ".mimir", "cc", "system-prompt.xml");
+    const ccContents = "Existing Claude Code runtime prompt.\n";
+    await mkdir(join(root, ".mimir", "cc"), { recursive: true });
+    await Bun.write(ccPrompt, ccContents);
+    spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json({ content: persona, version: "fixture-version" }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({ content: persona, version: "fixture-version" }),
+      );
+
+    for (let update = 0; update < 2; update++) {
+      const result = await installMimir(
+        { serverUrl: "https://mimir.example.com", apiKey: "test-key" },
+        noCartographer,
+      );
+      expect(result.ok).toBe(true);
+      expect(
+        await Bun.file(join(root, ".mimir", "system-prompt.md")).text(),
+      ).toBe(persona);
+      expect(await Bun.file(ccPrompt).text()).toBe(ccContents);
+    }
+  });
+
   test("exposes mimir_install before shared config exists", async () => {
     const names: string[] = [];
     await Reflect.apply(MimirPlugin.setup, undefined, [

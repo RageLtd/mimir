@@ -46,7 +46,7 @@ fi
 
 MIMIR_MARKER="$HOME/.mimir/next-session.json"
 BASE_ARGS=(
-  --system-prompt-file "$HOME/.mimir/system-prompt.md"
+  --system-prompt-file "$HOME/.mimir/cc/system-prompt.xml"
   --settings "$HOME/.mimir/settings.json"
 )
 USER_ARGS=("$@")

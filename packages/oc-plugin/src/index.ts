@@ -47,6 +47,7 @@ import { Plugin } from "@opencode/plugin";
 import { assembleBootContext } from "./boot-context";
 import { readConfig } from "./config";
 import { delegateTool, reviewPromptTool } from "./delegate-tools";
+import { OPENCODE_ENVIRONMENT } from "./environment";
 import { augmentReadOutput, createFileContextCache } from "./file-context";
 import { extractLastUserPrompt, injectLeadingContext } from "./message-inject";
 import { orgMemoryTools } from "./org-memory-tools";
@@ -222,6 +223,7 @@ export const MimirPlugin = Plugin.define({
       if (systemPromptMarkdown.length > 0) {
         output.system.push({ type: "text", text: systemPromptMarkdown });
       }
+      output.system.push({ type: "text", text: OPENCODE_ENVIRONMENT });
       if (projectRulesBlock)
         output.system.push({ type: "text", text: projectRulesBlock });
     };

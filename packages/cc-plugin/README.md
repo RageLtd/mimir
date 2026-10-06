@@ -21,7 +21,8 @@ Everything a session needs to be Mimir loads from two places: the plugin directo
   mimir.md               ← the persona as the "Mimir" output style — what a desktop-app session selects
 
 ~/.mimir/
-  system-prompt.md       ← fetched from mimir-server, XML-converted at install (wrapper sessions)
+  system-prompt.md       ← canonical Markdown fetched from mimir-server, unchanged and shared across hosts
+  cc/system-prompt.xml   ← CC-only XML rendering with host context (wrapper sessions)
   settings.json          ← wrapper-only settings (subagent env, deny list, outputStyle off)
   config.json            ← runtime config consumed by the binary (server URL, DB path, cartographer path)
   user-memories.db       ← SQLite store backing the mimir-local MCP

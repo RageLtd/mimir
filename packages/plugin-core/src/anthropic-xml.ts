@@ -78,13 +78,16 @@ A one-line statement of what's about to happen before a stretch of tool calls is
  * 2. Injects the environment context + Anthropic model override block
  *    (CC-only content).
  */
-export const toAnthropicXml = (markdown: string) => {
+export const toAnthropicXml = (
+  markdown: string,
+  environmentBlock = ENVIRONMENT_BLOCK,
+) => {
   const xml = markdownToXml(markdown);
   // Inject environment context then model override immediately before
   // <identity_and_voice> so both sit adjacent to the personality definition
   // (recency effect). Environment first, override second.
   const insertPoint = xml.lastIndexOf("<identity_and_voice>");
-  const injection = `${ENVIRONMENT_BLOCK}\n\n${ANTHROPIC_MODEL_OVERRIDE}`;
+  const injection = `${environmentBlock}\n\n${ANTHROPIC_MODEL_OVERRIDE}`;
   if (insertPoint !== -1) {
     return `${xml.slice(0, insertPoint) + injection}\n\n${xml.slice(insertPoint)}`;
   }

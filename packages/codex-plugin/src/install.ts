@@ -7,8 +7,8 @@
  * Steps in order:
  *   1. Validate the mimir-server URL.
  *   2. Fetch the canonical system prompt from /v1/system-prompt.
- *   3. Convert it to XML (toAnthropicXml — the voice-anchor parser
- *      requires the <voice_in_action> block that conversion produces).
+ *   3. Render the Codex persona with XML voice anchors and Codex-owned
+ *      runtime context.
  *   4. Materialise ~/.mimir/codex/{AGENTS.md, config.toml} and the
  *      shared ~/.mimir/config.json.
  *   5. Trust the hooks via `codex app-server` hooks/list (Codex silently
@@ -23,7 +23,6 @@
 import { chmod, copyFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { toAnthropicXml } from "@mimir/plugin-core/anthropic-xml";
 import { embedderDir } from "@mimir/plugin-core/brain/embedder";
 import { installEmbedderArtifacts } from "@mimir/plugin-core/brain/embedder-install";
 import { resolveCartographerBinary } from "@mimir/plugin-core/cartographer/resolve";
@@ -51,6 +50,7 @@ import wrapperTemplate from "../artifacts/wrapper.sh.template" with {
 };
 import { spliceManagedConfig } from "./config-preserve";
 import { mimirCodexHome } from "./paths";
+import { renderCodexPersona } from "./persona";
 import { trustMimirHooks } from "./trust";
 
 // `as const` keeps the discriminant literal so the ok/err union
@@ -225,7 +225,7 @@ export const runInstall = async (
   const promptResult = await fetchSystemPrompt(urlResult.value, opts.apiKey);
   if (!promptResult.ok) return promptResult;
 
-  const xml = toAnthropicXml(promptResult.value.content);
+  const xml = renderCodexPersona(promptResult.value.content);
 
   const home = mimirHome();
   const codexHome = mimirCodexHome();

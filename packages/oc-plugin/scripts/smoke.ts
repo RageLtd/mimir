@@ -240,6 +240,13 @@ pattern = 'class SongSource'
     };
     await host.invoke(host.sessionHooks, name, event);
     assert(event.system.some((part) => part.text === prompt));
+    assert.equal(
+      event.system.filter((part) => part.text.includes("<environment>")).length,
+      1,
+    );
+    assert(
+      event.system.some((part) => part.text.includes("@RageLtd/mimir-oc")),
+    );
   }
   console.log("PASS V2 hooks, tools, and system text parts");
 
@@ -266,6 +273,12 @@ pattern = 'class SongSource'
       ],
     };
     await host.invoke(host.sessionHooks, "context", request);
+    assert.equal(request.system[0].text, prompt);
+    assert.equal(
+      request.system.filter((part) => part.text.includes("<environment>"))
+        .length,
+      1,
+    );
     const text = request.messages
       .flatMap((m) =>
         m.content.filter((p) => p.type === "text").map((p) => p.text),

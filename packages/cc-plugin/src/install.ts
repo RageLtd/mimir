@@ -9,7 +9,8 @@
  *   1. Validate the mimir-server URL.
  *   2. Fetch the canonical system prompt from /v1/system-prompt.
  *   3. Convert it to Anthropic-optimised XML (toAnthropicXml).
- *   4. Materialise ~/.mimir/{system-prompt.md, settings.json, config.json}
+ *   4. Materialise the canonical ~/.mimir/system-prompt.md, CC-only
+ *      ~/.mimir/cc/system-prompt.xml, settings.json, and config.json
  *      and the "Mimir" output style under Claude Code's config dir — the
  *      persona a desktop-app session selects per project (`mimir-cc enable`).
  *   5. Materialise ~/.local/bin/{mimir, mimir-cc}.
@@ -220,6 +221,7 @@ export const runInstall = async (
   const userMemoryDb = opts.userMemoryDb ?? join(home, "user-memories.db");
 
   const promptPath = join(home, "system-prompt.md");
+  const ccPromptPath = join(home, "cc", "system-prompt.xml");
   const settingsPath = join(home, "settings.json");
   const stylePath = outputStylePath();
   const wrapperPath = join(binDir, "mimir");
@@ -227,7 +229,9 @@ export const runInstall = async (
 
   const ensureBinaryPath = join(home, "ensure-binary.sh");
 
-  await writeText(promptPath, xml);
+  // Shared persona stays byte-for-byte canonical; CC enrichment is host-local.
+  await writeText(promptPath, promptResult.value.content);
+  await writeText(ccPromptPath, xml);
   await writeText(stylePath, renderOutputStyle(xml));
   await writeText(settingsPath, settingsTemplate);
   // Retired files an update removes: workers moved into the plugin's
@@ -319,6 +323,7 @@ export const runInstallCommand = async (opts: InstallOptions) => {
       `Mimir installed.`,
       ``,
       `  System prompt:  ${home}/system-prompt.md  (version ${version})`,
+      `  CC prompt:      ${home}/cc/system-prompt.xml  (wrapper sessions)`,
       `  Output style:   ${stylePath}  ("${OUTPUT_STYLE_NAME}")`,
       `  Settings:       ${home}/settings.json  (wrapper sessions)`,
       `  Runtime config: ${home}/config.json`,

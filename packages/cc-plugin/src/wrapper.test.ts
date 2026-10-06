@@ -80,11 +80,11 @@ const readLog = async () => {
 
 beforeEach(async () => {
   tmp = await mkdtemp(join(tmpdir(), "mimir-wrapper-"));
-  await mkdir(join(tmp, ".mimir"), { recursive: true });
+  await mkdir(join(tmp, ".mimir", "cc"), { recursive: true });
 
   // Touch the files BASE_ARGS reference so the wrapper has something
   // to point at even though the mock claude ignores them.
-  await writeFile(join(tmp, ".mimir", "system-prompt.md"), "");
+  await writeFile(join(tmp, ".mimir", "cc", "system-prompt.xml"), "");
   await writeFile(join(tmp, ".mimir", "settings.json"), "{}");
 
   markerPath = join(tmp, ".mimir", "next-session.json");
@@ -118,6 +118,12 @@ exit 0
     const records = await readLog();
     expect(records).toHaveLength(1);
     expect(records[0]).toContain("ANTHROPIC_BASE_URL=unset");
+    expect(records[0]).toContain(
+      `--system-prompt-file ${join(tmp, ".mimir", "cc", "system-prompt.xml")}`,
+    );
+    expect(records[0]).not.toContain(
+      `--system-prompt-file ${join(tmp, ".mimir", "system-prompt.md")}`,
+    );
   });
 
   test("survives being rewritten while a launch is in flight", async () => {
