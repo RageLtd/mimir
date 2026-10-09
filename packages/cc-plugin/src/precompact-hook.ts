@@ -1,5 +1,6 @@
 /**
- * PreCompact hook — belt-and-suspenders distillation before CC discards
+ * `mimir-cc precompact` — run by the hooks module on `classic.PreCompact`
+ * with its payload: belt-and-suspenders distillation before CC discards
  * (MIM-86: fully local, nothing ships to the server).
  *
  * Fires when CC is about to compact (/compact or auto-trigger). Whatever

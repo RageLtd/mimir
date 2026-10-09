@@ -9,10 +9,10 @@ Everything a session needs to be Mimir loads from two places: the plugin directo
 ```
 <plugin root>/                 ← what Claude Code loads where the plugin is enabled
   hooks/register.ts            ← hooks module: persona (prompt.compose), boot context (prompt.context),
-                                  retrieval + voice anchors (prompt.submit) — one file per event
-  hooks/hooks.json             ← `modules` plus the remaining command hooks, each
-                                  `MIMIR_ACTIVE=1 "$HOME/.local/bin/mimir-cc" <sub>`
-  types/index.d.ts             ← the module's `$.state` contract (the turn counter)
+                                  retrieval + voice anchors (prompt.submit), tool gates (tool.call),
+                                  session lifecycle (classic.*) — one file per concern
+  hooks/hooks.json             ← names the module; no command hooks remain
+  types/index.d.ts             ← the module's `$.state` contract (turn counter, agents)
   .mcp.json                    ← mimir-local + mimir-logs stdio servers (the installed binary)
   agents/                      ← delegation workers
   commands/                    ← slash commands
@@ -31,7 +31,7 @@ Everything a session needs to be Mimir loads from two places: the plugin directo
   logs/mimir-cc.log      ← rolled append-only log from every hook + worker invocation
 ```
 
-The persona is the hooks module's doing: its `prompt.compose` hook answers with the installed XML and nothing else, so the Mimir prompt replaces Claude Code's wholesale in every session where the plugin is enabled — desktop app, plain `claude`, wrapper alike. The wrapper still passes `--system-prompt-file` (the same file) and `--settings` so the user's global settings stay untouched; hooks and MCP servers come from the plugin in every launch path. `MIMIR_ACTIVE=1` is set on each binary invocation (inline on the command hooks, in the module's `$.process.run` env, and exported by the wrapper) so the binary's gates pass.
+The persona is the hooks module's doing: its `prompt.compose` hook answers with the installed XML and nothing else, so the Mimir prompt replaces Claude Code's wholesale in every session where the plugin is enabled — desktop app, plain `claude`, wrapper alike. The wrapper still passes `--system-prompt-file` (the same file) and `--settings` so the user's global settings stay untouched; hooks and MCP servers come from the plugin in every launch path. `MIMIR_ACTIVE=1` is set on each binary invocation (in the module's `$.process.run` env, and exported by the wrapper) so the binary's gates pass.
 
 ## Claude desktop app
 
@@ -187,14 +187,11 @@ The in-process half of the plugin, loaded through `hooks.json`'s `modules` entry
 - **`tool.call` (Read) → `mimir-cc file-context`.** Runs beside the read, never ahead of it, and attaches the file's cartographer info (symbols, imports, dependents) and related memories from the local index and replica to the result as context, with the "↻ File context" line on the status bar. The binary dedupes per session by content hash.
 - **`tool.call` (Edit, Write) → `mimir-cc reindex`.** Once the write has landed: the binary forks a detached cartographer worker that parses the changed file into the local index and exits at once. A subagent's edit (inside its worktree) is skipped.
 - **`tool.call` (SubagentHandback) and `classic.SubagentStop` → `mimir-cc verify`.** The gate on a worker's "done" claim: re-checks the worker's worktree before the hand-back is accepted. On the hand-back, a block denies the call (the worker keeps working) and a pass rewrites the message with the report appended; on SubagentStop — the fallback for hosts without the hand-back tool — a block stops the worker and a pass hands the report on as context.
+- **`classic.SessionStart` → `mimir-cc session-start`.** On startup or resume (the classic event carries `source`; the engine's `session.start` does not): silent key reconcile and blind org sync (bounded), then a detached full re-index of the project into the local cartographer index.
+- **`classic.Stop` → `mimir-cc persist`.** The turn's transcript delta (the payload's `transcript_path`, read past a per-session watermark), distilled into the local replica.
+- **`classic.PreCompact` → `mimir-cc precompact`.** The undistilled tail, summarised and extracted before Claude Code compacts the context.
 
-### Command hooks (plugin `hooks/hooks.json`)
-
-The lifecycle events the module does not yet own. Each command is `MIMIR_ACTIVE=1 "$HOME/.local/bin/mimir-cc" <subcommand>` — the installed binary, with the gate every handler checks set inline. `manifests.spec.ts` pins each subcommand to the CLI's dispatch table.
-
-- **`SessionStart` → session-start.** On startup or resume: silent key reconcile and blind org sync (bounded), then a detached full re-index of the project into the local cartographer index.
-- **`Stop` → persist.** Ships the transcript delta to the local brain for memory extraction and summarisation.
-- **`PreCompact` (auto, manual) → precompact.** Persists what is about to be discarded before Claude Code compacts the context.
+`hooks.json` names the module and nothing else: there are no command hooks left. `manifests.spec.ts` pins every subcommand the module runs to the CLI's dispatch table.
 
 ### Settings (`~/.mimir/settings.json`, wrapper only)
 
@@ -293,8 +290,8 @@ bun run --filter @mimir/cc-plugin build  # or: cd packages/cc-plugin && ./build.
 packages/cc-plugin/                          ← workspace member @mimir/cc-plugin
   .claude-plugin/plugin.json                 ← plugin manifest (marketplace.json lives at monorepo root)
   .mcp.json                                  ← plugin-shipped MCP servers (mimir-local, mimir-logs)
-  hooks/hooks.json                           ← `modules` + the plugin-shipped command hooks
-  hooks/{register,persona,boot,submit,gate,edit-guard,file-context,reindex}.ts
+  hooks/hooks.json                           ← names the module (`modules`), nothing else
+  hooks/{register,persona,lifecycle,boot,submit,gate,edit-guard,file-context,reindex}.ts
                                              ← the hooks module, one file per concern; binary.ts and
                                                 payload.ts shape the $.process.run calls, shell-edit.ts
                                                 is the edit guard's classifier; *.test.ts are kit tests
@@ -309,10 +306,9 @@ packages/cc-plugin/                          ← workspace member @mimir/cc-plug
     project-settings.ts                      ← `enable` / `disable`: the per-project switch
     config.ts, logger.ts                     ← shims binding plugin-core's shared modules to this host
     boot-context.ts, voice-anchor.ts, retrieve-hook.ts, file-context-hook.ts,
-    rules-hook.ts, guard-hook.ts, verify-hook.ts, reindex-hook.ts
-                                             ← the subcommands the hooks module runs
+    rules-hook.ts, guard-hook.ts, verify-hook.ts, reindex-hook.ts,
     session-start-hook.ts, persist-hook.ts, precompact-hook.ts
-                                             ← one adapter per command hook in hooks/hooks.json
+                                             ← the subcommands the hooks module runs
     edit-guard.spec.ts                       ← Bun corpus test for hooks/shell-edit.ts
     user-memory-mcp.ts, log-mcp.ts           ← entry points for the two plugin MCP servers
     delegate-command.ts, hygiene-command.ts, backfill-command.ts   ← human-driven subcommands

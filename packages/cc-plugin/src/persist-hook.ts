@@ -1,5 +1,6 @@
 /**
- * Stop hook — extract memories from completed CC turns into the LOCAL
+ * `mimir-cc persist` — run by the hooks module on `classic.Stop` with the
+ * Stop payload: extract memories from completed CC turns into the LOCAL
  * replica (MIM-86). The server persist/token-report legs are gone: the
  * transcript never leaves the machine. Reads new lines from the session's
  * transcript JSONL since the last watermark, renders them to conversation

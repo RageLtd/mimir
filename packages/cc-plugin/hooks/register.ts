@@ -7,7 +7,8 @@
  * through `$`.
  *
  * `claude plugin validate .` reads this module the way the engine will;
- * `claude plugin test .` runs the `*.test.ts` beside it.
+ * `claude plugin test .` runs the `*.test.ts` beside it. hooks.json names
+ * this file alone: no command hooks remain.
  */
 
 import type { Register } from "claude-code";
@@ -15,12 +16,14 @@ import { registerBoot } from "./boot";
 import { registerEditGuard } from "./edit-guard";
 import { registerFileContext } from "./file-context";
 import { registerGate } from "./gate";
+import { registerLifecycle } from "./lifecycle";
 import { registerPersona } from "./persona";
 import { registerReindex } from "./reindex";
 import { registerSubmit } from "./submit";
 
 export const register: Register = (on, options) => {
   registerPersona(on, options);
+  registerLifecycle(on, options);
   registerBoot(on, options);
   registerSubmit(on, options);
   registerGate(on, options);

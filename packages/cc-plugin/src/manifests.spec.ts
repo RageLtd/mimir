@@ -1,28 +1,24 @@
 /**
  * The plugin-shipped manifests are what a desktop-app session loads
  * instead of the wrapper's flags: hooks/hooks.json and .mcp.json. Pin
- * their shape to the binary's dispatch table so a renamed subcommand
- * can't strand a hook.
+ * the subcommands the hooks module runs to the binary's dispatch table
+ * so a renamed subcommand can't strand a hook.
  */
 
 import { describe, expect, test } from "bun:test";
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { LOCAL_TOOL_PREFIX } from "@mimir/plugin-core/anthropic-xml";
 
 const ROOT = join(import.meta.dir, "..");
-const BIN = 'MIMIR_ACTIVE=1 "$HOME/.local/bin/mimir-cc" ';
 // biome-ignore lint/suspicious/noTemplateCurlyInString: literal MCP placeholder — Claude Code expands it, not JS
 const MCP_BIN = "${HOME}/.local/bin/mimir-cc";
-
-type HookEntry = {
-  readonly matcher?: string;
-  readonly hooks: readonly { readonly command: string }[];
-};
 
 const hooksJson = (await Bun.file(
   join(ROOT, "hooks", "hooks.json"),
 ).json()) as {
-  readonly hooks: Record<string, readonly HookEntry[]>;
+  readonly modules?: readonly string[];
+  readonly hooks?: unknown;
 };
 const mcpJson = (await Bun.file(join(ROOT, ".mcp.json")).json()) as {
   readonly mcpServers: Record<string, { command: string; args: string[] }>;
@@ -32,29 +28,46 @@ const settingsTemplate = (await Bun.file(
 ).json()) as Record<string, unknown>;
 const cliSource = await Bun.file(join(ROOT, "src", "cli.ts")).text();
 
-const allCommands = Object.values(hooksJson.hooks)
-  .flat()
-  .flatMap((entry) => entry.hooks.map((h) => h.command));
+/** Every subcommand a module file spells in `mimirCcArgv(home, "<sub>")`. */
+const moduleSubcommands = async () => {
+  const dir = join(ROOT, "hooks");
+  const files = (await readdir(dir)).filter(
+    (f) => f.endsWith(".ts") && !f.endsWith(".test.ts"),
+  );
+  const found = new Set<string>();
+  for (const file of files) {
+    const source = await Bun.file(join(dir, file)).text();
+    for (const m of source.matchAll(/mimirCcArgv\([^,]+,\s*"([a-z-]+)"\)/g)) {
+      if (m[1]) found.add(m[1]);
+    }
+  }
+  return [...found].sort();
+};
 
 describe("hooks/hooks.json", () => {
-  test("every hook runs the installed binary with MIMIR_ACTIVE set inline", () => {
-    expect(allCommands.length).toBeGreaterThan(0);
-    for (const command of allCommands) expect(command).toStartWith(BIN);
+  test("names the hooks module and no command hooks", () => {
+    expect(hooksJson.modules).toEqual(["./register.ts"]);
+    expect(hooksJson).not.toHaveProperty("hooks");
   });
 
-  test("every hook subcommand exists in the CLI dispatch table", () => {
-    for (const command of allCommands) {
-      const sub = command.slice(BIN.length);
+  test("every subcommand the module runs exists in the CLI dispatch table", async () => {
+    const subcommands = await moduleSubcommands();
+    expect(subcommands).toEqual([
+      "boot-context",
+      "file-context",
+      "guard",
+      "persist",
+      "precompact",
+      "reindex",
+      "retrieve",
+      "rules",
+      "session-start",
+      "verify",
+      "voice-anchor",
+    ]);
+    for (const sub of subcommands) {
       expect(cliSource).toContain(`case "${sub}":`);
     }
-  });
-
-  test("covers the lifecycle the wrapper used to wire", () => {
-    expect(Object.keys(hooksJson.hooks).sort()).toEqual([
-      "PreCompact",
-      "SessionStart",
-      "Stop",
-    ]);
   });
 });
 

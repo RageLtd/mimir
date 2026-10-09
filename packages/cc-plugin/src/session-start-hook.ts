@@ -1,7 +1,9 @@
 /**
- * SessionStart hook — full project re-index of the brain's cartographer view.
+ * `mimir-cc session-start` — run by the hooks module on
+ * `classic.SessionStart` with its payload: full project re-index of the
+ * brain's cartographer view.
  *
- * Fires when CC starts or resumes a session. Spawns a detached worker that
+ * Runs when CC starts or resumes a session. Spawns a detached worker that
  * walks every git-tracked file in the project, parses each via the
  * cartographer binary, and ships the full set to mimir-server with
  * `mode: "replace"` so anything deleted or moved since the last session is
