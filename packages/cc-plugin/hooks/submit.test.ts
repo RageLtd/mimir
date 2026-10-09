@@ -41,8 +41,8 @@ const retrieved = (context: string, message: string) =>
 const turnState = (on: On, initial?: number) => {
   let value = initial;
   let version = initial === undefined ? 0 : 1;
-  on("state.get", () => ({ value: { value, version } }));
-  on("state.set", (_, e) => {
+  on("state.get", { key: "turn" }, () => ({ value: { value, version } }));
+  on("state.set", { key: "turn" }, (_, e) => {
     value = e.value;
     version += 1;
     return { value: { isSet: true as const, version } };

@@ -1,13 +1,14 @@
 /**
- * Role guard — PreToolUse hook, `mimir-cc guard [--role <r>]`.
+ * Role guard — `mimir-cc guard [--role <r>]`, run by the hooks module's
+ * `tool.call` hook with the PreToolUse payload.
  *
- * One plugin hook (hooks/hooks.json) covers every role: a PreToolUse
- * registered that way fires inside subagents too, and there the payload carries
- * `agent_type`, so the role is read from it — a worker's agent name maps
- * to its role, no `agent_type` is the main session (coordinator), and
- * any other subagent is left alone. Plugin-shipped agents cannot carry
- * frontmatter hooks, which is why the role isn't wired per definition.
- * `--role` remains as an explicit override.
+ * One hook covers every role: `tool.call` fires inside subagents too,
+ * and there the module fills in `agent_type` (recorded at SubagentStart),
+ * so the role is read from it — a worker's agent name maps to its role,
+ * no `agent_type` is the main session (coordinator), and any other
+ * subagent is left alone. Plugin-shipped agents cannot carry frontmatter
+ * hooks, which is why the role isn't wired per definition. `--role`
+ * remains as an explicit override.
  *
  * The coordinator role is silent unless the delegation skill has written
  * an active coordinator state for this session — so ordinary Mimir

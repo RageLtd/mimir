@@ -35,7 +35,7 @@
     },
     "packages/oc-plugin": {
       "name": "@mimir/oc-plugin",
-      "version": "1.7.0",
+      "version": "1.9.0",
       "devDependencies": {
         "@mimir/plugin-core": "workspace:*",
         "@opencode/ai": "^2.0.24",

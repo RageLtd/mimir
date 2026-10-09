@@ -1,12 +1,13 @@
 /**
- * File-context injection on Read — PreToolUse hook.
+ * File-context injection on Read — `mimir-cc file-context`, run by the
+ * hooks module's `tool.call` hook on the built-in Read tool with the
+ * PreToolUse payload.
  *
- * Matched against the built-in `Read` tool. Before the model reads a
- * file, this hook builds cartographer info (symbols, imports,
- * dependents) from the LOCAL cart index and semantically-related
- * memories from the local replica (MIM-91 — no server round-trip), then
- * injects them as `additionalContext` alongside the tool_call so the
- * model frames the read with that knowledge.
+ * Builds cartographer info (symbols, imports, dependents) from the LOCAL
+ * cart index and semantically-related memories from the local replica
+ * (MIM-91 — no server round-trip), and emits them as `additionalContext`,
+ * which the module attaches to the read's result so the model frames the
+ * file with that knowledge.
  *
  * Dedup is hash-keyed, not path-keyed: the state file maps
  * `filePath → contentHash`, and re-injection happens only when the
@@ -30,7 +31,6 @@ import {
 import { attempt } from "@mimir/plugin-core/result";
 import { mimirHome } from "@mimir/plugin-core/util";
 import { readConfig } from "./config";
-import { noticeFor } from "./host";
 import { createLogger } from "./logger";
 
 const log = createLogger("file-context-hook");
@@ -185,10 +185,8 @@ const emitInjection = (block: string, summary: string) => {
         hookEventName: "PreToolUse",
         additionalContext: block,
       },
-      // The "↻ File context" status line is for hosts that render it
-      // (terminal TUI, desktop app); SDK-driven hosts such as Zed glue a
-      // systemMessage onto the reply (host.ts).
-      ...noticeFor(summary),
+      // The "↻ File context" line; the hooks module puts it on the status bar.
+      systemMessage: summary,
     }),
   );
 };

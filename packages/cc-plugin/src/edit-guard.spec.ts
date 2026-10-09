@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { classifyBashEdit, decide, shellWords } from "./edit-guard-hook";
+import { classifyBashEdit, decide, shellWords } from "../hooks/shell-edit";
 
 const shape = (cmd: string) => classifyBashEdit(cmd).shape;
 
@@ -47,20 +47,11 @@ describe("single-file shell edits are denied", () => {
   });
 
   test("names the target in the deny reason", () => {
-    const decision = decide(`sed -i 's/a/b/' src/app.ts`);
-    expect(decision?.hookSpecificOutput).toMatchObject({
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-    });
-    expect(
-      "permissionDecisionReason" in (decision?.hookSpecificOutput ?? {})
-        ? decision?.hookSpecificOutput.permissionDecisionReason
-        : "",
-    ).toContain("src/app.ts");
+    expect(decide(`sed -i 's/a/b/' src/app.ts`)).toContain("src/app.ts");
   });
 });
 
-describe("bulk mechanical edits are allowed with a report nudge", () => {
+describe("bulk mechanical edits are denied too", () => {
   test.each([
     `sed -i 's/foo/bar/g' src/a.ts src/b.ts`,
     `sed -i 's/foo/bar/g' src/*.ts`,
@@ -78,17 +69,10 @@ describe("bulk mechanical edits are allowed with a report nudge", () => {
     expect(shape(cmd)).toBe("bulk");
   });
 
-  test("denies, pointing at the Edit tool and codemod tooling", () => {
-    const decision = decide(`sed -i 's/foo/bar/g' src/a.ts src/b.ts`);
-    expect(decision?.hookSpecificOutput).toMatchObject({
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-    });
-    expect(
-      "permissionDecisionReason" in (decision?.hookSpecificOutput ?? {})
-        ? decision?.hookSpecificOutput.permissionDecisionReason
-        : "",
-    ).toContain("Edit tool");
+  test("points at the Edit tool and codemod tooling", () => {
+    expect(decide(`sed -i 's/foo/bar/g' src/a.ts src/b.ts`)).toContain(
+      "Edit tool",
+    );
   });
 });
 

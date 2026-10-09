@@ -1,11 +1,12 @@
 /**
- * Verify gate — `mimir-cc verify`, wired to two hook events.
+ * Verify gate — `mimir-cc verify`, run by the hooks module from two
+ * events, each handing over its payload on stdin.
  *
- * Primary: PreToolUse on `SubagentHandback`, inside the worker. On
- * Claude Code ≥ 2.1.27x a subagent hands its result back through this
+ * Primary: `tool.call` on `SubagentHandback`, inside the worker (the
+ * PreToolUse payload). A subagent hands its result back through this
  * tool call, and `tool_input.message` is the worker's final text — the
  * `STATUS:` line lives there. The gate answers in the PreToolUse
- * protocol:
+ * protocol, which the module maps onto the call:
  *
  *   block     → permissionDecision "deny" with the reason — the worker
  *               gets it as the tool error and keeps working
@@ -14,8 +15,8 @@
  *   exhausted → "allow", message rewritten to end in STATUS: failed
  *   skip      → silence (STATUS was not `done`)
  *
- * Fallback: SubagentStop, for hosts/versions without handback. Same
- * outcomes, spoken as `decision: "block"` or `additionalContext`. When
+ * Fallback: `classic.SubagentStop`, for hosts/versions without handback.
+ * Same outcomes, spoken as `decision: "block"` or `additionalContext`. When
  * handback is in use, SubagentStop's `last_assistant_message` is
  * boilerplate with no STATUS line, so the gate skips there and never
  * runs twice.

@@ -1,11 +1,10 @@
 /**
- * Cartographer auto-reindex PostToolUse hook.
- *
- * Wired into ~/.mimir/settings.json as a PostToolUse hook on Edit, Write,
- * and MultiEdit. CC fires us with the tool payload on stdin; we extract
- * the file path, spawn a detached `reindex --worker` child to do the
- * actual parse + local index write, and exit immediately so CC's next
- * model turn isn't blocked on a Rust binary.
+ * Cartographer auto-reindex — `mimir-cc reindex`, run by the hooks
+ * module's `tool.call` hook after an Edit or Write has landed, with the
+ * PostToolUse payload on stdin. We extract the file path, spawn a
+ * detached `reindex --worker` child to do the actual parse + local index
+ * write, and exit immediately so CC's next model turn isn't blocked on a
+ * Rust binary.
  *
  * The worker mode (`mimir-cc reindex --worker <project> <file>`) is the
  * one that actually spawns cartographer, parses the file, and writes the
@@ -13,10 +12,10 @@
  * machine). Detaching from the hook process means CC sees a clean exit
  * code 0 immediately while the indexer keeps running in the background.
  *
- * No-op when MIMIR_ACTIVE != 1 (defence in depth — settings.json scoping
- * already restricts the hook to mimir sessions), when the tool isn't a
- * file-write, when there's no cartographer binary configured, or when
- * the file path can't be resolved from the tool input.
+ * No-op when MIMIR_ACTIVE != 1 (defence in depth — the module sets it
+ * for every run), when the tool isn't a file-write, when there's no
+ * cartographer binary configured, or when the file path can't be
+ * resolved from the tool input.
  */
 
 import { spawn } from "node:child_process";

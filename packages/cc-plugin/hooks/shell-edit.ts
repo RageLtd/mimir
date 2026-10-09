@@ -1,11 +1,6 @@
 /**
- * Edit guard — PreToolUse:Bash hook.
- *
- * Claude Code's auto permission mode tells the model to prefer Bash
- * (sed, heredocs, short scripts) over the Read/Edit/Write tools. That
- * costs the developer the one thing they watch the chat for: edits shown
- * as diffs. This hook gives auto mode back its edit tools without giving
- * up the rest of it.
+ * How a Bash command edits files — the classifier behind the edit guard
+ * (edit-guard.ts).
  *
  *   single — the command rewrites exactly one explicit file through the
  *            shell. Denied, with a reason pointing at the Edit tool.
@@ -16,30 +11,16 @@
  *            project's formatter or codemod tooling, not sed.
  *   none   — not an edit, or too ambiguous to call. Silent.
  *
- * Hooks fire before the permission-mode check in every mode, so a deny
- * here is honoured even under auto. The classifier errs toward `none`:
- * blocking a legitimate command is the worse failure. Disable per
- * session with MIMIR_EDIT_GUARD=0.
+ * The classifier errs toward `none`: blocking a legitimate command is the
+ * worse failure. Pure, with no engine import, so `src/edit-guard.spec.ts`
+ * runs it under Bun against the full command corpus.
  */
-
-import { errMessage } from "@mimir/plugin-core/util";
-import { createLogger } from "./logger";
-
-const log = createLogger("edit-guard-hook");
 
 const assertNever = (x: never): never => {
   throw new Error(`Unhandled edit shape: ${String(x)}`);
 };
 
 export type EditShape = "none" | "single" | "bulk";
-
-type HookInput = {
-  readonly tool_name?: string;
-  readonly tool_input?: unknown;
-};
-
-const HOOK_EVENT = "PreToolUse";
-const GUARD_ENV = "MIMIR_EDIT_GUARD";
 
 /** Paths whose writes are scratch, not edits. */
 const SCRATCH_TARGET = /^(\/dev\/|\/tmp\/|\/private\/tmp\/|\/var\/folders\/)/;
@@ -342,76 +323,17 @@ const denyReason = (target: string) =>
 const BULK_REASON =
   "Mimir edit guard: this command edits files through the shell across many paths. Shell edits bypass the rule engine and never appear as diffs in chat. Make the changes with the Edit tool per file (Write for new files); for a genuinely mechanical sweep use the project's formatter or a codemod, then show `git diff --stat`.";
 
-/**
- * Hook decision for a Bash command: the JSON object to print, or null
- * for silence. Separated from I/O so it can be tested directly.
- */
+/** The deny reason for a Bash command, or null to let it run. */
 export const decide = (command: string) => {
   const { shape, target } = classifyBashEdit(command);
   switch (shape) {
     case "single":
-      return {
-        hookSpecificOutput: {
-          hookEventName: HOOK_EVENT,
-          permissionDecision: "deny",
-          permissionDecisionReason: denyReason(target ?? "that file"),
-        },
-      };
+      return denyReason(target ?? "that file");
     case "bulk":
-      return {
-        hookSpecificOutput: {
-          hookEventName: HOOK_EVENT,
-          permissionDecision: "deny",
-          permissionDecisionReason: BULK_REASON,
-        },
-      };
+      return BULK_REASON;
     case "none":
       return null;
     default:
       return assertNever(shape);
   }
-};
-
-const readStdin = async () => {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of Bun.stdin.stream()) chunks.push(chunk);
-  return Buffer.concat(chunks).toString("utf8");
-};
-
-const parseCommand = (raw: string) => {
-  if (raw.trim().length === 0) return null;
-  // Serialisation boundary: the hook payload arrives as untyped JSON.
-  const parsed = (() => {
-    try {
-      return JSON.parse(raw) as HookInput;
-    } catch {
-      return null;
-    }
-  })();
-  if (parsed?.tool_name !== "Bash") return null;
-  const input = parsed.tool_input;
-  if (!input || typeof input !== "object" || !("command" in input)) return null;
-  return typeof input.command === "string" ? input.command : null;
-};
-
-/**
- * Entry point for `mimir-cc edit-guard`. Always exits 0: a crashing hook
- * would block every Bash call, which is far worse than a missed edit.
- */
-export const runEditGuardHook = async () => {
-  if (process.env.MIMIR_ACTIVE !== "1") return 0;
-  if (process.env[GUARD_ENV] === "0") return 0;
-
-  const raw = await readStdin().catch((err) => {
-    log.error("stdin read failed", { error: errMessage(err) });
-    return "";
-  });
-  const command = parseCommand(raw);
-  if (command === null) return 0;
-
-  const decision = decide(command);
-  if (!decision) return 0;
-  log.info("edit guard fired", { shape: classifyBashEdit(command).shape });
-  process.stdout.write(JSON.stringify(decision));
-  return 0;
 };

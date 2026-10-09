@@ -18,15 +18,15 @@
  *   voice-anchor --session <id> --nth <n>
  *                            The n-th voice anchor of a session's rotation,
  *                            run by the hooks module on its cadence.
- *   rules                    PreToolUse hook handler (rule engine nudges).
- *   edit-guard               PreToolUse:Bash hook handler (shell edits denied
- *                            in favour of Edit).
- *   guard --role <r>         PreToolUse hook handler (role guard for workers
- *                            and the coordinator).
- *   verify                   SubagentStop hook handler (verify gate).
- *   reindex [--worker ...]   PostToolUse hook handler. Default mode forks
- *                            a worker and exits; worker mode does the
- *                            cartographer parse + server sync.
+ *   rules                    Rule engine on a tool call (PreToolUse payload
+ *                            on stdin), run by the hooks module.
+ *   guard --role <r>         Role guard for workers and the coordinator,
+ *                            run by the hooks module.
+ *   verify                   Verify gate (hand-back or SubagentStop payload),
+ *                            run by the hooks module.
+ *   reindex [--worker ...]   After a file write. Default mode forks a worker
+ *                            and exits; worker mode does the cartographer
+ *                            parse + local index write.
  *   user-memory-mcp          Stdio MCP server for user-memory tools.
  *
  * Anything else prints usage and exits non-zero.
@@ -42,7 +42,6 @@ import {
   parsePartialOptions,
 } from "./cli-args";
 import { runDelegateCommand, runReviewPromptCommand } from "./delegate-command";
-import { runEditGuardHook } from "./edit-guard-hook";
 import { runFileContextHook } from "./file-context-hook";
 import { runGuardHook } from "./guard-hook";
 import { runHygieneCommand } from "./hygiene-command";
@@ -85,11 +84,11 @@ const USAGE = [
   "                          the hooks module every MIMIR_ANCHOR_INTERVAL turns.",
   "  retrieve                Per-turn brain retrieval (reads the UserPromptSubmit",
   "                          payload from stdin). Run by the hooks module.",
-  "  rules                   PreToolUse hook (reads stdin).",
-  "  file-context            PreToolUse:Read hook: cartographer + memory injection.",
-  "  edit-guard              PreToolUse:Bash hook: deny shell edits (use Edit instead).",
-  "  guard --role <r>        PreToolUse hook: role guard (impl|test|review|coordinator).",
-  '  verify                  SubagentStop hook: verify gate for worker "done" claims.',
+  "  rules                   Rule engine on a tool call (PreToolUse payload on stdin).",
+  "  file-context            Cartographer + memory injection for a Read (stdin).",
+  "  guard --role <r>        Role guard (impl|test|review|coordinator) on a tool call.",
+  '  verify                  Verify gate for worker "done" claims (hand-back or',
+  "                          SubagentStop payload on stdin).",
   "  verify --worktree <path> [--role impl|test] [--agent <id>] [--allow-empty]",
   "                          Run the gate by hand: re-check a retained worktree, or",
   "                          (--allow-empty) the merged tree as the integration check.",
@@ -97,7 +96,7 @@ const USAGE = [
   "                          Turn the coordinator role on/off for this session.",
   "  review-prompt <worktree> [--title <t>]",
   "                          Print the context-free review prompt for a worker's change.",
-  "  reindex                 PostToolUse hook (reads stdin).",
+  "  reindex                 Reindex one written file (PostToolUse payload on stdin).",
   "  persist                 Stop hook: ship transcript delta to mimir brain.",
   "  precompact              PreCompact hook: pre-discard persistence.",
   "  session-start           SessionStart hook: full project re-index (replace mode).",
@@ -162,9 +161,6 @@ const dispatch = async (argv: readonly string[]): Promise<number> => {
 
     case "file-context":
       return runFileContextHook();
-
-    case "edit-guard":
-      return runEditGuardHook();
 
     case "guard":
       return runGuardHook(rest);

@@ -51,12 +51,9 @@ describe("hooks/hooks.json", () => {
 
   test("covers the lifecycle the wrapper used to wire", () => {
     expect(Object.keys(hooksJson.hooks).sort()).toEqual([
-      "PostToolUse",
       "PreCompact",
-      "PreToolUse",
       "SessionStart",
       "Stop",
-      "SubagentStop",
     ]);
   });
 });
