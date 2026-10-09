@@ -179,7 +179,7 @@ wrapper-specific; elsewhere the persona is the Mimir output style. In practice:
 
 ### Hooks (plugin `hooks/hooks.json`)
 
-These hooks ship in the plugin and fire wherever it is enabled. Each command is `MIMIR_ACTIVE=1 "$HOME/.local/bin/mimir-cc" <subcommand>` — the installed binary, with the gate every handler checks set inline. `manifests.test.ts` pins each subcommand to the CLI's dispatch table.
+These hooks ship in the plugin and fire wherever it is enabled. Each command is `MIMIR_ACTIVE=1 "$HOME/.local/bin/mimir-cc" <subcommand>` — the installed binary, with the gate every handler checks set inline. `manifests.spec.ts` pins each subcommand to the CLI's dispatch table.
 
 - **`SessionStart` → session-start.** On startup or resume: silent key reconcile and blind org sync (bounded), then a detached full re-index of the project into the local cartographer index.
 - **`UserPromptSubmit` → voice-anchor.** Assembles the boot-context block (user profile, recent project memories, session context) on every prompt, and every N turns (default 5, override via `MIMIR_ANCHOR_INTERVAL`) injects a `<voice_anchor>` block sampled from the system prompt's voice library. Recency-slot persona refresh that counteracts long-context drift.
@@ -235,7 +235,7 @@ Nothing prompts for `workerModels`: set it by hand-editing `~/.mimir/config.json
 
 ### Workers (plugin `agents/`)
 
-The three delegation workers — `mimir-impl`, `mimir-test`, `mimir-review` — ship as subagent files in this plugin's `agents/` directory, not in `~/.mimir`. The plugin directory is what Claude Code re-reads on `/reload-plugins`, on an agent-view respawn and on a desktop resume, so the workers survive all three; definitions passed on argv survive none of them. Each file is rendered from `packages/server/system-prompt.md` by `bun run --cwd packages/cc-plugin agents:render` (the "how to do work" sections plus a role contract, no persona) and committed; `agents.test.ts` fails when the committed files drift from the renderer, so re-render after editing the seed or `plugin-core/src/workers`. The worker prompt therefore tracks the plugin release, not the served prompt.
+The three delegation workers — `mimir-impl`, `mimir-test`, `mimir-review` — ship as subagent files in this plugin's `agents/` directory, not in `~/.mimir`. The plugin directory is what Claude Code re-reads on `/reload-plugins`, on an agent-view respawn and on a desktop resume, so the workers survive all three; definitions passed on argv survive none of them. Each file is rendered from `packages/server/system-prompt.md` by `bun run --cwd packages/cc-plugin agents:render` (the "how to do work" sections plus a role contract, no persona) and committed; `agents.spec.ts` fails when the committed files drift from the renderer, so re-render after editing the seed or `plugin-core/src/workers`. The worker prompt therefore tracks the plugin release, not the served prompt.
 
 Plugin agents cannot carry frontmatter hooks, so the role guard is the plugin's `guard` hook above — which, now that the hooks ship in the plugin, also fires in a plain `claude` or desktop-app session with the plugin enabled, so the workers are guarded there too.
 

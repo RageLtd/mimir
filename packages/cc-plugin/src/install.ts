@@ -37,6 +37,7 @@ import wrapperTemplate from "../artifacts/wrapper.sh.template" with {
 import ensureBinaryScript from "../scripts/ensure-binary.sh" with {
   type: "text",
 };
+import { checkClaudeVersion, MIN_CLAUDE_CODE_VERSION } from "./cc-version";
 import { extractionConfig, readConfig, writeConfig } from "./config";
 import { claudeConfigDir, OUTPUT_STYLE_NAME } from "./project-settings";
 
@@ -197,6 +198,24 @@ export const runInstall = async (
 ) => {
   const urlResult = validateUrl(opts.serverUrl);
   if (!urlResult.ok) return urlResult;
+
+  // The plugin's hooks are a hooks module; an older Claude Code ignores
+  // it and runs Mimir with no hooks at all, silently. Refuse that up front.
+  const claude = await checkClaudeVersion();
+  switch (claude.kind) {
+    case "too-old":
+      return err(
+        `Claude Code ${claude.version} is older than ${MIN_CLAUDE_CODE_VERSION}, ` +
+          "the first release with hooks-module support — update Claude Code and re-run.",
+      );
+    case "missing":
+      log(
+        `warning: \`claude\` not found on PATH — Mimir needs Claude Code ${MIN_CLAUDE_CODE_VERSION} or newer.`,
+      );
+      break;
+    case "ok":
+      break;
+  }
 
   // Resolve the cartographer binary BEFORE the server fetch: an explicit
   // --cartographer path is validated (a typo'd path used to install
