@@ -1,9 +1,9 @@
 ---
-description: Turn Mimir off for this project — removes the plugin enablement and the Mimir output style from .claude/settings.local.json
+description: Turn Mimir off for this project — removes the plugin enablement from .claude/settings.local.json
 allowed-tools: ["Bash"]
 ---
 
-You are turning Mimir off for the current project. The switch is this project's `.claude/settings.local.json`: `mimir-cc enable` added the plugin, the "Mimir" output style, and a few settings there, and `disable` removes exactly those entries — anything the developer added or changed since is kept.
+You are turning Mimir off for the current project. The switch is this project's `.claude/settings.local.json`: `mimir-cc enable` added the plugin and a few settings there, and `disable` removes exactly those entries — anything the developer added or changed since is kept.
 
 Run:
 

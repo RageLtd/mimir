@@ -1,9 +1,10 @@
 /**
- * Per-turn retrieval injection — UserPromptSubmit hook.
+ * Per-turn retrieval injection — `mimir-cc retrieve`, run by the hooks
+ * module's `prompt.submit` hook with the UserPromptSubmit payload.
  *
- * Fires on every developer prompt EXCEPT the first one (boot-context
- * handles the first prompt, owned by voice-anchor.ts). Reads the LOCAL
- * org replica (MIM-84) — no server round-trip — and emits:
+ * Fires on every developer prompt, the first included (boot context is
+ * profile and project only, injected on `prompt.context`). Reads the
+ * LOCAL org replica (MIM-84) — no server round-trip — and emits:
  *
  *   - hookSpecificOutput.additionalContext — the `<retrieved_context>`
  *     block, hidden from the developer's transcript view but visible to
@@ -18,16 +19,10 @@
  * self-sustaining. The lone remaining network touch is project-id
  * resolution, which is disk-cached after the first call per project.
  *
- * State: `~/.mimir/retrieve-state/<session-id>.json` — created on the
- * first hook call as a marker. Subsequent calls in the same session see
- * the marker exists and proceed with retrieval.
- *
- * Defence-in-depth: MIMIR_ACTIVE gate matches voice-anchor / rules /
- * reindex hooks so nested `claude` subprocesses can't accidentally fire.
+ * Defence-in-depth: MIMIR_ACTIVE gate matches the rules / reindex hooks
+ * so nested `claude` subprocesses can't accidentally fire.
  */
 
-import { mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
 import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
 import { retrieveLocalContext } from "@mimir/plugin-core/brain/retrieve";
 import { getOrResolveProjectId } from "@mimir/plugin-core/project";
@@ -36,7 +31,7 @@ import {
   createOrgReplica,
   defaultOrgReplicaPath,
 } from "@mimir/plugin-core/store/org-replica";
-import { errMessage, mimirHome } from "@mimir/plugin-core/util";
+import { errMessage } from "@mimir/plugin-core/util";
 import { readConfig } from "./config";
 import { noticeFor } from "./host";
 import { createLogger } from "./logger";
@@ -50,9 +45,6 @@ type HookInput = {
   readonly cwd?: string;
 };
 
-const markerPath = (sessionId: string) =>
-  join(mimirHome(), "retrieve-state", `${sessionId}.json`);
-
 const readStdin = async () => {
   const chunks: Uint8Array[] = [];
   for await (const chunk of Bun.stdin.stream()) {
@@ -65,15 +57,6 @@ const safeParseHookInput = async (raw: string) => {
   if (raw.trim().length === 0) return {} as HookInput;
   const [err, parsed] = await attempt(async () => JSON.parse(raw) as HookInput);
   return err ? ({} as HookInput) : parsed;
-};
-
-const ensureMarker = async (sessionId: string) => {
-  const path = markerPath(sessionId);
-  const file = Bun.file(path);
-  if (await file.exists()) return true;
-  await mkdir(dirname(path), { recursive: true }).catch(() => undefined);
-  await Bun.write(path, JSON.stringify({ initialized: Date.now() }));
-  return false;
 };
 
 const emitInjection = (
@@ -112,12 +95,6 @@ export const runRetrieveHook = async () => {
 
   if (prompt.length === 0) {
     log.debug("empty prompt, skipping");
-    return 0;
-  }
-
-  const seenBefore = await ensureMarker(sessionId);
-  if (!seenBefore) {
-    log.debug("first prompt of session — boot-context owns this turn");
     return 0;
   }
 

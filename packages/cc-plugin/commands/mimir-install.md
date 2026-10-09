@@ -1,5 +1,5 @@
 ---
-description: Install Mimir for Claude Code — sets up ~/.mimir/, the wrapper script, the Mimir output style, and the binary behind the plugin's hooks and MCP servers
+description: Install Mimir for Claude Code — sets up ~/.mimir/ (persona included), the wrapper script, and the binary behind the plugin's hooks and MCP servers
 argument-hint: "[server-url]"
 allowed-tools: ["Bash", "AskUserQuestion"]
 ---
@@ -97,7 +97,7 @@ Otherwise call `AskUserQuestion`:
 - question: `Enable Mimir for this project now? This is how the Claude desktop app (and a plain `claude`) runs as Mimir — the plugin's hooks, MCP servers and persona load only in projects where it is enabled.`
 - header: `Enable here`
 - options:
-  - label: `Yes — enable this project`, description: `Writes enabledPlugins + the Mimir output style into this project's .claude/settings.local.json (per-user, gitignored)`
+  - label: `Yes — enable this project`, description: `Writes enabledPlugins into this project's .claude/settings.local.json (per-user, gitignored)`
   - label: `No — I'll use the mimir wrapper`, description: `Terminal only; nothing is written to this project`
 
 If the user picks **Yes**, run:

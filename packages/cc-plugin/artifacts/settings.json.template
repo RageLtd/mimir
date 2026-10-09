@@ -25,6 +25,5 @@
       "Read(~/.npmrc)",
       "Read(~/.pypirc)"
     ]
-  },
-  "outputStyle": "default"
+  }
 }

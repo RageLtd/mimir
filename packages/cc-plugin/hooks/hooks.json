@@ -13,17 +13,6 @@
         ]
       }
     ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "MIMIR_ACTIVE=1 \"$HOME/.local/bin/mimir-cc\" voice-anchor",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "hooks": [

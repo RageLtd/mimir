@@ -3,7 +3,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { toAnthropicXml } from "@mimir/plugin-core/anthropic-xml";
-import { renderOutputStyle } from "./install";
 
 const serverSeed = await Bun.file(
   join(import.meta.dir, "..", "..", "server", "system-prompt.md"),
@@ -19,8 +18,11 @@ test.each([
   const home = await mkdtemp(join(tmpdir(), "mimir-cc-install-"));
   const mimirDir = join(home, ".mimir");
   const claudeDir = join(home, ".claude");
+  const legacyStyle = join(claudeDir, "output-styles", "mimir.md");
   const stopMessage = "fixture stops before binary installation";
   try {
+    // An older install's output style: an update removes it.
+    await Bun.write(legacyStyle, "---\nname: Mimir\n---\n");
     // Module mocks stay in a subprocess: the suite runs files in parallel.
     const proc = Bun.spawn(
       [
@@ -74,9 +76,7 @@ test.each([
     expect(xml).toContain("<environment>");
     expect(xml).toContain("<model_override>");
     expect(xml).toContain("mcp__plugin_mimir-cc_mimir-local__");
-    expect(
-      await Bun.file(join(claudeDir, "output-styles", "mimir.md")).text(),
-    ).toBe(renderOutputStyle(xml));
+    expect(await Bun.file(legacyStyle).exists()).toBe(false);
   } finally {
     await rm(home, { recursive: true, force: true });
   }

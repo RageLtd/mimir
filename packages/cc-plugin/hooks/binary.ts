@@ -28,11 +28,11 @@ export const mimirCcArgv = (home: string, subcommand: string) => [
   subcommand,
 ];
 
-/** `init` for `$.process.run`: the hook payload on stdin, gates passed. */
+/** `init` for `$.process.run`: the payload (if any) on stdin, gates passed. */
 export const mimirCcInit = (payload: unknown, timeoutMs: number) => ({
   env: { MIMIR_ACTIVE: "1" },
   timeoutMs,
-  stdin: JSON.stringify(payload),
+  ...(payload === undefined ? {} : { stdin: JSON.stringify(payload) }),
 });
 
 export const parseHookOutput = (stdout: string) => {

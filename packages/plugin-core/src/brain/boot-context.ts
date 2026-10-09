@@ -115,7 +115,13 @@ const wrapSessionContext = (block: string | null) =>
   block ?? "No prior session context — this is the start of the conversation.";
 
 export type BootContextOptions = {
-  readonly promptText: string;
+  /**
+   * The first prompt, the query for the session-context section. Omitted,
+   * that section is left out entirely — for a host whose boot fires before
+   * any prompt exists (Claude Code's `prompt.context`) and retrieves per
+   * turn instead.
+   */
+  readonly promptText?: string;
   readonly projectPath: string;
   /** Consumer's logger — omitted means silent operation. */
   readonly log?: Logger;
@@ -149,11 +155,12 @@ export const assembleBootContext = async (opts: BootContextOptions) => {
 
   const [profile, sessionContext] = await Promise.all([
     buildUserProfileSection(config.userMemoryDb, log),
-    buildSessionContext(opts.promptText, projectId, log),
+    opts.promptText === undefined
+      ? null
+      : buildSessionContext(opts.promptText, projectId, log),
   ]);
 
   const profileSection = wrapProfile(profile);
-  const sessionContextSection = wrapSessionContext(sessionContext);
 
   log.info("boot context assembled", {
     projectId,
@@ -179,12 +186,16 @@ export const assembleBootContext = async (opts: BootContextOptions) => {
     "<user_profile_section>",
     profileSection,
     "</user_profile_section>",
-    "",
-    "<session_context_section>",
-    sessionContextSection,
-    "</session_context_section>",
-    "</boot_context>",
   );
+  if (opts.promptText !== undefined) {
+    sections.push(
+      "",
+      "<session_context_section>",
+      wrapSessionContext(sessionContext),
+      "</session_context_section>",
+    );
+  }
+  sections.push("</boot_context>");
 
   return sections.join("\n");
 };

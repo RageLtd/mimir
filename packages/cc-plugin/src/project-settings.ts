@@ -3,19 +3,21 @@
  *
  * The Claude desktop app spawns `claude` with no flags, so a session can
  * only become Mimir through what Claude Code loads on its own. The plugin
- * carries the hooks (hooks/hooks.json) and MCP servers (.mcp.json); the
- * persona is the "Mimir" output style the installer writes. Where the
- * plugin is enabled is therefore where Mimir is active — and Claude Code
- * scopes plugin enablement per settings file. Enabling in a project's
+ * carries the hooks module (the persona included), the command hooks
+ * (hooks/hooks.json) and the MCP servers (.mcp.json). Where the plugin is
+ * enabled is therefore where Mimir is active — and Claude Code scopes
+ * plugin enablement per settings file. Enabling in a project's
  * `.claude/settings.local.json` (per-user, gitignored, copied into the
  * worktrees the desktop app creates) turns Mimir on for that project and
  * nowhere else.
  *
- * `enable` merges into that file: the plugin, the output style, and the
- * slice of the wrapper's settings a desktop session would otherwise lack
- * (subagent env, worktree base ref, secret-file deny list). `disable`
- * removes exactly what `enable` added, leaving the developer's own
- * entries — including a value they changed after enabling — untouched.
+ * `enable` merges into that file: the plugin and the slice of the
+ * wrapper's settings a desktop session would otherwise lack (subagent
+ * env, worktree base ref, secret-file deny list). `disable` removes
+ * exactly what `enable` added, leaving the developer's own entries —
+ * including a value they changed after enabling — untouched. Both drop
+ * the "Mimir" output style an older `enable` selected: the persona now
+ * arrives through the hooks module and the style file is gone.
  */
 
 import { rm } from "node:fs/promises";
@@ -26,7 +28,8 @@ import settingsTemplate from "../artifacts/settings.json.template" with {
   type: "text",
 };
 
-export const OUTPUT_STYLE_NAME = "Mimir";
+/** The output style installs before the hooks module selected per project. */
+export const LEGACY_OUTPUT_STYLE = "Mimir";
 export const PLUGIN_NAME = "mimir-cc";
 const DEFAULT_PLUGIN_KEY = `${PLUGIN_NAME}@rageltd`;
 const LOCAL_SETTINGS_PATH = join(".claude", "settings.local.json");
@@ -54,8 +57,8 @@ export const claudeConfigDir = () =>
 
 /**
  * The slice of the wrapper's settings template a project inherits. The
- * template is the single source for these values; `outputStyle` and
- * `disableAgentView` are wrapper-only and deliberately not copied.
+ * template is the single source for these values; `disableAgentView` is
+ * wrapper-only and deliberately not copied.
  */
 const templateSlice = () => {
   // Serialisation boundary: the template is JSON text bundled into the
@@ -72,8 +75,16 @@ const templateSlice = () => {
   };
 };
 
-export const enableProject = (settings: Json, pluginKey: string) => {
+/** Scalar, so the container helpers below don't apply: drop the legacy
+ *  style only while it is still the one an older `enable` selected. */
+const withoutLegacyStyle = (settings: Json) => {
+  const { outputStyle, ...rest } = settings;
+  return outputStyle === LEGACY_OUTPUT_STYLE ? rest : settings;
+};
+
+export const enableProject = (current: Json, pluginKey: string) => {
   const ours = templateSlice();
+  const settings = withoutLegacyStyle(current);
   const permissions = recordAt(settings, "permissions");
   return {
     ...settings,
@@ -81,7 +92,6 @@ export const enableProject = (settings: Json, pluginKey: string) => {
       ...recordAt(settings, "enabledPlugins"),
       [pluginKey]: true,
     },
-    outputStyle: OUTPUT_STYLE_NAME,
     env: { ...recordAt(settings, "env"), ...ours.env },
     worktree: { ...recordAt(settings, "worktree"), ...ours.worktree },
     permissions: {
@@ -126,10 +136,7 @@ export const disableProject = (settings: Json, pluginKey: string) => {
     withoutOurs(recordAt(out, "worktree"), ours.worktree),
   );
   out = setOrDrop(out, "permissions", setOrDrop(permissions, "deny", deny));
-  // Scalar, so the container helpers don't apply: drop it only while it
-  // is still the style `enable` selected.
-  const { outputStyle, ...rest } = out;
-  return outputStyle === OUTPUT_STYLE_NAME ? rest : out;
+  return withoutLegacyStyle(out);
 };
 
 /**
@@ -232,7 +239,6 @@ export const runEnableCommand = async (rest: readonly string[]) => {
     ``,
     `  Settings:   ${result.path}`,
     `  Plugin:     ${result.pluginKey}`,
-    `  Persona:    output style "${OUTPUT_STYLE_NAME}"`,
     ``,
     `Start a new Claude Code session in this project (desktop app or terminal)`,
     `to pick it up. Running sessions keep their current configuration.`,

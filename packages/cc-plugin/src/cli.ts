@@ -11,10 +11,13 @@
  *                            it from ~/.mimir/config.json so testers don't
  *                            have to remember it.
  *   enable | disable         Turn Mimir on/off for one project by toggling
- *                            the plugin + output style in its
- *                            .claude/settings.local.json (desktop app path).
- *   voice-anchor             UserPromptSubmit hook handler (boot context +
- *                            voice anchors).
+ *                            the plugin in its .claude/settings.local.json
+ *                            (desktop app path).
+ *   boot-context             First-message context block (user profile +
+ *                            active project), run by the hooks module.
+ *   voice-anchor --session <id> --nth <n>
+ *                            The n-th voice anchor of a session's rotation,
+ *                            run by the hooks module on its cadence.
  *   rules                    PreToolUse hook handler (rule engine nudges).
  *   edit-guard               PreToolUse:Bash hook handler (shell edits denied
  *                            in favour of Edit).
@@ -32,6 +35,7 @@
 import { runKeysCommand } from "@mimir/plugin-core/keys/cli";
 import { runSyncCommand } from "@mimir/plugin-core/sync/cli";
 import { runBackfillCommand } from "./backfill-command";
+import { runBootContextCommand } from "./boot-context";
 import {
   mergeUpdateOptions,
   parseInstallArgs,
@@ -54,7 +58,7 @@ import { runRulesHook } from "./rules-hook";
 import { runSessionStartCommand } from "./session-start-hook";
 import { runUserMemoryMcp } from "./user-memory-mcp";
 import { runVerifyHook } from "./verify-hook";
-import { runVoiceAnchorHook } from "./voice-anchor";
+import { runVoiceAnchorCommand } from "./voice-anchor";
 
 const USAGE = [
   "Usage: mimir-cc <command> [args]",
@@ -70,13 +74,17 @@ const USAGE = [
   "  update [server-url]     Re-install (uses existing config if URL omitted).",
   "  enable [--project DIR] [--plugin KEY]",
   "                          Turn Mimir on for a project (default: cwd): enables the",
-  "                          plugin and the Mimir output style in its",
-  "                          .claude/settings.local.json. How the Claude desktop app",
-  "                          and plain `claude` sessions become Mimir.",
+  "                          plugin in its .claude/settings.local.json. How the Claude",
+  "                          desktop app and plain `claude` sessions become Mimir.",
   "  disable [--project DIR] [--plugin KEY]",
   "                          Reverse `enable` for a project.",
-  "  voice-anchor            UserPromptSubmit hook (reads stdin).",
-  "  retrieve                UserPromptSubmit hook: per-turn brain retrieval.",
+  "  boot-context            First-message context block: user profile + active",
+  "                          project (reads {cwd} from stdin). Run by the hooks module.",
+  "  voice-anchor --session <id> --nth <n>",
+  "                          The n-th voice anchor of a session's rotation. Run by",
+  "                          the hooks module every MIMIR_ANCHOR_INTERVAL turns.",
+  "  retrieve                Per-turn brain retrieval (reads the UserPromptSubmit",
+  "                          payload from stdin). Run by the hooks module.",
   "  rules                   PreToolUse hook (reads stdin).",
   "  file-context            PreToolUse:Read hook: cartographer + memory injection.",
   "  edit-guard              PreToolUse:Bash hook: deny shell edits (use Edit instead).",
@@ -140,8 +148,11 @@ const dispatch = async (argv: readonly string[]): Promise<number> => {
     case "disable":
       return runDisableCommand(rest);
 
+    case "boot-context":
+      return runBootContextCommand();
+
     case "voice-anchor":
-      return runVoiceAnchorHook();
+      return runVoiceAnchorCommand(rest);
 
     case "retrieve":
       return runRetrieveHook();

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import {
   disableProject,
   enableProject,
-  OUTPUT_STYLE_NAME,
+  LEGACY_OUTPUT_STYLE,
   parseSwitchArgs,
   resolvePluginKey,
   runDisableCommand,
@@ -15,10 +15,10 @@ import {
 const KEY = "mimir-cc@rageltd";
 
 describe("enableProject", () => {
-  test("empty settings gain the plugin, the style, and the template slice", () => {
+  test("empty settings gain the plugin and the template slice", () => {
     const out = enableProject({}, KEY);
     expect(out.enabledPlugins).toEqual({ [KEY]: true });
-    expect(out.outputStyle).toBe(OUTPUT_STYLE_NAME);
+    expect(out).not.toHaveProperty("outputStyle");
     expect(out.env).toEqual({
       CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH: "1",
       CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS: "3",
@@ -49,11 +49,28 @@ describe("enableProject", () => {
     expect(deny.filter((d) => d === "Read(**/.env)")).toHaveLength(1);
     expect(deny).toContain("Read(secret)");
   });
+
+  test("drops the legacy Mimir output style, keeps any other", () => {
+    expect(
+      enableProject({ outputStyle: LEGACY_OUTPUT_STYLE }, KEY),
+    ).not.toHaveProperty("outputStyle");
+    expect(enableProject({ outputStyle: "Concise" }, KEY)).toMatchObject({
+      outputStyle: "Concise",
+    });
+  });
 });
 
 describe("disableProject", () => {
   test("exactly reverses enable on an empty file", () => {
     expect(disableProject(enableProject({}, KEY), KEY)).toEqual({});
+  });
+
+  test("drops the legacy Mimir output style an older enable selected", () => {
+    const legacy = {
+      ...enableProject({}, KEY),
+      outputStyle: LEGACY_OUTPUT_STYLE,
+    };
+    expect(disableProject(legacy, KEY)).toEqual({});
   });
 
   test("keeps the developer's own entries and values they changed", () => {
@@ -137,7 +154,7 @@ describe("enable / disable commands", () => {
     expect(await runEnableCommand(["--project", project])).toBe(0);
     const written = await Bun.file(settingsPath()).json();
     expect(written.enabledPlugins).toEqual({ "mimir-cc@mimir-cc-local": true });
-    expect(written.outputStyle).toBe(OUTPUT_STYLE_NAME);
+    expect(written).not.toHaveProperty("outputStyle");
 
     expect(await runDisableCommand(["--project", project])).toBe(0);
     expect(await Bun.file(settingsPath()).exists()).toBe(false);
