@@ -271,6 +271,7 @@ export const runVerifyHook = async (args: readonly string[] = []) => {
   log.info("verify gate", {
     agentId,
     agentType: input.agent_type,
+    worktree: input.cwd,
     via: onHandback ? "handback" : "stop",
     kind: outcome.kind,
     ...("blocks" in outcome ? { blocks: outcome.blocks } : {}),

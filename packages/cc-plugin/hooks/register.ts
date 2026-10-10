@@ -26,8 +26,10 @@ export const register: Register = (on, options) => {
   registerLifecycle(on, options);
   registerBoot(on, options);
   registerSubmit(on, options);
-  registerGate(on, options);
+  // The edit guard is pure and goes first: a shell edit is refused before
+  // the gate pays two binary runs for it.
   registerEditGuard(on, options);
+  registerGate(on, options);
   registerFileContext(on, options);
   registerReindex(on, options);
 };
