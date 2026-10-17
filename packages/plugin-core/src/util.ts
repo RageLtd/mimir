@@ -38,8 +38,8 @@ export const expandHomePath = (
 
 /**
  * Resolve the `~/.mimir/` directory root for every state file the
- * adapters touch (logs, config, persist-state, retrieve-state,
- * file-context-state, project-paths cache, mcp.json, voice-anchor state).
+ * adapters touch (logs, config, retrieve-state, file-context-state,
+ * project-paths cache, mcp.json, voice-anchor state).
  *
  * Honors `MIMIR_HOME` first. This is the only path that gets tests out
  * of a footgun: Bun's `homedir()` caches the home dir at process start

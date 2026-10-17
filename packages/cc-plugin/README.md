@@ -188,8 +188,8 @@ The in-process half of the plugin, loaded through `hooks.json`'s `modules` entry
 - **`tool.call` (Edit, Write) → `mimir-cc reindex`.** Once the write has landed: the binary forks a detached cartographer worker that parses the changed file into the local index and exits at once. A subagent's edit (inside its worktree) is skipped.
 - **`tool.call` (SubagentHandback) and `classic.SubagentStop` → `mimir-cc verify`.** The gate on a worker's "done" claim: re-checks the worker's worktree before the hand-back is accepted. On the hand-back, a block denies the call (the worker keeps working) and a pass rewrites the message with the report appended; on SubagentStop — the fallback for hosts without the hand-back tool — a block stops the worker and a pass hands the report on as context.
 - **`classic.SessionStart` → `mimir-cc session-start`.** On startup or resume (the classic event carries `source`; the engine's `session.start` does not): silent key reconcile and blind org sync (bounded), then a detached full re-index of the project into the local cartographer index.
-- **`classic.Stop` → `mimir-cc persist`.** The turn's transcript delta (the payload's `transcript_path`, read past a per-session watermark), distilled into the local replica.
-- **`classic.PreCompact` → `mimir-cc precompact`.** The undistilled tail, summarised and extracted before Claude Code compacts the context.
+- **`turn.complete` (main loop) → `mimir-cc persist`.** The messages since the last distillation, read from `$.session.messages({ as: "api" })` with media stripped, distilled into the local replica. Where the last distillation stopped is an anchor in `$.state` (`hooks/messages.ts`) that the module moves when the binary answers `{ advance: true }`; it finds its place again after the engine's 4096-row window slides. A subagent's turns are its own.
+- **`session.compact` (main loop) → `mimir-cc precompact`.** The undistilled tail, summarised and extracted before Claude Code compacts the context; afterwards the anchor is the compacted conversation, so the engine's summary is never distilled as a turn. A `precompute` passes over — it installs nothing.
 
 `hooks.json` names the module and nothing else: there are no command hooks left. `manifests.spec.ts` pins every subcommand the module runs to the CLI's dispatch table.
 
@@ -312,7 +312,7 @@ packages/cc-plugin/                          ← workspace member @mimir/cc-plug
     edit-guard.spec.ts                       ← Bun corpus test for hooks/shell-edit.ts
     user-memory-mcp.ts, log-mcp.ts           ← entry points for the two plugin MCP servers
     delegate-command.ts, hygiene-command.ts, backfill-command.ts   ← human-driven subcommands
-    agents.ts, worktree-bootstrap.ts, transcript-delta.ts
+    agents.ts, worktree-bootstrap.ts, conversation.ts
   artifacts/                                 ← templates bundled into the binary
     settings.json.template
     wrapper.sh.template

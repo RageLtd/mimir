@@ -20,6 +20,8 @@ export type HookOutput = {
     readonly additionalContext?: string;
   };
   readonly systemMessage?: string;
+  /** persist / precompact: whether the delta they were handed is settled. */
+  readonly advance?: boolean;
 };
 
 /** `argv` for `$.process.run`: the installed binary and one subcommand. */

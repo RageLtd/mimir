@@ -15,6 +15,16 @@ export type MimirAgent = {
   readonly type: string;
 };
 
+/**
+ * Where the last distillation stopped: how many messages of the main
+ * conversation it covered and the mark (role and text) of the last one,
+ * so the point is found again after the window slides or compacts.
+ */
+export type MimirAnchor = {
+  readonly count: number;
+  readonly mark: string;
+};
+
 declare module "claude-code" {
   interface PluginState {
     "mimir-cc": {
@@ -22,6 +32,8 @@ declare module "claude-code" {
       turn: MimirTurn;
       /** Subagents by id, for the gates that run inside them. */
       agents: StateFamily<MimirAgent>;
+      /** The main conversation's distilled prefix, advanced by persist. */
+      distilled: MimirAnchor;
     };
   }
 }

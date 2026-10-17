@@ -1,18 +1,20 @@
 /**
- * `mimir-cc precompact` — run by the hooks module on `classic.PreCompact`
- * with its payload: belt-and-suspenders distillation before CC discards
- * (MIM-86: fully local, nothing ships to the server).
+ * `mimir-cc precompact` — run by the hooks module on `session.compact`
+ * with the main conversation's undistilled tail: belt-and-suspenders
+ * distillation before the engine discards it (MIM-86: fully local,
+ * nothing ships to the server).
  *
- * Fires when CC is about to compact (/compact or auto-trigger). Whatever
- * transcript delta the Stop hook hasn't yet distilled gets two treatments
- * before CC's local history is summarized away:
+ * Fires when the engine is about to compact (/compact or auto-trigger).
+ * Whatever the turn-end persist hasn't yet distilled gets two treatments
+ * before the engine's history is summarized away:
  *   1. A type:"summary" replica memory (the narrative record boot-context
- *      reads by recency) — this is the hook's primary purpose.
- *   2. Best-effort fact extraction, same as the Stop hook would have run.
+ *      reads by recency) — this run's primary purpose.
+ *   2. Best-effort fact extraction, same as persist would have run.
  *
- * Watermark advances when the SUMMARY succeeds; extraction failure only
- * logs (retrying would re-store a near-identical summary, which is worse
- * than losing one window's facts).
+ * Answers `{ advance: true }` when the SUMMARY succeeds; extraction
+ * failure only logs (retrying would re-store a near-identical summary,
+ * which is worse than losing one window's facts). The module re-anchors
+ * on the compacted conversation afterwards either way.
  *
  * Never blocks compaction — exit 0 unconditionally.
  */
@@ -28,32 +30,10 @@ import {
 } from "@mimir/plugin-core/store/org-replica";
 import { storeTyped } from "@mimir/plugin-core/tools/org-memory";
 import { extractionConfig, readConfig } from "./config";
+import { answer, readDistillInput, toModelMessages } from "./conversation";
 import { createLogger } from "./logger";
-import { readDelta, readWatermark, writeWatermark } from "./transcript-delta";
 
 const log = createLogger("precompact-hook");
-
-type HookInput = {
-  readonly session_id?: string;
-  readonly hook_event_name?: string;
-  readonly transcript_path?: string;
-  readonly cwd?: string;
-  readonly trigger?: "manual" | "auto";
-};
-
-const readStdin = async () => {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of Bun.stdin.stream()) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks).toString("utf8");
-};
-
-const safeParseHookInput = async (raw: string) => {
-  if (raw.trim().length === 0) return {} as HookInput;
-  const [err, parsed] = await attempt(async () => JSON.parse(raw) as HookInput);
-  return err ? ({} as HookInput) : parsed;
-};
 
 /**
  * Entry point invoked from cli.ts when argv[2] === "precompact".
@@ -63,36 +43,29 @@ const safeParseHookInput = async (raw: string) => {
 export const runPreCompactHook = async () => {
   if (process.env.MIMIR_ACTIVE !== "1") return 0;
 
-  const raw = await readStdin();
-  const input = await safeParseHookInput(raw);
-
+  const input = await readDistillInput();
   const sessionId = input.session_id;
-  const transcriptPath = input.transcript_path;
   const cwd = input.cwd ?? process.cwd();
   const trigger = input.trigger ?? "unknown";
 
-  if (!sessionId || !transcriptPath) {
-    log.debug("missing session_id or transcript_path — skipping", { trigger });
+  if (!sessionId) {
+    log.debug("no session_id in payload — skipping", { trigger });
     return 0;
   }
 
-  const watermark = await readWatermark(sessionId);
-  const { messages, newOffset } = await readDelta(transcriptPath, watermark);
-
+  const messages = toModelMessages(input.messages ?? []);
   if (messages.length === 0) {
-    if (newOffset > watermark) await writeWatermark(sessionId, newOffset);
-    log.info("precompact: nothing new to distill (Stop hook caught up)", {
+    answer(true);
+    log.info("precompact: nothing new to distill (persist caught up)", {
       sessionId,
       trigger,
-      watermark,
-      newOffset,
     });
     return 0;
   }
 
   const extraction = await extractionConfig();
   if (!extraction) {
-    await writeWatermark(sessionId, newOffset);
+    answer(true);
     log.warn("extraction unconfigured — precompact window not distilled", {
       sessionId,
       trigger,
@@ -123,7 +96,8 @@ export const runPreCompactHook = async () => {
 
   if (!summary.ok) {
     replica.close();
-    log.error("precompact: summarization failed — keeping watermark", {
+    answer(false);
+    log.error("precompact: summarization failed", {
       sessionId,
       trigger,
       messages: messages.length,
@@ -132,10 +106,9 @@ export const runPreCompactHook = async () => {
     return 0;
   }
 
-  // Best-effort fact extraction over the same window — the Stop hook
-  // never saw this tail, so its facts would otherwise be lost with the
-  // transcript. Failure logs; the watermark advances regardless (see
-  // module doc for why).
+  // Best-effort fact extraction over the same window — persist never saw
+  // this tail, so its facts would otherwise be lost with the context.
+  // Failure logs; the delta is settled regardless (see module doc for why).
   let extracted = 0;
   const outcome = await extractFromConversation(extraction, messages);
   if (outcome.ok && !outcome.skipped) {
@@ -157,15 +130,13 @@ export const runPreCompactHook = async () => {
   }
 
   replica.close();
-  await writeWatermark(sessionId, newOffset);
+  answer(true);
 
   log.info("precompact: window distilled locally", {
     sessionId,
     trigger,
     project: cwd,
     projectId,
-    watermark,
-    newOffset,
     messagesInDelta: messages.length,
     summaryId: summary.id,
     summarySkipped: summary.skipped,
