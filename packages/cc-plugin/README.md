@@ -89,7 +89,7 @@ There are two ways in. The **marketplace path** is the normal one — no clone, 
    /mimir-install
    ```
 
-   It asks for the mimir-server URL (default `https://mimir.rageltd.ca`), the user-memory SQLite DB path (default `~/.mimir/user-memories.db`), and whether the server needs an API key (read from `MIMIR_API_KEY`, never pasted). Then `ensure-binary.sh` downloads the matching `mimir-cc-<platform>` asset from `RageLtd/mimir` releases, re-signs it on macOS to clear Bun's broken adhoc signature, and the installer writes out `~/.mimir/`, the Mimir output style, and the wrapper — downloading the latest cartographer release and the embedder artifacts along the way.
+   It asks for the mimir-server URL (default `https://mimir.rageltd.ca`), the user-memory SQLite DB path (default `~/.mimir/user-memories.db`), and whether the server needs an API key (read from `MIMIR_API_KEY`, never pasted). Then `ensure-binary.sh` downloads the matching `mimir-cc-<platform>` asset from `RageLtd/mimir` releases, re-signs it on macOS to clear Bun's broken adhoc signature, and the installer writes out `~/.mimir/`, the Mimir output style, and the wrapper — downloading the latest cartographer release (its `parse-only` build, see [Cartographer reindex](#cartographer-reindex)) and the embedder artifacts along the way.
 
 4. Either let `/mimir-install` enable the project you're in and open a new desktop-app (or plain `claude`) session there, or run `mimir` from any terminal for the wrapper path.
 
@@ -133,6 +133,7 @@ Slash commands inside Claude Code:
 | `/mimir-disable` | Turn Mimir off for the current project (reverses `mimir-cc enable`) |
 | `/switch-model` | Stage `~/.mimir/next-session.json` so the wrapper relaunches on a different model. Wrapper sessions only. The next session starts fresh — continuity bridges through a project-memory checkpoint, because extended-thinking signatures don't survive cross-backend transcript replay |
 | `/run-hygiene` | Sweep the local replica. Dry-run by default; `--live` applies |
+| `/add-grammar <language> [repo-url]` | Add a tree-sitter grammar to cartographer's host library (`~/.cartographer/grammars`), validate it, and re-index the current project |
 
 Terminal subcommands on the `mimir-cc` binary — hooks aside, these are the
 human-driven ones:
@@ -275,9 +276,11 @@ State lives per-session at `~/.mimir/voice-state/<session-id>.json`. The hash-of
 
 ## Cartographer reindex
 
-The installer always lands a cartographer binary: the latest `RageLtd/cartographer` GitHub release, downloaded into `~/.mimir/bin` and refreshed on `update` when a newer release exists. Nothing already on the machine is picked up — a binary Mimir didn't fetch is one it can't keep current; `--cartographer PATH` is the only override (a local build, say). With it in place the `PostToolUse` reindex hook fires on every Edit/Write/MultiEdit. The hook itself is a fast detached fork — spawns `mimir-cc reindex --worker <project> <file>` and exits 0 immediately so the next CC turn isn't blocked on a Rust binary.
+The installer always lands a cartographer binary: the `cartographer-parse-only-<platform>` asset of the latest `RageLtd/cartographer` GitHub release — the build without cartographer's SurrealDB feature, since Mimir owns the index and uses the binary purely as a parser — downloaded into `~/.mimir/bin` and refreshed on `update` when a newer release exists. Nothing already on the machine is picked up — a binary Mimir didn't fetch is one it can't keep current; `--cartographer PATH` is the only override (a local build, say). With it in place the `PostToolUse` reindex hook fires on every Edit/Write/MultiEdit. The hook itself is a fast detached fork — spawns `mimir-cc reindex --worker <project> <file>` and exits 0 immediately so the next CC turn isn't blocked on a Rust binary.
 
 The worker spawns cartographer in `--parse-only` mode, parses the changed file, hashes the contents (SHA-256), and writes the result to the local cartographer index — nothing leaves the machine (MIM-91). Failures get logged but never block the user's tool call.
+
+Cartographer parses six languages out of the box and loads any other tree-sitter grammar from `~/.cartographer/grammars/<name>/` at startup. `/add-grammar <language>` walks through installing one — build with the tree-sitter CLI, `tags.scm` / `imports.scm` queries, `language.json` manifest, validation with `cartographer grammars` and `cartographer parse` — and finishes with `mimir-cc session-start --worker <project>`, the same full replace-mode re-index the SessionStart hook runs. Because every re-index spawns a fresh cartographer, that *is* the restart; no new session is needed.
 
 ## Building
 

@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CARTOGRAPHER_REPO,
+  cartographerAssetName,
   cartographerBinaryPath,
   installCartographer,
 } from "./install";
@@ -20,12 +21,14 @@ import { isExecutableFile } from "./resolve";
 /**
  * A stand-in GitHub: the latest-release lookup and the asset download,
  * both on one local server. `tag` and `apiDown` are mutable so a test can
- * stage "a newer release shipped" or "GitHub unreachable".
+ * stage "a newer release shipped" or "GitHub unreachable"; `requestedAssets`
+ * records which asset names were downloaded.
  */
 const github = {
   tag: "v1.2.0",
   apiDown: false,
   downloads: 0,
+  requestedAssets: [] as string[],
   server: null as ReturnType<typeof Bun.serve> | null,
 };
 const BINARY_BODY = "#!/bin/sh\necho cartographer\n";
@@ -55,10 +58,11 @@ beforeAll(() => {
       }
       const download = `/${CARTOGRAPHER_REPO}/releases/download/`;
       if (pathname.startsWith(download)) {
-        const [tag] = pathname.slice(download.length).split("/");
+        const [tag, asset] = pathname.slice(download.length).split("/");
         if (tag !== github.tag)
           return new Response("no such release", { status: 404 });
         github.downloads++;
+        github.requestedAssets.push(asset ?? "");
         return new Response(BINARY_BODY);
       }
       return new Response("not found", { status: 404 });
@@ -77,6 +81,7 @@ beforeEach(async () => {
   github.tag = "v1.2.0";
   github.apiDown = false;
   github.downloads = 0;
+  github.requestedAssets.length = 0;
   logged.length = 0;
 });
 
@@ -98,6 +103,16 @@ describe("installCartographer", () => {
       "v1.2.0",
     );
     expect(github.downloads).toBe(1);
+  });
+
+  test("downloads the parse-only asset, never the full build", async () => {
+    await installCartographer(log, opts());
+    // `null` would mean "unsupported platform", which the fresh-machine test
+    // above already rules out; the fallback keeps this assertion failing
+    // loudly rather than the type-checker complaining.
+    const asset = cartographerAssetName() ?? "";
+    expect(asset).toStartWith("cartographer-parse-only-");
+    expect(github.requestedAssets).toEqual([asset]);
   });
 
   test("same tag on a later run: no download", async () => {

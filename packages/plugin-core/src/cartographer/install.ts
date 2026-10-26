@@ -5,6 +5,11 @@
  * tag, so a later install/update re-downloads only when a newer release
  * exists. Binaries elsewhere on the machine are deliberately ignored.
  *
+ * Mimir only ever wants the `parse-only` variant: cartographer built without
+ * its SurrealDB feature. Mimir owns the index (store/cart-index.ts) and
+ * drives the binary purely as a parser, so the storage half would be dead
+ * weight — and a dependency on a database server nobody here runs.
+ *
  * Tracks LATEST rather than a pinned tag by the project owner's call: the
  * same person releases both, so a release never changes the parse output
  * the hooks consume without this repo moving with it.
@@ -27,6 +32,8 @@ export const CARTOGRAPHER_REPO = "RageLtd/cartographer";
 const GITHUB_API_URL = "https://api.github.com";
 const GITHUB_DOWNLOAD_URL = "https://github.com";
 const BINARY_NAME = "cartographer";
+/** Release asset family: the build without SurrealDB (see module doc). */
+const ASSET_PREFIX = `${BINARY_NAME}-parse-only`;
 const TAG_MARKER_FILENAME = ".cartographer-tag";
 const PARTIAL_SUFFIX = ".partial";
 
@@ -36,10 +43,11 @@ type ProgressLog = (message: string) => void;
 export const cartographerAssetName = () => {
   const { platform, arch } = process;
   if (platform === "darwin" && arch === "arm64")
-    return `${BINARY_NAME}-darwin-arm64`;
+    return `${ASSET_PREFIX}-darwin-arm64`;
   if (platform === "darwin" && arch === "x64")
-    return `${BINARY_NAME}-darwin-x64`;
-  if (platform === "linux" && arch === "x64") return `${BINARY_NAME}-linux-x64`;
+    return `${ASSET_PREFIX}-darwin-x64`;
+  if (platform === "linux" && arch === "x64")
+    return `${ASSET_PREFIX}-linux-x64`;
   return null;
 };
 
