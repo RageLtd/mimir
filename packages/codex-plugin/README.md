@@ -53,10 +53,11 @@ canonical copy in plugin-core.
 `mimir-codex-bin install <mimir-server-url>` materialises:
 
 - `~/.mimir/codex/` — a **dedicated CODEX_HOME**: mimir-owned
-  `config.toml` (MCP servers, hooks, trust ledger, `code_mode_host`
-  pinned off) and `AGENTS.md` (the persona, fetched from
-  `/v1/system-prompt` and converted with toAnthropicXml so voice-anchor
-  parsing works). The user's own `~/.codex` is never touched.
+  `config.toml` (MCP servers, hooks, trust ledger) and `AGENTS.md` (the
+  persona, fetched from `/v1/system-prompt` and converted with
+  toAnthropicXml so voice-anchor parsing works). The user's own
+  `~/.codex` is never touched.
+  Codex feature flags use Codex's defaults, including `code_mode_host`.
 - `~/.mimir/config.json` — the shared runtime config, **merged** over
   whatever another distribution already wrote.
 - `~/.local/bin/mimir-codex` — wrapper: exports `CODEX_HOME` +

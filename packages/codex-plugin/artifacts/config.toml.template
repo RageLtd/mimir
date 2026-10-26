@@ -11,12 +11,6 @@
 # `codex login` run through the wrapper lands here otherwise.
 cli_auth_credentials_store = "file"
 
-[features]
-# The brew cask ships without codex-code-mode-host; with the feature on,
-# every tool call fails to spawn it. The standard exec path works
-# everywhere, so mimir sessions pin it off.
-code_mode_host = false
-
 # ── MCP servers ─────────────────────────────────────────────────────────
 
 [mcp_servers.mimir-local]
