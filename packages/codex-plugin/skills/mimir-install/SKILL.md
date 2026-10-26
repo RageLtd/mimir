@@ -5,10 +5,13 @@ description: Install or update Mimir for Codex — downloads the released mimir-
 
 # Install or update Mimir for Codex
 
-Codex plugins cannot deliver lifecycle hooks, so this plugin only bootstraps:
-the real runtime is installed by the compiled `mimir-codex-bin` binary, fetched
-from RageLtd/mimir GitHub Releases. The repo is private — the download uses the
-user's own `gh` auth (any repo collaborator) or `curl` + `$GITHUB_TOKEN`.
+This plugin only bootstraps. Codex plugins can bundle lifecycle hooks, but
+Mimir installs its runtime into a dedicated CODEX_HOME (`~/.mimir/codex`)
+instead — the user's own `~/.codex` stays untouched and the installer trusts
+its hooks automatically. That runtime is landed by the compiled
+`mimir-codex-bin` binary, fetched from RageLtd/mimir GitHub Releases. The repo
+is private — the download uses the user's own `gh` auth (any repo
+collaborator) or `curl` + `$GITHUB_TOKEN`.
 
 ## Fresh install
 

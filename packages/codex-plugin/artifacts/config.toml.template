@@ -4,6 +4,13 @@
 # the markers do not — and editing a hook line untrusts it silently
 # (run `mimir-codex-bin update` to re-trust).
 
+# Credentials live in auth.json inside THIS home. Codex defaults to the OS
+# keyring on macOS, and keyring entries are keyed per CODEX_HOME, so an
+# isolated home could never see the vanilla ~/.codex login. With the file
+# store, the wrapper can link ~/.codex/auth.json in when it exists, and a
+# `codex login` run through the wrapper lands here otherwise.
+cli_auth_credentials_store = "file"
+
 [features]
 # The brew cask ships without codex-code-mode-host; with the feature on,
 # every tool call fails to spawn it. The standard exec path works

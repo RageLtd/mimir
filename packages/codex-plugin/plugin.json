@@ -1,0 +1,26 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "mimir",
+  "version": "0.11.0",
+  "description": "Mimir for OpenAI Codex CLI — persona, lifecycle-hook brain, local memory, and cartographer indexing. This plugin is the bootstrap: its skill installs the mimir-codex binary, which lands the real runtime in a dedicated CODEX_HOME.",
+  "author": {
+    "name": "RageLtd",
+    "url": "https://github.com/RageLtd"
+  },
+  "repository": "https://github.com/RageLtd/mimir",
+  "license": "SEE LICENSE IN LICENSE",
+  "keywords": ["mimir", "memory", "persona", "hooks"],
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/mimir-install/SKILL.md",
+      "interface": {
+        "displayName": "Mimir",
+        "shortDescription": "Mimir brain for Codex CLI",
+        "longDescription": "Bootstrap plugin for Mimir in Codex. Codex plugins can bundle lifecycle hooks, but Mimir deliberately installs into a dedicated CODEX_HOME (~/.mimir/codex) instead: your own ~/.codex stays untouched, and the installer can trust its hooks automatically through codex app-server. Ask codex to 'install mimir' — the skill downloads the released mimir-codex binary and runs its installer, which lands the persona, hooks, trust ledger, and MCP wiring there.",
+        "developerName": "RageLtd",
+        "category": "Developer Tools",
+        "capabilities": ["Interactive", "Write"]
+      }
+    }
+  }
+}
