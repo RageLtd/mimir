@@ -23,11 +23,9 @@ import { embedderBinaryPath, embedderDir, embedderModelPath } from "./embedder";
 import {
   installEmbedderModel,
   installLlamaServer,
-  LLAMA_CPP_RELEASE,
-  llamaCppAssetUrl,
-  platformAssetSuffix,
   sha256File,
 } from "./embedder-install";
+import { LLAMA_CPP_RELEASE } from "./embedder-platform";
 
 // Stub HTTP round-trips starve under `bun test --parallel`; the runner's 5s
 // default is too tight.
@@ -67,17 +65,6 @@ const withByteServer = async (
 
 const sha256Of = (bytes: Uint8Array) =>
   new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
-
-describe("platform mapping", () => {
-  test("this machine maps to a known asset suffix and URL", () => {
-    // CI and dev boxes are darwin/linux on x64/arm64 — all supported.
-    const suffix = platformAssetSuffix();
-    expect(suffix).not.toBeNull();
-    expect(llamaCppAssetUrl(suffix as string)).toBe(
-      `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_CPP_RELEASE.tag}/llama-${LLAMA_CPP_RELEASE.tag}-bin-${suffix}.tar.gz`,
-    );
-  });
-});
 
 describe("sha256File", () => {
   test("streams a file to the expected digest", async () => {
@@ -208,6 +195,63 @@ describe("installLlamaServer", () => {
       const [err2] = await installLlamaServer(silent, { url });
       expect(err2).toBeNull();
       expect(hits()).toBe(1);
+    });
+  });
+
+  test("a different asset variant at the same tag re-downloads", async () => {
+    const archiveBytes = new Uint8Array(
+      await Bun.file(await buildFixtureArchive()).arrayBuffer(),
+    );
+    await withByteServer(archiveBytes, async (url, hits) => {
+      const cpu = "ubuntu-x64";
+      const vulkan = "ubuntu-vulkan-x64";
+      expect(
+        (await installLlamaServer(silent, { url, assetSuffix: cpu }))[0],
+      ).toBeNull();
+      expect(hits()).toBe(1);
+
+      // Same tag, same variant → still a no-op.
+      await installLlamaServer(silent, { url, assetSuffix: cpu });
+      expect(hits()).toBe(1);
+
+      // A GPU runtime appeared (or the probe changed): the variant differs,
+      // so the pinned tag alone must not count as "already installed".
+      const [err] = await installLlamaServer(silent, {
+        url,
+        assetSuffix: vulkan,
+      });
+      expect(err).toBeNull();
+      expect(hits()).toBe(2);
+      const marker = await Bun.file(
+        join(embedderDir(), ".llama-cpp-tag"),
+      ).text();
+      expect(marker).toContain(LLAMA_CPP_RELEASE.tag);
+      expect(marker).toContain(vulkan);
+    });
+  });
+
+  test("a legacy tag-only marker is treated as stale", async () => {
+    const archiveBytes = new Uint8Array(
+      await Bun.file(await buildFixtureArchive()).arrayBuffer(),
+    );
+    await withByteServer(archiveBytes, async (url, hits) => {
+      // Pre-variant installs wrote just the tag and shipped the CPU build.
+      await mkdir(embedderDir(), { recursive: true });
+      await Bun.write(embedderBinaryPath(), "#!/bin/sh\necho old\n");
+      await Bun.write(
+        join(embedderDir(), ".llama-cpp-tag"),
+        LLAMA_CPP_RELEASE.tag,
+      );
+
+      const [err] = await installLlamaServer(silent, {
+        url,
+        assetSuffix: "ubuntu-vulkan-x64",
+      });
+      expect(err).toBeNull();
+      expect(hits()).toBe(1);
+      expect(await Bun.file(embedderBinaryPath()).text()).toBe(
+        "#!/bin/sh\necho fake\n",
+      );
     });
   });
 

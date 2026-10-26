@@ -2,7 +2,9 @@
  * Embedder artifact acquisition (MIM-85) — the install story owns the
  * ~640MB model + llama.cpp binary fetch explicitly, so no hook ever
  * triggers a surprise download. Called from installer flows (mimir-cc
- * install/update); runtime code (embedder.ts) only checks presence.
+ * install/update); runtime code (embedder.ts) only checks presence. Which
+ * release and which build variant to fetch is decided in
+ * embedder-platform.ts.
  *
  * Verification policy, deliberately asymmetric:
  *   - The GGUF is sha256-PINNED (EMBEDDER_MODEL.sha256): the artifact hash
@@ -13,10 +15,14 @@
  *     with no vector-space stake; the binary can't poison the space, only
  *     fail to serve.
  *
- * Release archive layout (verified against b9912): a single top-level
- * `llama-<tag>/` dir with llama-server + its dylibs/sos flat inside.
- * We extract to a temp dir and keep only llama-server + lib* — portable
- * across BSD/GNU tar, no --wildcards divergence.
+ * Release archive layout (verified against b11889): a single top-level
+ * `llama-<tag>/` dir with llama-server + its dylibs/sos flat inside. The
+ * CUDA variants ship a second archive, `cudart-llama-<tag>-bin-<suffix>/`,
+ * holding libcudart/libcublas/libcublasLt; the binaries carry an `$ORIGIN`
+ * rpath, so dropping those next to llama-server is all the install needs —
+ * the host only has to have the NVIDIA driver. We extract each archive to a
+ * temp dir and keep only llama-server + lib* — portable across BSD/GNU tar,
+ * no --wildcards divergence.
  */
 
 import { chmod, mkdir, readdir, rename, rm } from "node:fs/promises";
@@ -30,35 +36,29 @@ import {
   embedderDir,
   embedderModelPath,
 } from "./embedder";
-
-export const LLAMA_CPP_RELEASE = {
-  tag: "b9912",
-  baseUrl: "https://github.com/ggml-org/llama.cpp/releases/download",
-} as const;
+import {
+  cudaRuntimeAssetUrl,
+  isCudaSuffix,
+  LLAMA_CPP_RELEASE,
+  llamaCppAssetUrl,
+  platformAssetSuffix,
+} from "./embedder-platform";
 
 const BINARY_NAME = "llama-server";
 const LIB_PREFIX = "lib";
-/** Records which release tag the installed binary came from — tag bump
- *  triggers re-download on the next install/update run. */
+/** Records which release tag AND asset variant the installed binary came
+ *  from (`<tag> <suffix>`) — a tag bump or a variant change (CPU → Vulkan →
+ *  ROCm/CUDA as runtimes show up) triggers re-download on the next
+ *  install/update. Pre-variant installs wrote the bare tag; that never
+ *  matches, so they re-download once. */
 const TAG_MARKER_FILENAME = ".llama-cpp-tag";
 const PARTIAL_SUFFIX = ".partial";
 
 type ProgressLog = (message: string) => void;
 
-/** GitHub asset suffix for this machine, or null when unsupported. */
-export const platformAssetSuffix = () => {
-  const { platform, arch } = process;
-  if (platform === "darwin" && arch === "arm64") return "macos-arm64";
-  if (platform === "darwin" && arch === "x64") return "macos-x64";
-  if (platform === "linux" && arch === "x64") return "ubuntu-x64";
-  if (platform === "linux" && arch === "arm64") return "ubuntu-arm64";
-  return null;
-};
-
-export const llamaCppAssetUrl = (suffix: string) =>
-  `${LLAMA_CPP_RELEASE.baseUrl}/${LLAMA_CPP_RELEASE.tag}/llama-${LLAMA_CPP_RELEASE.tag}-bin-${suffix}.tar.gz`;
-
 const tagMarkerPath = () => join(embedderDir(), TAG_MARKER_FILENAME);
+const installedMarker = (suffix: string) =>
+  `${LLAMA_CPP_RELEASE.tag} ${suffix}`;
 
 export const sha256File = async (path: string) => {
   const hasher = new Bun.CryptoHasher("sha256");
@@ -116,67 +116,97 @@ export const installEmbedderModel = async (
   });
 
 /**
+ * Download a release archive and move its server binary and shared
+ * libraries into `dir`, discarding everything else. Returns how many files
+ * were kept. Extraction goes through a temp dir on the same volume so a
+ * failure never leaves half an install behind.
+ */
+const fetchAndKeepLibs = async (url: string, dir: string) => {
+  const archive = join(dir, `llama-cpp${PARTIAL_SUFFIX}.tar.gz`);
+  await downloadTo(url, archive);
+
+  const extractDir = join(dir, ".extract-tmp");
+  await rm(extractDir, { recursive: true, force: true });
+  await mkdir(extractDir, { recursive: true });
+  await $`tar -xzf ${archive} --strip-components=1 -C ${extractDir}`.quiet();
+
+  let kept = 0;
+  for (const entry of await readdir(extractDir)) {
+    if (entry === BINARY_NAME || entry.startsWith(LIB_PREFIX)) {
+      await rename(join(extractDir, entry), join(dir, entry));
+      kept++;
+    }
+  }
+  await rm(extractDir, { recursive: true, force: true });
+  await rm(archive);
+  return kept;
+};
+
+/**
  * Ensure the pinned-tag llama-server binary (+ its shared libs) is
- * installed. Skips when the tag marker matches the pin. Returns
- * [error, binaryPath].
+ * installed, in the right variant for this machine. CUDA variants also
+ * pull the companion runtime-library archive. Skips when the marker matches
+ * both the pinned tag and the variant. Returns [error, binaryPath].
  */
 export const installLlamaServer = async (
   log: ProgressLog,
-  opts: { readonly url?: string } = {},
+  opts: {
+    readonly url?: string;
+    /** Test seam — the CUDA runtime bundle; defaults from the suffix. */
+    readonly runtimeUrl?: string;
+    /** Test seam — production callers let the platform probe decide. */
+    readonly assetSuffix?: string;
+  } = {},
 ) =>
   attempt(async () => {
     const dir = embedderDir();
     const binary = embedderBinaryPath();
     await mkdir(dir, { recursive: true });
 
-    const marker = Bun.file(tagMarkerPath());
-    if (
-      (await Bun.file(binary).exists()) &&
-      (await marker.exists()) &&
-      (await marker.text()).trim() === LLAMA_CPP_RELEASE.tag
-    ) {
-      log(`llama-server ${LLAMA_CPP_RELEASE.tag} already installed`);
-      return binary;
-    }
-
-    const suffix = platformAssetSuffix();
+    const suffix = opts.assetSuffix ?? platformAssetSuffix();
     if (suffix === null) {
       throw new Error(
         `unsupported platform ${process.platform}/${process.arch} — no llama.cpp release asset; embedding stays text-only`,
       );
     }
 
+    const marker = Bun.file(tagMarkerPath());
+    if (
+      (await Bun.file(binary).exists()) &&
+      (await marker.exists()) &&
+      (await marker.text()).trim() === installedMarker(suffix)
+    ) {
+      log(
+        `llama-server ${LLAMA_CPP_RELEASE.tag} (${suffix}) already installed`,
+      );
+      return binary;
+    }
+
     const url = opts.url ?? llamaCppAssetUrl(suffix);
     log(`downloading llama.cpp ${LLAMA_CPP_RELEASE.tag} (${suffix})`);
-    const archive = join(dir, `llama-cpp${PARTIAL_SUFFIX}.tar.gz`);
-    await downloadTo(url, archive);
-
-    // Extract everything to a temp dir on the same volume, then keep only
-    // the server binary and its libs.
-    const extractDir = join(dir, ".extract-tmp");
-    await rm(extractDir, { recursive: true, force: true });
-    await mkdir(extractDir, { recursive: true });
-    await $`tar -xzf ${archive} --strip-components=1 -C ${extractDir}`.quiet();
-
-    let kept = 0;
-    for (const entry of await readdir(extractDir)) {
-      if (entry === BINARY_NAME || entry.startsWith(LIB_PREFIX)) {
-        await rename(join(extractDir, entry), join(dir, entry));
-        kept++;
-      }
-    }
-    await rm(extractDir, { recursive: true, force: true });
-    await rm(archive);
-
+    const kept = await fetchAndKeepLibs(url, dir);
     if (kept === 0 || !(await Bun.file(binary).exists())) {
       throw new Error(
         `archive from ${url} did not contain ${BINARY_NAME} — release layout changed?`,
       );
     }
 
+    const runtimeUrl =
+      opts.runtimeUrl ??
+      (isCudaSuffix(suffix) ? cudaRuntimeAssetUrl(suffix) : null);
+    if (runtimeUrl !== null) {
+      log(`downloading CUDA runtime libraries for ${suffix}`);
+      const runtimeLibs = await fetchAndKeepLibs(runtimeUrl, dir);
+      if (runtimeLibs === 0) {
+        throw new Error(
+          `runtime archive from ${runtimeUrl} contained no libraries — release layout changed?`,
+        );
+      }
+    }
+
     await chmod(binary, 0o755);
-    await Bun.write(tagMarkerPath(), LLAMA_CPP_RELEASE.tag);
-    log(`llama-server installed: ${binary}`);
+    await Bun.write(tagMarkerPath(), installedMarker(suffix));
+    log(`llama-server installed (${suffix}): ${binary}`);
     return binary;
   });
 

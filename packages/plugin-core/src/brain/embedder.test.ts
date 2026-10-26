@@ -63,6 +63,7 @@ const vectorOf = (fill: number, dims: number = DIMS) =>
 type EmbedOpts = {
   readonly spawnWaitMs?: number;
   readonly healthTimeoutMs?: number;
+  readonly embedTimeoutMs?: number;
 };
 /** Generous probe window so stub-backed cases stop depending on the
  *  embedder's default /health timeout under `--parallel` load. */
@@ -205,6 +206,28 @@ describe("embedTexts", () => {
       () => new Response("boom", { status: 500 }),
       async () => {
         expect(await embedTexts(["text"], STUB_OPTS)).toBeNull();
+      },
+    );
+  });
+
+  test("embedTimeoutMs bounds the embeddings request itself", async () => {
+    const SLOW_EMBED_MS = 800;
+    await withStub(
+      async () => {
+        await Bun.sleep(SLOW_EMBED_MS);
+        return okEmbeddings([vectorOf(1)]);
+      },
+      async () => {
+        // Tighter than the server: degrades to null instead of hanging.
+        expect(
+          await embedTexts(["text"], { ...STUB_OPTS, embedTimeoutMs: 100 }),
+        ).toBeNull();
+        // Patient budget (what the backfill passes): the same server answers.
+        const result = await embedTexts(["text"], {
+          ...STUB_OPTS,
+          embedTimeoutMs: 10_000,
+        });
+        expect(result).toHaveLength(1);
       },
     );
   });

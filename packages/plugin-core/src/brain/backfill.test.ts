@@ -144,7 +144,8 @@ describe("backfillEmbeddings", () => {
     process.env.MIMIR_EMBEDDER_PORT = "45991"; // nothing listens
     const result = await backfillEmbeddings(replica, silent);
     expect(result.embedded).toBe(0);
-    expect(result.error).toContain("embedder unavailable");
+    expect(result.error).toContain("embedding failed");
+    expect(result.error).toContain("[mimir-embedder]");
     // Rows remain unembedded for the next attempt.
     expect(replica.listUnembedded(10)).toHaveLength(2);
     replica.close();

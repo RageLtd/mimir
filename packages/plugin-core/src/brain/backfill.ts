@@ -13,6 +13,9 @@ import { memoryEmbedSource, type OrgReplica } from "../store/org-replica";
 import { embedTexts } from "./embedder";
 
 const BATCH_SIZE = 64;
+/** A 64-text batch of memory-sized inputs is seconds on a GPU and can be
+ *  minutes on CPU; this is a batch job, so wait for it rather than fail. */
+const BATCH_EMBED_TIMEOUT_MS = 120_000;
 
 export const backfillEmbeddings = async (
   replica: OrgReplica,
@@ -23,12 +26,14 @@ export const backfillEmbeddings = async (
     const batch = replica.listUnembedded(BATCH_SIZE);
     if (batch.length === 0) break;
 
-    const vectors = await embedTexts(batch.map(memoryEmbedSource));
+    const vectors = await embedTexts(batch.map(memoryEmbedSource), {
+      embedTimeoutMs: BATCH_EMBED_TIMEOUT_MS,
+    });
     if (vectors === null) {
       return {
         embedded,
         error:
-          "embedder unavailable — is it installed? (`mimir-cc update` fetches it); see stderr for the specific failure",
+          "embedding failed — see the [mimir-embedder] line on stderr: not installed means `mimir-cc update`; a timeout means this batch is too slow for the running server (CPU-only build? re-run `mimir-cc update` to pick up the GPU variant)",
       };
     }
 

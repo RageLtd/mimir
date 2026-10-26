@@ -54,6 +54,10 @@ const BATCH_SIZE = "8192";
  *  it via `healthTimeoutMs` — like `spawnWaitMs`, the right timeout is
  *  call-site policy, not module policy. */
 const HEALTH_TIMEOUT_MS = 1_500;
+/** Per-request /v1/embeddings budget for the query path (one short text).
+ *  Batch callers embedding dozens of memory-sized texts widen it via
+ *  `embedTimeoutMs` — on a CPU-only server a 64-text batch runs well past
+ *  this, and a fixed budget turned "slow" into "embedder unavailable". */
 const EMBED_TIMEOUT_MS = 30_000;
 /** Patient default — backfill and other batch callers ride out a cold
  *  model load. */
@@ -67,6 +71,7 @@ const SPAWN_POLL_INTERVAL_MS = 300;
 export type EmbedderOpts = {
   readonly spawnWaitMs?: number;
   readonly healthTimeoutMs?: number;
+  readonly embedTimeoutMs?: number;
 };
 
 export const embedderPort = () => {
@@ -189,13 +194,14 @@ export const embedTexts = async (
   if (texts.length === 0) return [];
   const baseUrl = await getOrStartEmbedder(opts);
   if (baseUrl === null) return null;
+  const embedTimeoutMs = opts.embedTimeoutMs ?? EMBED_TIMEOUT_MS;
 
   const [err, vectors] = await attempt(async () => {
     const res = await fetch(`${baseUrl}/v1/embeddings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ input: texts, model: EMBEDDER_MODEL.file }),
-      signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
+      signal: AbortSignal.timeout(embedTimeoutMs),
     });
     if (!res.ok) {
       const detail = (await res.text()).slice(0, 200);
@@ -224,7 +230,9 @@ export const embedTexts = async (
   });
 
   if (err) {
-    logErr(`embed failed: ${err.message}`);
+    logErr(
+      `embed failed (${texts.length} texts, ${embedTimeoutMs}ms budget): ${err.message}`,
+    );
     return null;
   }
   return vectors;
@@ -241,6 +249,7 @@ export const createEmbedQuery =
     const vectors = await embedTexts([text], {
       spawnWaitMs: opts.spawnWaitMs ?? QUERY_SPAWN_WAIT_MS,
       healthTimeoutMs: opts.healthTimeoutMs,
+      embedTimeoutMs: opts.embedTimeoutMs,
     });
     return vectors?.[0] ?? null;
   };
