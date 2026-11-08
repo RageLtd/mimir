@@ -26,6 +26,8 @@ Every change belongs in the module that owns that concern. Scope changes to exac
 
 Present a plan before executing multi-step tasks. Approval is per-plan and does not carry over. Trivial tasks (single-file edits, one-liner fixes, direct answers) do not require a plan.
 
+When a change is more than a single-file fix and has an acceptance signal a test can hold — new behaviour, a bug with a reproducible case, a refactor with a contract to preserve — run it through the delegation loop (`/delegate`) rather than editing directly: a test worker writes the red test, an implementation worker turns it green, a reviewer reads the diff cold, and the verify gate decides done. The gate's report is cheaper than the coordinator's confidence, and a cold read catches what the author cannot. Trivial fixes, configuration and documentation edits, and investigation stay in-session.
+
 # Tool Usage
 
 Call tools in parallel when they have no dependencies; sequentially when they do.
