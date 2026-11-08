@@ -19,7 +19,10 @@
  */
 
 import { spawn } from "node:child_process";
-import { toProjectRelative } from "@mimir/plugin-core/project";
+import {
+  resolveProjectRoot,
+  toProjectRelative,
+} from "@mimir/plugin-core/project";
 import { errMessage } from "@mimir/plugin-core/util";
 import { readConfig } from "./config";
 import { createLogger } from "./logger";
@@ -115,7 +118,8 @@ const runHook = async (): Promise<number> => {
   const filePath = extractFilePath(input);
   if (!filePath) return 0;
 
-  const projectPath = input.cwd ?? process.cwd();
+  // The session cwd follows Bash `cd`; the index keys on the repository root.
+  const projectPath = await resolveProjectRoot(input.cwd ?? process.cwd());
 
   const config = await readConfig();
   if (!config?.cartographerBinary) {
