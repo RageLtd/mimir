@@ -26,6 +26,7 @@ import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
 import { buildLocalFileInfo } from "@mimir/plugin-core/cartographer/file-context";
 import {
   getOrResolveProjectId,
+  resolveProjectRoot,
   toProjectRelative,
 } from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
@@ -207,6 +208,8 @@ export const runFileContextHook = async () => {
 
   const sessionId = input.session_id ?? "default";
   const cwd = input.cwd ?? process.cwd();
+  // The session cwd follows Bash `cd`; cart rows key on the repository root.
+  const projectRoot = await resolveProjectRoot(cwd);
   const filePath = extractFilePath(input);
 
   if (!filePath) {
@@ -233,9 +236,9 @@ export const runFileContextHook = async () => {
   // representation or every lookup misses. The dedup cache key uses the
   // relative form too — anything else would silently re-inject when CC
   // hands us the same file via a path that round-trips differently.
-  const relativeFilePath = toProjectRelative(cwd, filePath);
+  const relativeFilePath = toProjectRelative(projectRoot, filePath);
 
-  const info = await localFileInfo(cwd, relativeFilePath, projectId);
+  const info = await localFileInfo(projectRoot, relativeFilePath, projectId);
   if (!info) return 0;
 
   // File not in cartographer index — no contentHash, no content to inject.
