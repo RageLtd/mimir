@@ -23,15 +23,18 @@ if [[ -x "$ENSURE_BINARY" ]]; then
   "$ENSURE_BINARY" codex || echo "mimir-codex-acp: binary update check failed — continuing with the installed binary." >&2
 fi
 
-# Shared login: codex core reads auth.json from CODEX_HOME. Link the
-# vanilla ~/.codex credential in; refuse to create a dangling link —
+# Shared login: codex core reads auth.json from CODEX_HOME (the managed
+# config pins the file credential store). Link the vanilla ~/.codex
+# credential in when it exists; refuse to create a dangling link —
 # codex writes auth.json via atomic rename, which would replace the
-# symlink and silently fork the two credential stores.
+# symlink and silently fork the two credential stores. No file there is
+# normal on macOS, where vanilla codex defaults to the OS keyring; ACP
+# has no interactive login, so point at the TUI wrapper and stop.
 if [[ ! -e "$CODEX_HOME/auth.json" ]]; then
   if [[ -f "$HOME/.codex/auth.json" ]]; then
     ln -sf "$HOME/.codex/auth.json" "$CODEX_HOME/auth.json"
   else
-    echo "mimir-codex-acp: no ~/.codex/auth.json found — run 'codex login' once with vanilla codex first." >&2
+    echo "mimir-codex-acp: no login in $CODEX_HOME and no ~/.codex/auth.json to share — run \`mimir-codex login\` once, then retry." >&2
     exit 1
   fi
 fi

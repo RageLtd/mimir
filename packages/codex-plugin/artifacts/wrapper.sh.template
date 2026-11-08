@@ -27,16 +27,18 @@ if [[ "${1:-}" == "keys" || "${1:-}" == "sync" || "${1:-}" == "status" ]]; then
   exec "$HOME/.local/bin/mimir-codex-bin" "$@"
 fi
 
-# Shared login: codex reads auth.json from CODEX_HOME. Link the vanilla
-# ~/.codex credential in; refuse to create a dangling link — codex
-# writes auth.json via atomic rename, which would replace the symlink
-# and silently fork the two credential stores.
+# Shared login: codex reads auth.json from CODEX_HOME (the managed
+# config pins the file credential store). Link the vanilla ~/.codex
+# credential in when it exists; refuse to create a dangling link — codex
+# writes auth.json via atomic rename, which would replace the symlink and
+# silently fork the two credential stores. No file there is normal on
+# macOS, where vanilla codex defaults to the OS keyring: let codex prompt
+# for login itself, and the credential lands in this home.
 if [[ ! -e "$CODEX_HOME/auth.json" ]]; then
   if [[ -f "$HOME/.codex/auth.json" ]]; then
     ln -sf "$HOME/.codex/auth.json" "$CODEX_HOME/auth.json"
   else
-    echo "mimir-codex: no ~/.codex/auth.json found — run 'codex login' once with vanilla codex first." >&2
-    exit 1
+    echo "mimir-codex: no ~/.codex/auth.json to share — sign in once here (\`mimir-codex login\`); the login is kept in $CODEX_HOME." >&2
   fi
 fi
 

@@ -5,7 +5,7 @@
 #
 # Usage: scripts/release-package.sh <pkg-name> <manifest-relpath> [--dry-run] [--no-tag] [--no-commit]
 #   e.g. scripts/release-package.sh cc-plugin packages/cc-plugin/.claude-plugin/plugin.json --dry-run
-#        scripts/release-package.sh codex-plugin packages/codex-plugin/.codex-plugin/plugin.json
+#        scripts/release-package.sh codex-plugin packages/codex-plugin/plugin.json
 #
 # Monorepo-scoped:
 #   - the last tag is looked up in the `<pkg-name>/v*` namespace only

@@ -2,7 +2,7 @@ name: codex-plugin Release
 
 # Auto-versioned release for packages/codex-plugin, driven by conventional
 # commits — no manual tagging. On a push to main that touches the package,
-# release-package.sh analyzes commits, bumps .codex-plugin/plugin.json,
+# release-package.sh analyzes commits, bumps the plugin.json manifest,
 # commits chore(release), and tags codex-plugin/v<version>. The release job
 # then builds the binaries and publishes a GitHub Release on that tag.
 # Unlike cc-plugin there is no marketplace-notify step: the codex bootstrap
@@ -59,7 +59,7 @@ jobs:
       - name: Analyze commits (dry run)
         id: dry-run
         run: |
-          OUTPUT=$(sh scripts/release-package.sh codex-plugin packages/codex-plugin/.codex-plugin/plugin.json --dry-run 2>&1)
+          OUTPUT=$(sh scripts/release-package.sh codex-plugin packages/codex-plugin/plugin.json --dry-run 2>&1)
           echo "$OUTPUT"
           if echo "$OUTPUT" | grep -q "Nothing to do"; then
             echo "should_release=false" >> "$GITHUB_OUTPUT"
@@ -71,7 +71,7 @@ jobs:
 
       - name: Bump, commit, tag
         if: steps.dry-run.outputs.should_release == 'true'
-        run: sh scripts/release-package.sh codex-plugin packages/codex-plugin/.codex-plugin/plugin.json
+        run: sh scripts/release-package.sh codex-plugin packages/codex-plugin/plugin.json
 
       - name: Push changes and tags
         if: steps.dry-run.outputs.should_release == 'true'
