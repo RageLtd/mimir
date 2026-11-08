@@ -36,7 +36,7 @@ export { detectGitRemote } from "./git";
 export { toProjectRelative } from "./paths";
 export type { ResolvedProject } from "./resolver";
 export { normalizeGitRemote, resolveProjectForPath } from "./resolver";
-export { resolveProjectRoot } from "./root";
+export { findGitRoot, resolveProjectRoot } from "./root";
 export {
   findPackageRoot,
   type ResolvedToolchain,
