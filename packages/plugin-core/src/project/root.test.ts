@@ -12,7 +12,7 @@ import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { resolveProjectRoot } from "./root";
+import { findGitRoot, resolveProjectRoot } from "./root";
 
 let dir = "";
 
@@ -77,5 +77,24 @@ describe("resolveProjectRoot", () => {
     const root = await resolveProjectRoot(join(link, "a", "b"));
 
     expect(root).toBe(link);
+  });
+});
+
+describe("findGitRoot", () => {
+  test("resolves a nested subdirectory to the repository root", async () => {
+    await runGit(dir, ["init", "-q"]);
+    const nested = join(dir, "a", "b");
+    await mkdir(nested, { recursive: true });
+
+    const root = await findGitRoot(nested);
+
+    if (root === null) {
+      throw new Error(`expected a repository root for ${nested}, got null`);
+    }
+    expect(await realpath(root)).toBe(await realpath(dir));
+  });
+
+  test("returns null outside a repository", async () => {
+    expect(await findGitRoot(dir)).toBeNull();
   });
 });

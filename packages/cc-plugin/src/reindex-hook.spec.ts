@@ -31,6 +31,25 @@ describe("reindexTarget", () => {
     expect(skipReason(result)).toContain(ROOT);
   });
 
+  test("skips every write when there is no repository root", () => {
+    const result = reindexTarget(
+      {
+        tool_name: "Edit",
+        tool_input: { file_path: "/private/tmp/scratch/notes.txt" },
+      },
+      null,
+    );
+    expect(skipReason(result)).toContain("repository");
+  });
+
+  test("skips a path that leaves the root through ..", () => {
+    const result = reindexTarget(
+      { tool_name: "Write", tool_input: { file_path: "/work/repo/../etc/x" } },
+      ROOT,
+    );
+    expect("skip" in result).toBe(true);
+  });
+
   test("skips a sibling directory that shares the root as a string prefix", () => {
     const result = reindexTarget(
       { tool_name: "Edit", tool_input: { file_path: "/work/repo-other/a.ts" } },
@@ -48,15 +67,15 @@ describe("reindexTarget", () => {
       },
       ROOT,
     );
-    expect("skip" in result).toBe(true);
+    expect(skipReason(result)).toContain("subagent");
   });
 
-  test("skips a tool that does not write files", () => {
+  test("skips a tool that does not write files, naming the tool", () => {
     const result = reindexTarget(
       { tool_name: "Read", tool_input: { file_path: IN_ROOT } },
       ROOT,
     );
-    expect("skip" in result).toBe(true);
+    expect(skipReason(result)).toContain("Read");
   });
 
   test.each([
@@ -73,7 +92,7 @@ describe("reindexTarget", () => {
 
   test("skips when tool_input is missing", () => {
     const result = reindexTarget({ tool_name: "Edit" }, ROOT);
-    expect("skip" in result).toBe(true);
+    expect(skipReason(result)).toContain("file_path");
   });
 
   test("skips when tool_input has no file_path", () => {
@@ -81,7 +100,7 @@ describe("reindexTarget", () => {
       { tool_name: "Edit", tool_input: { old_string: "a" } },
       ROOT,
     );
-    expect("skip" in result).toBe(true);
+    expect(skipReason(result)).toContain("file_path");
   });
 
   test("skips an empty file_path", () => {
@@ -89,6 +108,6 @@ describe("reindexTarget", () => {
       { tool_name: "Write", tool_input: { file_path: "" } },
       ROOT,
     );
-    expect("skip" in result).toBe(true);
+    expect(skipReason(result)).toContain("file_path");
   });
 });
