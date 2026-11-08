@@ -33,15 +33,18 @@
 
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { attempt } from "@mimir/plugin-core/result";
 import { errMessage } from "@mimir/plugin-core/util";
 import {
   clearBlocks,
+  parseStatus,
   runVerify,
   type VerifyOutcome,
   type VerifyRole,
 } from "@mimir/plugin-core/verify";
 import { roleForAgentType } from "@mimir/plugin-core/workers";
 import { createLogger } from "./logger";
+import { taskProvenance } from "./task-state";
 
 const log = createLogger("verify-hook");
 
@@ -187,7 +190,7 @@ const runVerifyCli = async (args: VerifyCliArgs) => {
   // A worker's block count is its own; the coordinator's shared id
   // starts clean every time so old runs can't exhaust a new one.
   if (!args.agentId) await clearBlocks(agentId);
-  const outcome = await runVerify({
+  const outcome = await verifyForSession(process.env.CLAUDE_CODE_SESSION_ID, {
     role: args.role,
     worktree: resolve(args.worktree),
     lastMessage: "STATUS: done",
@@ -209,6 +212,28 @@ const runVerifyCli = async (args: VerifyCliArgs) => {
     default:
       return assertNever(outcome);
   }
+};
+
+const verifyForSession = async (
+  session: string | undefined,
+  options: Parameters<typeof runVerify>[0],
+) => {
+  if (options.role === "review" || parseStatus(options.lastMessage) !== "done")
+    return runVerify(options);
+  const [error, task] = await attempt(() =>
+    taskProvenance(session, options.worktree),
+  );
+  if (error)
+    return {
+      kind: "block",
+      blocks: 0,
+      reason: `Cannot verify task provenance: ${errMessage(error)}`,
+    } satisfies VerifyOutcome;
+  return runVerify({
+    ...options,
+    base: task?.base,
+    worktree: task?.worktree ?? options.worktree,
+  });
 };
 
 const handbackMessage = (input: HookInput) => {
@@ -250,7 +275,7 @@ export const runVerifyHook = async (args: readonly string[] = []) => {
     ? handbackMessage(input)
     : (input.last_assistant_message ?? "");
 
-  const outcome = await runVerify({
+  const outcome = await verifyForSession(input.session_id, {
     role: roleOf(input.agent_type),
     worktree: input.cwd ?? process.cwd(),
     lastMessage: message,

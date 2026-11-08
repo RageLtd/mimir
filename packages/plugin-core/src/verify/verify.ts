@@ -18,6 +18,8 @@
 
 import { resolveToolchainsForFiles } from "../project/toolchain";
 import type { ResolvedToolchain } from "../project/toolchain-types";
+import { attempt } from "../result";
+import { errMessage } from "../util";
 import { collectChanges } from "./changes";
 import {
   coverageCheck,
@@ -47,6 +49,8 @@ export type VerifyOptions = {
   readonly role?: VerifyRole;
   /** The worker's working directory (its worktree). */
   readonly worktree: string;
+  /** Host-owned task-start commit; excludes coverage from earlier tasks. */
+  readonly base?: string;
   /** The worker's final message; the STATUS line is parsed from it. */
   readonly lastMessage: string;
   /** Identifies the worker for the loop guard. */
@@ -138,7 +142,10 @@ export const runVerify = async (options: VerifyOptions) => {
       : ({ kind: "block", reason: formatted, blocks } satisfies VerifyOutcome);
   };
 
-  const changes = await collectChanges(run, options.worktree);
+  const [error, changes] = await attempt(() =>
+    collectChanges(run, options.worktree, options.base),
+  );
+  if (error) return block(`Change collection failed: ${errMessage(error)}`);
   if (!changes) {
     return block(
       `${options.worktree} is not a git worktree, so the change set cannot be verified.`,

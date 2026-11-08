@@ -142,14 +142,39 @@ const readOrNull = (filePath: string) =>
     );
 
 /** Collect the worker's change set. Null when `worktree` isn't a git repo. */
-export const collectChanges = async (run: CommandRunner, worktree: string) => {
-  const base = await resolveBase(run, worktree);
+export const collectChanges = async (
+  run: CommandRunner,
+  worktree: string,
+  taskBase?: string,
+) => {
+  const strictGit = async (...args: string[]) => {
+    const result = await run(["git", ...args], worktree);
+    if (result.code !== 0 || result.timedOut)
+      throw new Error(
+        `Cannot collect task base changes: git ${args.join(" ")} failed: ${result.stderr || result.stdout}`,
+      );
+    return result.stdout;
+  };
+  if (taskBase !== undefined) {
+    if (!/^[0-9a-f]{40,64}$/.test(taskBase))
+      throw new Error("Invalid task base: expected a full commit ID.");
+    await strictGit("cat-file", "-e", `${taskBase}^{commit}`);
+    const ancestor = await run(
+      ["git", "merge-base", "--is-ancestor", taskBase, "HEAD"],
+      worktree,
+    );
+    if (ancestor.code !== 0 || ancestor.timedOut)
+      throw new Error(
+        `Invalid task base: ${taskBase} is not a verified ancestor of HEAD. ${ancestor.stderr}`,
+      );
+  }
+  const base = taskBase ?? (await resolveBase(run, worktree));
   if (!base) return null;
+  const collectGit = (...args: string[]) =>
+    taskBase === undefined ? git(run, worktree, ...args) : strictGit(...args);
 
-  const nameStatus = await git(run, worktree, "diff", "--name-status", base);
-  const untracked = await git(
-    run,
-    worktree,
+  const nameStatus = await collectGit("diff", "--name-status", base);
+  const untracked = await collectGit(
     "ls-files",
     "--others",
     "--exclude-standard",
@@ -164,16 +189,18 @@ export const collectChanges = async (run: CommandRunner, worktree: string) => {
   for (const entry of entries) {
     const abs = join(worktree, entry.path);
     const after = entry.status === "D" ? null : await readOrNull(abs);
+    if (taskBase !== undefined && entry.status !== "D" && after === null)
+      throw new Error(
+        `Cannot collect task changes: failed to read ${entry.path}.`,
+      );
     const before =
       entry.status === "A"
         ? null
-        : await git(run, worktree, "show", `${base}:${entry.path}`);
+        : await collectGit("show", `${base}:${entry.path}`);
     const diff =
       before === null
         ? { added: after ?? "", removed: "" }
-        : splitDiff(
-            (await git(run, worktree, "diff", base, "--", entry.path)) ?? "",
-          );
+        : splitDiff((await collectGit("diff", base, "--", entry.path)) ?? "");
     files.push({
       path: relative(worktree, abs).split("\\").join("/"),
       status: entry.status,
@@ -183,6 +210,8 @@ export const collectChanges = async (run: CommandRunner, worktree: string) => {
       after,
     });
   }
-  const branchPaths = await collectBranchPaths(run, worktree, base);
+  // Explicit task boundaries must not borrow tests from earlier branch tasks.
+  const branchPaths =
+    taskBase === undefined ? await collectBranchPaths(run, worktree, base) : [];
   return { base, files, branchPaths } satisfies ChangeSet;
 };

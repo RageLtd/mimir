@@ -11,6 +11,7 @@
  * is appended to the tool output the coordinator reads.
  */
 
+import { resolve } from "node:path";
 import {
   type GuardRole,
   guardDecision,
@@ -63,6 +64,12 @@ export const createSessionRoles = (lookup: SessionLookup) => {
   };
   return {
     invalidate: (sessionID: string) => cache.delete(sessionID),
+    coordinatorSession: async (sessionID: string) => {
+      const session = await info(sessionID);
+      if (!session)
+        throw new Error("Cannot resolve the review task's owning session.");
+      return session.parentID ?? sessionID;
+    },
     isChild: async (sessionID: string) =>
       (await info(sessionID))?.parentID !== undefined,
     /** The worker role for a child session running a `mimir-*` agent. */
@@ -122,7 +129,7 @@ export const guardReason = async (
   const state = await readCoordinatorState(input.sessionID);
   if (!state?.active) return null;
   const role: GuardRole = "coordinator";
-  return denyReason(
+  const reason = denyReason(
     guardDecision({
       ...base,
       role,
@@ -131,10 +138,34 @@ export const guardReason = async (
       workerWorktrees: [],
     }),
   );
+  if (reason) return reason;
+  if (spawnsWorker(input.tool, args) && !taskCovers(state, worktree))
+    return 'Role guard: begin this task with mimir_delegate action: "task" before dispatching workers; no task base exists for this worktree.';
+  return null;
 };
+
+/** A `subagent` call for one of Mimir's workers; utility agents need no task. */
+const spawnsWorker = (tool: string, args: Readonly<Record<string, unknown>>) =>
+  tool === SUBAGENT_TOOL &&
+  typeof args.agent === "string" &&
+  workerByName(args.agent) !== null;
+
+const taskCovers = (
+  state: NonNullable<Awaited<ReturnType<typeof readCoordinatorState>>>,
+  worktree: string,
+) =>
+  state.task !== undefined &&
+  resolve(state.task.worktree) === resolve(worktree);
 
 const denyReason = (decision: ReturnType<typeof guardDecision>) =>
   decision.allow ? null : decision.reason;
+
+export const enforceRoleGuard = async (
+  ...args: Parameters<typeof guardReason>
+) => {
+  const reason = await guardReason(...args);
+  if (reason) throw new Error(reason);
+};
 
 // ── After: gate on `subagent` ──
 
@@ -193,6 +224,7 @@ export const gateTaskOutput = async (
   input: {
     readonly tool: string;
     readonly callID: string;
+    readonly sessionID?: string;
     readonly args: unknown;
   },
   output: { output: string; metadata: unknown },
@@ -213,9 +245,30 @@ export const gateTaskOutput = async (
       : {};
   const agentType = typeof args.agent === "string" ? args.agent : undefined;
   const childId = childSessionId(output.metadata);
+  const state = input.sessionID
+    ? await readCoordinatorState(input.sessionID)
+    : null;
+  if (
+    state?.active &&
+    spawnsWorker(input.tool, args) &&
+    !taskCovers(state, worktree)
+  ) {
+    output.output = appendVerdict(
+      output.output,
+      {
+        kind: "block",
+        reason:
+          "Verify gate blocked: missing task base for this worktree. Stop and restart delegation.",
+        blocks: 1,
+      },
+      childId,
+    );
+    return "block";
+  }
   const outcome = await deps.verify({
     role: roleForAgentType(agentType),
     worktree,
+    ...(state?.active ? { base: state.task?.base } : {}),
     lastMessage: output.output,
     agentId: childId ?? input.callID,
     commandTimeoutMs: deps.commandTimeoutMs,

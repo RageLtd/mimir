@@ -64,8 +64,8 @@ import { persistSessionTranscript } from "./transcript-persistence";
 import { appendToolText, toolInput, toolText } from "./v2-tool-results";
 import {
   createSessionRoles,
+  enforceRoleGuard,
   gateTaskOutput,
-  guardReason,
   sessionLookupFrom,
 } from "./worker-hooks";
 
@@ -208,8 +208,12 @@ export const MimirPlugin = Plugin.define({
       ...cartographerTools(projectRoot),
       mimir_install: installTool(),
       mimir_hygiene: hygieneTool(),
-      mimir_delegate: delegateTool(directory),
-      mimir_review_prompt: reviewPromptTool(directory),
+      mimir_delegate: delegateTool(directory, projectRoot),
+      mimir_review_prompt: reviewPromptTool(
+        directory,
+        sessionRoles.coordinatorSession,
+        projectRoot,
+      ),
     };
     await ctx.tool.transform((editor) => {
       for (const [name, definition] of Object.entries(tools))
@@ -297,7 +301,7 @@ export const MimirPlugin = Plugin.define({
       // coordinator's from the shared state file, secret reads for
       // everyone. Throwing is the plugin's only deny.
       for (const call of calls) {
-        const guard = await guardReason(
+        await enforceRoleGuard(
           sessionRoles,
           { ...input, tool: call.toolName },
           {
@@ -305,16 +309,7 @@ export const MimirPlugin = Plugin.define({
             filePath: call.toolInput.file_path ?? call.toolInput.path,
           },
           projectPath,
-        ).catch((err) => {
-          log.error("role guard crashed — allowing the call", {
-            error: errMessage(err),
-          });
-          return null;
-        });
-        if (guard) {
-          log.info("role guard denied", { tool: input.tool });
-          throw new Error(guard);
-        }
+        );
       }
       const loaded = await loadRules(projectPath).catch((err) => {
         log.error("loadRules failed", { error: errMessage(err) });
@@ -378,13 +373,14 @@ export const MimirPlugin = Plugin.define({
       fileContextCaches.set(event.sessionID, fileContextCache);
       // Verify gate on a finished worker: OpenCode can't block a child's
       // stop, so the verdict is appended to the `task` output the
-      // coordinator reads. A crash lets the output through untouched.
+      // coordinator reads. A crash must not turn an unverified claim into done.
       const gated = await gateTaskOutput(input, output, projectRoot).catch(
         (err) => {
-          log.error("verify gate crashed — output left as is", {
+          log.error("verify gate crashed — blocking hand-back", {
             error: errMessage(err),
           });
-          return null;
+          output.output += `\n\nVerify gate blocked: verification failed: ${errMessage(err)}\nSTATUS: blocked`;
+          return "block";
         },
       );
       if (gated) log.info("verify gate", { kind: gated });

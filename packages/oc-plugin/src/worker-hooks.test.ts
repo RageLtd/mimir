@@ -9,11 +9,17 @@ import {
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writeCoordinatorState } from "@mimir/plugin-core/guard";
-import type { VerifyOutcome } from "@mimir/plugin-core/verify";
+import {
+  readCoordinatorState,
+  writeCoordinatorState,
+} from "@mimir/plugin-core/guard";
+import { runCommand, type VerifyOutcome } from "@mimir/plugin-core/verify";
+import type { ToolContext } from "@opencode/plugin/promise/tool";
+import { delegateTool, reviewPromptTool } from "./delegate-tools";
 import {
   appendVerdict,
   createSessionRoles,
+  enforceRoleGuard,
   gateTaskOutput,
   guardReason,
   type SessionInfo,
@@ -46,6 +52,165 @@ const rolesFor = (
     calls.push(id);
     return sessions[id] ?? null;
   });
+
+test("explicit task boundary survives fresh review-fix workers and refreshes even with reused workers", async () => {
+  const root = dirs[dirs.length - 1] ?? "";
+  const git = async (...args: string[]) => {
+    const result = await runCommand(["git", ...args], root);
+    expect(result.code).toBe(0);
+    return result.stdout.trim();
+  };
+  await git("init", "-q", "-b", "main");
+  await git("config", "user.email", "t@example.com");
+  await git("config", "user.name", "t");
+  await git("commit", "--allow-empty", "-qm", "base");
+  const base = await git("rev-parse", "HEAD");
+  const planFile = join(root, "plan.md");
+  await Bun.write(planFile, "# Plan");
+  await writeCoordinatorState("parent", { active: true, planFile });
+  const context: ToolContext = {
+    ...JSON.parse(
+      '{"sessionID":"parent","messageID":"m","agent":"mimir","id":"c"}',
+    ),
+    signal: new AbortController().signal,
+    progress: async () => {},
+  };
+  await delegateTool(root).execute({ action: "task" }, context);
+  const call = (agent: string, sessionID?: string) =>
+    enforceRoleGuard(
+      rolesFor({ parent: {} }),
+      { tool: "subagent", sessionID: "parent" },
+      { agent, sessionID },
+      root,
+    );
+  await call("mimir-test");
+  expect((await readCoordinatorState("parent"))?.task?.base).toBe(base);
+  const seen: unknown[] = [];
+  const output = {
+    output: "STATUS: done",
+    metadata: { sessionID: "test-child" },
+  };
+  await gateTaskOutput(
+    {
+      tool: "subagent",
+      callID: "c",
+      sessionID: "parent",
+      args: { agent: "mimir-test" },
+    },
+    output,
+    root,
+    {
+      verify: async (options) => {
+        seen.push(options);
+        return { kind: "pass", report: "ok" };
+      },
+      commandTimeoutMs: 1,
+    },
+  );
+  expect(seen[0]).toMatchObject({ base, role: "test" });
+  await git("commit", "--allow-empty", "-qm", "tests");
+  await delegateTool(root).execute(
+    { action: "start", planFile: join(root, "plan.md") },
+    context,
+  );
+  expect((await readCoordinatorState("parent"))?.task?.base).toBe(base);
+  await Bun.write(
+    join(root, "example.test.ts"),
+    'test("example", () => expect(1).toBe(1));\n',
+  );
+  await git("add", "example.test.ts");
+  await git("commit", "-qm", "test content");
+  const review = await reviewPromptTool(root).execute(
+    { title: "Example" },
+    context,
+  );
+  expect(review.content).toContain("example.test.ts");
+  const roles = rolesFor({
+    reviewer: { parentID: "parent", agent: "mimir-review" },
+  });
+  const childReview = await reviewPromptTool(
+    root,
+    roles.coordinatorSession,
+  ).execute(
+    { title: "Example" },
+    { ...context, ...JSON.parse('{"sessionID":"reviewer"}') },
+  );
+  expect(childReview.content).toContain("example.test.ts");
+  await call("mimir-test", "test-child");
+  await call("mimir-impl");
+  await call("mimir-test"); // test assistance while implementation is blocked
+  await call("mimir-review");
+  await call("mimir-test"); // a fresh worker fixing reviewer findings is the same task
+  expect((await readCoordinatorState("parent"))?.task?.base).toBe(base);
+  await call("mimir-impl", "impl-child");
+  expect((await readCoordinatorState("parent"))?.task?.base).toBe(base);
+  await call("mimir-test", "test-child");
+  expect((await readCoordinatorState("parent"))?.task?.base).toBe(base);
+  await delegateTool(root).execute({ action: "task" }, context);
+  await call("mimir-test", "test-child");
+  expect((await readCoordinatorState("parent"))?.task?.base).toBe(
+    await git("rev-parse", "HEAD"),
+  );
+  await call("mimir-review");
+  await git("commit", "--allow-empty", "-qm", "next task accepted");
+  await delegateTool(root).execute({ action: "task" }, context);
+  await call("mimir-impl", "impl-child");
+  expect((await readCoordinatorState("parent"))?.task?.base).toBe(
+    await git("rev-parse", "HEAD"),
+  );
+  await gateTaskOutput(
+    {
+      tool: "subagent",
+      callID: "next",
+      sessionID: "parent",
+      args: { agent: "mimir-impl", sessionID: "impl-child" },
+    },
+    { output: "STATUS: done", metadata: { sessionID: "impl-child" } },
+    root,
+    {
+      verify: async (options) => {
+        seen.push(options);
+        return { kind: "pass", report: "ok" };
+      },
+      commandTimeoutMs: 1,
+    },
+  );
+  expect(seen[1]).toMatchObject({
+    base: await git("rev-parse", "HEAD"),
+    agentId: "impl-child",
+  });
+});
+
+test("dispatch leaves default calls alone but requires an explicit task for coordinators", async () => {
+  const root = dirs[dirs.length - 1] ?? "";
+  const input = {
+    tool: "subagent",
+    sessionID: "parent",
+  };
+  const roles = rolesFor({ parent: {} });
+  await enforceRoleGuard(roles, input, { agent: "mimir-test" }, root);
+  expect(await readCoordinatorState("parent")).toBeNull();
+  const planFile = join(root, "plan.md");
+  await Bun.write(planFile, "# Plan");
+  await writeCoordinatorState("parent", { active: true, planFile });
+  await expect(
+    enforceRoleGuard(roles, input, { agent: "mimir-test" }, root),
+  ).rejects.toThrow("task");
+  const output = { output: "STATUS: done", metadata: {} };
+  expect(
+    await gateTaskOutput(
+      {
+        tool: "subagent",
+        callID: "c",
+        sessionID: "parent",
+        args: { agent: "mimir-impl" },
+      },
+      output,
+      root,
+    ),
+  ).toBe("block");
+  expect(output.output).toContain("missing task base");
+});
 
 describe("createSessionRoles", () => {
   test("V2 lookup returns direct session info and retries failed lookups", async () => {
@@ -222,6 +387,11 @@ describe("guardReason", () => {
       ),
     ).toContain("delegates");
     await Bun.write(planFile, "# plan");
+    await writeCoordinatorState("main", {
+      active: true,
+      planFile,
+      task: { base: "a".repeat(40), worktree: WT },
+    });
     expect(
       await guardReason(
         roles,

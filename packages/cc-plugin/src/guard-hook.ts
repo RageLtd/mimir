@@ -12,7 +12,11 @@
  *
  * The coordinator role is silent unless the delegation skill has written
  * an active coordinator state for this session — so ordinary Mimir
- * sessions never feel it.
+ * sessions never feel it. Two of its denials come before the role
+ * decision: a state file whose task boundary is malformed (fail closed —
+ * a borrowed base would verify the wrong change), and spawning one of
+ * Mimir's workers without a captured task. Workers are proven at spawn
+ * and at hand-back, not on every tool call; utility agents need no task.
  *
  * The decision itself is `guardDecision` in plugin-core; this file only
  * builds the context from the CC payload (worktree = cwd, plan-file
@@ -27,9 +31,11 @@ import {
   isGuardRole,
   readCoordinatorState,
 } from "@mimir/plugin-core/guard";
+import { attempt } from "@mimir/plugin-core/result";
 import { errMessage } from "@mimir/plugin-core/util";
 import { workerByName } from "@mimir/plugin-core/workers";
 import { createLogger } from "./logger";
+import { taskProvenance } from "./task-state";
 import { bootstrapWorktree } from "./worktree-bootstrap";
 
 const log = createLogger("guard-hook");
@@ -115,14 +121,49 @@ const coordinatorFields = async (sessionId: string, worktree: string) => {
   return { planFile: state.planFile, planFileExists, workerWorktrees };
 };
 
+// Serialisation boundary: the tool's input arrives as untyped JSON.
+const toolInputOf = (input: HookInput) =>
+  input.tool_input && typeof input.tool_input === "object"
+    ? (input.tool_input as Record<string, unknown>)
+    : {};
+
+const SPAWN_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task"]);
+
+/** True when the call spawns one of Mimir's workers, not a utility agent. */
+export const spawnsWorker = (input: HookInput) => {
+  if (!input.tool_name || !SPAWN_TOOLS.has(input.tool_name)) return false;
+  const subagentType = toolInputOf(input).subagent_type;
+  return (
+    typeof subagentType === "string" && workerByName(subagentType) !== null
+  );
+};
+
+/** The coordinator's state-level denial for this call, or null. */
+const coordinatorDenial = async (input: HookInput) => {
+  const [stateError] = await attempt(() =>
+    readCoordinatorState(input.session_id ?? ""),
+  );
+  if (stateError)
+    return {
+      allow: false,
+      reason: `${errMessage(stateError)} Run \`mimir-cc delegate stop\` to clear it.`,
+    } satisfies ReturnType<typeof guardDecision>;
+  if (!spawnsWorker(input)) return null;
+  const [error] = await attempt(() =>
+    taskProvenance(input.session_id, input.cwd ?? process.cwd()),
+  );
+  if (!error) return null;
+  return {
+    allow: false,
+    reason: `Cannot delegate without task provenance: ${errMessage(error)}`,
+  } satisfies ReturnType<typeof guardDecision>;
+};
+
 /** Build the guard context; null means "nothing to decide" (stay silent). */
 export const buildGuardContext = async (role: GuardRole, input: HookInput) => {
   if (!input.tool_name) return null;
   const worktree = input.cwd ?? process.cwd();
-  const toolInput =
-    input.tool_input && typeof input.tool_input === "object"
-      ? (input.tool_input as Record<string, unknown>)
-      : {};
+  const toolInput = toolInputOf(input);
   const coordinator =
     role === "coordinator"
       ? await coordinatorFields(input.session_id ?? "", worktree)
@@ -142,6 +183,14 @@ export const runGuardHook = async (args: readonly string[]) => {
   const input = await parseInput(await readStdin());
   const role = parseGuardArgs(args) ?? roleFromInput(input);
   if (!role) return 0;
+  if (role === "coordinator") {
+    const denied = await coordinatorDenial(input);
+    if (denied) {
+      log.info("role guard denied", { role, toolName: input.tool_name });
+      process.stdout.write(JSON.stringify(guardOutput(denied)));
+      return 0;
+    }
+  }
   // A worker's first call inside its fresh worktree: install deps there
   // once, before any command that would need them.
   if (role !== "coordinator" && input.cwd) {

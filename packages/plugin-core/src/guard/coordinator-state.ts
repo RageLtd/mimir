@@ -4,8 +4,10 @@
  * opened and cleared when the delegation ends. The guard reads it to
  * decide whether the coordinator role is active for a tool call.
  *
- * Absent or malformed → inactive. A broken state file must never lock
- * the developer out of their own session.
+ * Absent or unparseable → inactive: a broken state file must never lock
+ * the developer out of their own session. A parseable file whose task
+ * boundary is malformed is the one exception — reading it throws, and
+ * the guards deny rather than verify against a borrowed base.
  */
 
 import { join } from "node:path";
@@ -21,6 +23,18 @@ export type CoordinatorState = {
   readonly active: boolean;
   /** Absolute path to the delegation plan the guard requires before spawning. */
   readonly planFile: string;
+  /**
+   * The current red → green → review task's boundary — one per session,
+   * not the whole plan. Captured host-side; verification and review diff
+   * from `base` so the task's committed red tests count and earlier
+   * tasks' don't.
+   */
+  readonly task?: {
+    /** Full commit id of HEAD when the task began. */
+    readonly base: string;
+    /** The integration worktree the base was captured in. */
+    readonly worktree: string;
+  };
 };
 
 const stateDir = () => join(mimirHome(), "agents");
@@ -30,6 +44,20 @@ const safeSessionId = (sessionId: string) =>
 
 export const coordinatorStatePath = (sessionId: string) =>
   join(stateDir(), `${safeSessionId(sessionId)}.json`);
+
+const readTask = (raw: unknown) => {
+  if (raw === undefined) return undefined;
+  const task = asRecord(raw);
+  if (
+    !task ||
+    typeof task.base !== "string" ||
+    typeof task.worktree !== "string"
+  )
+    throw new Error(
+      "Invalid coordinator task state: cannot verify the task base.",
+    );
+  return { base: task.base, worktree: task.worktree };
+};
 
 export const readCoordinatorState = async (sessionId: string) => {
   const file = Bun.file(coordinatorStatePath(sessionId));
@@ -52,9 +80,11 @@ export const readCoordinatorState = async (sessionId: string) => {
   ) {
     return null;
   }
+  const task = readTask(record.task);
   return {
     active: record.active,
     planFile: record.planFile,
+    ...(task ? { task } : {}),
   } satisfies CoordinatorState;
 };
 
