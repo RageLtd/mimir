@@ -2,10 +2,11 @@
  * The session lifecycle — session start, turn end and compaction — each
  * handing the subcommand written against it what it needs.
  *
- * - `classic.SessionStart` → `mimir-cc session-start`: key reconcile and
- *   blind org sync (bounded), then a detached full reindex on startup or
- *   resume. The classic event is the bridge because it carries `source`,
- *   which the engine's own `session.start` does not.
+ * - `classic.SessionStart` → `mimir-cc session-start`: on startup or
+ *   resume, detaches a worker that reconciles keys, syncs the org replica
+ *   and reindexes the project, then returns at once so the first prompt
+ *   is never behind it. The classic event is the bridge because it
+ *   carries `source`, which the engine's own `session.start` does not.
  * - `turn.complete` (main loop) → `mimir-cc persist`: the messages since
  *   the last distillation, read from `$.session.messages({ as: "api" })`
  *   and distilled into the local replica.
@@ -28,8 +29,8 @@ import type { MimirAnchor } from "../types";
 import { mimirCcArgv, mimirCcInit, parseHookOutput } from "./binary";
 import { anchorOf, deltaSince, NO_ANCHOR, slim } from "./messages";
 
-/** The binary bounds its reconcile at 15 s and detaches the reindex. */
-const SESSION_START_TIMEOUT_MS = 20_000;
+/** The binary only parses the payload and detaches its worker. */
+const SESSION_START_TIMEOUT_MS = 5_000;
 const PERSIST_TIMEOUT_MS = 10_000;
 const PRECOMPACT_TIMEOUT_MS = 15_000;
 
