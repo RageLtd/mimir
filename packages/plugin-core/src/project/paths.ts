@@ -14,7 +14,17 @@
  * index stops carrying two representations of the same file.
  */
 
-import { isAbsolute, relative } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 
 export const toProjectRelative = (projectRoot: string, filePath: string) =>
   isAbsolute(filePath) ? relative(projectRoot, filePath) : filePath;
+
+/**
+ * Whether `filePath` (absolute, or relative to the root) lies inside
+ * `projectRoot`. Compares path segments, not string prefixes, so
+ * `/repo-other` is outside `/repo` and `/repo/..hidden` is inside it.
+ */
+export const isInsideProject = (projectRoot: string, filePath: string) => {
+  const rel = relative(projectRoot, resolve(projectRoot, filePath));
+  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+};
