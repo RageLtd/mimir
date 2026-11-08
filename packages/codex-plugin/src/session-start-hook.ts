@@ -1,25 +1,36 @@
 /**
- * SessionStart hook — full project re-index of the brain's cartographer
- * view (ported from cc-plugin).
+ * SessionStart hook (ported from cc-plugin).
  *
- * Fires when Codex starts or resumes a session. Spawns a detached worker
- * that walks every git-tracked file in the project, parses each via the
- * cartographer binary, and writes the full set to the local cart index
- * with `mode: "replace"` so anything deleted or moved since the last
- * session is dropped. The reindex-hook (apply_patch) uses
- * `mode: "upsert"` thereafter.
+ * The hook itself does one thing: on `startup` or `resume` it resolves the
+ * repository root and spawns a detached worker for it, then returns, so the
+ * developer's first prompt is never behind it. `/clear` and `/compact` don't
+ * represent a new working period and spawn nothing.
  *
- * Only fires on source === "startup" or "resume" — /clear and /compact
- * don't represent a new working period and shouldn't trigger a re-scan.
+ * The worker does the real session-start work, in order:
+ *   1. Silent key reconcile (MIM-87) then blind org sync (MIM-88): fulfil
+ *      pending wraps, pull/push org memories — no embedder spawn, never
+ *      mints secrets. Bounded, because the reindex is queued behind it and
+ *      a hung sync would otherwise block the reindex indefinitely.
+ *   2. Full project re-index of the brain's cartographer view: every
+ *      git-tracked file parsed via the cartographer binary and written with
+ *      `mode: "replace"`, so anything deleted or moved since the last
+ *      session drops out. The reindex-hook (apply_patch) uses
+ *      `mode: "upsert"` thereafter.
  *
- * The hook returns 0 immediately after detaching the worker. Codex's
- * startup latency is unaffected; the brain catches up in the background
- * while the developer types their first prompt.
+ * A first-turn retrieve may race the sync; pulled rows land a few seconds
+ * later and are there for the next turn. The reindex waits behind reconcile
+ * + sync (up to the deadline), so on a slow or unreachable server the cart
+ * index can be stale for the first turns — the same trade-off the cc-plugin
+ * hook accepts.
  */
 
 import { spawn } from "node:child_process";
+import type { ParsedFileOutput } from "@mimir/plugin-core/cartographer/client";
 import { reconcileFromSharedConfig } from "@mimir/plugin-core/keys/cli";
-import { getOrResolveProjectId } from "@mimir/plugin-core/project";
+import {
+  getOrResolveProjectId,
+  resolveProjectRoot,
+} from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
 import { readConfig } from "@mimir/plugin-core/shared-config";
 import { syncFromSharedConfig } from "@mimir/plugin-core/sync/cli";
@@ -29,13 +40,15 @@ import { createLogger } from "./logger";
 
 const log = createLogger("session-start-hook");
 
-type HookInput = {
+export type HookInput = {
   readonly session_id?: string;
   readonly cwd?: string;
   readonly source?: "startup" | "resume" | "clear" | "compact";
 };
 
 const RESCAN_SOURCES = new Set(["startup", "resume"]);
+/** Reconcile + sync budget inside the worker; a miss retries next session. */
+const BOOT_SYNC_DEADLINE_MS = 60_000;
 
 const spawnWorker = (projectPath: string) => {
   const child = spawn(
@@ -50,59 +63,37 @@ const spawnWorker = (projectPath: string) => {
   child.unref();
 };
 
-const runHook = async () => {
-  if (process.env.MIMIR_ACTIVE !== "1") return 0;
-
-  const input = await readHookInput<HookInput>();
+export const runHook = async (
+  input: HookInput,
+  deps: { readonly spawnWorker: (projectPath: string) => void } = {
+    spawnWorker,
+  },
+) => {
   const source = input.source ?? "startup";
-
   if (!RESCAN_SOURCES.has(source)) {
-    log.debug("source does not warrant rescan, skipping", { source });
+    log.debug("source does not warrant a session-start worker", { source });
     return 0;
   }
-
+  // The session cwd may be a subdirectory; the full-replace index write must
+  // land under the same root the reindex and file-context hooks read.
   const cwd = input.cwd ?? process.cwd();
-
-  // Silent key reconcile (MIM-87) then blind sync (MIM-88): fulfil
-  // pending wraps, pull/push org memories (no embedder spawn at boot).
-  // Bounded await — the hook process exits after dispatch, so a detached
-  // promise would be killed mid-flight; a missed deadline just retries
-  // on the next session start. Never mints secrets.
-  const RECONCILE_DEADLINE_MS = 15_000;
-  const [reconcileErr, reconciled] = await attempt(() =>
-    Promise.race([
-      (async () => {
-        const keys = await reconcileFromSharedConfig();
-        log.info("key reconcile", { ...keys });
-        return syncFromSharedConfig();
-      })(),
-      new Promise<{ status: "deadline" }>((resolve) =>
-        setTimeout(
-          () => resolve({ status: "deadline" }),
-          RECONCILE_DEADLINE_MS,
-        ),
-      ),
-    ]),
-  );
-  if (reconcileErr) {
-    log.warn("boot reconcile failed", { error: reconcileErr.message });
-  } else {
-    log.info("org sync", { ...reconciled });
-  }
-
-  const config = await readConfig();
-  if (!config?.cartographerBinary) {
-    log.debug("no cartographer configured — skipping full reindex", {
-      cwd,
-      source,
-    });
-    return 0;
-  }
-
-  log.info("spawning session-start reindex worker", { cwd, source });
-  spawnWorker(cwd);
+  const projectRoot = await resolveProjectRoot(cwd);
+  log.info("spawning session-start worker", { cwd, projectRoot, source });
+  deps.spawnWorker(projectRoot);
   return 0;
 };
+
+const reconcileAndSync = () =>
+  Promise.race([
+    (async () => {
+      const keys = await reconcileFromSharedConfig();
+      log.info("key reconcile", { ...keys });
+      return syncFromSharedConfig();
+    })(),
+    new Promise<{ status: "deadline" }>((resolve) =>
+      setTimeout(() => resolve({ status: "deadline" }), BOOT_SYNC_DEADLINE_MS),
+    ),
+  ]);
 
 const listGitFiles = async (projectPath: string) => {
   // `--cached --others --exclude-standard` covers tracked files AND
@@ -129,13 +120,16 @@ const listGitFiles = async (projectPath: string) => {
   return text.split("\n").filter((f) => f.length > 0);
 };
 
-const runWorker = async (projectPath: string) => {
+const reindex = async (projectPath: string) => {
   const start = Date.now();
 
   const config = await readConfig();
-  if (!config?.cartographerBinary) {
-    log.warn("worker started but no cartographer configured", { projectPath });
-    return 0;
+  const cartographerBinary = config?.cartographerBinary;
+  if (!config || !cartographerBinary) {
+    log.debug("no cartographer configured — skipping full reindex", {
+      projectPath,
+    });
+    return;
   }
 
   const files = await listGitFiles(projectPath);
@@ -143,7 +137,7 @@ const runWorker = async (projectPath: string) => {
     log.warn("no git-tracked files found — skipping full reindex", {
       projectPath,
     });
-    return 0;
+    return;
   }
 
   log.info("starting full project reindex", {
@@ -157,17 +151,17 @@ const runWorker = async (projectPath: string) => {
   const { syncIndex } = await import("@mimir/plugin-core/cartographer/sync");
 
   const [spawnErr, client] = await attempt(() =>
-    spawnCartographer(config.cartographerBinary as string, projectPath),
+    spawnCartographer(cartographerBinary, projectPath),
   );
   if (spawnErr || !client) {
     log.error("cartographer spawn failed", {
       projectPath,
       error: spawnErr?.message,
     });
-    return 0;
+    return;
   }
 
-  const parsed = [];
+  const parsed: ParsedFileOutput[] = [];
   let parseFailures = 0;
   for (const file of files) {
     // git ls-files emits project-root-relative paths — the canonical form
@@ -190,7 +184,7 @@ const runWorker = async (projectPath: string) => {
       attempted: files.length,
       parseFailures,
     });
-    return 0;
+    return;
   }
 
   // Deterministic local project identity; no path, remote, or manifest
@@ -217,6 +211,22 @@ const runWorker = async (projectPath: string) => {
     syncOk: result.ok,
     elapsed: `${Date.now() - start}ms`,
   });
+};
+
+export const runWorker = async (
+  projectPath: string,
+  deps: {
+    readonly reconcileAndSync: () => Promise<Record<string, unknown>>;
+    readonly reindex: (projectPath: string) => Promise<void>;
+  } = { reconcileAndSync, reindex },
+) => {
+  const [syncErr, synced] = await attempt(deps.reconcileAndSync);
+  if (syncErr) {
+    log.warn("boot reconcile failed", { error: syncErr.message });
+  } else {
+    log.info("org sync", { ...synced });
+  }
+  await deps.reindex(projectPath);
   return 0;
 };
 
@@ -229,5 +239,6 @@ export const runSessionStartCommand = async (args: readonly string[]) => {
     }
     return runWorker(projectPath);
   }
-  return runHook();
+  if (process.env.MIMIR_ACTIVE !== "1") return 0;
+  return runHook(await readHookInput<HookInput>());
 };
