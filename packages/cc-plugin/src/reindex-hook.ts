@@ -13,16 +13,16 @@
  * code 0 immediately while the indexer keeps running in the background.
  *
  * No-op when MIMIR_ACTIVE != 1 (defence in depth — the module sets it
- * for every run), when the tool isn't a file-write, when there's no
- * cartographer binary configured, or when the file path can't be
- * resolved from the tool input.
+ * for every run), when the tool isn't a file-write, when the edit came
+ * from a subagent, when the file path can't be resolved from the tool
+ * input, when the session cwd is not inside a git repository, when the
+ * file lies outside the project root, or when there's no cartographer
+ * binary configured.
  */
 
 import { spawn } from "node:child_process";
-import {
-  resolveProjectRoot,
-  toProjectRelative,
-} from "@mimir/plugin-core/project";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+import { findGitRoot, toProjectRelative } from "@mimir/plugin-core/project";
 import { errMessage } from "@mimir/plugin-core/util";
 import { readConfig } from "./config";
 import { createLogger } from "./logger";
@@ -71,6 +71,48 @@ const extractFilePath = (input: HookInput): string | null => {
   return typeof fp === "string" && fp.length > 0 ? fp : null;
 };
 
+const isInsideRoot = (projectRoot: string, filePath: string) => {
+  const rel = relative(projectRoot, resolve(projectRoot, filePath));
+  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+};
+
+/**
+ * Decide whether a PostToolUse payload names a file to reindex under
+ * `projectRoot`. Pure: either a skip with its reason, or the pair the
+ * worker is forked with.
+ */
+export const reindexTarget = (input: HookInput, projectRoot: string | null) => {
+  if (!input.tool_name || !FILE_WRITE_TOOLS.has(input.tool_name)) {
+    return { skip: `tool ${input.tool_name ?? "(none)"} does not write files` };
+  }
+
+  // A worker subagent edits inside an ephemeral worktree. Indexing that
+  // would overwrite the project's entries with half-finished state under
+  // the same relative paths; the SessionStart replace-mode reindex picks
+  // up whatever the coordinator merges.
+  if (input.agent_id) {
+    return { skip: `subagent edit (agent ${input.agent_id})` };
+  }
+
+  const filePath = extractFilePath(input);
+  if (!filePath) return { skip: "tool_input has no file_path" };
+
+  // Outside a repository there is no stable root to key the index on —
+  // falling back to the session cwd would let a scratch directory pose as
+  // the project.
+  if (projectRoot === null) {
+    return { skip: `${filePath} was written outside any git repository` };
+  }
+
+  // A write outside the repository (scratch dirs, /tmp) has no place in
+  // this project's index — toProjectRelative would key it as `../…`.
+  if (!isInsideRoot(projectRoot, filePath)) {
+    return { skip: `${filePath} is outside the project root ${projectRoot}` };
+  }
+
+  return { projectPath: projectRoot, filePath };
+};
+
 /**
  * Fork a detached child running `mimir-cc reindex --worker <project> <file>`.
  *
@@ -104,22 +146,15 @@ const runHook = async (): Promise<number> => {
   const raw = await readStdin();
   const input = safeParseHookInput(raw);
 
-  if (!input.tool_name || !FILE_WRITE_TOOLS.has(input.tool_name)) return 0;
+  // The session cwd follows Bash `cd`; the index keys on the repository root.
+  const projectRoot = await findGitRoot(input.cwd ?? process.cwd());
 
-  // A worker subagent edits inside an ephemeral worktree. Indexing that
-  // would overwrite the project's entries with half-finished state under
-  // the same relative paths; the SessionStart replace-mode reindex picks
-  // up whatever the coordinator merges.
-  if (input.agent_id) {
-    log.debug("subagent edit — skipping reindex", { agentId: input.agent_id });
+  const target = reindexTarget(input, projectRoot);
+  if ("skip" in target) {
+    log.debug("skipping reindex", { reason: target.skip });
     return 0;
   }
-
-  const filePath = extractFilePath(input);
-  if (!filePath) return 0;
-
-  // The session cwd follows Bash `cd`; the index keys on the repository root.
-  const projectPath = await resolveProjectRoot(input.cwd ?? process.cwd());
+  const { projectPath, filePath } = target;
 
   const config = await readConfig();
   if (!config?.cartographerBinary) {

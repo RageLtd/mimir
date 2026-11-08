@@ -3,8 +3,9 @@
  *
  * A host's session cwd can drift below the repository root (Claude Code's
  * follows Bash `cd`), and the cart index keys its rows on one stable root
- * path. The git toplevel is that root; outside a repository the input is
- * already the best answer.
+ * path. The git toplevel is that root. Outside a repository there is none
+ * (`findGitRoot` → null); readers content with a best effort take the input
+ * instead (`resolveProjectRoot`).
  *
  * The root is derived from `--show-cdup` against the caller's own path
  * rather than taken from `--show-toplevel`, which reports the physical
@@ -31,13 +32,20 @@ const gitCdup = async (cwd: string) => {
 
 /**
  * Resolve `cwd` to its git repository root in the caller's path form, or
- * return it unchanged when it is not inside a repository. Never throws — a
- * missing git binary or an unreadable directory degrades to the input.
+ * null when it is not inside a repository. Never throws — a missing git
+ * binary or an unreadable directory degrades to null.
  */
-export const resolveProjectRoot = async (cwd: string) => {
+export const findGitRoot = async (cwd: string) => {
   const [err, cdup] = await attempt(() => gitCdup(cwd));
   if (err) {
     log.debug("git root resolution failed", { cwd, error: err.message });
   }
-  return cdup === null ? cwd : resolve(cwd, cdup);
+  return cdup === null ? null : resolve(cwd, cdup);
 };
+
+/**
+ * `findGitRoot`, falling back to `cwd` itself outside a repository — for
+ * readers that want a best-effort root rather than a guarantee.
+ */
+export const resolveProjectRoot = async (cwd: string) =>
+  (await findGitRoot(cwd)) ?? cwd;
