@@ -26,7 +26,10 @@
 
 import { spawn } from "node:child_process";
 import { reconcileFromSharedConfig } from "@mimir/plugin-core/keys/cli";
-import { getOrResolveProjectId } from "@mimir/plugin-core/project";
+import {
+  getOrResolveProjectId,
+  resolveProjectRoot,
+} from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
 import { syncFromSharedConfig } from "@mimir/plugin-core/sync/cli";
 import { errMessage } from "@mimir/plugin-core/util";
@@ -72,7 +75,7 @@ const spawnWorker = (projectPath: string) => {
   child.unref();
 };
 
-export const runHook = (
+export const runHook = async (
   input: HookInput,
   deps: { readonly spawnWorker: (projectPath: string) => void } = {
     spawnWorker,
@@ -83,9 +86,12 @@ export const runHook = (
     log.debug("source does not warrant a session-start worker", { source });
     return 0;
   }
+  // The session cwd follows Bash `cd`; the full-replace index write must
+  // land under the same root the file-context and reindex hooks read.
   const cwd = input.cwd ?? process.cwd();
-  log.info("spawning session-start worker", { cwd, source });
-  deps.spawnWorker(cwd);
+  const projectRoot = await resolveProjectRoot(cwd);
+  log.info("spawning session-start worker", { cwd, projectRoot, source });
+  deps.spawnWorker(projectRoot);
   return 0;
 };
 
