@@ -6,7 +6,10 @@
  * get-or-start per the repo's reuse-processes rule: probe localhost for a
  * healthy server, spawn one if the pinned artifacts are installed, and
  * degrade to null (FTS-only retrieval) otherwise — an absent embedder is a
- * working state, not an error state.
+ * working state, not an error state. The server sleeps after a few idle
+ * minutes (model and context freed, listener kept, /health still ok) and
+ * reloads on the next task; only install/update stops it (`stopEmbedder`),
+ * so a new binary or flag set takes effect.
  *
  * The artifact spec below is the ORG VECTOR SPACE contract: different quants
  * of the same model emit close-but-not-identical vectors, so the exact GGUF
@@ -53,7 +56,7 @@ const BATCH_SIZE = "8192";
 /** Per-probe /health budget. Hooks keep this default; batch callers widen
  *  it via `healthTimeoutMs` — like `spawnWaitMs`, the right timeout is
  *  call-site policy, not module policy. */
-const HEALTH_TIMEOUT_MS = 1_500;
+export const HEALTH_TIMEOUT_MS = 1_500;
 const EMBED_TIMEOUT_MS = 30_000;
 /** Patient default — backfill and other batch callers ride out a cold
  *  model load. */
@@ -63,6 +66,11 @@ const SPAWN_WAIT_MS = 60_000;
  *  turn degrades to FTS-only and the next turn finds a warm server. */
 const QUERY_SPAWN_WAIT_MS = 5_000;
 const SPAWN_POLL_INTERVAL_MS = 300;
+/** Idle seconds before llama-server frees the model and context. It keeps
+ *  listening — /health answers from a cache without waking it — and the
+ *  next task reloads in ~0.5 s. Hooks fire on every prompt, so five quiet
+ *  minutes means the developer has walked away. */
+const SLEEP_IDLE_SECONDS = 300;
 
 export type EmbedderOpts = {
   readonly spawnWaitMs?: number;
@@ -86,7 +94,10 @@ const logErr = (msg: string) => {
 
 // ── Lifecycle: get-or-start ──
 
-const probeHealthy = async (baseUrl: string, healthTimeoutMs: number) => {
+export const probeHealthy = async (
+  baseUrl: string,
+  healthTimeoutMs: number,
+) => {
   const [err, res] = await attempt(() =>
     fetch(`${baseUrl}/health`, {
       signal: AbortSignal.timeout(healthTimeoutMs),
@@ -101,30 +112,37 @@ export const embedderInstalled = async () =>
   (await Bun.file(embedderModelPath()).exists()) &&
   (await Bun.file(embedderBinaryPath()).exists());
 
+/** The llama-server command line — exported so the flags are testable. */
+export const embedderArgv = () => [
+  embedderBinaryPath(),
+  "-m",
+  embedderModelPath(),
+  "--embedding",
+  "--pooling",
+  EMBEDDER_MODEL.pooling,
+  "--host",
+  LOCALHOST,
+  "--port",
+  String(embedderPort()),
+  "-c",
+  BATCH_SIZE,
+  "-b",
+  BATCH_SIZE,
+  "-ub",
+  BATCH_SIZE,
+  "--sleep-idle-seconds",
+  String(SLEEP_IDLE_SECONDS),
+];
+
 const spawnEmbedder = () => {
-  const proc = Bun.spawn(
-    [
-      embedderBinaryPath(),
-      "-m",
-      embedderModelPath(),
-      "--embedding",
-      "--pooling",
-      EMBEDDER_MODEL.pooling,
-      "--host",
-      LOCALHOST,
-      "--port",
-      String(embedderPort()),
-      "-c",
-      BATCH_SIZE,
-      "-b",
-      BATCH_SIZE,
-      "-ub",
-      BATCH_SIZE,
-    ],
-    { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
-  );
-  // The server outlives the (often hook-lifetime) process that started it;
-  // per reuse-processes, nobody stops it — the next caller reuses it.
+  const proc = Bun.spawn(embedderArgv(), {
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  // The server outlives the (often hook-lifetime) process that started it
+  // and sleeps when idle; per reuse-processes, hooks never stop it — the
+  // next caller reuses it, and install/update restarts it via stopEmbedder.
   proc.unref();
 };
 

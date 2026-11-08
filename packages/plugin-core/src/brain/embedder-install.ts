@@ -30,6 +30,7 @@ import {
   embedderDir,
   embedderModelPath,
 } from "./embedder";
+import { stopEmbedder } from "./embedder-stop";
 
 export const LLAMA_CPP_RELEASE = {
   tag: "b9912",
@@ -180,17 +181,39 @@ export const installLlamaServer = async (
     return binary;
   });
 
-/** Full acquisition: binary first (small), then the model (large). */
+/** Full acquisition: binary first (small), then the model (large), then
+ *  stop any server still running from before — it would keep the previous
+ *  binary and flags for as long as it lived. */
 export const installEmbedderArtifacts = async (
   log: ProgressLog,
   opts: {
     readonly modelUrl?: string;
     readonly binaryUrl?: string;
+    /** Test seam only — production callers never override the pin. */
+    readonly expectedSha256?: string;
   } = {},
 ) => {
   const [binErr] = await installLlamaServer(log, { url: opts.binaryUrl });
   if (binErr) return binErr;
-  const [modelErr] = await installEmbedderModel(log, { url: opts.modelUrl });
+  const [modelErr] = await installEmbedderModel(log, {
+    url: opts.modelUrl,
+    expectedSha256: opts.expectedSha256,
+  });
   if (modelErr) return modelErr;
+  const stop = await stopEmbedder();
+  switch (stop.kind) {
+    case "absent":
+      break;
+    case "stopped":
+      log(
+        `stopped running embedder (pid ${stop.pid}); the next call restarts it with current settings`,
+      );
+      break;
+    case "kept":
+      log(
+        `WARNING: running embedder not stopped — ${stop.reason}; it keeps its previous settings until restarted`,
+      );
+      break;
+  }
   return null;
 };

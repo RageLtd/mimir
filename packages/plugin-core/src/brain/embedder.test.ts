@@ -16,10 +16,13 @@ import {
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { attempt } from "../result";
 import {
   createEmbedQuery,
   EMBEDDER_MODEL,
+  embedderArgv,
   embedderBaseUrl,
+  embedderBinaryPath,
   embedderDir,
   embedderInstalled,
   embedderModelPath,
@@ -27,6 +30,7 @@ import {
   embedTexts,
   getOrStartEmbedder,
 } from "./embedder";
+import { stopEmbedder } from "./embedder-stop";
 
 // Stub HTTP round-trips starve under `bun test --parallel`; the runner's 5s
 // default is too tight.
@@ -259,5 +263,63 @@ describe("createEmbedQuery", () => {
     process.env.MIMIR_EMBEDDER_PORT = "45991";
     const embedQuery = createEmbedQuery();
     expect(await embedQuery("anything")).toBeNull();
+  });
+});
+
+describe("embedderArgv", () => {
+  test("pinned binary, configured port, five-minute idle sleep", () => {
+    process.env.MIMIR_EMBEDDER_PORT = "46400";
+    const argv = embedderArgv();
+    const flagValue = (flag: string) => argv[argv.indexOf(flag) + 1];
+    expect(argv[0]).toBe(embedderBinaryPath());
+    expect(flagValue("--port")).toBe("46400");
+    expect(flagValue("--sleep-idle-seconds")).toBe("300");
+  });
+});
+
+describe("stopEmbedder", () => {
+  /** Stand-in llama-server: Bun running a script placed AT the pinned
+   *  binary path, so `ps` shows the command the real spawn would. */
+  const withFakeServer = async (fn: (pid: number) => Promise<void>) => {
+    await Bun.write(
+      embedderBinaryPath(),
+      'const s = Bun.serve({ port: 0, fetch: () => Response.json({ status: "ok" }) });\nconsole.log(s.port);\n',
+    );
+    const proc = Bun.spawn([process.execPath, embedderBinaryPath()], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const { value } = await proc.stdout.getReader().read();
+    process.env.MIMIR_EMBEDDER_PORT = new TextDecoder().decode(value).trim();
+    await fn(proc.pid).finally(() => proc.kill());
+  };
+
+  test("nothing listening → absent", async () => {
+    const probe = Bun.serve({ port: 0, fetch: () => new Response() });
+    process.env.MIMIR_EMBEDDER_PORT = String(probe.port);
+    probe.stop(true);
+    expect(await stopEmbedder()).toEqual({ kind: "absent" });
+  });
+
+  test("terminates the pinned binary on the port and waits until it is gone", async () => {
+    await withFakeServer(async (pid) => {
+      expect(await stopEmbedder()).toEqual({ kind: "stopped", pid });
+      const [err] = await attempt(() => fetch(`${embedderBaseUrl()}/health`));
+      expect(err).not.toBeNull();
+    });
+  });
+
+  test("leaves a listener that is not the pinned binary alone", async () => {
+    // The stub lives in THIS process — a wrong implementation would kill
+    // the test runner, which is the loudest possible failure.
+    await withStub(
+      () => new Response(),
+      async () => {
+        expect(await stopEmbedder()).toEqual({
+          kind: "kept",
+          reason: expect.stringContaining("not the pinned llama-server"),
+        });
+      },
+    );
   });
 });
