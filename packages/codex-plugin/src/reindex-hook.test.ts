@@ -5,6 +5,8 @@ import { APPLY_PATCH_TOOL } from "./tool-map";
 const ROOT = "/work/repo";
 const IN_ROOT = "/work/repo/src/a.ts";
 const OUTSIDE = "/private/tmp/scratch/notes.txt";
+const DRIFTED_CWD = "/work/repo/packages/x";
+const RELATIVE_HEADER = "src/a.ts";
 
 const patchOf = (...lines: readonly string[]) =>
   ["*** Begin Patch", ...lines, "*** End Patch"].join("\n");
@@ -84,5 +86,48 @@ describe("reindexTargets", () => {
   test("skips a payload with no tool name", () => {
     const result = reindexTargets({ tool_input: { command: "x" } }, ROOT);
     expect("skip" in result).toBe(true);
+  });
+
+  test("resolves a relative header against the payload cwd", () => {
+    const result = reindexTargets(
+      {
+        ...applyPatch(patchOf(...updateFile(RELATIVE_HEADER))),
+        cwd: DRIFTED_CWD,
+      },
+      ROOT,
+    );
+    expect(result).toEqual({
+      projectPath: ROOT,
+      filePaths: [`${DRIFTED_CWD}/${RELATIVE_HEADER}`],
+      skipped: [],
+    });
+  });
+
+  test("skips a relative header that resolves outside the root", () => {
+    const result = reindexTargets(
+      {
+        ...applyPatch(patchOf(...updateFile("../../../outside.ts"))),
+        cwd: DRIFTED_CWD,
+      },
+      ROOT,
+    );
+    if ("skip" in result) {
+      throw new Error(`expected targets, got ${JSON.stringify(result)}`);
+    }
+    expect(result.filePaths).toEqual([]);
+    expect(result.skipped).toHaveLength(1);
+    expect(result.skipped[0]?.filePath).toBe("/work/outside.ts");
+    expect(result.skipped[0]?.reason).toContain(ROOT);
+  });
+
+  test("resolves a relative header against the root when cwd is absent", () => {
+    const result = reindexTargets(
+      applyPatch(patchOf(...updateFile(RELATIVE_HEADER))),
+      ROOT,
+    );
+    if ("skip" in result) {
+      throw new Error(`expected targets, got ${JSON.stringify(result)}`);
+    }
+    expect(result.filePaths).toEqual([IN_ROOT]);
   });
 });
