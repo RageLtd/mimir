@@ -33,7 +33,7 @@ export {
   writeCache,
 } from "./cache";
 export { detectGitRemote } from "./git";
-export { toProjectRelative } from "./paths";
+export { isInsideProject, toProjectRelative } from "./paths";
 export type { ResolvedProject } from "./resolver";
 export { normalizeGitRemote, resolveProjectForPath } from "./resolver";
 export { findGitRoot, resolveProjectRoot } from "./root";

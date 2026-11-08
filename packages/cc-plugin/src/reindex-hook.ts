@@ -21,8 +21,11 @@
  */
 
 import { spawn } from "node:child_process";
-import { isAbsolute, relative, resolve, sep } from "node:path";
-import { findGitRoot, toProjectRelative } from "@mimir/plugin-core/project";
+import {
+  findGitRoot,
+  isInsideProject,
+  toProjectRelative,
+} from "@mimir/plugin-core/project";
 import { errMessage } from "@mimir/plugin-core/util";
 import { readConfig } from "./config";
 import { createLogger } from "./logger";
@@ -71,11 +74,6 @@ const extractFilePath = (input: HookInput): string | null => {
   return typeof fp === "string" && fp.length > 0 ? fp : null;
 };
 
-const isInsideRoot = (projectRoot: string, filePath: string) => {
-  const rel = relative(projectRoot, resolve(projectRoot, filePath));
-  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
-};
-
 /**
  * Decide whether a PostToolUse payload names a file to reindex under
  * `projectRoot`. Pure: either a skip with its reason, or the pair the
@@ -106,7 +104,7 @@ export const reindexTarget = (input: HookInput, projectRoot: string | null) => {
 
   // A write outside the repository (scratch dirs, /tmp) has no place in
   // this project's index — toProjectRelative would key it as `../…`.
-  if (!isInsideRoot(projectRoot, filePath)) {
+  if (!isInsideProject(projectRoot, filePath)) {
     return { skip: `${filePath} is outside the project root ${projectRoot}` };
   }
 

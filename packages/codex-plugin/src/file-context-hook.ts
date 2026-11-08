@@ -20,12 +20,13 @@
  */
 
 import { mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
 import { buildLocalFileInfo } from "@mimir/plugin-core/cartographer/file-context";
 import {
   getOrResolveProjectId,
-  toProjectRelative,
+  isInsideProject,
+  resolveProjectRoot,
 } from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
 import {
@@ -127,11 +128,11 @@ const writeScopedSeen = async (sessionId: string, seen: Set<string>) => {
  * called only after the injection is actually emitted.
  */
 const scopedRulesInjection = async (
-  cwd: string,
+  projectRoot: string,
   relativeFilePath: string,
   sessionId: string,
 ) => {
-  const entries = await readProjectRules(cwd, {
+  const entries = await readProjectRules(projectRoot, {
     includeRootFiles: false,
     log,
   }).catch((err: unknown) => {
@@ -226,6 +227,24 @@ const emitInjection = (block: string, summary: string) => {
 };
 
 /**
+ * Root-relative key for a Bash read. The command's argument is relative
+ * to the session cwd (which follows `cd`), so resolve it there first;
+ * cart rows, scoped rules and the dedup cache all key on the root-relative
+ * form. Null when the read lies outside the root — reindex skips those
+ * too, so there is nothing indexed to inject.
+ */
+export const projectRelativeReadPath = (
+  cwd: string,
+  projectRoot: string,
+  filePath: string,
+) => {
+  const absolute = resolve(cwd, filePath);
+  return isInsideProject(projectRoot, absolute)
+    ? relative(projectRoot, absolute)
+    : null;
+};
+
+/**
  * Entry point invoked from cli.ts when argv[2] === "file-context".
  *
  * Exit 0 unconditionally. PreToolUse non-zero exits would surface as a
@@ -242,6 +261,22 @@ export const runFileContextHook = async () => {
 
   const sessionId = input.session_id ?? "default";
   const cwd = input.cwd ?? process.cwd();
+  // The session cwd follows Bash `cd`; cart rows and project rules key on
+  // the repository root.
+  const projectRoot = await resolveProjectRoot(cwd);
+
+  // Cart rows store project-relative paths. Query by the same
+  // representation or every lookup misses; the dedup cache key and the
+  // scoped-rule match use the relative form too.
+  const relativeFilePath = projectRelativeReadPath(cwd, projectRoot, filePath);
+  if (relativeFilePath === null) {
+    log.debug("read outside the project root — skipping file-context", {
+      filePath,
+      cwd,
+      projectRoot,
+    });
+    return 0;
+  }
 
   const config = await readConfig();
   if (!config) {
@@ -252,22 +287,23 @@ export const runFileContextHook = async () => {
   // Resolve cwd → project UUID (disk-cached after the first hook of a
   // session). Used only as the memory-scoring tiebreaker — the cart
   // lookup itself is keyed by rootPath and needs no server at all.
+  // Deliberately the raw cwd, not projectRoot: project identity is
+  // unified separately (MIM-131).
   const projectId = await getOrResolveProjectId(
     config.serverUrl,
     cwd,
     config.apiKey,
   ).catch(() => null);
 
-  // Cart rows store project-relative paths. Query by the same
-  // representation or every lookup misses; the dedup cache key uses the
-  // relative form too.
-  const relativeFilePath = toProjectRelative(cwd, filePath);
-
   // Scoped rules and cartographer context are independent legs; a hook
   // emits one JSON object, so both are computed first and emitted once.
-  const scoped = await scopedRulesInjection(cwd, relativeFilePath, sessionId);
+  const scoped = await scopedRulesInjection(
+    projectRoot,
+    relativeFilePath,
+    sessionId,
+  );
   const context = await fileContextInjection(
-    cwd,
+    projectRoot,
     filePath,
     relativeFilePath,
     projectId,
@@ -294,13 +330,13 @@ export const runFileContextHook = async () => {
  * hash was already injected this session, or the block is empty.
  */
 const fileContextInjection = async (
-  cwd: string,
+  projectRoot: string,
   filePath: string,
   relativeFilePath: string,
   projectId: string | null,
   sessionId: string,
 ) => {
-  const info = await localFileInfo(cwd, relativeFilePath, projectId);
+  const info = await localFileInfo(projectRoot, relativeFilePath, projectId);
   if (!info) return null;
 
   // File not in cartographer index — no contentHash, nothing to inject.
