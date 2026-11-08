@@ -61,6 +61,9 @@ compose.override.yml
 # Docs
 docs/
 
+# Delegation plan files — working records for a coordinator session, not source
+.mimir/plans/
+
 # One-off analysis artifacts — regenerated on demand, never part of the docs surface
 security-ownership-map/
 security-ownership-rules.csv
