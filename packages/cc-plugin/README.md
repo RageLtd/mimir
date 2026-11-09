@@ -192,6 +192,8 @@ The in-process half of the plugin, loaded through `hooks.json`'s `modules` entry
 
 Both distillation legs run on the session's own model client, so a Claude Code session needs no extraction endpoint. The module marks its payload `host_completions: true`; with no `extractionBaseUrl` configured the binary answers its first run with `requests` — the extraction (and, for precompact, summary) prompts it rendered — which the module runs in parallel through `$.model.complete` on `haiku` at low effort, then hands back as `completions` on a second run that parses and stores them. A configured `extractionBaseUrl` and `extractionModel` still win: the binary extracts through that endpoint in one run, as OpenCode, Codex and ACP always do.
 
+Neither leg holds the user. The hook captures the delta, marks it `pending` in `$.state`, and schedules the run with `$.clock.after(0, …)`, so `turn.complete` and `session.compact` pass on at once and distillation runs after them. One persist is in flight at a time: a turn that ends while one is pending schedules nothing, and the next turn's delta carries its messages. A pending older than a worst-case persist plus a minute's slack (`PENDING_STALE_MS`, 260 s — a session that ended mid-run) blocks nothing. A pathological precompact can outlive that and overlap a persist; its duplicate facts dedupe and both anchor writes are version-checked. A precompact always schedules, and its anchor write lands only if no re-anchor came first.
+
 `hooks.json` names the module and nothing else: there are no command hooks left. `manifests.spec.ts` pins every subcommand the module runs to the CLI's dispatch table.
 
 ### Settings (`~/.mimir/settings.json`, wrapper only)

@@ -25,6 +25,16 @@ export type MimirAnchor = {
   readonly mark: string;
 };
 
+/**
+ * A distillation scheduled off the turn and not yet settled: the anchor it
+ * will move to, and when it was scheduled (`$.clock.now()`), so one left
+ * behind by a session that ended mid-run goes stale instead of blocking.
+ */
+export type MimirPending = {
+  readonly anchor: MimirAnchor;
+  readonly at: number;
+};
+
 declare module "claude-code" {
   interface PluginState {
     "mimir-cc": {
@@ -34,6 +44,8 @@ declare module "claude-code" {
       agents: StateFamily<MimirAgent>;
       /** The main conversation's distilled prefix, advanced by persist. */
       distilled: MimirAnchor;
+      /** The distillation in flight, null once it settles. */
+      pending: MimirPending | null;
     };
   }
 }
