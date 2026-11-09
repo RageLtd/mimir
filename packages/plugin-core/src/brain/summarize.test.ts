@@ -17,8 +17,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrgReplica } from "../store/org-replica";
-import type { ExtractionConfig } from "./extract";
-import { summarizeToReplica } from "./summarize";
+import { type ExtractionConfig, renderConversation } from "./extract";
+import { prepareSummary, storeSummary, summarizeToReplica } from "./summarize";
 
 // Stub HTTP round-trips starve under `bun test --parallel`; the runner's 5s
 // default is too tight.
@@ -151,6 +151,60 @@ describe("summarizeToReplica", () => {
     });
     expect(result.ok).toBe(false);
     expect(replica.countMemories()).toBe(0);
+    replica.close();
+  });
+});
+
+describe("prepareSummary", () => {
+  test("tiny window skips", () => {
+    expect(prepareSummary([{ role: "user", content: "hi" }])).toEqual({
+      skipped: "window too small",
+    });
+  });
+
+  test("a real window yields the summarization request verbatim", () => {
+    const prepared = prepareSummary(longWindow);
+    if (!("request" in prepared)) {
+      throw new Error(`expected a request, got skip: ${prepared.skipped}`);
+    }
+    const { request } = prepared;
+    expect(request.system).toContain(
+      "You summarize conversations into concise context",
+    );
+    expect(request.prompt).toBe(renderConversation(longWindow, 120_000));
+    expect(request.maxTokens).toBe(8192);
+  });
+});
+
+describe("storeSummary", () => {
+  test("stores a type:summary memory with embedding and project, returns its id", async () => {
+    const replica = newReplica();
+    const id = await storeSummary({
+      replica,
+      embed: embedFixed,
+      projectId: "proj-456",
+      text: "A summary produced elsewhere.",
+    });
+    const stored = replica.getMemory(id);
+    expect(stored?.type).toBe("summary");
+    expect(stored?.content).toBe("A summary produced elsewhere.");
+    expect(stored?.project_id).toBe("proj-456");
+    expect(replica.listUnembedded(10)).toEqual([]);
+    replica.close();
+  });
+
+  test("embedder down → stored unembedded, no project when none given", async () => {
+    const replica = newReplica();
+    const id = await storeSummary({
+      replica,
+      embed: embedNull,
+      text: "Summary without vectors.",
+    });
+    const stored = replica.getMemory(id);
+    expect(stored?.type).toBe("summary");
+    expect(stored?.content).toBe("Summary without vectors.");
+    expect(stored?.project_id ?? null).toBeNull();
+    expect(replica.listUnembedded(10)).toHaveLength(1);
     replica.close();
   });
 });
