@@ -1,6 +1,10 @@
 import type { ModelCompleteInput, ModelCompleteResult, On } from "claude-code";
 import { expect, test } from "claude-code/testing";
 import type { MimirAnchor } from "../types";
+import {
+  PERSIST_COMPLETION_TIMEOUT_MS,
+  PRECOMPACT_COMPLETION_TIMEOUT_MS,
+} from "./binary";
 import { anchorOf, type Message } from "./messages";
 import {
   BIN,
@@ -153,6 +157,7 @@ test("persist's requests run on the session's model and their replies go back to
   expect(ask?.system).toBe("S");
   expect(ask?.prompt).toBe("P");
   expect(ask?.maxTokens).toBe(2048);
+  expect(ask?.timeoutMs).toBe(PERSIST_COMPLETION_TIMEOUT_MS);
   const persists = runsOf(runs, "persist");
   expect(persists).toHaveLength(2);
   const [first, second] = persists;
@@ -173,13 +178,61 @@ test("the anchor stays where persist's second run does not advance", async ($, o
     on,
     phases({ advance: false, requests: { facts: FACTS } }, { advance: false }),
   );
-  model(on, () => answered("not json"));
+  model(on);
   on("turn.complete", (_, e) => ({ text: e.answer }));
 
   await $.turn.complete(TURN);
 
   expect(runsOf(runs, "persist")).toHaveLength(2);
   expect(anchor.get()).toEqual(initial);
+});
+
+test("a rejected completion goes back to persist as its error, with no status line", async ($, on) => {
+  const statuses = session(on);
+  anchorState(on, anchorOf(turnOne));
+  conversation(on, [...turnOne, ...turnTwo]);
+  const runs = binary(
+    on,
+    phases({ advance: false, requests: { facts: FACTS } }, { advance: true }),
+  );
+  on("model.complete", () => {
+    throw new Error("model haiku is not allowed");
+  });
+  on("turn.complete", (_, e) => ({ text: e.answer }));
+
+  await $.turn.complete(TURN);
+
+  const persists = runsOf(runs, "persist");
+  expect(persists).toHaveLength(2);
+  const [, second] = persists;
+  expect(parsed(second?.stdin).completions?.facts?.error).toContain(
+    "model haiku is not allowed",
+  );
+  expect(statuses).toEqual([]);
+});
+
+test("a persist that asks for completions on its second run gets no third", async ($, on) => {
+  const statuses = session(on);
+  const initial = anchorOf(turnOne);
+  const anchor = anchorState(on, initial);
+  conversation(on, [...turnOne, ...turnTwo]);
+  const runs = binary(
+    on,
+    phases(
+      { advance: false, requests: { facts: FACTS } },
+      { advance: false, requests: { facts: FACTS } },
+      { advance: true },
+    ),
+  );
+  const asks = model(on, () => answered('["a fact"]'));
+  on("turn.complete", (_, e) => ({ text: e.answer }));
+
+  await $.turn.complete(TURN);
+
+  expect(runsOf(runs, "persist")).toHaveLength(2);
+  expect(asks).toHaveLength(1);
+  expect(anchor.get()).toEqual(initial);
+  expect(statuses).toEqual(["mimir: persist asked for completions twice"]);
 });
 
 test("an unanswered completion goes back to persist as its reason", async ($, on) => {
@@ -202,9 +255,9 @@ test("an unanswered completion goes back to persist as its reason", async ($, on
   await $.turn.complete(TURN);
 
   const [, second] = runsOf(runs, "persist");
-  expect(parsed(second?.stdin).completions).toEqual({
-    facts: { error: "api-error" },
-  });
+  expect(parsed(second?.stdin).completions?.facts?.error).toContain(
+    "api-error",
+  );
 });
 
 test("a persist that fails its first run asks no model", async ($, on) => {
@@ -312,6 +365,8 @@ test("precompact's summary and facts requests each run, and both replies go back
   expect(bySystem("S")?.prompt).toBe("P");
   expect(bySystem("S")?.maxTokens).toBe(2048);
   expect(bySystem("S")?.model).toBe("haiku");
+  for (const ask of asks)
+    expect(ask.timeoutMs).toBe(PRECOMPACT_COMPLETION_TIMEOUT_MS);
   const precompacts = runsOf(runs, "precompact");
   expect(precompacts).toHaveLength(2);
   const [first, second] = precompacts;
@@ -322,6 +377,56 @@ test("precompact's summary and facts requests each run, and both replies go back
       facts: { text: '["a fact"]' },
     },
   });
+});
+
+test("a rejected facts completion still lets the summary go back to precompact", async ($, on) => {
+  const statuses = session(on);
+  anchorState(on, anchorOf(turnOne));
+  conversation(on, [...turnOne, ...turnTwo]);
+  const runs = binary(
+    on,
+    phases(
+      { advance: false, requests: { summary: SUMMARY, facts: FACTS } },
+      { advance: true },
+    ),
+  );
+  on("model.complete", (_, e) => {
+    if (e.system === "S") throw new Error("model haiku is not allowed");
+    return { value: answered("the summary") };
+  });
+  on("session.compact", () => ({ messages: remaining }));
+
+  await $.session.compact({ trigger: "manual", messages: rows });
+
+  const precompacts = runsOf(runs, "precompact");
+  expect(precompacts).toHaveLength(2);
+  const [, second] = precompacts;
+  const { completions } = parsed(second?.stdin);
+  expect(completions?.summary).toEqual({ text: "the summary" });
+  expect(completions?.facts?.error).toContain("model haiku is not allowed");
+  expect(statuses).toEqual([]);
+});
+
+test("a precompact that asks for completions on its second run gets no third", async ($, on) => {
+  const statuses = session(on);
+  anchorState(on, anchorOf(turnOne));
+  conversation(on, [...turnOne, ...turnTwo]);
+  const runs = binary(
+    on,
+    phases(
+      { advance: false, requests: { facts: FACTS } },
+      { advance: false, requests: { facts: FACTS } },
+      { advance: true },
+    ),
+  );
+  const asks = model(on, () => answered('["a fact"]'));
+  on("session.compact", () => ({ messages: remaining }));
+
+  await $.session.compact({ trigger: "manual", messages: rows });
+
+  expect(runsOf(runs, "precompact")).toHaveLength(2);
+  expect(asks).toHaveLength(1);
+  expect(statuses).toEqual(["mimir: precompact asked for completions twice"]);
 });
 
 test("a skipped compaction keeps the anchor precompact advanced to", async ($, on) => {
