@@ -205,8 +205,10 @@ test("a rejected completion goes back to persist as its error, with no status li
   const persists = runsOf(runs, "persist");
   expect(persists).toHaveLength(2);
   const [, second] = persists;
+  // The kit skips a throwing hook and rejects with its own "no implementation
+  // for model.complete", so the thrown message never reaches the module.
   expect(parsed(second?.stdin).completions?.facts?.error).toContain(
-    "model haiku is not allowed",
+    "model.complete",
   );
   expect(statuses).toEqual([]);
 });
@@ -403,7 +405,7 @@ test("a rejected facts completion still lets the summary go back to precompact",
   const [, second] = precompacts;
   const { completions } = parsed(second?.stdin);
   expect(completions?.summary).toEqual({ text: "the summary" });
-  expect(completions?.facts?.error).toContain("model haiku is not allowed");
+  expect(completions?.facts?.error).toContain("model.complete");
   expect(statuses).toEqual([]);
 });
 
