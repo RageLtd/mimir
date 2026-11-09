@@ -190,6 +190,8 @@ The in-process half of the plugin, loaded through `hooks.json`'s `modules` entry
 - **`turn.complete` (main loop) → `mimir-cc persist`.** The messages since the last distillation, read from `$.session.messages({ as: "api" })` with media stripped, distilled into the local replica. Where the last distillation stopped is an anchor in `$.state` (`hooks/messages.ts`) that the module moves when the binary answers `{ advance: true }`; it finds its place again after the engine's 4096-row window slides. A subagent's turns are its own.
 - **`session.compact` (main loop) → `mimir-cc precompact`.** The undistilled tail, summarised and extracted before Claude Code compacts the context; afterwards the anchor is the compacted conversation, so the engine's summary is never distilled as a turn. A `precompute` passes over — it installs nothing.
 
+Both distillation legs run on the session's own model client, so a Claude Code session needs no extraction endpoint. The module marks its payload `host_completions: true`; with no `extractionBaseUrl` configured the binary answers its first run with `requests` — the extraction (and, for precompact, summary) prompts it rendered — which the module runs in parallel through `$.model.complete` on `haiku` at low effort, then hands back as `completions` on a second run that parses and stores them. A configured `extractionBaseUrl` and `extractionModel` still win: the binary extracts through that endpoint in one run, as OpenCode, Codex and ACP always do.
+
 `hooks.json` names the module and nothing else: there are no command hooks left. `manifests.spec.ts` pins every subcommand the module runs to the CLI's dispatch table.
 
 ### Settings (`~/.mimir/settings.json`, wrapper only)
