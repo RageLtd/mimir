@@ -3,8 +3,71 @@
  * module hands it, → ModelMessage[] for the brain.
  */
 
-import { describe, expect, test } from "bun:test";
-import { type ApiMessage, toModelMessages } from "./conversation";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import type { CompletionRequest } from "@mimir/plugin-core/brain/extract";
+import {
+  type ApiMessage,
+  answer,
+  type DistillInput,
+  toModelMessages,
+} from "./conversation";
+
+describe("answer", () => {
+  let written: string[] = [];
+  const spy = () =>
+    spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      written.push(String(chunk));
+      return true;
+    });
+
+  afterEach(() => {
+    written = [];
+  });
+
+  test("writes only { advance } when no requests are given", () => {
+    const write = spy();
+    answer(true);
+    write.mockRestore();
+    expect(written.map((chunk) => JSON.parse(chunk))).toEqual([
+      { advance: true },
+    ]);
+  });
+
+  test("writes { advance, requests } when requests are given", () => {
+    const facts: CompletionRequest = {
+      system: "sys",
+      prompt: "user: hi",
+      maxTokens: 2048,
+    };
+    const write = spy();
+    answer(false, { facts });
+    write.mockRestore();
+    expect(written.map((chunk) => JSON.parse(chunk))).toEqual([
+      { advance: false, requests: { facts } },
+    ]);
+  });
+});
+
+describe("DistillInput", () => {
+  test("a phase-two payload carries completions keyed by request, text or error", () => {
+    // Serialisation boundary, as readDistillInput parses it.
+    const input = JSON.parse(
+      JSON.stringify({
+        session_id: "s1",
+        messages: [],
+        completions: {
+          facts: { text: '["a"]' },
+          summary: { error: "api-error" },
+        },
+      }),
+    ) as DistillInput;
+    const completions: DistillInput["completions"] = input.completions;
+    expect(completions).toEqual({
+      facts: { text: '["a"]' },
+      summary: { error: "api-error" },
+    });
+  });
+});
 
 const user = (text: string): ApiMessage => ({
   role: "user",
