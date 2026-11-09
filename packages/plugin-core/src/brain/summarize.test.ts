@@ -10,6 +10,7 @@ import {
   beforeEach,
   describe,
   expect,
+  mock,
   setDefaultTimeout,
   test,
 } from "bun:test";
@@ -185,6 +186,7 @@ describe("storeSummary", () => {
       projectId: "proj-456",
       text: "A summary produced elsewhere.",
     });
+    if (id === null) throw new Error("expected a stored summary id");
     const stored = replica.getMemory(id);
     expect(stored?.type).toBe("summary");
     expect(stored?.content).toBe("A summary produced elsewhere.");
@@ -200,11 +202,32 @@ describe("storeSummary", () => {
       embed: embedNull,
       text: "Summary without vectors.",
     });
+    if (id === null) throw new Error("expected a stored summary id");
     const stored = replica.getMemory(id);
     expect(stored?.type).toBe("summary");
     expect(stored?.content).toBe("Summary without vectors.");
     expect(stored?.project_id ?? null).toBeNull();
     expect(replica.listUnembedded(10)).toHaveLength(1);
+    replica.close();
+  });
+
+  test("empty text → returns null and stores nothing", async () => {
+    const replica = newReplica();
+    const id = await storeSummary({ replica, embed: embedFixed, text: "" });
+    expect(id).toBeNull();
+    expect(replica.listMemories()).toEqual([]);
+    expect(replica.countMemories()).toBe(0);
+    replica.close();
+  });
+
+  test("whitespace-only text → returns null, stores nothing, never embeds", async () => {
+    const replica = newReplica();
+    const embed = mock(embedFixed);
+    const id = await storeSummary({ replica, embed, text: "   \n " });
+    expect(id).toBeNull();
+    expect(embed).not.toHaveBeenCalled();
+    expect(replica.listMemories()).toEqual([]);
+    expect(replica.countMemories()).toBe(0);
     replica.close();
   });
 });
