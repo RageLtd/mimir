@@ -66,6 +66,13 @@ export const setCachedProjectId = async (
   await writeCache(cache);
 };
 
+export const deleteCachedProjectId = async (projectPath: string) => {
+  const cache = await readCache();
+  if (!(projectPath in cache)) return;
+  delete cache[projectPath];
+  await writeCache(cache);
+};
+
 export const setProjectIdAlias = async (
   legacyId: string,
   currentId: string,
