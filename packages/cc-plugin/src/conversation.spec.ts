@@ -3,8 +3,106 @@
  * module hands it, → ModelMessage[] for the brain.
  */
 
-import { describe, expect, test } from "bun:test";
-import { type ApiMessage, toModelMessages } from "./conversation";
+import { afterEach, describe, expect, type Mock, spyOn, test } from "bun:test";
+import type { CompletionRequest } from "@mimir/plugin-core/brain/extract";
+import {
+  type ApiMessage,
+  answer,
+  type Completions,
+  completionText,
+  toModelMessages,
+} from "./conversation";
+
+describe("answer", () => {
+  let written: string[] = [];
+  let write: Mock<typeof process.stdout.write> | undefined;
+  const spy = () => {
+    write = spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      written.push(String(chunk));
+      return true;
+    });
+  };
+
+  afterEach(() => {
+    write?.mockRestore();
+    write = undefined;
+    written = [];
+  });
+
+  test("writes only { advance } when no requests are given", () => {
+    spy();
+    answer(true);
+    expect(written.map((chunk) => JSON.parse(chunk))).toEqual([
+      { advance: true },
+    ]);
+  });
+
+  test("writes { advance, requests } when requests are given", () => {
+    const facts: CompletionRequest = {
+      system: "sys",
+      prompt: "user: hi",
+      maxTokens: 2048,
+    };
+    spy();
+    answer(false, { facts });
+    expect(written.map((chunk) => JSON.parse(chunk))).toEqual([
+      { advance: false, requests: { facts } },
+    ]);
+  });
+});
+
+/**
+ * Completions as readDistillInput hands them over: whatever JSON the hooks
+ * module wrote on stdin, typed but unvalidated.
+ */
+const fromStdin = (raw: unknown) =>
+  // Serialisation boundary: the shape is what the wire carried, not what the type claims.
+  JSON.parse(JSON.stringify(raw)) as Completions;
+
+describe("completionText", () => {
+  test("a text completion is ok with its text", () => {
+    expect(
+      completionText(fromStdin({ facts: { text: "x" } }), "facts"),
+    ).toEqual({ ok: true, text: "x" });
+  });
+
+  test("an error completion is not ok and names the error", () => {
+    expect(
+      completionText(fromStdin({ facts: { error: "api-error" } }), "facts"),
+    ).toEqual({ ok: false, reason: expect.stringContaining("api-error") });
+  });
+
+  test("a missing key is not ok", () => {
+    expect(
+      completionText(fromStdin({ summary: { text: "x" } }), "facts"),
+    ).toEqual({ ok: false, reason: expect.any(String) });
+  });
+
+  test("no completions at all is not ok", () => {
+    expect(completionText(undefined, "facts")).toEqual({
+      ok: false,
+      reason: expect.any(String),
+    });
+  });
+
+  const MALFORMED: readonly [string, unknown][] = [
+    ["a string", { facts: "a string" }],
+    ["null", { facts: null }],
+    ["a null text", { facts: { text: null } }],
+    ["a numeric text", { facts: { text: 42 } }],
+    ["an empty object", { facts: {} }],
+  ];
+
+  for (const [label, raw] of MALFORMED) {
+    test(`a malformed completion (${label}) is not ok, with a reason, and does not throw`, () => {
+      const result = completionText(fromStdin(raw), "facts");
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(typeof result.reason).toBe("string");
+      expect(result.reason.length).toBeGreaterThan(0);
+    });
+  }
+});
 
 const user = (text: string): ApiMessage => ({
   role: "user",

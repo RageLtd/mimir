@@ -14,7 +14,10 @@
  *   the undistilled tail, summarised before the engine discards it.
  *
  * Where the last distillation stopped lives in `$.state` as an anchor
- * (messages.ts). The binary answers `{ advance }`: true once the delta is
+ * (messages.ts). With no extraction endpoint configured, a leg's first run
+ * answers `requests` — the prompts it rendered — which run on the session's
+ * own model (`$.model.complete`, haiku) before a second run parses and
+ * stores the replies. The binary answers `{ advance }`: true once the delta is
  * settled — distilled, or skipped on purpose — false when extraction
  * failed and the next turn should carry the same messages again. After a
  * compaction the anchor is the compacted conversation whatever happened,
@@ -26,7 +29,17 @@
 
 import type { EngineInterface, ProcessRunResult, Register } from "claude-code";
 import type { MimirAnchor } from "../types";
-import { mimirCcArgv, mimirCcInit, parseHookOutput } from "./binary";
+import {
+  type Completion,
+  completionAsk,
+  completionOutcome,
+  completionRefusal,
+  mimirCcArgv,
+  mimirCcInit,
+  PERSIST_COMPLETION_TIMEOUT_MS,
+  PRECOMPACT_COMPLETION_TIMEOUT_MS,
+  parseHookOutput,
+} from "./binary";
 import { anchorOf, deltaSince, NO_ANCHOR, slim } from "./messages";
 
 /** The binary only parses the payload and detaches its worker. */
@@ -55,7 +68,51 @@ const distillPayload = async (
     $.session.id(),
     $.session.cwd(),
   ]);
-  return { session_id, cwd, messages, ...extra };
+  // host_completions tells the binary this module runs its `requests`; a
+  // binary that never sees it keeps the single-phase behaviour.
+  return { session_id, cwd, messages, ...extra, host_completions: true };
+};
+
+/**
+ * Runs a distillation leg. When it answers `requests`, each runs on the
+ * session's model in parallel and the leg runs again with the replies as
+ * `completions`; the last run is the one to settle on. A completion the
+ * engine refuses to send goes back as its error, so the others still land.
+ */
+const distill = async (
+  $: EngineInterface,
+  leg: {
+    readonly name: string;
+    readonly argv: readonly string[];
+    readonly timeoutMs: number;
+    readonly completionTimeoutMs: number;
+  },
+  payload: Record<string, unknown>,
+) => {
+  const run = (input: unknown) =>
+    $.process.run(leg.argv, mimirCcInit(input, leg.timeoutMs));
+  const first = await run(payload);
+  if (first.exitCode !== 0) return first;
+  const { requests } = parseHookOutput(first.stdout);
+  if (requests === undefined) return first;
+  const replies = await Promise.all(
+    Object.entries(requests).map(async ([key, request]) => {
+      const outcome = await $.model
+        .complete(completionAsk(request, leg.completionTimeoutMs))
+        .then(completionOutcome, completionRefusal);
+      return [key, outcome] satisfies [string, Completion];
+    }),
+  );
+  const second = await run({
+    ...payload,
+    completions: Object.fromEntries(replies),
+  });
+  if (
+    second.exitCode === 0 &&
+    parseHookOutput(second.stdout).requests !== undefined
+  )
+    $.ui.status(`mimir: ${leg.name} asked for completions twice`);
+  return second;
 };
 
 /** Moves the anchor when the binary settled the delta; reports otherwise. */
@@ -93,9 +150,15 @@ export const registerLifecycle: Register = (on) => {
     const { delta, anchor } = await undistilled($);
     if (delta.length === 0) return next(e);
     const home = (await $.env.get("HOME")) ?? "";
-    const ran = await $.process.run(
-      mimirCcArgv(home, "persist"),
-      mimirCcInit(await distillPayload($, delta), PERSIST_TIMEOUT_MS),
+    const ran = await distill(
+      $,
+      {
+        name: "persist",
+        argv: mimirCcArgv(home, "persist"),
+        timeoutMs: PERSIST_TIMEOUT_MS,
+        completionTimeoutMs: PERSIST_COMPLETION_TIMEOUT_MS,
+      },
+      await distillPayload($, delta),
     );
     await settle($, "persist", ran, anchor);
     return next(e);
@@ -111,12 +174,15 @@ export const registerLifecycle: Register = (on) => {
     const { delta, anchor } = await undistilled($);
     if (delta.length > 0) {
       const home = (await $.env.get("HOME")) ?? "";
-      const ran = await $.process.run(
-        mimirCcArgv(home, "precompact"),
-        mimirCcInit(
-          await distillPayload($, delta, { trigger: e.trigger }),
-          PRECOMPACT_TIMEOUT_MS,
-        ),
+      const ran = await distill(
+        $,
+        {
+          name: "precompact",
+          argv: mimirCcArgv(home, "precompact"),
+          timeoutMs: PRECOMPACT_TIMEOUT_MS,
+          completionTimeoutMs: PRECOMPACT_COMPLETION_TIMEOUT_MS,
+        },
+        await distillPayload($, delta, { trigger: e.trigger }),
       );
       await settle($, "precompact", ran, anchor);
     }

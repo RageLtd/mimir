@@ -10,11 +10,12 @@
  * endpoints alike. No key required for local endpoints.
  *
  * Failure contract mirrors MIM-74's hard rule transitively: extraction
- * failure returns [] — memories just don't get extracted this turn; the
- * transcript watermark stays put so the next turn retries.
+ * failure returns null — memories just don't get extracted this turn; the
+ * transcript watermark stays put so the next turn retries. [] is an honest
+ * "nothing worth keeping".
  */
 
-import { attempt } from "../result";
+import { attempt, attemptSync } from "../result";
 
 /** User-chosen extraction endpoint. */
 export type ExtractionConfig = {
@@ -139,36 +140,51 @@ export const completeChat = async (
   return content;
 };
 
-const completeExtraction = (
+/**
+ * A completion one leg needs, transport-agnostic: the BYOK path runs it
+ * through completeChat, the cc-plugin path hands it to the host's model.
+ */
+export type CompletionRequest = {
+  readonly system: string;
+  readonly prompt: string;
+  readonly maxTokens: number;
+};
+
+// A prepare step yields one of these. Built through helpers rather than
+// inline literals so the inferred union stays discriminable with `in`
+// (TS normalizes a union of fresh literals, adding `?: undefined` keys).
+export const skipLeg = (skipped: string) => ({ skipped });
+export const requestLeg = (request: CompletionRequest) => ({ request });
+
+const extractionRequest = (conversationText: string) => ({
+  system: EXTRACTION_SYSTEM_PROMPT,
+  prompt: conversationText,
+  maxTokens: EXTRACTION_MAX_TOKENS,
+});
+
+/** Run a prepared request against the user-chosen endpoint. */
+export const completeRequest = (
   config: ExtractionConfig,
-  conversationText: string,
+  request: CompletionRequest,
+  timeoutMs: number,
 ) =>
   completeChat(config, {
-    system: EXTRACTION_SYSTEM_PROMPT,
-    user: conversationText,
-    maxTokens: EXTRACTION_MAX_TOKENS,
-    timeoutMs: EXTRACTION_TIMEOUT_MS,
+    system: request.system,
+    user: request.prompt,
+    maxTokens: request.maxTokens,
+    timeoutMs,
   });
 
 /**
- * Extract memory strings from conversation text. NULL means transport or
- * parse FAILURE (callers keep their watermark and retry next turn); an
- * empty array is an honest "nothing worth keeping".
+ * Parse an extraction completion into memory strings. NULL is a parse
+ * FAILURE (not JSON, or not a string array); [] is an honest "nothing".
  */
-export const extractMemories = async (
-  config: ExtractionConfig,
-  conversationText: string,
-) => {
-  if (!conversationText.trim()) return [];
-
-  const content = await completeExtraction(config, conversationText);
-  if (content === null) return null;
-
-  const [parseErr, memories] = await attempt(async () => {
-    // Models fond of markdown wrap the array in ```json fences.
-    const cleaned = content.replace(/```json\n?|```/g, "").trim();
-    return JSON.parse(cleaned) as unknown;
-  });
+export const parseExtraction = (content: string) => {
+  // Models fond of markdown wrap the array in ```json fences.
+  const cleaned = content.replace(/```json\n?|```/g, "").trim();
+  const [parseErr, memories] = attemptSync(
+    () => JSON.parse(cleaned) as unknown,
+  );
 
   if (
     parseErr ||
@@ -181,6 +197,26 @@ export const extractMemories = async (
     return null;
   }
   return memories;
+};
+
+/**
+ * Extract memory strings from conversation text. NULL means transport or
+ * parse FAILURE (callers keep their watermark and retry next turn); an
+ * empty array is an honest "nothing worth keeping".
+ */
+export const extractMemories = async (
+  config: ExtractionConfig,
+  conversationText: string,
+) => {
+  if (!conversationText.trim()) return [];
+
+  const content = await completeRequest(
+    config,
+    extractionRequest(conversationText),
+    EXTRACTION_TIMEOUT_MS,
+  );
+  if (content === null) return null;
+  return parseExtraction(content);
 };
 
 // ── Conversation rendering: parity port of server goldfish/memory.ts
@@ -253,37 +289,50 @@ export const buildExtractionText = (messages: readonly ConversationMessage[]) =>
   renderConversation(messages, EXTRACTION_MAX_CHARS);
 
 /**
- * Full pipeline: gate → render → extract. Server-parity gates: fewer than
- * two user turns or under 200 rendered chars skip extraction (skips are
- * SUCCESS — the caller advances its watermark). `ok: false` is transport
- * failure — keep the watermark, retry next turn. Discriminants are
+ * Gate → render. Server-parity gates: fewer than two user turns or under
+ * 200 rendered chars skip extraction (skips are SUCCESS — the caller
+ * advances its watermark); otherwise the request to complete.
+ */
+export const prepareExtraction = (messages: readonly ConversationMessage[]) => {
+  const userTurns = messages.filter(
+    (m) => m.role === "user" && contentToString(m.content),
+  ).length;
+  if (userTurns < MIN_USER_TURNS) {
+    return skipLeg("fewer than 2 user turns");
+  }
+
+  const text = buildExtractionText(messages);
+  if (text.length < MIN_TEXT_CHARS) {
+    return skipLeg("conversation too short");
+  }
+
+  return requestLeg(extractionRequest(text));
+};
+
+/**
+ * Full pipeline: prepare → complete → parse. `ok: false` is transport or
+ * parse failure — keep the watermark, retry next turn. Discriminants are
  * `as const` so the inferred union discriminates without an annotation.
  */
 export const extractFromConversation = async (
   config: ExtractionConfig,
   messages: readonly ConversationMessage[],
 ) => {
-  const userTurns = messages.filter(
-    (m) => m.role === "user" && contentToString(m.content),
-  ).length;
-  if (userTurns < MIN_USER_TURNS) {
+  const prepared = prepareExtraction(messages);
+  if ("skipped" in prepared) {
     return {
       ok: true as const,
       memories: [] as string[],
-      skipped: "fewer than 2 user turns",
+      skipped: prepared.skipped,
     };
   }
 
-  const text = buildExtractionText(messages);
-  if (text.length < MIN_TEXT_CHARS) {
-    return {
-      ok: true as const,
-      memories: [] as string[],
-      skipped: "conversation too short",
-    };
-  }
-
-  const memories = await extractMemories(config, text);
+  const content = await completeRequest(
+    config,
+    prepared.request,
+    EXTRACTION_TIMEOUT_MS,
+  );
+  const memories = content === null ? null : parseExtraction(content);
   if (memories === null) {
     return { ok: false as const, memories: null, skipped: null };
   }
