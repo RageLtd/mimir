@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  deleteCachedProjectId,
   getCachedProjectId,
   readCache,
   readProjectIdAliases,
@@ -90,6 +91,13 @@ describe("setCachedProjectId / getCachedProjectId", () => {
     await setCachedProjectId("/repo/x", "old-uuid");
     await setCachedProjectId("/repo/x", "new-uuid");
     expect(await getCachedProjectId("/repo/x")).toBe("new-uuid");
+  });
+
+  test("deleteCachedProjectId removes one entry and leaves the rest", async () => {
+    await writeCache({ "/repo/a": "uuid-a", "/repo/a/nested": "uuid-n" });
+    await deleteCachedProjectId("/repo/a/nested");
+    await deleteCachedProjectId("/never/cached");
+    expect(await readCache()).toEqual({ "/repo/a": "uuid-a" });
   });
 });
 

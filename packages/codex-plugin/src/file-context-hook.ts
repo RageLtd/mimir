@@ -284,11 +284,10 @@ export const runFileContextHook = async () => {
     return 0;
   }
 
-  // Resolve cwd → project UUID (disk-cached after the first hook of a
-  // session). Used only as the memory-scoring tiebreaker — the cart
-  // lookup itself is keyed by rootPath and needs no server at all.
-  // Deliberately the raw cwd, not projectRoot: project identity is
-  // unified separately (MIM-131).
+  // Project id (disk-cached after the first hook of a session; keys on the
+  // repository root internally). Used only as the memory-scoring
+  // tiebreaker — the cart lookup itself is keyed by rootPath and needs no
+  // server at all.
   const projectId = await getOrResolveProjectId(
     config.serverUrl,
     cwd,
