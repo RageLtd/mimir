@@ -11,6 +11,8 @@ import {
   type ExtractionConfig,
   extractFromConversation,
   extractMemories,
+  parseExtraction,
+  prepareExtraction,
 } from "./extract";
 
 // Stub HTTP round-trips starve under `bun test --parallel`; the runner's 5s
@@ -231,5 +233,80 @@ describe("extractFromConversation gates", () => {
       ],
     );
     expect(outcome.ok).toBe(false);
+  });
+});
+
+describe("prepareExtraction", () => {
+  test("single user turn skips", () => {
+    expect(
+      prepareExtraction([
+        user("only one user turn here"),
+        assistant("a reasonably long assistant reply for the filter"),
+      ]),
+    ).toEqual({ skipped: "fewer than 2 user turns" });
+  });
+
+  test("user turns without text do not count toward the gate", () => {
+    expect(
+      prepareExtraction([
+        user("a single real user turn"),
+        { role: "user", content: [{ type: "image", image: "x" }] },
+      ]),
+    ).toEqual({ skipped: "fewer than 2 user turns" });
+  });
+
+  test("short rendered conversation skips", () => {
+    expect(prepareExtraction([user("hi"), user("ok")])).toEqual({
+      skipped: "conversation too short",
+    });
+  });
+
+  test("substantive conversation yields the extraction request verbatim", () => {
+    const padding = "we discussed the compaction threshold ".repeat(10);
+    const messages = [user(padding), assistant(padding), user(padding)];
+    const prepared = prepareExtraction(messages);
+    if (!("request" in prepared)) {
+      throw new Error(`expected a request, got skip: ${prepared.skipped}`);
+    }
+    const { request } = prepared;
+    expect(request.system).toContain(
+      "You extract factual memories from development conversations",
+    );
+    expect(request.system).toContain(
+      'Output format: ["memory 1", "memory 2", ...]',
+    );
+    expect(request.prompt).toBe(buildExtractionText(messages));
+    expect(request.maxTokens).toBe(2048);
+  });
+});
+
+describe("parseExtraction", () => {
+  test("plain JSON string array", () => {
+    expect(parseExtraction('["fact one", "fact two"]')).toEqual([
+      "fact one",
+      "fact two",
+    ]);
+  });
+
+  test("empty array is an honest nothing", () => {
+    expect(parseExtraction("[]")).toEqual([]);
+  });
+
+  test("```json fenced array", () => {
+    expect(parseExtraction('```json\n["fenced fact"]\n```')).toEqual([
+      "fenced fact",
+    ]);
+  });
+
+  test("non-JSON is null", () => {
+    expect(parseExtraction("Here are the memories: none")).toBeNull();
+  });
+
+  test("non-array JSON is null", () => {
+    expect(parseExtraction('{"not": "an array"}')).toBeNull();
+  });
+
+  test("array with a non-string element is null", () => {
+    expect(parseExtraction('["ok", 42]')).toBeNull();
   });
 });
