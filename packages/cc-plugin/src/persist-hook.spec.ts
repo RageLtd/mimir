@@ -1,8 +1,9 @@
 /**
  * Tests for persistPlan: the pure decision behind the two-phase `persist`
- * run (MIM-134). BYOK configured runs today's path; unconfigured, phase one
- * asks the hooks module for a `facts` completion and phase two parses what
- * came back.
+ * run (MIM-134). BYOK configured runs today's path; unconfigured with a host
+ * that can run completions, phase one asks the hooks module for a `facts`
+ * completion and phase two parses what came back; unconfigured without one
+ * keeps the pre-MIM-134 behaviour.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -45,10 +46,12 @@ const LONG: ModelMessage[] = [
 const SHORT: ModelMessage[] = [user("hi")];
 
 describe("persistPlan", () => {
-  test("BYOK configured runs today's path", () => {
-    expect(persistPlan({ messages: LONG, extraction: BYOK })).toEqual({
-      kind: "byok",
-    });
+  test("BYOK configured runs today's path whether or not the host can run completions", () => {
+    for (const hostCompletions of [true, false]) {
+      expect(
+        persistPlan({ messages: LONG, extraction: BYOK, hostCompletions }),
+      ).toEqual({ kind: "byok" });
+    }
   });
 
   test("BYOK configured runs today's path even when completions arrive", () => {
@@ -56,9 +59,18 @@ describe("persistPlan", () => {
       persistPlan({
         messages: LONG,
         extraction: BYOK,
+        hostCompletions: true,
         completions: { facts: { text: '["a"]' } },
       }),
     ).toEqual({ kind: "byok" });
+  });
+
+  test("unconfigured, a host that cannot run completions is unconfigured", () => {
+    // A module that predates two-phase runs sends no host_completions
+    // marker; asking it for requests would leave the delta unsettled forever.
+    expect(
+      persistPlan({ messages: LONG, extraction: null, hostCompletions: false }),
+    ).toEqual({ kind: "unconfigured" });
   });
 
   test("unconfigured, a gate skip settles with the skip reason", () => {
@@ -66,7 +78,9 @@ describe("persistPlan", () => {
     if (!("skipped" in prepared)) {
       throw new Error("fixture should fail the extraction gate");
     }
-    expect(persistPlan({ messages: SHORT, extraction: null })).toEqual({
+    expect(
+      persistPlan({ messages: SHORT, extraction: null, hostCompletions: true }),
+    ).toEqual({
       kind: "settle",
       advance: true,
       reason: prepared.skipped,
@@ -74,7 +88,11 @@ describe("persistPlan", () => {
   });
 
   test("unconfigured, a passing gate requests a facts completion carrying the extraction prompts", () => {
-    const plan = persistPlan({ messages: LONG, extraction: null });
+    const plan = persistPlan({
+      messages: LONG,
+      extraction: null,
+      hostCompletions: true,
+    });
     if (plan.kind !== "request") {
       throw new Error(`expected a request, got ${JSON.stringify(plan)}`);
     }
@@ -91,6 +109,7 @@ describe("persistPlan", () => {
       persistPlan({
         messages: LONG,
         extraction: null,
+        hostCompletions: true,
         completions: { facts: { text: '["a","b"]' } },
       }),
     ).toEqual({ kind: "store", memories: ["a", "b"] });
@@ -100,6 +119,7 @@ describe("persistPlan", () => {
     const plan = persistPlan({
       messages: LONG,
       extraction: null,
+      hostCompletions: true,
       completions: { facts: { text: "not json" } },
     });
     if (plan.kind !== "retry") {
@@ -113,6 +133,7 @@ describe("persistPlan", () => {
     const plan = persistPlan({
       messages: LONG,
       extraction: null,
+      hostCompletions: true,
       completions: { facts: { error: "api-error" } },
     });
     if (plan.kind !== "retry") {
@@ -125,6 +146,7 @@ describe("persistPlan", () => {
     const plan = persistPlan({
       messages: LONG,
       extraction: null,
+      hostCompletions: true,
       completions: {},
     });
     if (plan.kind !== "retry") {
