@@ -345,7 +345,7 @@ export const runInstallCommand = async (opts: InstallOptions) => {
       `      in a project to turn Mimir on there (and only there), then open`,
       `      a new session in it.`,
       `  Terminal:  make sure ${binDir} is on your PATH and run \`mimir\` —`,
-      `      the wrapper's settings plus /switch-model.`,
+      `      claude with the wrapper's settings file.`,
     ].join("\n"),
   );
   return 0;

@@ -82,7 +82,7 @@ Requires an authenticated `gh` CLI and `~/.local/bin` on your `PATH`. Inside Cla
 /mimir-install
 ```
 
-The installer downloads the prebuilt `mimir-cc` binary, writes the runtime (persona included) under `~/.mimir/`, and lands a `mimir` wrapper. Two ways to run it: in the **Claude desktop app** (or a plain `claude`), enable Mimir per project with `mimir-cc enable` — the plugin's hooks module composes the persona into the system prompt, and its hooks and MCP servers load, wherever it is enabled and nowhere else; or run `mimir` from a terminal for the wrapper's settings and `/switch-model`.
+The installer downloads the prebuilt `mimir-cc` binary, writes the runtime (persona included) under `~/.mimir/`, and lands a `mimir` wrapper. Two ways to run it: in the **Claude desktop app** (or a plain `claude`), enable Mimir per project with `mimir-cc enable` — the plugin's hooks module composes the persona into the system prompt, and its hooks and MCP servers load, wherever it is enabled and nowhere else; or run `mimir` from a terminal for the wrapper's settings file.
 
 → Walkthrough, from-source path, hook and MCP reference, troubleshooting: [`packages/cc-plugin/README.md`](packages/cc-plugin/README.md)
 
@@ -183,7 +183,6 @@ Slash commands inside the editor:
 |---------|---------|--------------|
 | `/mimir-install` | Claude Code, OpenCode | Write the runtime state — system prompt, config, MCP wiring, hooks |
 | `/mimir-update` | Claude Code, OpenCode | Re-fetch the system prompt and re-land the runtime |
-| `/switch-model` | Claude Code | Restart the session on a different model, bridging continuity through project memory |
 | `/run-hygiene` | Claude Code | Sweep the local replica — consolidate near-duplicates, demote contradictions, prune stale facts. Dry-run by default; `--live` applies |
 
 Terminal commands, from the wrapper for your editor (`mimir` for Claude Code, `mimir-opencode`, `mimir-codex`, or `bun run packages/acp/index.ts` for ACP):

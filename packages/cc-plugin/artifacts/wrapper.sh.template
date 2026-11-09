@@ -1,29 +1,18 @@
 #!/usr/bin/env bash
 #
-# mimir — launch vanilla Claude Code with the Mimir persona as the full
-# system prompt plus the installed settings file. MCP servers and lifecycle
-# hooks come from the mimir-cc plugin itself (its .mcp.json and
-# hooks/hooks.json), so they are the same whether a session starts here,
-# from the Claude desktop app, or from a plain `claude` in a project where
-# the plugin is enabled. MIMIR_ACTIVE is exported for anything that still
-# reads it; the plugin's hooks set it inline.
+# mimir — launch vanilla Claude Code with the installed settings file. The
+# persona, MCP servers and lifecycle hooks all come from the mimir-cc
+# plugin (its hooks module composes the system prompt on every launch
+# path), so a wrapper session differs from a plain `claude` in an enabled
+# project by exactly one thing: --settings keeps ~/.claude/settings.json
+# untouched. MIMIR_ACTIVE is exported for anything that still reads it;
+# the plugin's hooks set it inline.
 #
-# This script is a launch-and-check-marker loop rather than a single
-# `exec` so the plugin can switch backing models mid-session: the plugin
-# writes ~/.mimir/next-session.json with { model, env, flags } before
-# calling exit, and the next iteration of this loop picks up the marker,
-# consumes it (reads + deletes), and re-launches claude with the marker's
-# env overrides and extra flags merged in. Crash-safe — an orphaned
-# marker is picked up on the next launch rather than dropped.
-#
-# Everything lives inside main() and the file ends with the call: bash
-# reads a script incrementally, and `mimir-cc update` rewrites this file
-# while a session launched by the old copy is still running. A function
-# body is parsed in full before it executes, so the running copy is
-# immune to the rewrite; a bare script would resume at a stale offset in
-# the new file and hit a syntax error on exit.
+# The launch is an exec, so this process is gone by the time a session
+# runs `mimir-cc update` and rewrites this file — bash reads scripts
+# incrementally, and a wrapper that stayed resident across the rewrite
+# would resume at a stale offset in the new file.
 
-main() {
 set -eo pipefail
 export MIMIR_ACTIVE=1
 
@@ -44,71 +33,4 @@ if [[ "${1:-}" == "keys" || "${1:-}" == "sync" ]]; then
   exec "$HOME/.local/bin/mimir-cc" "$@"
 fi
 
-MIMIR_MARKER="$HOME/.mimir/next-session.json"
-BASE_ARGS=(
-  --system-prompt-file "$HOME/.mimir/cc/system-prompt.xml"
-  --settings "$HOME/.mimir/settings.json"
-)
-USER_ARGS=("$@")
-EXTRA_ARGS=()
-EXTRA_ENV=()
-MODEL_ARGS=()
-
-while true; do
-  CMD=()
-  if [[ ${#EXTRA_ENV[@]} -gt 0 ]]; then
-    CMD+=(env "${EXTRA_ENV[@]}")
-  fi
-  CMD+=(claude "${BASE_ARGS[@]}")
-  if [[ ${#USER_ARGS[@]} -gt 0 ]]; then
-    CMD+=("${USER_ARGS[@]}")
-  fi
-  # Marker-contributed args come last so a model/flag from /switch-model
-  # overrides whatever the user originally passed on the first launch.
-  if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
-    CMD+=("${EXTRA_ARGS[@]}")
-  fi
-  if [[ ${#MODEL_ARGS[@]} -gt 0 ]]; then
-    CMD+=("${MODEL_ARGS[@]}")
-  fi
-
-  # Reset per-launch state before invoking so the next iteration's
-  # marker (if any) rebuilds it from scratch. claude's exit code is
-  # tolerated so we always reach the marker check.
-  EXTRA_ARGS=()
-  EXTRA_ENV=()
-  MODEL_ARGS=()
-
-  "${CMD[@]}" || true
-
-  if [[ ! -f "$MIMIR_MARKER" ]]; then
-    break
-  fi
-
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "mimir: next-session marker present but jq is not installed — ignoring." >&2
-    rm -f "$MIMIR_MARKER"
-    break
-  fi
-
-  MARKER_MODEL=$(jq -r '.model // empty' "$MIMIR_MARKER")
-  if [[ -n "$MARKER_MODEL" ]]; then
-    MODEL_ARGS=(--model "$MARKER_MODEL")
-  fi
-
-  while IFS= read -r kv; do
-    [[ -z "$kv" ]] && continue
-    EXTRA_ENV+=("$kv")
-  done < <(jq -r '(.env // {}) | to_entries[] | "\(.key)=\(.value)"' "$MIMIR_MARKER")
-
-  while IFS= read -r flag; do
-    [[ -z "$flag" ]] && continue
-    EXTRA_ARGS+=("$flag")
-  done < <(jq -r '(.flags // []) | .[]' "$MIMIR_MARKER")
-
-  rm -f "$MIMIR_MARKER"
-done
-}
-
-main "$@"
-exit $?
+exec claude --settings "$HOME/.mimir/settings.json" "$@"

@@ -1,15 +1,10 @@
 /**
  * Integration test for the mimir wrapper script.
  *
- * Exercises the marker round-trip with a mock `claude` binary: launch
- * the wrapper, the mock writes its args+env to a log on each call, the
- * wrapper consumes ~/.mimir/next-session.json between invocations and
- * re-launches claude with the marker's env overrides + extra flags.
- *
- * The wrapper is bash so we spawn it through bash, with HOME and PATH
- * overridden to the temp environment. The template at
- * `artifacts/wrapper.sh.template` is the source of truth and is copied
- * into the temp dir verbatim for each test.
+ * Launches the wrapper against a mock `claude` (and a mock `mimir-cc`)
+ * that log their args + env, with HOME and PATH pointed at a temp
+ * environment. The template at `artifacts/wrapper.sh.template` is the
+ * source of truth and is copied into the temp dir verbatim for each test.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -28,32 +23,35 @@ const wrapperTemplate = await Bun.file(
   join(import.meta.dir, "..", "artifacts", "wrapper.sh.template"),
 ).text();
 
+const LOGGING_CLAUDE = `#!/usr/bin/env bash
+echo "args=$*" >> "$MIMIR_LOG"
+echo "---" >> "$MIMIR_LOG"
+exit 0
+`;
+
 let tmp = "";
 let wrapperPath = "";
 let mockClaudeDir = "";
 let logPath = "";
-let markerPath = "";
 
-const writeMockClaude = async (script: string) => {
-  const path = join(mockClaudeDir, "claude");
+const writeExecutable = async (path: string, script: string) => {
   await writeFile(path, script);
   await chmod(path, 0o755);
 };
 
-const writeUpdater = async (script: string) => {
-  const path = join(tmp, ".mimir", "ensure-binary.sh");
-  await writeFile(path, script);
-  await chmod(path, 0o755);
-};
+const writeMockClaude = (script: string) =>
+  writeExecutable(join(mockClaudeDir, "claude"), script);
+
+const writeMockBinary = (script: string) =>
+  writeExecutable(join(tmp, ".local", "bin", "mimir-cc"), script);
+
+const writeUpdater = (script: string) =>
+  writeExecutable(join(tmp, ".mimir", "ensure-binary.sh"), script);
 
 const runWrapper = async (args: string[] = []) => {
-  // The assertions check that a launch WITHOUT a marker leaves
-  // ANTHROPIC_BASE_URL unset, so the test runner's own value (the Claude
-  // desktop app exports one) must not leak into the mock.
-  const { ANTHROPIC_BASE_URL: _, ...inherited } = process.env;
   const proc = Bun.spawn(["bash", wrapperPath, ...args], {
     env: {
-      ...inherited,
+      ...process.env,
       HOME: tmp,
       PATH: `${mockClaudeDir}:${process.env.PATH ?? ""}`,
       MIMIR_LOG: logPath,
@@ -80,18 +78,12 @@ const readLog = async () => {
 
 beforeEach(async () => {
   tmp = await mkdtemp(join(tmpdir(), "mimir-wrapper-"));
-  await mkdir(join(tmp, ".mimir", "cc"), { recursive: true });
-
-  // Touch the files BASE_ARGS reference so the wrapper has something
-  // to point at even though the mock claude ignores them.
-  await writeFile(join(tmp, ".mimir", "cc", "system-prompt.xml"), "");
+  await mkdir(join(tmp, ".mimir"), { recursive: true });
+  await mkdir(join(tmp, ".local", "bin"), { recursive: true });
   await writeFile(join(tmp, ".mimir", "settings.json"), "{}");
 
-  markerPath = join(tmp, ".mimir", "next-session.json");
-
   wrapperPath = join(tmp, "mimir");
-  await writeFile(wrapperPath, wrapperTemplate);
-  await chmod(wrapperPath, 0o755);
+  await writeExecutable(wrapperPath, wrapperTemplate);
 
   mockClaudeDir = join(tmp, "bin");
   await mkdir(mockClaudeDir, { recursive: true });
@@ -104,9 +96,9 @@ afterEach(async () => {
 });
 
 describe("mimir wrapper", () => {
-  test("no marker — claude is invoked exactly once then loop exits", async () => {
+  test("launches claude once with --settings and no system-prompt flag", async () => {
     await writeMockClaude(`#!/usr/bin/env bash
-echo "ANTHROPIC_BASE_URL=\${ANTHROPIC_BASE_URL:-unset}" >> "$MIMIR_LOG"
+echo "MIMIR_ACTIVE=\${MIMIR_ACTIVE:-unset}" >> "$MIMIR_LOG"
 echo "args=$*" >> "$MIMIR_LOG"
 echo "---" >> "$MIMIR_LOG"
 exit 0
@@ -117,19 +109,36 @@ exit 0
 
     const records = await readLog();
     expect(records).toHaveLength(1);
-    expect(records[0]).toContain("ANTHROPIC_BASE_URL=unset");
+    expect(records[0]).toContain("MIMIR_ACTIVE=1");
     expect(records[0]).toContain(
-      `--system-prompt-file ${join(tmp, ".mimir", "cc", "system-prompt.xml")}`,
+      `--settings ${join(tmp, ".mimir", "settings.json")}`,
     );
-    expect(records[0]).not.toContain(
-      `--system-prompt-file ${join(tmp, ".mimir", "system-prompt.md")}`,
-    );
+    expect(records[0]).not.toContain("--system-prompt-file");
+  });
+
+  test("user-supplied args pass through after the wrapper's own", async () => {
+    await writeMockClaude(LOGGING_CLAUDE);
+
+    await runWrapper(["--resume", "session-id"]);
+
+    const records = await readLog();
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatch(/--settings \S+ --resume session-id$/);
+  });
+
+  test("claude's exit code is the wrapper's exit code", async () => {
+    await writeMockClaude(`#!/usr/bin/env bash
+exit 17
+`);
+
+    const result = await runWrapper();
+    expect(result.exitCode).toBe(17);
   });
 
   test("survives being rewritten while a launch is in flight", async () => {
     // The mock claude overwrites the wrapper mid-run with a different,
     // shorter script — what `mimir-cc update` does from inside a session.
-    // A bare script would resume at a stale offset and fail to parse.
+    // A wrapper still resident in bash would resume at a stale offset.
     await writeMockClaude(`#!/usr/bin/env bash
 echo "args=$*" >> "$MIMIR_LOG"
 echo "---" >> "$MIMIR_LOG"
@@ -145,119 +154,17 @@ exit 0
     expect(records[0]).not.toContain("replaced");
   });
 
-  test("pre-staged marker triggers a second invocation with merged env + flags", async () => {
-    await writeFile(
-      markerPath,
-      JSON.stringify({
-        model: "glm-5.1",
-        env: { ANTHROPIC_BASE_URL: "http://mimir-server:3000" },
-        flags: ["--continue"],
-      }),
-    );
-
-    await writeMockClaude(`#!/usr/bin/env bash
-echo "ANTHROPIC_BASE_URL=\${ANTHROPIC_BASE_URL:-unset}" >> "$MIMIR_LOG"
-echo "args=$*" >> "$MIMIR_LOG"
-echo "---" >> "$MIMIR_LOG"
-exit 0
-`);
-
-    const result = await runWrapper();
-    expect(result.exitCode).toBe(0);
-
-    const records = await readLog();
-    expect(records).toHaveLength(2);
-
-    // First call: pre-existing env (marker not consumed yet).
-    expect(records[0]).toContain("ANTHROPIC_BASE_URL=unset");
-    expect(records[0]).not.toContain("--model");
-    expect(records[0]).not.toContain("--continue");
-
-    // Second call: marker consumed, env + flags merged in.
-    expect(records[1]).toContain("ANTHROPIC_BASE_URL=http://mimir-server:3000");
-    expect(records[1]).toContain("--model glm-5.1");
-    expect(records[1]).toContain("--continue");
-  });
-
-  test("marker is deleted after consumption", async () => {
-    await writeFile(
-      markerPath,
-      JSON.stringify({ model: "glm-5.1", env: {}, flags: [] }),
-    );
-
-    await writeMockClaude(`#!/usr/bin/env bash
-exit 0
-`);
-
-    await runWrapper();
-
-    const stillExists = await Bun.file(markerPath).exists();
-    expect(stillExists).toBe(false);
-  });
-
-  test("marker with only env (no model) still applies env on relaunch", async () => {
-    await writeFile(
-      markerPath,
-      JSON.stringify({
-        env: { CUSTOM_VAR: "value-from-marker" },
-      }),
-    );
-
-    await writeMockClaude(`#!/usr/bin/env bash
-echo "CUSTOM_VAR=\${CUSTOM_VAR:-unset}" >> "$MIMIR_LOG"
-echo "args=$*" >> "$MIMIR_LOG"
-echo "---" >> "$MIMIR_LOG"
-exit 0
-`);
-
-    const result = await runWrapper();
-    expect(result.exitCode).toBe(0);
-
-    const records = await readLog();
-    expect(records).toHaveLength(2);
-    expect(records[0]).toContain("CUSTOM_VAR=unset");
-    expect(records[1]).toContain("CUSTOM_VAR=value-from-marker");
-    expect(records[1]).not.toContain("--model");
-  });
-
-  test("user-supplied args pass through on both invocations", async () => {
-    await writeFile(
-      markerPath,
-      JSON.stringify({ model: "glm-5.1", env: {}, flags: [] }),
-    );
-
-    await writeMockClaude(`#!/usr/bin/env bash
-echo "args=$*" >> "$MIMIR_LOG"
-echo "---" >> "$MIMIR_LOG"
-exit 0
-`);
-
-    await runWrapper(["--resume", "session-id"]);
-
-    const records = await readLog();
-    expect(records).toHaveLength(2);
-    expect(records[0]).toContain("--resume session-id");
-    expect(records[1]).toContain("--resume session-id");
-    expect(records[1]).toContain("--model glm-5.1");
-  });
-
   test("runs ensure-binary.sh before launch when present and executable", async () => {
     await writeUpdater(`#!/usr/bin/env bash
 touch "$HOME/updater-ran"
 exit 0
 `);
-    await writeMockClaude(`#!/usr/bin/env bash
-echo "args=$*" >> "$MIMIR_LOG"
-echo "---" >> "$MIMIR_LOG"
-exit 0
-`);
+    await writeMockClaude(LOGGING_CLAUDE);
 
     const result = await runWrapper();
     expect(result.exitCode).toBe(0);
 
-    // The updater ran...
     expect(await Bun.file(join(tmp, "updater-ran")).exists()).toBe(true);
-    // ...and claude still launched exactly once.
     const records = await readLog();
     expect(records).toHaveLength(1);
   });
@@ -267,11 +174,7 @@ exit 0
 echo "boom" >&2
 exit 1
 `);
-    await writeMockClaude(`#!/usr/bin/env bash
-echo "args=$*" >> "$MIMIR_LOG"
-echo "---" >> "$MIMIR_LOG"
-exit 0
-`);
+    await writeMockClaude(LOGGING_CLAUDE);
 
     const result = await runWrapper();
     // set -e must not let the updater's non-zero exit kill the launch.
@@ -282,32 +185,22 @@ exit 0
     expect(records).toHaveLength(1);
   });
 
-  test("claude exit code does not abort the marker check", async () => {
-    await writeFile(
-      markerPath,
-      JSON.stringify({ model: "glm-5.1", env: {}, flags: [] }),
-    );
-
-    // Mock returns non-zero on first call, zero on second.
-    await writeMockClaude(`#!/usr/bin/env bash
-COUNTER_FILE="$MIMIR_LOG.counter"
-COUNT=$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)
-echo $((COUNT + 1)) > "$COUNTER_FILE"
-echo "call=$COUNT args=$*" >> "$MIMIR_LOG"
+  test.each([
+    "keys",
+    "sync",
+  ])("`mimir %s …` dispatches to mimir-cc and never launches claude", async (subcommand) => {
+    await writeMockBinary(`#!/usr/bin/env bash
+echo "binary args=$*" >> "$MIMIR_LOG"
 echo "---" >> "$MIMIR_LOG"
-if [[ "$COUNT" == "0" ]]; then
-  exit 17
-fi
-exit 0
+exit 3
 `);
+    await writeMockClaude(LOGGING_CLAUDE);
 
-    const result = await runWrapper();
-    expect(result.exitCode).toBe(0);
+    const result = await runWrapper([subcommand, "status"]);
+    expect(result.exitCode).toBe(3);
 
     const records = await readLog();
-    expect(records).toHaveLength(2);
-    expect(records[0]).toContain("call=0");
-    expect(records[1]).toContain("call=1");
-    expect(records[1]).toContain("--model glm-5.1");
+    expect(records).toHaveLength(1);
+    expect(records[0]).toBe(`binary args=${subcommand} status`);
   });
 });

@@ -18,7 +18,7 @@ Everything a session needs to be Mimir loads from two places: the plugin directo
   commands/                    ← slash commands
 
 ~/.local/bin/
-  mimir                  ← wrapper script: claude --system-prompt-file + --settings, model-switch loop
+  mimir                  ← wrapper script: binary update check, then exec claude --settings
   mimir-cc               ← compiled binary: install + hook handlers + MCP servers + enable/disable
 
 ~/.mimir/
@@ -31,11 +31,11 @@ Everything a session needs to be Mimir loads from two places: the plugin directo
   logs/mimir-cc.log      ← rolled append-only log from every hook + worker invocation
 ```
 
-The persona is the hooks module's doing: its `prompt.compose` hook answers with the installed XML and nothing else, so the Mimir prompt replaces Claude Code's wholesale in every session where the plugin is enabled — desktop app, plain `claude`, wrapper alike. The wrapper still passes `--system-prompt-file` (the same file) and `--settings` so the user's global settings stay untouched; hooks and MCP servers come from the plugin in every launch path. `MIMIR_ACTIVE=1` is set on each binary invocation (in the module's `$.process.run` env, and exported by the wrapper) so the binary's gates pass.
+The persona is the hooks module's doing: its `prompt.compose` hook answers with the installed XML and nothing else, so the Mimir prompt replaces Claude Code's wholesale in every session where the plugin is enabled — desktop app, plain `claude`, wrapper alike. The wrapper adds nothing to the persona: it runs the binary update check, then `exec`s `claude --settings ~/.mimir/settings.json` so the user's global settings stay untouched — that flag is the only thing separating a wrapper session from a plain `claude` in an enabled project. Hooks and MCP servers come from the plugin in every launch path. `MIMIR_ACTIVE=1` is set on each binary invocation (in the module's `$.process.run` env, and exported by the wrapper) so the binary's gates pass.
 
 ## Claude desktop app
 
-The desktop app's Code tab spawns `claude` with no flags, so a session can only become Mimir through what Claude Code loads on its own: the plugin, which carries the persona in its hooks module along with the command hooks and MCP servers. All of it loads wherever the plugin is enabled, and nothing else changes on the machine.
+The desktop app's Code tab spawns `claude` with no flags, so a session can only become Mimir through what Claude Code loads on its own: the plugin, which carries the persona in its hooks module along with the lifecycle hooks and MCP servers. All of it loads wherever the plugin is enabled, and nothing else changes on the machine.
 
 The same route covers **Zed's Claude Code agent**: its `claude-code-acp` adapter drives the real binary through the Agent SDK with user, project and local settings loaded, so an enabled project comes up as Mimir there too (verified live with adapter 0.85.0). The hooks' `↻` lines go through the engine's status line (`$.ui.status`), which each host renders its own way — the terminal TUI and the desktop app as a status line — rather than a command hook's `systemMessage`, which SDK-driven hosts used to glue onto the reply.
 
@@ -47,10 +47,9 @@ Enable it per project:
 
 This merges into the project's `.claude/settings.local.json` — per-user, gitignored, and copied into the worktrees the desktop app creates — the plugin enablement and the slice of the wrapper's settings a flag-less session would otherwise lack (subagent env, worktree base ref, secret-file deny list). `disable` removes exactly those entries and keeps anything you added or changed since; both drop the `"outputStyle": "Mimir"` an older `enable` wrote, now that the persona comes from the hooks module. `/mimir-install` offers to enable the project it runs in; after that, run the binary from any session's Bash, since the plugin's slash commands aren't loaded in a project where it is disabled.
 
-For Mimir to stay out of other projects, the plugin must **not** be enabled in `~/.claude/settings.json` — `enable` prints a note when it is. The trade-offs against the wrapper:
+For Mimir to stay out of other projects, the plugin must **not** be enabled in `~/.claude/settings.json` — `enable` prints a note when it is. One trade-off against the wrapper: **nested sessions** — a `claude` spawned from inside an enabled project also has the plugin enabled, so its hooks fire there too.
 
-- **No `/switch-model`.** Only the wrapper can relaunch under another model; the command says so when run from the app.
-- **Nested sessions.** A `claude` spawned from inside an enabled project also has the plugin enabled, so its hooks fire there too.
+To run a session on a different model, pass `--model` to `mimir` or `claude` at launch, or use Claude Code's own `/model` inside the session.
 
 ## Install
 
@@ -131,7 +130,6 @@ Slash commands inside Claude Code:
 | `/mimir-install` | Land the runtime — binary, system prompt, cartographer, wrapper — and offer to enable the current project |
 | `/mimir-update` | Re-fetch the binary and re-land the runtime. Without arguments it reuses the server URL from `~/.mimir/config.json` |
 | `/mimir-disable` | Turn Mimir off for the current project (reverses `mimir-cc enable`) |
-| `/switch-model` | Stage `~/.mimir/next-session.json` so the wrapper relaunches on a different model. Wrapper sessions only. The next session starts fresh — continuity bridges through a project-memory checkpoint, because extended-thinking signatures don't survive cross-backend transcript replay |
 | `/run-hygiene` | Sweep the local replica. Dry-run by default; `--live` applies |
 | `/add-grammar <language> [repo-url]` | Add a tree-sitter grammar to cartographer's host library (`~/.cartographer/grammars`), validate it, and re-index the current project |
 
@@ -196,10 +194,7 @@ The in-process half of the plugin, loaded through `hooks.json`'s `modules` entry
 
 ### Settings (`~/.mimir/settings.json`, wrapper only)
 
-The wrapper passes this file with `--settings`. Besides the subagent env and the secret-file deny list it carries two keys:
-
-- **`disableAgentView: true`.** Claude Code's agent view (`←` on an empty prompt) re-spawns the session as a fresh `claude` process carrying only `--settings`, `--mcp-config` and `--permission-mode` — the persona (`--system-prompt-file`) is dropped. Off, the wrapper's flags stay in force for the life of the session.
-- **`worktree.baseRef: "head"`.** Worker worktrees branch from the current `HEAD` rather than the remote default branch, so a worker sees the coordinator's integration branch instead of `main`.
+The wrapper passes this file with `--settings`. Besides the subagent env and the secret-file deny list it carries one key: **`worktree.baseRef: "head"`**, so worker worktrees branch from the current `HEAD` rather than the remote default branch and a worker sees the coordinator's integration branch instead of `main`.
 
 ### Runtime config (config.json)
 
@@ -299,7 +294,7 @@ packages/cc-plugin/                          ← workspace member @mimir/cc-plug
                                                 payload.ts shape the $.process.run calls, shell-edit.ts
                                                 is the edit guard's classifier; *.test.ts are kit tests
   types/index.d.ts                           ← the module's $.state contract (turn counter, agents)
-  commands/{mimir-install,mimir-update,mimir-disable,switch-model,...}.md   ← slash commands
+  commands/{mimir-install,mimir-update,mimir-disable,delegate,...}.md   ← slash commands
   agents/                                    ← delegation workers (rendered from the prompt seed)
   src/                                       ← thin Claude Code wiring; the brain, stores, rules engine,
                                                 cartographer client and MCP servers live in plugin-core
