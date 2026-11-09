@@ -82,6 +82,62 @@ test("a compaction re-anchors at once and runs precompact on the pre-compaction 
   expect(pending.get()).toBeNull();
 });
 
+test("a compaction during an in-flight persist takes over pending and the persist's late writes miss", async ($, on) => {
+  session(on);
+  const clock = mock.clock(on);
+  const anchor = anchorState(on, anchorOf(turnOne));
+  const pending = pendingState(on);
+  conversation(on, [...turnOne, ...turnTwo]);
+  const runs = binary(on, () => exited(0, JSON.stringify({ advance: true })));
+  on("turn.complete", (_, e) => ({ text: e.answer }));
+  on("session.compact", () => ({ messages: remaining }));
+  const distilled = anchorOf([...turnOne, ...turnTwo]);
+
+  await $.turn.complete(TURN);
+
+  expect(runs).toEqual([]);
+  expect(pending.get()).not.toBeNull();
+
+  const result = await $.session.compact({ trigger: "manual", messages: rows });
+
+  expect(result).toMatchObject({ messages: remaining });
+  expect(runs).toEqual([]);
+  expect(anchor.get()).toEqual(anchorOf(remaining));
+  // The precompact's claim: the same anchor as the persist's, but its own write.
+  expect(pending.get()?.anchor).toEqual(distilled);
+  const claims = pending.writes();
+  expect(claims).toHaveLength(2);
+  expect(claims.every((claim) => claim !== null)).toBe(true);
+
+  await clock.advance(0);
+
+  expect(runsOf(runs, "persist")).toHaveLength(1);
+  expect(runsOf(runs, "precompact")).toHaveLength(1);
+  // Persist and precompact both wrote on the version they read before the re-anchor.
+  expect(
+    anchor.attempts.filter(
+      (a) => JSON.stringify(a.value) === JSON.stringify(distilled),
+    ),
+  ).toEqual([
+    { value: distilled, ifVersion: 1, isSet: false },
+    { value: distilled, ifVersion: 1, isSet: false },
+  ]);
+  expect(anchor.get()).toEqual(anchorOf(remaining));
+  // Each leg clears on its own claim's version: the persist's (1) was taken
+  // over by the precompact's (2), so only the precompact's clear lands.
+  expect(pending.attempts).toContainEqual({
+    value: null,
+    ifVersion: 1,
+    isSet: false,
+  });
+  expect(pending.attempts).toContainEqual({
+    value: null,
+    ifVersion: 2,
+    isSet: true,
+  });
+  expect(pending.get()).toBeNull();
+});
+
 test("a deferred precompact's anchor write misses once the compaction re-anchored", async ($, on) => {
   session(on);
   const clock = mock.clock(on);

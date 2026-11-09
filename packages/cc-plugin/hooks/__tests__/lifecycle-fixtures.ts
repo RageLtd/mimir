@@ -5,7 +5,7 @@
  */
 
 import type { ModelCompleteInput, ModelCompleteResult, On } from "claude-code";
-import type { MimirAnchor } from "../../types";
+import type { MimirAnchor, MimirPending } from "../../types";
 import type { Message } from "../messages";
 import { exited } from "../support.test-helpers";
 
@@ -62,13 +62,8 @@ export const anchorState = (on: On, initial?: MimirAnchor) => {
   return cell;
 };
 
-/** A distillation in flight: the anchor it will move to, and when it began. */
-export type Pending = {
-  readonly anchor: MimirAnchor;
-  readonly at: number;
-} | null;
-
-export const pendingState = (on: On, initial?: Pending) => {
+/** A distillation in flight, or none. */
+export const pendingState = (on: On, initial?: MimirPending | null) => {
   const cell = held(initial);
   on("state.get", { key: "pending" }, cell.read);
   on("state.set", { key: "pending" }, (_, e) =>
@@ -77,8 +72,7 @@ export const pendingState = (on: On, initial?: Pending) => {
   return cell;
 };
 
-/** Mirrors lifecycle.ts's PENDING_STALE_MS: a pending older than this is dead. */
-export const PENDING_STALE_MS = 180_000;
+export { PENDING_STALE_MS } from "../lifecycle";
 export const NOW = 1_000_000;
 
 /** The main conversation; the returned setter grows it between events. */
