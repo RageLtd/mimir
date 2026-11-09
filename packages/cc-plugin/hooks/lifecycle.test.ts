@@ -1,4 +1,4 @@
-import type { On } from "claude-code";
+import type { ModelCompleteInput, ModelCompleteResult, On } from "claude-code";
 import { expect, test } from "claude-code/testing";
 import type { MimirAnchor } from "../types";
 import { anchorOf, type Message } from "./messages";
@@ -43,6 +43,44 @@ const conversation = (on: On, messages: readonly Message[]) =>
     value: messages.map((m) => ({ role: m.role, content: [...m.content] })),
   }));
 
+const NO_USAGE = {
+  input_tokens: 0,
+  output_tokens: 0,
+  cache_read_input_tokens: 0,
+  cache_creation_input_tokens: 0,
+};
+const answered = (text: string): ModelCompleteResult => ({
+  isAnswered: true,
+  text,
+  usage: NO_USAGE,
+});
+
+/** Records every `$.model.complete`; `reply` picks the result by request. */
+const model = (
+  on: On,
+  reply: (e: ModelCompleteInput) => ModelCompleteResult = () => answered(""),
+) => {
+  const asks: ModelCompleteInput[] = [];
+  on("model.complete", (_, e) => {
+    asks.push(e);
+    return { value: reply(e) };
+  });
+  return asks;
+};
+
+/** A binary answer per run of the same leg: phase one, then phase two. */
+const phases = (...outputs: readonly object[]) => {
+  let run = 0;
+  return () => {
+    const output = outputs[Math.min(run, outputs.length - 1)] ?? {};
+    run += 1;
+    return exited(0, JSON.stringify(output));
+  };
+};
+
+const FACTS = { system: "S", prompt: "P", maxTokens: 2048 };
+const SUMMARY = { system: "SUM-S", prompt: "SUM-P", maxTokens: 1024 };
+
 /** A main-loop turn's end; `{ ...TURN, agentId }` is a subagent's. */
 const TURN = {
   answer: "Then this.",
@@ -75,20 +113,115 @@ test("a main-loop turn hands the messages since the anchor to persist and advanc
   const anchor = anchorState(on, anchorOf(turnOne));
   conversation(on, [...turnOne, ...turnTwo]);
   const runs = binary(on, () => exited(0, JSON.stringify({ advance: true })));
+  const asks = model(on);
   on("turn.complete", (_, e) => ({ text: e.answer }));
 
   const result = await $.turn.complete(TURN);
 
   expect(result).toEqual({ text: "Then this." });
-  const [run] = runsOf(runs, "persist");
+  const persists = runsOf(runs, "persist");
+  expect(persists).toHaveLength(1);
+  const [run] = persists;
   expect(run?.argv).toEqual([BIN, "persist"]);
   expect(run?.env).toEqual({ MIMIR_ACTIVE: "1" });
   expect(parsed(run?.stdin)).toEqual({
     session_id: SESSION,
     cwd: CWD,
     messages: turnTwo,
+    host_completions: true,
+  });
+  expect(asks).toEqual([]);
+  expect(anchor.get()).toEqual(anchorOf([...turnOne, ...turnTwo]));
+});
+
+test("persist's requests run on the session's model and their replies go back to persist", async ($, on) => {
+  session(on);
+  const anchor = anchorState(on, anchorOf(turnOne));
+  conversation(on, [...turnOne, ...turnTwo]);
+  const runs = binary(
+    on,
+    phases({ advance: false, requests: { facts: FACTS } }, { advance: true }),
+  );
+  const asks = model(on, () => answered('["a fact"]'));
+  on("turn.complete", (_, e) => ({ text: e.answer }));
+
+  await $.turn.complete(TURN);
+
+  expect(asks).toHaveLength(1);
+  const [ask] = asks;
+  expect(ask?.model).toBe("haiku");
+  expect(ask?.system).toBe("S");
+  expect(ask?.prompt).toBe("P");
+  expect(ask?.maxTokens).toBe(2048);
+  const persists = runsOf(runs, "persist");
+  expect(persists).toHaveLength(2);
+  const [first, second] = persists;
+  expect(second?.argv).toEqual([BIN, "persist"]);
+  expect(parsed(second?.stdin)).toEqual({
+    ...parsed(first?.stdin),
+    completions: { facts: { text: '["a fact"]' } },
   });
   expect(anchor.get()).toEqual(anchorOf([...turnOne, ...turnTwo]));
+});
+
+test("the anchor stays where persist's second run does not advance", async ($, on) => {
+  session(on);
+  const initial = anchorOf(turnOne);
+  const anchor = anchorState(on, initial);
+  conversation(on, [...turnOne, ...turnTwo]);
+  const runs = binary(
+    on,
+    phases({ advance: false, requests: { facts: FACTS } }, { advance: false }),
+  );
+  model(on, () => answered("not json"));
+  on("turn.complete", (_, e) => ({ text: e.answer }));
+
+  await $.turn.complete(TURN);
+
+  expect(runsOf(runs, "persist")).toHaveLength(2);
+  expect(anchor.get()).toEqual(initial);
+});
+
+test("an unanswered completion goes back to persist as its reason", async ($, on) => {
+  session(on);
+  anchorState(on, anchorOf(turnOne));
+  conversation(on, [...turnOne, ...turnTwo]);
+  const runs = binary(
+    on,
+    phases({ advance: false, requests: { facts: FACTS } }, { advance: false }),
+  );
+  model(on, () => ({
+    isAnswered: false,
+    reason: "api-error",
+    status: 500,
+    error: "overloaded",
+    usage: NO_USAGE,
+  }));
+  on("turn.complete", (_, e) => ({ text: e.answer }));
+
+  await $.turn.complete(TURN);
+
+  const [, second] = runsOf(runs, "persist");
+  expect(parsed(second?.stdin).completions).toEqual({
+    facts: { error: "api-error" },
+  });
+});
+
+test("a persist that fails its first run asks no model", async ($, on) => {
+  const statuses = session(on);
+  anchorState(on, anchorOf(turnOne));
+  conversation(on, [...turnOne, ...turnTwo]);
+  const runs = binary(on, () =>
+    exited(4, JSON.stringify({ advance: false, requests: { facts: FACTS } })),
+  );
+  const asks = model(on);
+  on("turn.complete", (_, e) => ({ text: e.answer }));
+
+  await $.turn.complete(TURN);
+
+  expect(asks).toEqual([]);
+  expect(runsOf(runs, "persist")).toHaveLength(1);
+  expect(statuses).toEqual(["mimir: persist failed (exit 4)"]);
 });
 
 test("a subagent's turn and a turn with nothing new run nothing", async ($, on) => {
@@ -147,9 +280,48 @@ test("a compaction hands the undistilled tail to precompact and re-anchors on wh
     cwd: CWD,
     trigger: "manual",
     messages: turnTwo,
+    host_completions: true,
   });
   expect(result).toMatchObject({ messages: remaining });
   expect(anchor.get()).toEqual(anchorOf(remaining));
+});
+
+test("precompact's summary and facts requests each run, and both replies go back", async ($, on) => {
+  session(on);
+  anchorState(on, anchorOf(turnOne));
+  conversation(on, [...turnOne, ...turnTwo]);
+  const runs = binary(
+    on,
+    phases(
+      { advance: false, requests: { summary: SUMMARY, facts: FACTS } },
+      { advance: true },
+    ),
+  );
+  const asks = model(on, (e) =>
+    answered(e.system === "SUM-S" ? "the summary" : '["a fact"]'),
+  );
+  on("session.compact", () => ({ messages: remaining }));
+
+  await $.session.compact({ trigger: "manual", messages: rows });
+
+  expect(asks).toHaveLength(2);
+  const bySystem = (system: string) => asks.find((e) => e.system === system);
+  expect(bySystem("SUM-S")?.prompt).toBe("SUM-P");
+  expect(bySystem("SUM-S")?.maxTokens).toBe(1024);
+  expect(bySystem("SUM-S")?.model).toBe("haiku");
+  expect(bySystem("S")?.prompt).toBe("P");
+  expect(bySystem("S")?.maxTokens).toBe(2048);
+  expect(bySystem("S")?.model).toBe("haiku");
+  const precompacts = runsOf(runs, "precompact");
+  expect(precompacts).toHaveLength(2);
+  const [first, second] = precompacts;
+  expect(parsed(second?.stdin)).toEqual({
+    ...parsed(first?.stdin),
+    completions: {
+      summary: { text: "the summary" },
+      facts: { text: '["a fact"]' },
+    },
+  });
 });
 
 test("a skipped compaction keeps the anchor precompact advanced to", async ($, on) => {
