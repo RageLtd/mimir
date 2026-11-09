@@ -26,8 +26,6 @@ describe("enableProject", () => {
     });
     expect(out.worktree).toEqual({ baseRef: "head" });
     expect(out.permissions.deny).toContain("Read(**/.env)");
-    // Wrapper-only keys stay out of a project file.
-    expect(out).not.toHaveProperty("disableAgentView");
   });
 
   test("preserves unrelated settings and dedupes deny entries", () => {

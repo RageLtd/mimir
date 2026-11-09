@@ -57,8 +57,7 @@ export const claudeConfigDir = () =>
 
 /**
  * The slice of the wrapper's settings template a project inherits. The
- * template is the single source for these values; `disableAgentView` is
- * wrapper-only and deliberately not copied.
+ * template is the single source for these values.
  */
 const templateSlice = () => {
   // Serialisation boundary: the template is JSON text bundled into the

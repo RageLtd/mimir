@@ -115,6 +115,6 @@ Tell the user:
 > Mimir is installed.
 >
 > - **Claude desktop app / plain `claude`:** open a new session in any project where you ran `mimir-cc enable`. To enable another project later, run `~/.local/bin/mimir-cc enable` from inside it (any session's Bash will do — the plugin's commands aren't loaded in projects where it's disabled); `mimir-cc disable` reverses it.
-> - **Terminal:** run `mimir` for a session with the full persona prompt and `/switch-model`. Make sure `~/.local/bin` is on your PATH.
+> - **Terminal:** run `mimir` for a session with the wrapper's settings file applied. Make sure `~/.local/bin` is on your PATH.
 >
 > Hook logs land at `~/.mimir/logs/mimir-cc.log` — `tail -f` it if something misbehaves.
