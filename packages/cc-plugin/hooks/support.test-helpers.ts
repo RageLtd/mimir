@@ -59,9 +59,13 @@ const store = (on: On, kept: Map<string, unknown>) => {
   on("store.keys", () => ({ value: [...kept.keys()] }));
 };
 
+/** Where `session` keeps the `reanchor` state flag, in the map it is given. */
+export const REANCHOR = "state:reanchor";
+
 /**
  * The session every tool-hook test runs in; returns the status lines
  * shown. `kept` is the plugin's store: pass a map to seed it or read it.
+ * It also holds the `reanchor` state flag, under REANCHOR.
  */
 export const session = (
   on: On,
@@ -76,6 +80,13 @@ export const session = (
   on("state.get", { key: "agents" }, () => ({
     value: { value: undefined, version: 0 },
   }));
+  on("state.get", { key: "reanchor" }, () => ({
+    value: { value: kept.get(REANCHOR) === true, version: 0 },
+  }));
+  on("state.set", { key: "reanchor" }, (_, e) => {
+    kept.set(REANCHOR, e.value);
+    return { value: { isSet: true as const, version: 0 } };
+  });
   const statuses: Array<string | undefined> = [];
   on("ui.status", (_, e) => {
     statuses.push(e.text);

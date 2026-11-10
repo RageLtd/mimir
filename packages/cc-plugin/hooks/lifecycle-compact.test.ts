@@ -22,6 +22,7 @@ import {
   binary,
   CWD,
   exited,
+  REANCHOR,
   runsOf,
   SESSION,
   session,
@@ -50,6 +51,27 @@ test("a compaction hands the undistilled tail to precompact and re-anchors on wh
   });
   expect(result).toMatchObject({ messages: remaining });
   expect(anchor.get()).toEqual(anchorOf(remaining));
+});
+
+test("a compaction asks for a voice anchor on the next prompt; a skipped one does not", async ($, on) => {
+  const kept = new Map<string, unknown>();
+  session(on, {}, kept);
+  mock.clock(on);
+  anchorState(on, anchorOf(turnOne));
+  pendingState(on);
+  conversation(on, [...turnOne, ...turnTwo]);
+  binary(on, () => exited(0, JSON.stringify({ advance: true })));
+  let isSkipped = true;
+  on("session.compact", () =>
+    isSkipped ? { skip: "not now" } : { messages: remaining },
+  );
+
+  await $.session.compact({ trigger: "manual", messages: rows });
+  expect(kept.get(REANCHOR)).toBeUndefined();
+
+  isSkipped = false;
+  await $.session.compact({ trigger: "auto", messages: rows });
+  expect(kept.get(REANCHOR)).toBe(true);
 });
 
 test("a compaction re-anchors at once and runs precompact on the pre-compaction tail afterwards", async ($, on) => {

@@ -12,7 +12,10 @@
  *   `mimir-cc voice-anchor --session <id> --nth <n>`, the next exchange
  *   in the session's rotation, attached after the retrieval. The
  *   recency-slot persona refresh; the binary owns the library and the
- *   rotation, this file the cadence.
+ *   rotation, this file the cadence. The first prompt after a compaction
+ *   (`reanchor`, set in lifecycle.ts) is an anchor turn too, and the
+ *   cadence restarts from it: the summary that replaced the conversation
+ *   carries none of the voice.
  *
  * Both legs run at once and fail open leg by leg: a binary that errors
  * or times out costs the turn that leg, never the prompt, and the
@@ -31,6 +34,10 @@ export const anchorInterval = (raw: string | undefined) => {
   const parsed = raw === undefined ? Number.NaN : Number.parseInt(raw, 10);
   return parsed > 0 ? parsed : DEFAULT_INTERVAL;
 };
+
+/** The anchor turn at or after `turn`: where a re-anchor moves the count. */
+export const nextAnchorTurn = (turn: number, interval: number) =>
+  Math.ceil(turn / interval) * interval;
 
 /** Which anchor a turn gets, or null when it is not an anchor turn. */
 export const anchorIndexFor = (turn: number, interval: number) =>
@@ -56,13 +63,20 @@ export const registerSubmit: Register = (on) => {
     const home = (await $.env.get("HOME")) ?? "";
     const sessionId = await $.session.id();
 
-    const held = await $.state.get({ plugin: "mimir-cc", key: "turn" });
-    const turn = (held.value ?? 0) + 1;
+    const interval = anchorInterval(await $.env.get("MIMIR_ANCHOR_INTERVAL"));
+    const [held, reanchor] = await Promise.all([
+      $.state.get({ plugin: "mimir-cc", key: "turn" }),
+      $.state.get({ plugin: "mimir-cc", key: "reanchor" }),
+    ]);
+    const counted = (held.value ?? 0) + 1;
+    // After a compaction this prompt is an anchor turn whatever the count.
+    const isReanchor = reanchor.value === true;
+    const turn = isReanchor ? nextAnchorTurn(counted, interval) : counted;
     await $.state.set({ plugin: "mimir-cc", key: "turn" }, turn);
-    const nth = anchorIndexFor(
-      turn,
-      anchorInterval(await $.env.get("MIMIR_ANCHOR_INTERVAL")),
-    );
+    if (isReanchor) {
+      await $.state.set({ plugin: "mimir-cc", key: "reanchor" }, false);
+    }
+    const nth = anchorIndexFor(turn, interval);
 
     const payload = {
       session_id: sessionId,
