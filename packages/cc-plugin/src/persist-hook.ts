@@ -81,9 +81,11 @@ export const persistPlan = (input: {
 
   const prepared = prepareExtraction(input.messages);
   if ("skipped" in prepared) {
+    // Too little to distil yet. A turn is one user message, so settling
+    // here would drop every ordinary turn: the next turn carries it.
     return {
       kind: "settle" as const,
-      advance: true as const,
+      advance: false as const,
       reason: prepared.skipped,
     };
   }
@@ -105,7 +107,11 @@ export const persistPlan = (input: {
       reason: `${FACTS} completion is not a JSON string array`,
     };
   }
-  return { kind: "store" as const, memories };
+  return {
+    kind: "store" as const,
+    memories,
+    replyChars: completion.text.length,
+  };
 };
 
 type RunContext = {
@@ -213,8 +219,9 @@ const runByok = async (
   }
 
   if (outcome.skipped) {
-    answer(true);
-    log.debug("extraction skipped", {
+    // Carried, like the session-model path: see persistPlan.
+    answer(false);
+    log.debug("extraction skipped — the next turn carries this delta", {
       sessionId: ctx.sessionId,
       reason: outcome.skipped,
     });
@@ -273,13 +280,18 @@ export const runPersistHook = async () => {
       return 0;
     case "settle":
       answer(plan.advance);
-      log.debug("extraction skipped", { sessionId, reason: plan.reason });
+      log.debug("extraction skipped — the next turn carries this delta", {
+        sessionId,
+        messages: ctx.messages,
+        reason: plan.reason,
+      });
       return 0;
     case "request":
       answer(false, plan.requests);
       log.debug("extraction handed to the session model", {
         sessionId,
         messages: ctx.messages,
+        promptChars: plan.requests[FACTS].prompt.length,
       });
       return 0;
     case "retry":
@@ -292,6 +304,11 @@ export const runPersistHook = async () => {
       });
       return 0;
     case "store":
+      log.debug("session model replied", {
+        sessionId,
+        replyChars: plan.replyChars,
+        memories: plan.memories.length,
+      });
       await storeAndSettle(plan.memories, ctx, SESSION_MODEL);
       return 0;
     default:

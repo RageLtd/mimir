@@ -127,6 +127,23 @@ describe("toModelMessages", () => {
     ).toEqual([]);
   });
 
+  test("drops engine-injected system reminders, keeping what the developer typed", () => {
+    const reminder = `<system-reminder>\nprompt.submit hook additional context: ${"x".repeat(8000)}\n</system-reminder>`;
+    expect(
+      toModelMessages([
+        {
+          role: "user",
+          content: [
+            { type: "text", text: reminder },
+            { type: "text", text: "Lets merge the branch into cc-mod" },
+          ],
+        },
+        // A tool result's user message carrying nothing but a reminder.
+        user(reminder),
+      ]),
+    ).toEqual([{ role: "user", content: "Lets merge the branch into cc-mod" }]);
+  });
+
   test("keeps an assistant message's text and tool calls, thinking stripped", () => {
     const [message] = toModelMessages([
       {
