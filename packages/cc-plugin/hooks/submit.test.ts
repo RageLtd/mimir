@@ -1,6 +1,6 @@
 import type { On } from "claude-code";
 import { expect, mock, test } from "claude-code/testing";
-import { anchorIndexFor, anchorInterval } from "./submit";
+import { anchorIndexFor, anchorInterval, nextAnchorTurn } from "./submit";
 
 const HOME = "/home/t";
 const BIN = `${HOME}/.local/bin/mimir-cc`;
@@ -50,7 +50,25 @@ const turnState = (on: On, initial?: number) => {
   return { get: () => value };
 };
 
-const session = (on: On, env: Record<string, string> = {}) => {
+/** The flag a compaction leaves for the next prompt (lifecycle.ts). */
+const reanchorState = (on: On, initial = false) => {
+  let value = initial;
+  on("state.get", { key: "reanchor" }, () => ({
+    value: { value, version: 0 },
+  }));
+  on("state.set", { key: "reanchor" }, (_, e) => {
+    value = e.value;
+    return { value: { isSet: true as const, version: 0 } };
+  });
+  return { get: () => value };
+};
+
+const session = (
+  on: On,
+  env: Record<string, string> = {},
+  reanchor = reanchorState(on),
+) => {
+  void reanchor;
   mock.env(on, { HOME, ...env });
   on("session.id", () => ({ value: SESSION }));
   on("session.cwd", () => ({ value: CWD }));
@@ -133,6 +151,32 @@ test("MIMIR_ANCHOR_INTERVAL sets the cadence", async ($, on) => {
   ]);
 });
 
+test("the first prompt after a compaction is anchored whatever the count, and the cadence restarts from it", async ($, on) => {
+  const reanchor = reanchorState(on, true);
+  session(on, {}, reanchor);
+  const turn = turnState(on, 6);
+  const argvs: (readonly string[])[] = [];
+  on("process.run", (_, e) => {
+    argvs.push(e.argv);
+    return exited(0);
+  });
+
+  await $.prompt.submit(submitted("where were we?"));
+
+  // Turn 7 becomes the next anchor turn, 10: the second exchange in the
+  // rotation now, and the third five prompts on.
+  expect(argvs[1]).toEqual([
+    BIN,
+    "voice-anchor",
+    "--session",
+    SESSION,
+    "--nth",
+    "1",
+  ]);
+  expect(turn.get()).toBe(10);
+  expect(reanchor.get()).toBe(false);
+});
+
 test("passes the prompt through untouched when neither leg has anything to add", async ($, on) => {
   session(on);
   turnState(on);
@@ -185,5 +229,8 @@ test("cadence helpers", async () => {
     null,
     1,
     2,
+  ]);
+  expect([1, 5, 6, 10].map((t) => nextAnchorTurn(t, 5))).toEqual([
+    5, 5, 10, 10,
   ]);
 });

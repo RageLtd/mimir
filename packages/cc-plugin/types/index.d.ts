@@ -38,8 +38,18 @@ export type MimirPending = {
 declare module "claude-code" {
   interface PluginState {
     "mimir-cc": {
-      /** Developer turns this session, counted on `prompt.submit`. */
+      /**
+       * Developer turns this session, counted on `prompt.submit` — the
+       * voice-anchor cadence. A re-anchor moves it up to the next anchor
+       * turn, so the cadence restarts from there.
+       */
       turn: MimirTurn;
+      /**
+       * Set by a compaction: the next prompt gets a voice anchor whatever
+       * the count. The summary that replaced the conversation carries none
+       * of the persona's voice.
+       */
+      reanchor: boolean;
       /** Subagents by id, for the gates that run inside them. */
       agents: StateFamily<MimirAgent>;
       /** The main conversation's distilled prefix, advanced by persist. */

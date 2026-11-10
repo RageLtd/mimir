@@ -350,6 +350,8 @@ export const registerLifecycle: Register = (on) => {
       const reanchored = anchorOf(compacted.messages);
       await $.state.set(DISTILLED, reanchored);
       await keepAnchor($, reanchored);
+      // The next prompt gets a voice anchor (submit.ts).
+      await $.state.set({ plugin: "mimir-cc", key: "reanchor" }, true);
     }
     if (payload !== undefined) {
       const home = (await $.env.get("HOME")) ?? "";
