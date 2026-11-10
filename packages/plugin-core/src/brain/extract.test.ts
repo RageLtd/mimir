@@ -265,6 +265,22 @@ describe("extractFromConversation gates", () => {
     );
   });
 
+  test("a closing run extracts from a single user turn", async () => {
+    await withStub(
+      () => completion('["a closing memory"]'),
+      async (config) => {
+        const padding = "we discussed the compaction threshold ".repeat(10);
+        const outcome = await extractFromConversation(
+          config,
+          [user(padding), assistant(padding)],
+          { closing: true },
+        );
+        expect(outcome.skipped).toBeNull();
+        expect(outcome.memories).toEqual(["a closing memory"]);
+      },
+    );
+  });
+
   test("transport failure reports ok:false", async () => {
     const outcome = await extractFromConversation(
       { baseUrl: "http://127.0.0.1:45991", model: "m" },
@@ -294,6 +310,20 @@ describe("prepareExtraction", () => {
         { role: "user", content: [{ type: "image", image: "x" }] },
       ]),
     ).toEqual({ skipped: "fewer than 2 user turns" });
+  });
+
+  test("a closing run does not wait for a second user turn", () => {
+    const padding = "we discussed the compaction threshold ".repeat(10);
+    const prepared = prepareExtraction([user(padding), assistant(padding)], {
+      closing: true,
+    });
+    expect("request" in prepared).toBe(true);
+  });
+
+  test("a closing run still skips a conversation too short to hold anything", () => {
+    expect(prepareExtraction([user("hi")], { closing: true })).toEqual({
+      skipped: "conversation too short",
+    });
   });
 
   test("short rendered conversation skips", () => {

@@ -125,10 +125,10 @@ export const precompactPlan = (input: {
   if (!input.hostCompletions) return { kind: "unconfigured" as const };
 
   const summary = prepareSummary(input.messages);
-  const facts = prepareExtraction(
-    input.messages,
-    SESSION_MODEL_EXTRACTION_CHARS,
-  );
+  const facts = prepareExtraction(input.messages, {
+    maxChars: SESSION_MODEL_EXTRACTION_CHARS,
+    closing: true,
+  });
   if ("skipped" in summary && "skipped" in facts) {
     return {
       kind: "settle" as const,
@@ -235,7 +235,9 @@ const runByok = async (
   // this tail, so its facts would otherwise be lost with the context.
   // Failure logs; the delta is settled regardless (see module doc for why).
   let extracted = 0;
-  const outcome = await extractFromConversation(extraction, messages);
+  const outcome = await extractFromConversation(extraction, messages, {
+    closing: true,
+  });
   if (outcome.ok && !outcome.skipped) {
     extracted = await storeFacts(store, outcome.memories);
   } else if (!outcome.ok) {

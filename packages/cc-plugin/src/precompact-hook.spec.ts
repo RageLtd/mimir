@@ -168,6 +168,22 @@ describe("precompactPlan", () => {
     expect(plan.requests.facts?.prompt).toBe(buildExtractionText(MID));
   });
 
+  test("unconfigured, a window with one user turn still requests facts: compaction is its last reading", () => {
+    const oneTurn: ModelMessage[] = [
+      user("x".repeat(150)),
+      assistant("y".repeat(150)),
+    ];
+    const plan = precompactPlan({
+      messages: oneTurn,
+      extraction: null,
+      hostCompletions: true,
+    });
+    if (plan.kind !== "request") {
+      throw new Error(`expected a request, got ${JSON.stringify(plan)}`);
+    }
+    expect(Object.keys(plan.requests)).toEqual(["facts"]);
+  });
+
   test("unconfigured, both completions succeeding stores both, advances, and reports no reasons", () => {
     expect(
       precompactPlan({
