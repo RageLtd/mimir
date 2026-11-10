@@ -8,7 +8,7 @@
  *   payload. Its `additionalContext` becomes prompt context — what the
  *   model reads beside the prompt and the developer never sees — and its
  *   `systemMessage` (the "↻ Retrieved N memories" line) the status line.
- * - A voice anchor every MIMIR_ANCHOR_INTERVAL turns (default 5):
+ * - A voice anchor every MIMIR_ANCHOR_INTERVAL turns (default 3):
  *   `mimir-cc voice-anchor --session <id> --nth <n>`, the next exchange
  *   in the session's rotation, attached after the retrieval. The
  *   recency-slot persona refresh; the binary owns the library and the
@@ -27,7 +27,8 @@ import { mimirCcArgv, mimirCcInit, parseHookOutput } from "./binary";
 
 const RETRIEVE_TIMEOUT_MS = 15_000;
 const ANCHOR_TIMEOUT_MS = 10_000;
-const DEFAULT_INTERVAL = 5;
+/** plugin-core's DEFAULT_ANCHOR_INTERVAL, which the sandbox cannot import. */
+const DEFAULT_INTERVAL = 3;
 
 /** `MIMIR_ANCHOR_INTERVAL` as a positive integer, else the default. */
 export const anchorInterval = (raw: string | undefined) => {

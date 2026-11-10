@@ -25,6 +25,7 @@ import {
 } from "@mimir/plugin-core/rules";
 import { errMessage, mimirHome } from "@mimir/plugin-core/util";
 import {
+  anchorIntervalFrom,
   createSessionVoiceAnchor,
   formatAnchor,
   nextAnchor,
@@ -103,10 +104,7 @@ export const runVoiceAnchorHook = async () => {
   const library = parseVoiceAnchors(promptText);
   if (library.length === 0) return 0;
 
-  const intervalEnv = process.env.MIMIR_ANCHOR_INTERVAL;
-  const parsedInterval = intervalEnv ? Number.parseInt(intervalEnv, 10) : 5;
-  const interval =
-    Number.isFinite(parsedInterval) && parsedInterval > 0 ? parsedInterval : 5;
+  const interval = anchorIntervalFrom(process.env.MIMIR_ANCHOR_INTERVAL);
 
   const state = await loadState(statePath, sessionId, library.length);
 
