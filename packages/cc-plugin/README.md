@@ -176,7 +176,7 @@ an enabled project is Mimir however it was started. In practice:
 
 ### Hooks module (plugin `hooks/register.ts`)
 
-The in-process half of the plugin, loaded through `hooks.json`'s `modules` entry (Claude Code ≥ 2.1.294). One file per concern; each reaches the brain by running the installed binary through `$.process.run` (with `MIMIR_ACTIVE=1` set for the run, so the binary's gates pass) and fails open with a status line, so a binary that errors costs that leg and never the prompt or the tool call. `claude plugin validate .` reads it the way the engine will; `claude plugin test .` runs the kit tests beside it.
+The in-process half of the plugin, loaded through `hooks.json`'s `modules` entry (Claude Code ≥ 2.1.319). One file per concern; each reaches the brain by running the installed binary through `$.process.run` (with `MIMIR_ACTIVE=1` set for the run, so the binary's gates pass) and fails open with a status line, so a binary that errors costs that leg and never the prompt or the tool call. `claude plugin validate .` reads it the way the engine will; `claude plugin test .` runs the kit tests beside it.
 
 - **`prompt.compose` → persona.** Answers with the installed `~/.mimir/cc/system-prompt.xml` as the whole system prompt, in every session. Falls back to the canonical Markdown, and to Claude Code's own prompt (with a status line saying so) when no persona is installed.
 - **`prompt.context` → `mimir-cc boot-context`.** Appends the `<boot_context>` block — user profile and active project from the local stores — to the blocks the conversation's first user message carries. The engine re-renders those after a compaction or `/clear`, so the profile survives both. No prior-session section here: this fires before any prompt exists to query with.
