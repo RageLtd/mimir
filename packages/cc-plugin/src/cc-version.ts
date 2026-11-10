@@ -7,11 +7,17 @@
  * refuses that rather than leaving the developer to notice the brain is
  * dark. A machine with no `claude` on PATH is only warned: the plugin can
  * be installed ahead of Claude Code.
+ *
+ * The minimum is the oldest Claude Code the module has been run on, not
+ * the first that loads a hooks module: the changelog never announces most
+ * of the `$` calls the module makes, so an older version cannot be shown
+ * to have them. Lower it only with a `claude plugin validate` and
+ * `claude plugin test` pass on that version.
  */
 
 import { attempt } from "@mimir/plugin-core/result";
 
-export const MIN_CLAUDE_CODE_VERSION = "2.1.294";
+export const MIN_CLAUDE_CODE_VERSION = "2.1.319";
 
 const VERSION_PATTERN = /(\d+)\.(\d+)\.(\d+)/;
 
