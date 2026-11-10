@@ -8,6 +8,7 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   buildExtractionText,
   type ConversationMessage,
+  EXTRACTION_MAX_CHARS,
   type ExtractionConfig,
   extractFromConversation,
   extractMemories,
@@ -170,15 +171,44 @@ describe("buildExtractionText", () => {
   });
 
   test("keeps the last message whole and fills backward within budget", () => {
-    const filler = "x".repeat(3000);
+    const filler = "x".repeat(EXTRACTION_MAX_CHARS * 0.75);
     const text = buildExtractionText([
       user(filler),
       user(filler),
       user("the final word"),
     ]);
-    // Last message always present; only one filler fits the 4000 budget.
+    // Last message always present; one filler fits the budget whole
+    // and the one before it is cut to what is left.
     expect(text.endsWith("user: the final word")).toBe(true);
-    expect(text.split("\n")).toHaveLength(2);
+    expect(text.split("\n")).toHaveLength(3);
+    expect(text.length).toBeLessThanOrEqual(EXTRACTION_MAX_CHARS + 2);
+  });
+
+  test("an oversized message is cut to the remaining budget, not dropped with everything before it", () => {
+    const text = buildExtractionText([
+      user(
+        `We decided the relay stays blind. ${"x".repeat(EXTRACTION_MAX_CHARS * 2)}`,
+      ),
+      assistant("Merged the branch as 4a33913 and the gate is green."),
+    ]);
+    expect(text.startsWith("user: We decided the relay stays blind.")).toBe(
+      true,
+    );
+    expect(
+      text.endsWith(
+        "assistant: Merged the branch as 4a33913 and the gate is green.",
+      ),
+    ).toBe(true);
+    expect(text.split("\n")[0]?.endsWith("…")).toBe(true);
+    expect(text.length).toBeLessThanOrEqual(EXTRACTION_MAX_CHARS + 1);
+  });
+
+  test("a sliver of budget is left empty rather than filled with a fragment", () => {
+    const text = buildExtractionText([
+      user("an earlier question that will not fit in what is left"),
+      user("y".repeat(EXTRACTION_MAX_CHARS - 10)),
+    ]);
+    expect(text.split("\n")).toHaveLength(1);
   });
 });
 

@@ -229,10 +229,13 @@ export type ConversationMessage = {
   readonly content: unknown;
 };
 
-const EXTRACTION_MAX_CHARS = 4000;
+/** Rendered conversation handed to the extractor: about 12k tokens. */
+export const EXTRACTION_MAX_CHARS = 48_000;
 const MIN_USER_TURNS = 2;
 const MIN_TEXT_CHARS = 200;
 const MIN_ASSISTANT_CHARS = 20;
+/** Less budget than this is left empty rather than filled with a fragment. */
+const MIN_TRUNCATED_CHARS = 80;
 
 /** Text parts only — port of message-utils modelContentToString. */
 export const contentToString = (content: unknown) => {
@@ -250,8 +253,9 @@ export const contentToString = (content: unknown) => {
     .join("\n");
 };
 
-/** Last message untruncated, fill backward within the char budget.
- *  Shared renderer — extraction uses the 4000-char parity budget,
+/** Last message untruncated, fill backward within the char budget; the
+ *  message that overflows it is cut to fit and nothing earlier is read.
+ *  Shared renderer — extraction uses EXTRACTION_MAX_CHARS,
  *  summarization (brain/summarize.ts) a much larger one. */
 export const renderConversation = (
   messages: readonly ConversationMessage[],
@@ -277,7 +281,15 @@ export const renderConversation = (
     const msg = filtered[i];
     if (!msg) continue;
     const line = `${msg.role}: ${contentToString(msg.content)}`;
-    if (totalChars + line.length > maxChars) break;
+    const room = maxChars - totalChars;
+    if (line.length > room) {
+      // Cut to what is left: dropped whole, one long message would hide
+      // itself and everything said before it.
+      if (room >= MIN_TRUNCATED_CHARS) {
+        lines.unshift(`${line.slice(0, room - 1)}…`);
+      }
+      break;
+    }
     lines.unshift(line);
     totalChars += line.length;
   }

@@ -17,7 +17,8 @@
  *     name recovered from the delta's own tool_use blocks (a result whose
  *     call fell before the delta is named "unknown" rather than lost).
  *   - user text that is Claude Code's slash-command scaffolding
- *     (`<command-name>` and kin) is dropped: no developer wrote it.
+ *     (`<command-name>` and kin) or an injected `<system-reminder>` block
+ *     is dropped: no developer wrote it.
  */
 
 import type {
@@ -144,6 +145,9 @@ const META_CONTENT_PATTERNS = [
   /^<command-message>/,
   /^<command-args>/,
   /^<command-stderr>/,
+  // What the engine and hooks inject beside a prompt (retrieved context,
+  // file context): thousands of chars nobody said, and Mimir's own output.
+  /^<system-reminder>/,
 ];
 
 const isText = (block: Block): block is TextBlock =>

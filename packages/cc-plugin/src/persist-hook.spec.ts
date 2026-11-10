@@ -73,17 +73,35 @@ describe("persistPlan", () => {
     ).toEqual({ kind: "unconfigured" });
   });
 
-  test("unconfigured, a gate skip settles with the skip reason", () => {
+  test("unconfigured, a gate skip carries the delta into the next turn with the skip reason", () => {
     const prepared = prepareExtraction(SHORT);
     if (!("skipped" in prepared)) {
       throw new Error("fixture should fail the extraction gate");
     }
+    // A turn is one user message: settling a skip would drop every
+    // ordinary turn. Carried, two short turns distil together.
     expect(
       persistPlan({ messages: SHORT, extraction: null, hostCompletions: true }),
     ).toEqual({
       kind: "settle",
-      advance: true,
+      advance: false,
       reason: prepared.skipped,
+    });
+  });
+
+  test("unconfigured, a stored completion reports the size of the reply it parsed", () => {
+    const text = '["the relay stays blind"]';
+    expect(
+      persistPlan({
+        messages: LONG,
+        extraction: null,
+        hostCompletions: true,
+        completions: { facts: { text } },
+      }),
+    ).toEqual({
+      kind: "store",
+      memories: ["the relay stays blind"],
+      replyChars: text.length,
     });
   });
 
@@ -112,7 +130,7 @@ describe("persistPlan", () => {
         hostCompletions: true,
         completions: { facts: { text: '["a","b"]' } },
       }),
-    ).toEqual({ kind: "store", memories: ["a", "b"] });
+    ).toEqual({ kind: "store", memories: ["a", "b"], replyChars: 9 });
   });
 
   test("unconfigured, an unparseable facts completion retries", () => {
