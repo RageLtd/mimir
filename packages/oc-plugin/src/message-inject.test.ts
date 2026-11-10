@@ -78,25 +78,21 @@ describe("injectLeadingContext", () => {
     expect(original?.content).toHaveLength(1);
   });
 
-  test("preserves non-text content and message metadata", () => {
-    const call = {
-      type: "tool-call",
-      id: "call-1",
-      name: "read",
-      input: { path: "song.ts" },
-    } as const;
+  test("preserves non-text content and the message's other fields", () => {
+    // A user message holds text and media parts, and carries provider
+    // metadata (@opencode/ai 2.2: no tool calls, `metadata` or `native`).
+    const image = Message.media("aGVsbG8=", { mediaType: "image/png" });
+    const providerMetadata = { mimir: { source: "developer" } };
     const original = Message.make({
       id: "user-1",
       role: "user",
-      metadata: { source: "developer" },
-      native: { opaque: "keep" },
-      content: [Message.text("question"), call],
+      providerMetadata,
+      content: [Message.text("question"), image],
     });
     const messages = [original];
     injectLeadingContext(messages, ["context"]);
-    expect(messages[0]?.metadata).toEqual(original.metadata);
-    expect(messages[0]?.native).toEqual(original.native);
-    expect(messages[0]?.content[2]).toEqual(call);
+    expect(messages[0]).toMatchObject({ id: "user-1", providerMetadata });
+    expect(messages[0]?.content[2]).toEqual(image);
     expect(original.content).toHaveLength(2);
   });
 

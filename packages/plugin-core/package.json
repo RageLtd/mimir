@@ -57,7 +57,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "catalog:ai-sdk",
-    "@ai-sdk/cohere": "^3",
+    "@ai-sdk/cohere": "^3.0.78",
     "@ai-sdk/google": "catalog:ai-sdk",
     "@ai-sdk/moonshotai": "catalog:ai-sdk",
     "@ai-sdk/openai": "catalog:ai-sdk",
