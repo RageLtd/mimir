@@ -203,6 +203,17 @@ describe("buildExtractionText", () => {
     expect(text.length).toBeLessThanOrEqual(EXTRACTION_MAX_CHARS + 1);
   });
 
+  test("an assistant message takes at most half the budget, so the prompt before it is still read", () => {
+    const text = buildExtractionText([
+      user("We decided the relay stays blind."),
+      assistant("y".repeat(EXTRACTION_MAX_CHARS * 2)),
+    ]);
+    const [first, second] = text.split("\n");
+    expect(first).toBe("user: We decided the relay stays blind.");
+    expect(second?.length).toBeLessThanOrEqual(EXTRACTION_MAX_CHARS / 2);
+    expect(second?.endsWith("…")).toBe(true);
+  });
+
   test("a sliver of budget is left empty rather than filled with a fragment", () => {
     const text = buildExtractionText([
       user("an earlier question that will not fit in what is left"),

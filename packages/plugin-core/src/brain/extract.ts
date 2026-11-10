@@ -229,13 +229,21 @@ export type ConversationMessage = {
   readonly content: unknown;
 };
 
-/** Rendered conversation handed to the extractor: about 12k tokens. */
-export const EXTRACTION_MAX_CHARS = 48_000;
+/**
+ * Rendered conversation handed to a configured endpoint. Small on purpose:
+ * a local reasoning model spends EXTRACTION_MAX_TOKENS on thinking as well
+ * as on its answer, and past roughly 12k chars of prompt it thinks the
+ * limit away and answers nothing. A caller with a roomier model passes its
+ * own budget.
+ */
+export const EXTRACTION_MAX_CHARS = 4000;
 const MIN_USER_TURNS = 2;
 const MIN_TEXT_CHARS = 200;
 const MIN_ASSISTANT_CHARS = 20;
 /** Less budget than this is left empty rather than filled with a fragment. */
 const MIN_TRUNCATED_CHARS = 80;
+/** One assistant message takes at most this fraction (1/n) of the budget. */
+const ASSISTANT_SHARE = 2;
 
 /** Text parts only — port of message-utils modelContentToString. */
 export const contentToString = (content: unknown) => {
@@ -253,8 +261,21 @@ export const contentToString = (content: unknown) => {
     .join("\n");
 };
 
-/** Last message untruncated, fill backward within the char budget; the
- *  message that overflows it is cut to fit and nothing earlier is read.
+const cut = (line: string, room: number) => `${line.slice(0, room - 1)}…`;
+
+/** A message as its line. An assistant's is cut to its share of the
+ *  budget: a long reply would otherwise crowd out the prompt it answers,
+ *  and the prompt is where the developer's decisions are. */
+const lineOf = (msg: ConversationMessage, maxChars: number) => {
+  const line = `${msg.role}: ${contentToString(msg.content)}`;
+  const share = Math.floor(maxChars / ASSISTANT_SHARE);
+  return msg.role === "assistant" && line.length > share
+    ? cut(line, share)
+    : line;
+};
+
+/** Last message first, fill backward within the char budget; the message
+ *  that overflows it is cut to fit and nothing earlier is read.
  *  Shared renderer — extraction uses EXTRACTION_MAX_CHARS,
  *  summarization (brain/summarize.ts) a much larger one. */
 export const renderConversation = (
@@ -273,20 +294,20 @@ export const renderConversation = (
 
   const lastMsg = filtered.at(-1);
   if (!lastMsg) return "";
-  const lastLine = `${lastMsg.role}: ${contentToString(lastMsg.content)}`;
+  const lastLine = lineOf(lastMsg, maxChars);
   const lines: string[] = [lastLine];
   let totalChars = lastLine.length;
 
   for (let i = filtered.length - 2; i >= 0; i--) {
     const msg = filtered[i];
     if (!msg) continue;
-    const line = `${msg.role}: ${contentToString(msg.content)}`;
+    const line = lineOf(msg, maxChars);
     const room = maxChars - totalChars;
     if (line.length > room) {
       // Cut to what is left: dropped whole, one long message would hide
       // itself and everything said before it.
       if (room >= MIN_TRUNCATED_CHARS) {
-        lines.unshift(`${line.slice(0, room - 1)}…`);
+        lines.unshift(cut(line, room));
       }
       break;
     }
@@ -297,15 +318,20 @@ export const renderConversation = (
   return lines.join("\n");
 };
 
-export const buildExtractionText = (messages: readonly ConversationMessage[]) =>
-  renderConversation(messages, EXTRACTION_MAX_CHARS);
+export const buildExtractionText = (
+  messages: readonly ConversationMessage[],
+  maxChars = EXTRACTION_MAX_CHARS,
+) => renderConversation(messages, maxChars);
 
 /**
  * Gate → render. Server-parity gates: fewer than two user turns or under
  * 200 rendered chars skip extraction (skips are SUCCESS — the caller
  * advances its watermark); otherwise the request to complete.
  */
-export const prepareExtraction = (messages: readonly ConversationMessage[]) => {
+export const prepareExtraction = (
+  messages: readonly ConversationMessage[],
+  maxChars = EXTRACTION_MAX_CHARS,
+) => {
   const userTurns = messages.filter(
     (m) => m.role === "user" && contentToString(m.content),
   ).length;
@@ -313,7 +339,7 @@ export const prepareExtraction = (messages: readonly ConversationMessage[]) => {
     return skipLeg("fewer than 2 user turns");
   }
 
-  const text = buildExtractionText(messages);
+  const text = buildExtractionText(messages, maxChars);
   if (text.length < MIN_TEXT_CHARS) {
     return skipLeg("conversation too short");
   }

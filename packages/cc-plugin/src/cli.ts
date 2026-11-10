@@ -47,7 +47,7 @@ import { runGuardHook } from "./guard-hook";
 import { runHygieneCommand } from "./hygiene-command";
 import { runInstallCommand } from "./install";
 import { runLogMcp } from "./log-mcp";
-import { flushLogs } from "./logger";
+import { createLogger, flushLogs } from "./logger";
 import { runPersistHook } from "./persist-hook";
 import { runPreCompactHook } from "./precompact-hook";
 import { runDisableCommand, runEnableCommand } from "./project-settings";
@@ -55,6 +55,7 @@ import { runReindexCommand } from "./reindex-hook";
 import { runRetrieveHook } from "./retrieve-hook";
 import { runRulesHook } from "./rules-hook";
 import { runSessionStartCommand } from "./session-start-hook";
+import { STALE_PLUGIN_NOTICE, staleCaller } from "./stale-caller";
 import { runUserMemoryMcp } from "./user-memory-mcp";
 import { runVerifyHook } from "./verify-hook";
 import { runVoiceAnchorCommand } from "./voice-anchor";
@@ -113,8 +114,20 @@ const USAGE = [
   "                          relay (MIM-88), including embedding backfill.",
 ].join("\n");
 
+const log = createLogger("cli");
+
 const dispatch = async (argv: readonly string[]): Promise<number> => {
   const [command, ...rest] = argv;
+
+  const stale = staleCaller(command, rest);
+  if (stale) {
+    log.warn("called the way a plugin older than this binary calls it", {
+      command: stale.command,
+    });
+    if (stale.isShown && process.env.MIMIR_ACTIVE === "1")
+      console.log(JSON.stringify({ systemMessage: STALE_PLUGIN_NOTICE }));
+    return 0;
+  }
 
   switch (command) {
     case "install": {

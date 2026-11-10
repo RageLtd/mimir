@@ -45,9 +45,31 @@ export const nudged = (context: string, message?: string) =>
 
 export const BASH_RESULT = { stdout: "ok", stderr: "", interrupted: false };
 
-/** The session every tool-hook test runs in; returns the status lines shown. */
-export const session = (on: On, env: Record<string, string> = {}) => {
+/** `$.store` over a map the test holds, so it can read what was kept. */
+const store = (on: On, kept: Map<string, unknown>) => {
+  on("store.get", (_, e) => ({ value: kept.get(e.key) }));
+  on("store.set", (_, e) => {
+    kept.set(e.key, e.value);
+    return { value: undefined };
+  });
+  on("store.delete", (_, e) => {
+    kept.delete(e.key);
+    return { value: undefined };
+  });
+  on("store.keys", () => ({ value: [...kept.keys()] }));
+};
+
+/**
+ * The session every tool-hook test runs in; returns the status lines
+ * shown. `kept` is the plugin's store: pass a map to seed it or read it.
+ */
+export const session = (
+  on: On,
+  env: Record<string, string> = {},
+  kept: Map<string, unknown> = new Map(),
+) => {
   mock.env(on, { HOME, ...env });
+  store(on, kept);
   on("session.id", () => ({ value: SESSION }));
   on("session.cwd", () => ({ value: CWD }));
   on("agent.list", () => ({ value: [] }));

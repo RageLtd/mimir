@@ -10,9 +10,11 @@ import { describe, expect, test } from "bun:test";
 import type { ModelMessage } from "@ai-sdk/provider-utils";
 import {
   buildExtractionText,
+  EXTRACTION_MAX_CHARS,
   type ExtractionConfig,
   prepareExtraction,
 } from "@mimir/plugin-core/brain/extract";
+import { SESSION_MODEL_EXTRACTION_CHARS } from "./conversation";
 import { persistPlan } from "./persist-hook";
 
 const BYOK: ExtractionConfig = {
@@ -120,6 +122,31 @@ describe("persistPlan", () => {
     );
     expect(plan.requests.facts.prompt).toBe(buildExtractionText(LONG));
     expect(plan.requests.facts.maxTokens).toBeGreaterThan(0);
+  });
+
+  test("unconfigured, the session model is handed far more of the delta than an endpoint is", () => {
+    // An endpoint's budget is sized for a local reasoning model, whose
+    // thinking shares the reply's token limit; the session's model is not.
+    const big: ModelMessage[] = [
+      user("We decided the sync relay stays blind."),
+      assistant("x".repeat(EXTRACTION_MAX_CHARS)),
+      user("And the cc-plugin uses Haiku through the session's own client."),
+      assistant("y".repeat(EXTRACTION_MAX_CHARS)),
+    ];
+    const plan = persistPlan({
+      messages: big,
+      extraction: null,
+      hostCompletions: true,
+    });
+    if (plan.kind !== "request") {
+      throw new Error(`expected a request, got ${JSON.stringify(plan)}`);
+    }
+    expect(plan.requests.facts.prompt).toBe(
+      buildExtractionText(big, SESSION_MODEL_EXTRACTION_CHARS),
+    );
+    expect(plan.requests.facts.prompt.length).toBeGreaterThan(
+      EXTRACTION_MAX_CHARS,
+    );
   });
 
   test("unconfigured, a facts completion with a string array stores the parsed memories", () => {

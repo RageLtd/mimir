@@ -94,6 +94,22 @@ export const readDistillInput = async () => {
 };
 
 /**
+ * How much of a delta the session's model is handed for extraction, about
+ * 12k tokens: twelve times what a configured endpoint gets
+ * (EXTRACTION_MAX_CHARS), since Haiku neither slows on it nor thinks its
+ * reply away.
+ */
+export const SESSION_MODEL_EXTRACTION_CHARS = 48_000;
+
+/**
+ * A classic hook payload: it names the session and carries no messages.
+ * A plugin older than this binary sent it (see stale-caller.ts); the
+ * hooks module always sends `messages`, empty or not.
+ */
+export const isStalePayload = (input: DistillInput) =>
+  input.session_id !== undefined && input.messages === undefined;
+
+/**
  * What a run prints: whether the module should move its anchor past the
  * delta, plus — phase one only — the completions it should run on the
  * session's model and hand back as `completions` in a second run.
