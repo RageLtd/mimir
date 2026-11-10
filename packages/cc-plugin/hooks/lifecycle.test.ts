@@ -430,3 +430,86 @@ test("the anchor stays where persist does not advance, so the next turn retries"
   expect(anchor.get()).toBeUndefined();
   expect(statuses).toEqual([]);
 });
+
+const ANCHOR_KEY = `distilled:${SESSION}`;
+
+test("a resumed session, its $.state gone, finds its anchor in the store", async ($, on) => {
+  session(on, {}, new Map([[ANCHOR_KEY, anchorOf(turnOne)]]));
+  const clock = mock.clock(on);
+  anchorState(on);
+  pendingState(on);
+  conversation(on, [...turnOne, ...turnTwo]);
+  const runs = binary(on, () => exited(0, JSON.stringify({ advance: true })));
+  on("turn.complete", (_, e) => ({ text: e.answer }));
+
+  await $.turn.complete(TURN);
+  await clock.advance(0);
+
+  const [run] = runsOf(runs, "persist");
+  expect(parsed(run?.stdin).messages).toEqual(turnTwo);
+});
+
+test("a stored value that is not an anchor is ignored: the whole window is new", async ($, on) => {
+  session(on, {}, new Map([[ANCHOR_KEY, { count: "two" }]]));
+  const clock = mock.clock(on);
+  anchorState(on);
+  pendingState(on);
+  conversation(on, [...turnOne, ...turnTwo]);
+  const runs = binary(on, () => exited(0, JSON.stringify({ advance: true })));
+  on("turn.complete", (_, e) => ({ text: e.answer }));
+
+  await $.turn.complete(TURN);
+  await clock.advance(0);
+
+  const [run] = runsOf(runs, "persist");
+  expect(parsed(run?.stdin).messages).toEqual([...turnOne, ...turnTwo]);
+});
+
+test("an anchor persist advanced is kept in the store; one it did not advance is not", async ($, on) => {
+  const kept = new Map<string, unknown>();
+  session(on, {}, kept);
+  const clock = mock.clock(on);
+  anchorState(on, anchorOf(turnOne));
+  pendingState(on);
+  const grow = conversation(on, [...turnOne, ...turnTwo]);
+  const runs = binary(on, phases({ advance: false }, { advance: true }));
+  on("turn.complete", (_, e) => ({ text: e.answer }));
+
+  await $.turn.complete(TURN);
+  await clock.advance(0);
+  expect(kept.get(ANCHOR_KEY)).toBeUndefined();
+
+  grow([...turnOne, ...turnTwo, ...turnThree]);
+  await $.turn.complete(TURN);
+  await clock.advance(0);
+
+  expect(runsOf(runs, "persist")).toHaveLength(2);
+  expect(kept.get(ANCHOR_KEY)).toEqual(
+    anchorOf([...turnOne, ...turnTwo, ...turnThree]),
+  );
+});
+
+test("the store keeps the newest sessions' anchors and drops the oldest past the cap", async ($, on) => {
+  const kept = new Map<string, unknown>(
+    Array.from({ length: 64 }, (_, i) => [
+      `distilled:old-${i}`,
+      anchorOf(turnOne),
+    ]),
+  );
+  session(on, {}, kept);
+  const clock = mock.clock(on);
+  anchorState(on, anchorOf(turnOne));
+  pendingState(on);
+  conversation(on, [...turnOne, ...turnTwo]);
+  binary(on, () => exited(0, JSON.stringify({ advance: true })));
+  on("turn.complete", (_, e) => ({ text: e.answer }));
+
+  await $.turn.complete(TURN);
+  await clock.advance(0);
+
+  const keys = [...kept.keys()];
+  expect(keys).toHaveLength(64);
+  expect(keys).not.toContain("distilled:old-0");
+  expect(keys).toContain("distilled:old-1");
+  expect(keys).toContain(ANCHOR_KEY);
+});

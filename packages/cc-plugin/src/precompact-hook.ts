@@ -53,7 +53,9 @@ import {
   answer,
   type Completions,
   completionText,
+  isStalePayload,
   readDistillInput,
+  SESSION_MODEL_EXTRACTION_CHARS,
   toModelMessages,
 } from "./conversation";
 import { createLogger } from "./logger";
@@ -123,7 +125,10 @@ export const precompactPlan = (input: {
   if (!input.hostCompletions) return { kind: "unconfigured" as const };
 
   const summary = prepareSummary(input.messages);
-  const facts = prepareExtraction(input.messages);
+  const facts = prepareExtraction(
+    input.messages,
+    SESSION_MODEL_EXTRACTION_CHARS,
+  );
   if ("skipped" in summary && "skipped" in facts) {
     return {
       kind: "settle" as const,
@@ -320,6 +325,15 @@ export const runPreCompactHook = async () => {
 
   if (!sessionId) {
     log.debug("no session_id in payload — skipping", { trigger });
+    return 0;
+  }
+
+  if (isStalePayload(input)) {
+    // Nothing printed: a classic PreCompact hook reads stdout as its own.
+    log.warn(
+      "payload carries no messages — the installed plugin is older than this binary; window not distilled",
+      { sessionId, trigger },
+    );
     return 0;
   }
 

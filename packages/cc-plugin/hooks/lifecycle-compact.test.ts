@@ -323,3 +323,19 @@ test("a failing leg shows a status line and the event passes on", async ($, on) 
     "mimir: precompact failed",
   ]);
 });
+
+test("a compaction's re-anchor is kept in the store for the session's next start", async ($, on) => {
+  const kept = new Map<string, unknown>();
+  session(on, {}, kept);
+  const clock = mock.clock(on);
+  anchorState(on, anchorOf(turnOne));
+  pendingState(on);
+  conversation(on, [...turnOne, ...turnTwo]);
+  binary(on, () => exited(0, JSON.stringify({ advance: false })));
+  on("session.compact", () => ({ messages: remaining }));
+
+  await $.session.compact({ trigger: "manual", messages: rows });
+  await clock.advance(0);
+
+  expect(kept.get(`distilled:${SESSION}`)).toEqual(anchorOf(remaining));
+});

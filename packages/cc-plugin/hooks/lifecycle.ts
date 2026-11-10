@@ -89,13 +89,56 @@ type Leg = {
 };
 
 /**
+ * `$.state` lasts as long as the process, so each anchor is also kept in
+ * `$.store` under its session: a resumed session picks up where it stopped
+ * instead of distilling its whole window again.
+ */
+const ANCHOR_PREFIX = "distilled:";
+/** Sessions whose anchors the store keeps; the oldest go first. */
+const MAX_KEPT_ANCHORS = 64;
+
+/** A stored value as the anchor it is, or undefined: the store is JSON. */
+const asAnchor = (value: unknown) =>
+  typeof value === "object" &&
+  value !== null &&
+  "count" in value &&
+  typeof value.count === "number" &&
+  "mark" in value &&
+  typeof value.mark === "string"
+    ? { count: value.count, mark: value.mark }
+    : undefined;
+
+const anchorKey = async ($: EngineInterface) =>
+  `${ANCHOR_PREFIX}${await $.session.id()}`;
+
+const keepAnchor = async ($: EngineInterface, anchor: MimirAnchor) => {
+  await $.store.set(await anchorKey($), anchor);
+  const kept = (await $.store.keys()).filter((key) =>
+    key.startsWith(ANCHOR_PREFIX),
+  );
+  await Promise.all(
+    kept
+      .slice(0, Math.max(0, kept.length - MAX_KEPT_ANCHORS))
+      .map((key) => $.store.delete(key)),
+  );
+};
+
+/** The anchor `$.state` holds or, in a session just resumed, the store's. */
+const heldAnchor = async ($: EngineInterface) => {
+  const held = await $.state.get(DISTILLED);
+  if (held.value !== undefined) return held;
+  const kept = await $.store.get(await anchorKey($));
+  return { value: asAnchor(kept), version: held.version };
+};
+
+/**
  * The main conversation past the anchor, the anchor it would move to, and
  * the version the anchor stood at when read.
  */
 const undistilled = async ($: EngineInterface) => {
   const [messages, held] = await Promise.all([
     $.session.messages({ as: "api" }),
-    $.state.get(DISTILLED),
+    heldAnchor($),
   ]);
   return {
     delta: deltaSince(messages, held.value ?? NO_ANCHOR).map(slim),
@@ -173,8 +216,9 @@ const settle = async (
     $.ui.status(`mimir: ${leg} failed (exit ${ran.exitCode})`);
     return;
   }
-  if (parseHookOutput(ran.stdout).advance === true)
-    await $.state.set(DISTILLED, anchor, { ifVersion });
+  if (parseHookOutput(ran.stdout).advance !== true) return;
+  const moved = await $.state.set(DISTILLED, anchor, { ifVersion });
+  if (moved.isSet) await keepAnchor($, anchor);
 };
 
 /**
@@ -264,8 +308,11 @@ export const registerLifecycle: Register = (on) => {
         ? await distillPayload($, delta, { trigger: e.trigger })
         : undefined;
     const compacted = await next(e);
-    if (compacted.messages !== undefined)
-      await $.state.set(DISTILLED, anchorOf(compacted.messages));
+    if (compacted.messages !== undefined) {
+      const reanchored = anchorOf(compacted.messages);
+      await $.state.set(DISTILLED, reanchored);
+      await keepAnchor($, reanchored);
+    }
     if (payload !== undefined) {
       const home = (await $.env.get("HOME")) ?? "";
       // Always scheduled: losing the window's summary is worse than a rare

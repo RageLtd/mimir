@@ -10,8 +10,23 @@ import {
   answer,
   type Completions,
   completionText,
+  isStalePayload,
   toModelMessages,
 } from "./conversation";
+
+describe("isStalePayload", () => {
+  test("a classic hook payload, which names a session and carries no messages, is stale", () => {
+    expect(isStalePayload({ session_id: "s", cwd: "/work" })).toBe(true);
+  });
+
+  test("the hooks module's payload is current, even with an empty delta", () => {
+    expect(isStalePayload({ session_id: "s", messages: [] })).toBe(false);
+  });
+
+  test("no payload at all is not a stale plugin", () => {
+    expect(isStalePayload({})).toBe(false);
+  });
+});
 
 describe("answer", () => {
   let written: string[] = [];

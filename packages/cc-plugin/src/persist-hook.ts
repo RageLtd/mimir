@@ -48,7 +48,9 @@ import {
   answer,
   type Completions,
   completionText,
+  isStalePayload,
   readDistillInput,
+  SESSION_MODEL_EXTRACTION_CHARS,
   toModelMessages,
 } from "./conversation";
 import { createLogger } from "./logger";
@@ -79,7 +81,10 @@ export const persistPlan = (input: {
   if (input.extraction) return { kind: "byok" as const };
   if (!input.hostCompletions) return { kind: "unconfigured" as const };
 
-  const prepared = prepareExtraction(input.messages);
+  const prepared = prepareExtraction(
+    input.messages,
+    SESSION_MODEL_EXTRACTION_CHARS,
+  );
   if ("skipped" in prepared) {
     // Too little to distil yet. A turn is one user message, so settling
     // here would drop every ordinary turn: the next turn carries it.
@@ -244,6 +249,15 @@ export const runPersistHook = async () => {
 
   if (!sessionId) {
     log.debug("no session_id in payload — skipping");
+    return 0;
+  }
+
+  if (isStalePayload(input)) {
+    // Nothing printed: a classic Stop hook reads stdout as its own JSON.
+    log.warn(
+      "payload carries no messages — the installed plugin is older than this binary; turn not distilled",
+      { sessionId },
+    );
     return 0;
   }
 

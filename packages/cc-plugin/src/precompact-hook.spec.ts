@@ -12,9 +12,11 @@ import { describe, expect, test } from "bun:test";
 import type { ModelMessage } from "@ai-sdk/provider-utils";
 import {
   buildExtractionText,
+  EXTRACTION_MAX_CHARS,
   type ExtractionConfig,
   renderConversation,
 } from "@mimir/plugin-core/brain/extract";
+import { SESSION_MODEL_EXTRACTION_CHARS } from "./conversation";
 import { precompactPlan } from "./precompact-hook";
 
 const BYOK: ExtractionConfig = {
@@ -131,6 +133,26 @@ describe("precompactPlan", () => {
       "You extract factual memories",
     );
     expect(plan.requests.facts?.prompt).toBe(buildExtractionText(LONG));
+  });
+
+  test("unconfigured, the facts request is rendered to the session model's budget", () => {
+    const big: ModelMessage[] = [
+      user("We decided the sync relay stays blind."),
+      assistant("x".repeat(EXTRACTION_MAX_CHARS)),
+      user("And the cc-plugin uses Haiku through the session's own client."),
+      assistant("y".repeat(EXTRACTION_MAX_CHARS)),
+    ];
+    const plan = precompactPlan({
+      messages: big,
+      extraction: null,
+      hostCompletions: true,
+    });
+    if (plan.kind !== "request") {
+      throw new Error(`expected a request, got ${JSON.stringify(plan)}`);
+    }
+    expect(plan.requests.facts?.prompt).toBe(
+      buildExtractionText(big, SESSION_MODEL_EXTRACTION_CHARS),
+    );
   });
 
   test("unconfigured, a window too small to summarise requests facts alone", () => {
