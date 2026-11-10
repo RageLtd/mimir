@@ -48,6 +48,11 @@ const statePath = (sessionId: string) => join(stateDir(), `${sessionId}.json`);
 const META_CONTENT_PATTERNS = [
   /^<environment_context>/,
   /^<user_instructions>/,
+  // How 0.144 delivers AGENTS.md ("# AGENTS.md instructions", with " for
+  // <path>" when a project has one) — for Mimir, the whole persona, ~25k
+  // chars at the head of every session and again after each compaction.
+  // Unfiltered it counts as a user turn and is read for facts.
+  /^# AGENTS\.md instructions/,
   /^<recommended_plugins>/,
   /^<permissions instructions>/,
   /^<skills_instructions>/,

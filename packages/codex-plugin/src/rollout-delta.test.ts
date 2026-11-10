@@ -101,6 +101,42 @@ describe("readDelta against the captured 0.144.0 rollout", () => {
     expect(tail.messages.length).toBeLessThan(full.messages.length);
   });
 
+  test("the AGENTS.md block Codex opens a session with is scaffolding, not a user turn", async () => {
+    // Seen in every 0.144 rollout: one user record carrying the plugin
+    // list, the project's AGENTS.md (the whole persona) and the environment.
+    const userRecord = (...texts: string[]) =>
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: texts.map((text) => ({ type: "input_text", text })),
+        },
+      });
+    const rollout = join(sandbox, "agents-scaffolding.jsonl");
+    await Bun.write(
+      rollout,
+      [
+        userRecord(
+          "<recommended_plugins>\nnone\n</recommended_plugins>",
+          "# AGENTS.md instructions for /work/repo\n\n<INSTRUCTIONS>\nYou are Mimir.\n</INSTRUCTIONS>",
+          "<environment_context>\n  <cwd>/work/repo</cwd>\n</environment_context>",
+        ),
+        // With no project AGENTS.md the heading carries no path.
+        userRecord(
+          "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nYou are Mimir.\n</INSTRUCTIONS>",
+        ),
+        userRecord("Why is the embedder not downloading?"),
+      ].join("\n"),
+    );
+
+    const { messages } = await readDelta(rollout, 0);
+
+    expect(messages).toEqual([
+      { role: "user", content: "Why is the embedder not downloading?" },
+    ]);
+  });
+
   test("missing rollout returns the watermark unchanged", async () => {
     const { messages, newOffset } = await readDelta(
       join(sandbox, "does-not-exist.jsonl"),
