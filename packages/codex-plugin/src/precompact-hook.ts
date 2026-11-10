@@ -122,7 +122,9 @@ export const runPreCompactHook = async () => {
   // rollout window. Failure logs; the watermark advances regardless (see
   // module doc for why).
   let extracted = 0;
-  const outcome = await extractFromConversation(extraction, messages);
+  const outcome = await extractFromConversation(extraction, messages, {
+    closing: true,
+  });
   if (outcome.ok && !outcome.skipped) {
     for (const memory of outcome.memories) {
       const [storeErr, result] = await attempt(() =>

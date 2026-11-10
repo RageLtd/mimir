@@ -323,19 +323,30 @@ export const buildExtractionText = (
   maxChars = EXTRACTION_MAX_CHARS,
 ) => renderConversation(messages, maxChars);
 
+export type ExtractionOptions = {
+  /** Render budget; a configured endpoint's by default. */
+  readonly maxChars?: number;
+  /**
+   * The window's last reading: compaction is about to discard it. The
+   * two-user-turn gate waits for more conversation, and none is coming.
+   */
+  readonly closing?: boolean;
+};
+
 /**
- * Gate → render. Server-parity gates: fewer than two user turns or under
- * 200 rendered chars skip extraction (skips are SUCCESS — the caller
- * advances its watermark); otherwise the request to complete.
+ * Gate → render. Fewer than two user turns (unless `closing`) or under
+ * 200 rendered chars skip extraction: a skip is not a failure, and the
+ * caller decides whether to carry the delta or settle it. Otherwise the
+ * request to complete.
  */
 export const prepareExtraction = (
   messages: readonly ConversationMessage[],
-  maxChars = EXTRACTION_MAX_CHARS,
+  { maxChars = EXTRACTION_MAX_CHARS, closing = false }: ExtractionOptions = {},
 ) => {
   const userTurns = messages.filter(
     (m) => m.role === "user" && contentToString(m.content),
   ).length;
-  if (userTurns < MIN_USER_TURNS) {
+  if (!closing && userTurns < MIN_USER_TURNS) {
     return skipLeg("fewer than 2 user turns");
   }
 
@@ -355,8 +366,9 @@ export const prepareExtraction = (
 export const extractFromConversation = async (
   config: ExtractionConfig,
   messages: readonly ConversationMessage[],
+  options: ExtractionOptions = {},
 ) => {
-  const prepared = prepareExtraction(messages);
+  const prepared = prepareExtraction(messages, options);
   if ("skipped" in prepared) {
     return {
       ok: true as const,
