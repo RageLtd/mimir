@@ -41,7 +41,7 @@ import {
   createOrgReplica,
   defaultOrgReplicaPath,
 } from "@mimir/plugin-core/store/org-replica";
-import { syncFromSharedConfig } from "@mimir/plugin-core/sync/cli";
+import { syncAfterDistill } from "@mimir/plugin-core/sync/after-distill";
 import { storeTyped } from "@mimir/plugin-core/tools/org-memory";
 import { extractionConfig, readConfig } from "./config";
 import {
@@ -160,28 +160,6 @@ const storeFacts = async (memories: readonly string[], cwd: string) => {
   return { projectId, stored, duplicates };
 };
 
-/**
- * Push leg (MIM-88): ship freshly distilled memories through the blind
- * sync relay. Bounded — the hook process exits after this; a missed
- * deadline just leaves them dirty for the next boot/persist sync.
- */
-const syncAfterDistill = async () => {
-  const SYNC_DEADLINE_MS = 10_000;
-  const [syncErr, synced] = await attempt(() =>
-    Promise.race([
-      syncFromSharedConfig(),
-      new Promise<{ status: "deadline" }>((resolve) =>
-        setTimeout(() => resolve({ status: "deadline" }), SYNC_DEADLINE_MS),
-      ),
-    ]),
-  );
-  if (syncErr) {
-    log.warn("post-distill sync failed", { error: syncErr.message });
-  } else {
-    log.info("post-distill sync", { ...synced });
-  }
-};
-
 /** Store, settle the delta, then sync anything new. */
 const storeAndSettle = async (
   memories: readonly string[],
@@ -203,7 +181,7 @@ const storeAndSettle = async (
     model,
   });
 
-  if (stored > 0) await syncAfterDistill();
+  if (stored > 0) await syncAfterDistill(log);
 };
 
 const runByok = async (

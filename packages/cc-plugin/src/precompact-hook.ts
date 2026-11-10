@@ -47,6 +47,7 @@ import {
   createOrgReplica,
   defaultOrgReplicaPath,
 } from "@mimir/plugin-core/store/org-replica";
+import { syncAfterDistill } from "@mimir/plugin-core/sync/after-distill";
 import { storeTyped } from "@mimir/plugin-core/tools/org-memory";
 import { extractionConfig, readConfig } from "./config";
 import {
@@ -261,6 +262,8 @@ const runByok = async (
     factsStored: extracted,
     model: extraction.model,
   });
+
+  if (summary.id !== null || extracted > 0) await syncAfterDistill(log);
 };
 
 const runStore = async (
@@ -310,6 +313,8 @@ const runStore = async (
     model: SESSION_MODEL,
     reasons: plan.reasons,
   });
+
+  if (summaryId !== null || extracted > 0) await syncAfterDistill(log);
 };
 
 /**

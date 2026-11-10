@@ -26,6 +26,7 @@ import {
   createOrgReplica,
   defaultOrgReplicaPath,
 } from "@mimir/plugin-core/store/org-replica";
+import { syncAfterDistill } from "@mimir/plugin-core/sync/after-distill";
 import { storeTyped } from "@mimir/plugin-core/tools/org-memory";
 import { readHookInput } from "./hook-input";
 import { createLogger } from "./logger";
@@ -159,6 +160,8 @@ export const runPreCompactHook = async () => {
     factsStored: extracted,
     model: extraction.model,
   });
+
+  if (summary.id !== null || extracted > 0) await syncAfterDistill(log);
 
   return 0;
 };

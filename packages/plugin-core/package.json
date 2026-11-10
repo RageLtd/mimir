@@ -28,6 +28,7 @@
     "./keys/flows": "./src/keys/flows.ts",
     "./keys/client": "./src/keys/client.ts",
     "./keys/device-secret": "./src/keys/device-secret.ts",
+    "./sync/after-distill": "./src/sync/after-distill.ts",
     "./sync/cli": "./src/sync/cli.ts",
     "./sync/engine": "./src/sync/engine.ts",
     "./sync/envelope": "./src/sync/envelope.ts",
