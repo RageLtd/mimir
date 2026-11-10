@@ -25,7 +25,7 @@ import {
   createOrgReplica,
   defaultOrgReplicaPath,
 } from "@mimir/plugin-core/store/org-replica";
-import { syncFromSharedConfig } from "@mimir/plugin-core/sync/cli";
+import { syncAfterDistill } from "@mimir/plugin-core/sync/after-distill";
 import { storeTyped } from "@mimir/plugin-core/tools/org-memory";
 import { readHookInput } from "./hook-input";
 import { createLogger } from "./logger";
@@ -152,25 +152,7 @@ export const runPersistHook = async () => {
     model: extraction.model,
   });
 
-  // Push leg (MIM-88): ship freshly distilled memories through the blind
-  // sync relay. Bounded — the hook process exits after this; a missed
-  // deadline just leaves them dirty for the next boot/persist sync.
-  if (stored > 0) {
-    const SYNC_DEADLINE_MS = 10_000;
-    const [syncErr, synced] = await attempt(() =>
-      Promise.race([
-        syncFromSharedConfig(),
-        new Promise<{ status: "deadline" }>((resolve) =>
-          setTimeout(() => resolve({ status: "deadline" }), SYNC_DEADLINE_MS),
-        ),
-      ]),
-    );
-    if (syncErr) {
-      log.warn("post-distill sync failed", { error: syncErr.message });
-    } else {
-      log.info("post-distill sync", { ...synced });
-    }
-  }
+  if (stored > 0) await syncAfterDistill(log);
 
   return 0;
 };
