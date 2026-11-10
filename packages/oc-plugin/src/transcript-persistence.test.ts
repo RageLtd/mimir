@@ -6,6 +6,7 @@ import { extractFromConversation } from "@mimir/plugin-core/brain/extract";
 import {
   _extractionWatermarks,
   convertMessage,
+  distillBeforeCompaction,
   persistSessionTranscript,
   type TranscriptClient,
 } from "./transcript-persistence";
@@ -236,6 +237,93 @@ describe("persistSessionTranscript — V2 context and ID checkpoint", () => {
       { role: "user", content: "first prompt" },
       { role: "user", content: "second prompt" },
     ]);
+  });
+
+  describe("before a compaction", () => {
+    const onePrompt: TranscriptClient = {
+      session: {
+        context: async () => [
+          { type: "user", id: "turn-1", text: "first prompt" },
+        ],
+      },
+    };
+
+    const closing = (
+      summary: Awaited<
+        ReturnType<
+          NonNullable<
+            Parameters<typeof distillBeforeCompaction>[5]
+          >["summarizeToReplica"]
+        >
+      >,
+      outcome: Awaited<ReturnType<typeof extractFromConversation>> = extracted,
+    ) => {
+      const seen = {
+        summarized: [] as unknown[],
+        extractions: [] as unknown[],
+        syncs: 0,
+      };
+      const ops = {
+        extractionConfig: async () => ({
+          baseUrl: "http://unused",
+          model: "test",
+        }),
+        summarizeToReplica: async (opts) => {
+          seen.summarized.push(opts.messages);
+          return summary;
+        },
+        extractFromConversation: async (_config, _messages, options) => {
+          seen.extractions.push(options);
+          return outcome;
+        },
+        syncAfterDistill: async () => {
+          seen.syncs++;
+        },
+      } satisfies NonNullable<Parameters<typeof distillBeforeCompaction>[5]>;
+      return { seen, ops };
+    };
+
+    test("stores a summary, reads a one-prompt window's facts as its last reading, and syncs", async () => {
+      useScratchReplica();
+      const { seen, ops } = closing({
+        ok: true,
+        id: "memory:summary",
+        skipped: null,
+      });
+
+      await distillBeforeCompaction("s", "/repo", config, log, onePrompt, ops);
+
+      expect(seen.summarized).toEqual([
+        [{ role: "user", content: "first prompt" }],
+      ]);
+      expect(seen.extractions).toEqual([{ closing: true }]);
+      expect(seen.syncs).toBe(1);
+      expect(_extractionWatermarks.get("s")).toBe("turn-1");
+    });
+
+    test("a failed summary keeps the watermark and distils nothing else", async () => {
+      useScratchReplica();
+      const { seen, ops } = closing({ ok: false, id: null, skipped: null });
+
+      await distillBeforeCompaction("s", "/repo", config, log, onePrompt, ops);
+
+      expect(seen.extractions).toEqual([]);
+      expect(seen.syncs).toBe(0);
+      expect(_extractionWatermarks.has("s")).toBe(false);
+    });
+
+    test("a window too small to hold anything settles without a sync", async () => {
+      useScratchReplica();
+      const { seen, ops } = closing(
+        { ok: true, id: null, skipped: "window too small" },
+        { ok: true, memories: [], skipped: "conversation too short" },
+      );
+
+      await distillBeforeCompaction("s", "/repo", config, log, onePrompt, ops);
+
+      expect(seen.syncs).toBe(0);
+      expect(_extractionWatermarks.get("s")).toBe("turn-1");
+    });
   });
 
   test("serializes overlapping callers so only one extracts the committed delta", async () => {

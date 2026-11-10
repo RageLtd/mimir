@@ -23,12 +23,14 @@
 
 import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
 import { extractFromConversation } from "@mimir/plugin-core/brain/extract";
+import { summarizeToReplica } from "@mimir/plugin-core/brain/summarize";
 import { getOrResolveProjectId } from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
 import {
   createOrgReplica,
   defaultOrgReplicaPath,
 } from "@mimir/plugin-core/store/org-replica";
+import { syncAfterDistill } from "@mimir/plugin-core/sync/after-distill";
 import { storeTyped } from "@mimir/plugin-core/tools/org-memory";
 import { errMessage } from "@mimir/plugin-core/util";
 import { extractionConfig, type MimirConfig } from "./config";
@@ -141,21 +143,26 @@ export const convertMessage = (msg: OpenCodeMessage) => {
 export const _extractionWatermarks = new Map<string, string>();
 const pendingPersistence = new Map<string, Promise<void>>();
 const extractionOperations = { extractionConfig, extractFromConversation };
+const closingOperations = {
+  ...extractionOperations,
+  summarizeToReplica,
+  syncAfterDistill,
+};
+
+type Run = {
+  readonly sessionID: string;
+  readonly projectPath: string;
+  readonly config: MimirConfig;
+  readonly log: TranscriptLogger;
+  readonly client: TranscriptClient;
+};
 
 /**
- * Fetch the session's transcript from OpenCode, take the delta since the
- * last watermark, and distill it into the local replica via the
- * user-configured extraction endpoint. Fire-and-forget: errors are
- * logged but never propagated.
+ * The session's messages since the watermark, converted, and how to move
+ * the watermark past them. Null when there is nothing to distil: the
+ * fetch failed, nothing is new, or nothing new is convertible.
  */
-const persistTranscript = async (
-  sessionID: string,
-  projectPath: string,
-  config: MimirConfig,
-  log: TranscriptLogger,
-  client: TranscriptClient,
-  ops: typeof extractionOperations,
-) => {
+const readDelta = async ({ sessionID, log, client }: Run) => {
   const [fetchErr, messages] = await attempt(() =>
     client.session.context({ sessionID }),
   );
@@ -164,7 +171,7 @@ const persistTranscript = async (
       sessionID,
       error: errMessage(fetchErr),
     });
-    return;
+    return null;
   }
   const watermark = _extractionWatermarks.get(sessionID);
   const checkpoint = messages.findIndex((message) => message.id === watermark);
@@ -179,7 +186,7 @@ const persistTranscript = async (
       sessionID,
       watermark,
     });
-    return;
+    return null;
   }
 
   const modelMessages: ModelMessage[] = [];
@@ -194,20 +201,91 @@ const persistTranscript = async (
     log.debug("session idle — no convertible messages in delta", {
       sessionID,
     });
-    return;
+    return null;
   }
 
+  return { modelMessages, watermark, newWatermark, advance };
+};
+
+/**
+ * The configured endpoint, or null after advancing past a delta no
+ * endpoint will ever consume — otherwise it accumulates forever. Loud
+ * once per run in the log.
+ */
+const endpointOrAdvance = async (
+  { sessionID, log }: Run,
+  ops: typeof extractionOperations,
+  delta: NonNullable<Awaited<ReturnType<typeof readDelta>>>,
+) => {
   const extraction = await ops.extractionConfig();
-  if (!extraction) {
-    // No endpoint will ever consume this delta — advance so it can't
-    // accumulate forever. Loud once per idle in the log.
-    advance();
-    log.warn(
-      "extraction unconfigured (MIMIR_EXTRACTION_BASE_URL / extractionBaseUrl) — session not distilled",
-      { sessionID, messages: modelMessages.length },
+  if (extraction) return extraction;
+  delta.advance();
+  log.warn(
+    "extraction unconfigured (MIMIR_EXTRACTION_BASE_URL / extractionBaseUrl) — session not distilled",
+    { sessionID, messages: delta.modelMessages.length },
+  );
+  return null;
+};
+
+/** The replica, embedder and project attribution every store path needs. */
+const openStore = async ({ sessionID, projectPath, config, log }: Run) => {
+  // Project id for memory attribution — disk-cached after first resolution.
+  const projectId = await getOrResolveProjectId(
+    config.serverUrl,
+    projectPath,
+    config.apiKey,
+  ).catch((err) => {
+    log.warn("project id resolve failed", {
+      sessionID,
+      error: errMessage(err),
+    });
+    return null;
+  });
+  const replica = createOrgReplica(
+    process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
+  );
+  return { projectId, replica, embedQuery: createEmbedQuery() };
+};
+
+const storeFacts = async (
+  store: Awaited<ReturnType<typeof openStore>>,
+  memories: readonly string[],
+  log: TranscriptLogger,
+) => {
+  let stored = 0;
+  let duplicates = 0;
+  for (const memory of memories) {
+    const [storeErr, storeResult] = await attempt(() =>
+      storeTyped(store.replica, store.embedQuery, {
+        content: memory,
+        type: "fact",
+        ...(store.projectId ? { project: store.projectId } : {}),
+      }),
     );
-    return;
+    if (storeErr) {
+      log.warn("memory store failed", { error: storeErr.message });
+      continue;
+    }
+    if (storeResult.stored) stored++;
+    else duplicates++;
   }
+  return { stored, duplicates };
+};
+
+/**
+ * Idle: distil the delta's facts into the local replica via the
+ * user-configured extraction endpoint. Errors are logged, never thrown.
+ */
+const persistTranscript = async (
+  run: Run,
+  ops: typeof extractionOperations,
+) => {
+  const { sessionID, projectPath, log } = run;
+  const delta = await readDelta(run);
+  if (!delta) return;
+  const { modelMessages, watermark, newWatermark, advance } = delta;
+  const extraction = await endpointOrAdvance(run, ops, delta);
+  if (!extraction) return;
 
   const outcome = await ops.extractFromConversation(extraction, modelMessages);
   if (!outcome.ok) {
@@ -230,49 +308,16 @@ const persistTranscript = async (
     return;
   }
 
-  // Project id for memory attribution — disk-cached after first resolution.
-  const projectId = await getOrResolveProjectId(
-    config.serverUrl,
-    projectPath,
-    config.apiKey,
-  ).catch((err) => {
-    log.warn("project id resolve failed", {
-      sessionID,
-      error: errMessage(err),
-    });
-    return null;
-  });
-
-  const replica = createOrgReplica(
-    process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
-  );
-  const embedQuery = createEmbedQuery();
-
-  let stored = 0;
-  let duplicates = 0;
-  for (const memory of outcome.memories) {
-    const [storeErr, storeResult] = await attempt(() =>
-      storeTyped(replica, embedQuery, {
-        content: memory,
-        type: "fact",
-        ...(projectId ? { project: projectId } : {}),
-      }),
-    );
-    if (storeErr) {
-      log.warn("memory store failed", { error: storeErr.message });
-      continue;
-    }
-    if (storeResult.stored) stored++;
-    else duplicates++;
-  }
-  replica.close();
+  const store = await openStore(run);
+  const { stored, duplicates } = await storeFacts(store, outcome.memories, log);
+  store.replica.close();
 
   advance();
 
   log.info("session distilled locally", {
     sessionID,
     project: projectPath,
-    projectId,
+    projectId: store.projectId,
     watermark,
     newWatermark,
     messagesInDelta: modelMessages.length,
@@ -283,19 +328,77 @@ const persistTranscript = async (
   });
 };
 
-/** Idle and precompaction share a queue so neither extracts the same delta concurrently. */
-export const persistSessionTranscript = (
-  sessionID: string,
-  projectPath: string,
-  config: MimirConfig,
-  log: TranscriptLogger,
-  client: TranscriptClient,
-  ops: typeof extractionOperations = extractionOperations,
-) => {
+/**
+ * Compaction: the window is about to be replaced, so this is its last
+ * reading. A type:"summary" memory first (the narrative record boot
+ * context reads by recency), then its facts without waiting for a second
+ * user turn, then a sync of whatever landed.
+ *
+ * The watermark moves once the summary is settled; a failed fact
+ * extraction only logs, because retrying would store a near-identical
+ * summary again, which is worse than losing one window's facts.
+ */
+const distillWindow = async (run: Run, ops: typeof closingOperations) => {
+  const { sessionID, projectPath, log } = run;
+  const delta = await readDelta(run);
+  if (!delta) return;
+  const { modelMessages, advance } = delta;
+  const extraction = await endpointOrAdvance(run, ops, delta);
+  if (!extraction) return;
+
+  const store = await openStore(run);
+  const summary = await ops.summarizeToReplica({
+    config: extraction,
+    replica: store.replica,
+    messages: modelMessages,
+    embed: store.embedQuery,
+    projectId: store.projectId,
+  });
+  if (!summary.ok) {
+    store.replica.close();
+    log.error("precompact: summarization failed — keeping watermark", {
+      sessionID,
+      messages: modelMessages.length,
+      model: extraction.model,
+    });
+    return;
+  }
+
+  const outcome = await ops.extractFromConversation(extraction, modelMessages, {
+    closing: true,
+  });
+  const facts =
+    outcome.ok && !outcome.skipped
+      ? await storeFacts(store, outcome.memories, log)
+      : { stored: 0, duplicates: 0 };
+  if (!outcome.ok) {
+    log.warn("precompact: fact extraction failed (summary still stored)", {
+      sessionID,
+    });
+  }
+  store.replica.close();
+
+  advance();
+
+  log.info("precompact: window distilled locally", {
+    sessionID,
+    project: projectPath,
+    projectId: store.projectId,
+    messagesInDelta: modelMessages.length,
+    summaryId: summary.id,
+    summarySkipped: summary.skipped,
+    factsStored: facts.stored,
+    model: extraction.model,
+  });
+
+  if (summary.id !== null || facts.stored > 0) await ops.syncAfterDistill(log);
+};
+
+/** Idle and precompaction share a queue so neither distils the same delta concurrently. */
+const enqueue = (run: Run, distil: () => Promise<void>) => {
+  const { sessionID, log } = run;
   const pending = (pendingPersistence.get(sessionID) ?? Promise.resolve())
-    .then(() =>
-      persistTranscript(sessionID, projectPath, config, log, client, ops),
-    )
+    .then(distil)
     .catch((err) =>
       log.error("transcript persist failed", {
         sessionID,
@@ -308,4 +411,28 @@ export const persistSessionTranscript = (
       pendingPersistence.delete(sessionID);
   });
   return pending;
+};
+
+export const persistSessionTranscript = (
+  sessionID: string,
+  projectPath: string,
+  config: MimirConfig,
+  log: TranscriptLogger,
+  client: TranscriptClient,
+  ops: typeof extractionOperations = extractionOperations,
+) => {
+  const run = { sessionID, projectPath, config, log, client };
+  return enqueue(run, () => persistTranscript(run, ops));
+};
+
+export const distillBeforeCompaction = (
+  sessionID: string,
+  projectPath: string,
+  config: MimirConfig,
+  log: TranscriptLogger,
+  client: TranscriptClient,
+  ops: typeof closingOperations = closingOperations,
+) => {
+  const run = { sessionID, projectPath, config, log, client };
+  return enqueue(run, () => distillWindow(run, ops));
 };
