@@ -76,6 +76,18 @@ describe("settings.json.template", () => {
     expect(settingsTemplate).not.toHaveProperty("hooks");
     expect(settingsTemplate).not.toHaveProperty("outputStyle");
   });
+
+  test("turns auto-update on for the marketplace the plugin ships from", () => {
+    // Off by default for a third-party marketplace, and nothing in
+    // marketplace.json can turn it on: without it an install stays on the
+    // release it was installed at.
+    expect(settingsTemplate.extraKnownMarketplaces).toEqual({
+      rageltd: {
+        source: { source: "github", repo: "RageLtd/claude-plugins" },
+        autoUpdate: true,
+      },
+    });
+  });
 });
 
 describe(".mcp.json", () => {

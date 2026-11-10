@@ -16,13 +16,14 @@
 set -eo pipefail
 export MIMIR_ACTIVE=1
 
-# Keep ~/.local/bin/mimir-cc current before launching. ensure-binary.sh exits 0
-# when the binary is already up to date or when it's present but the release
-# check can't reach GitHub, so a routine launch never blocks on the network;
-# it only downloads when a newer release exists. A hard failure (no binary and
-# no way to fetch one) is surfaced but not fatal — claude still launches.
+# Fetch ~/.local/bin/mimir-cc only when there is none. Which release an
+# installed binary should be is the plugin's call, not this wrapper's: the
+# hooks module asks for the binary of its own version at session start, and
+# a wrapper chasing the latest release would pair a new binary with an older
+# plugin. A hard failure (no way to fetch one) is surfaced but not fatal —
+# claude still launches.
 ENSURE_BINARY="$HOME/.mimir/ensure-binary.sh"
-if [[ -x "$ENSURE_BINARY" ]]; then
+if [[ -x "$ENSURE_BINARY" && ! -x "$HOME/.local/bin/mimir-cc" ]]; then
   "$ENSURE_BINARY" || echo "mimir: binary update check failed — continuing with the installed binary." >&2
 fi
 

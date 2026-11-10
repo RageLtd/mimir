@@ -13,6 +13,11 @@ import {
 } from "./project-settings";
 
 const KEY = "mimir-cc@rageltd";
+/** The marketplace entry the settings template carries. */
+const RAGELTD = {
+  source: { source: "github", repo: "RageLtd/claude-plugins" },
+  autoUpdate: true,
+};
 
 describe("enableProject", () => {
   test("empty settings gain the plugin and the template slice", () => {
@@ -48,6 +53,32 @@ describe("enableProject", () => {
     expect(deny).toContain("Read(secret)");
   });
 
+  test("turns auto-update on for the marketplace the plugin came from", () => {
+    const out = enableProject(
+      { extraKnownMarketplaces: { other: { autoUpdate: false } } },
+      KEY,
+    );
+    expect(out.extraKnownMarketplaces).toEqual({
+      other: { autoUpdate: false },
+      rageltd: RAGELTD,
+    });
+  });
+
+  test("leaves a marketplace entry the developer already wrote", () => {
+    const theirs = { ...RAGELTD, autoUpdate: false };
+    const out = enableProject(
+      { extraKnownMarketplaces: { rageltd: theirs } },
+      KEY,
+    );
+    expect(out.extraKnownMarketplaces).toEqual({ rageltd: theirs });
+  });
+
+  test("a from-source install names no marketplace to update from", () => {
+    expect(enableProject({}, "mimir-cc@mimir-cc-local")).not.toHaveProperty(
+      "extraKnownMarketplaces",
+    );
+  });
+
   test("drops the legacy Mimir output style, keeps any other", () => {
     expect(
       enableProject({ outputStyle: LEGACY_OUTPUT_STYLE }, KEY),
@@ -61,6 +92,17 @@ describe("enableProject", () => {
 describe("disableProject", () => {
   test("exactly reverses enable on an empty file", () => {
     expect(disableProject(enableProject({}, KEY), KEY)).toEqual({});
+  });
+
+  test("keeps a marketplace entry the developer changed since enabling", () => {
+    const enabled = enableProject({}, KEY);
+    const changed = { ...RAGELTD, autoUpdate: false };
+    expect(
+      disableProject(
+        { ...enabled, extraKnownMarketplaces: { rageltd: changed } },
+        KEY,
+      ),
+    ).toEqual({ extraKnownMarketplaces: { rageltd: changed } });
   });
 
   test("drops the legacy Mimir output style an older enable selected", () => {

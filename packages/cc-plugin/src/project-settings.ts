@@ -13,7 +13,8 @@
  *
  * `enable` merges into that file: the plugin and the slice of the
  * wrapper's settings a desktop session would otherwise lack (subagent
- * env, worktree base ref, secret-file deny list). `disable` removes
+ * env, worktree base ref, secret-file deny list, auto-update for the
+ * plugin's marketplace). `disable` removes
  * exactly what `enable` added, leaving the developer's own entries —
  * including a value they changed after enabling — untouched. Both drop
  * the "Mimir" output style an older `enable` selected: the persona now
@@ -66,13 +67,45 @@ const templateSlice = () => {
     readonly env: Record<string, string>;
     readonly worktree: Record<string, string>;
     readonly permissions: { readonly deny: readonly string[] };
+    readonly extraKnownMarketplaces: Record<string, Json>;
   };
   return {
     env: template.env,
     worktree: template.worktree,
     deny: template.permissions.deny,
+    marketplaces: template.extraKnownMarketplaces,
   };
 };
+
+const MARKETPLACES = "extraKnownMarketplaces";
+
+/** `mimir-cc@rageltd` → `rageltd`. */
+const marketplaceOf = (pluginKey: string) =>
+  pluginKey.slice(pluginKey.indexOf("@") + 1);
+
+/**
+ * The plugin's marketplace with auto-update on, unless the developer
+ * already wrote an entry for it. Claude Code leaves auto-update off for a
+ * third-party marketplace, and an install that never updates falls behind
+ * the releases its binary is fetched from. A from-source install names a
+ * marketplace the template does not know and gains nothing.
+ */
+const withMarketplace = (
+  settings: Json,
+  pluginKey: string,
+  ours: Record<string, Json>,
+) => {
+  const name = marketplaceOf(pluginKey);
+  const entry = ours[name];
+  if (entry === undefined) return {};
+  return {
+    [MARKETPLACES]: { [name]: entry, ...recordAt(settings, MARKETPLACES) },
+  };
+};
+
+/** Entries are objects, so "still what `enable` wrote" compares by value. */
+const isSameJson = (a: unknown, b: unknown) =>
+  JSON.stringify(a) === JSON.stringify(b);
 
 /** Scalar, so the container helpers below don't apply: drop the legacy
  *  style only while it is still the one an older `enable` selected. */
@@ -97,6 +130,7 @@ export const enableProject = (current: Json, pluginKey: string) => {
       ...permissions,
       deny: [...new Set([...stringsAt(permissions, "deny"), ...ours.deny])],
     },
+    ...withMarketplace(settings, pluginKey, ours.marketplaces),
   };
 };
 
@@ -135,6 +169,15 @@ export const disableProject = (settings: Json, pluginKey: string) => {
     withoutOurs(recordAt(out, "worktree"), ours.worktree),
   );
   out = setOrDrop(out, "permissions", setOrDrop(permissions, "deny", deny));
+  out = setOrDrop(
+    out,
+    MARKETPLACES,
+    Object.fromEntries(
+      Object.entries(recordAt(out, MARKETPLACES)).filter(
+        ([name, entry]) => !isSameJson(entry, ours.marketplaces[name]),
+      ),
+    ),
+  );
   return withoutLegacyStyle(out);
 };
 

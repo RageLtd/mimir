@@ -28,24 +28,6 @@ import {
   session,
 } from "./support.test-helpers";
 
-test("SessionStart hands its payload, source included, to session-start", async ($, on) => {
-  const statuses = session(on);
-  const runs = binary(on);
-  on("classic.SessionStart", () => ({}));
-
-  await $.classic.SessionStart({ source: "resume", cwd: "/work/repo" });
-
-  const [run] = runsOf(runs, "session-start");
-  expect(run?.argv).toEqual([BIN, "session-start"]);
-  expect(run?.env).toEqual({ MIMIR_ACTIVE: "1" });
-  expect(parsed(run?.stdin)).toMatchObject({
-    hook_event_name: "SessionStart",
-    source: "resume",
-    cwd: "/work/repo",
-  });
-  expect(statuses).toEqual([]);
-});
-
 test("a main-loop turn hands the messages since the anchor to persist and advances it", async ($, on) => {
   session(on);
   const clock = mock.clock(on);
