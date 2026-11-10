@@ -154,7 +154,22 @@ exit 0
     expect(records[0]).not.toContain("replaced");
   });
 
-  test("runs ensure-binary.sh before launch when present and executable", async () => {
+  test("leaves an installed binary alone: the plugin's hooks module keeps it at the plugin's version", async () => {
+    await writeUpdater(`#!/usr/bin/env bash
+touch "$HOME/updater-ran"
+exit 0
+`);
+    await writeMockBinary("#!/usr/bin/env bash\nexit 0\n");
+    await writeMockClaude(LOGGING_CLAUDE);
+
+    const result = await runWrapper();
+    expect(result.exitCode).toBe(0);
+
+    expect(await Bun.file(join(tmp, "updater-ran")).exists()).toBe(false);
+    expect(await readLog()).toHaveLength(1);
+  });
+
+  test("runs ensure-binary.sh before launch when no binary is installed", async () => {
     await writeUpdater(`#!/usr/bin/env bash
 touch "$HOME/updater-ran"
 exit 0

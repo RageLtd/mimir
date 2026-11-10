@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -81,6 +81,105 @@ test("codex flavor ignores the cc dev pin and proceeds to the release check", as
   expect(exitCode).toBe(1);
   expect(stderr).not.toContain("dev build pinned");
   expect(stderr).toContain("Cannot reach");
+});
+
+// --- a pinned version (the plugin's own) -------------------------------------
+
+const BINARY = () => join(home, ".local", "bin", "mimir-cc");
+const GH_LOG = () => join(home, "gh.log");
+
+/** A `gh` that logs its arguments and writes whatever `--output` names. */
+const FAKE_GH = `#!/bin/sh
+echo "$*" >> "$HOME/gh.log"
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--output" ]; then echo "#!/bin/sh" > "$2"; fi
+  shift
+done
+`;
+
+const installed = async (tag: string) => {
+  await mkdir(join(home, ".local", "bin"), { recursive: true });
+  await writeFile(BINARY(), "old build\n");
+  await chmod(BINARY(), 0o755);
+  await writeFile(join(home, ".mimir", ".cc-version"), `${tag}\n`);
+};
+
+const runWithGh = async (...args: string[]) => {
+  const bin = join(home, "fakebin");
+  await mkdir(bin, { recursive: true });
+  await writeFile(join(bin, "gh"), FAKE_GH);
+  await chmod(join(bin, "gh"), 0o755);
+  const proc = Bun.spawn(["sh", scriptPath, ...args], {
+    env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  await proc.exited;
+  return {
+    exitCode: proc.exitCode ?? -1,
+    stderr: await new Response(proc.stderr).text(),
+    gh: (await Bun.file(GH_LOG()).exists())
+      ? await Bun.file(GH_LOG()).text()
+      : "",
+  };
+};
+
+test("a pinned version already installed asks GitHub nothing", async () => {
+  await installed("cc-plugin/v1.2.3");
+
+  const { exitCode, gh } = await runWithGh("cc", "1.2.3");
+
+  expect(exitCode).toBe(0);
+  expect(gh).toBe("");
+  expect(await Bun.file(BINARY()).text()).toBe("old build\n");
+});
+
+test("a pinned version that differs is fetched by its own tag, never the latest", async () => {
+  await installed("cc-plugin/v9.9.9");
+
+  const { exitCode, gh } = await runWithGh("cc", "1.2.3");
+
+  expect(exitCode).toBe(0);
+  expect(gh).toContain("release download cc-plugin/v1.2.3");
+  expect(gh).not.toContain("release list");
+  expect(await Bun.file(BINARY()).text()).toBe("#!/bin/sh\n");
+  expect(
+    (await Bun.file(join(home, ".mimir", ".cc-version")).text()).trim(),
+  ).toBe("cc-plugin/v1.2.3");
+});
+
+test("a fetch lands beside the binary and is moved over it, so a running one is never written in place", async () => {
+  await installed("cc-plugin/v9.9.9");
+
+  const { gh } = await runWithGh("cc", "1.2.3");
+
+  expect(gh).toContain("--output");
+  expect(gh).not.toContain(`--output ${BINARY()} `);
+});
+
+test("a pinned version that cannot be fetched fails loudly, even with a binary installed", async () => {
+  await installed("cc-plugin/v9.9.9");
+
+  const { exitCode, stderr } = await run("cc", "1.2.3");
+
+  expect(exitCode).toBe(1);
+  expect(stderr).toContain("Need either gh");
+});
+
+test("a dev pin wins over a pinned version", async () => {
+  await pin(".cc-dev");
+
+  const { exitCode, stderr } = await run("cc", "1.2.3");
+
+  expect(exitCode).toBe(0);
+  expect(stderr).toContain("dev build pinned");
+});
+
+test("a pinned version that is not a version exits 1", async () => {
+  const { exitCode, stderr } = await run("cc", "latest; rm -rf");
+
+  expect(exitCode).toBe(1);
+  expect(stderr).toContain("Not a version");
 });
 
 test("unknown flavor exits 1 with a loud error", async () => {

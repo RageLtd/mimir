@@ -7,6 +7,15 @@
   "worktree": {
     "baseRef": "head"
   },
+  "extraKnownMarketplaces": {
+    "rageltd": {
+      "source": {
+        "source": "github",
+        "repo": "RageLtd/claude-plugins"
+      },
+      "autoUpdate": true
+    }
+  },
   "permissions": {
     "deny": [
       "Read(./.env)",

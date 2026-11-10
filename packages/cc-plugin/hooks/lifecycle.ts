@@ -7,6 +7,7 @@
  *   and reindexes the project, then returns at once so the first prompt
  *   is never behind it. The classic event is the bridge because it
  *   carries `source`, which the engine's own `session.start` does not.
+ *   The same hook asks for the binary released with this plugin.
  * - `turn.complete` (main loop) → `mimir-cc persist`: the messages since
  *   the last distillation, read from `$.session.messages({ as: "api" })`
  *   and distilled into the local replica.
@@ -56,6 +57,12 @@ import {
   parseHookOutput,
 } from "./binary";
 import { anchorOf, deltaSince, NO_ANCHOR, slim } from "./messages";
+import {
+  FETCH_TIMEOUT_MS,
+  manifestPath,
+  manifestVersion,
+  pinArgv,
+} from "./pin-binary";
 
 /** The binary only parses the payload and detaches its worker. */
 const SESSION_START_TIMEOUT_MS = 5_000;
@@ -247,8 +254,39 @@ const detach = (
   );
 };
 
+/**
+ * Asks for the binary released with this plugin (pin-binary.ts), in a
+ * dispatch of its own: a download takes seconds. Each hook runs the
+ * binary afresh, so they pick the fetched build up as soon as it lands;
+ * the MCP servers already running keep the old one until the next session.
+ */
+const pinBinary = async ($: EngineInterface) => {
+  const root = $.plugin.root;
+  const version = await $.fs
+    .read(manifestPath(root))
+    .then(manifestVersion)
+    .catch(() => undefined);
+  if (version === undefined) {
+    $.ui.status("mimir: plugin.json carries no version");
+    return;
+  }
+  const failed = (detail = "") =>
+    $.ui.status(
+      `mimir: could not fetch the mimir-cc ${version} binary${detail}`,
+    );
+  $.clock.after(0, () =>
+    $.process.run(pinArgv(root, version), { timeoutMs: FETCH_TIMEOUT_MS }).then(
+      (ran) => {
+        if (ran.exitCode !== 0) failed(` (exit ${ran.exitCode})`);
+      },
+      () => failed(),
+    ),
+  );
+};
+
 export const registerLifecycle: Register = (on) => {
   on("classic.SessionStart", async ($, e, next) => {
+    await pinBinary($);
     const home = (await $.env.get("HOME")) ?? "";
     const ran = await $.process.run(
       mimirCcArgv(home, "session-start"),
