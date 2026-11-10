@@ -44,7 +44,6 @@ import {
   type VoiceAnchorState,
 } from "@mimir/plugin-core/voice-anchor";
 import { Plugin } from "@opencode/plugin";
-import { assembleBootContext } from "./boot-context";
 import { readConfig } from "./config";
 import { delegateTool, reviewPromptTool } from "./delegate-tools";
 import { OPENCODE_ENVIRONMENT } from "./environment";
@@ -61,6 +60,7 @@ import {
   userMemoryTools,
 } from "./tools";
 import { distillBeforeCompaction } from "./transcript-persistence";
+import { turnContext } from "./turn-context";
 import { appendToolText, toolInput, toolText } from "./v2-tool-results";
 import {
   createSessionRoles,
@@ -75,6 +75,8 @@ type SessionState = {
   voiceAnchor: VoiceAnchorState;
   /** True after the first developer turn for this session. */
   bootDone: boolean;
+  /** A developer prompt was admitted and not yet retrieved against. */
+  pendingRetrieval: boolean;
   /**
    * Anchor chosen by prompt admission (per developer turn) for the next
    * context round to inject and clear. Advancing per-turn but injecting
@@ -99,6 +101,7 @@ const getSession = (
     s = {
       voiceAnchor: createSessionVoiceAnchor(sessionId, libSize),
       bootDone: false,
+      pendingRetrieval: false,
       pendingAnchor: null,
       pendingNudges: [],
     };
@@ -250,6 +253,7 @@ export const MimirPlugin = Plugin.define({
         ANCHOR_INTERVAL,
       );
       s.voiceAnchor = step.next;
+      s.pendingRetrieval = true;
       if (step.inject) s.pendingAnchor = step.anchor;
     });
 
@@ -262,22 +266,18 @@ export const MimirPlugin = Plugin.define({
       // once, on the session's first turn), then any pending voice anchor.
       const blocks: string[] = [];
 
-      if (!s.bootDone) {
-        s.bootDone = true;
-        // assembleBootContext reads the user-memory store and the local
-        // org replica (MIM-86), returning a <boot_context> XML block
-        // ready for injection.
-        const boot = await assembleBootContext({
-          promptText: extractLastUserPrompt(output.messages),
-          projectPath: projectRoot,
-          config,
-          userMemoryStore,
-        }).catch((err) => {
-          log.error("assembleBootContext threw", { error: errMessage(err) });
-          return null;
-        });
-        if (boot) blocks.push(boot);
-      }
+      // Boot context on the first request, a retrieval against each later
+      // prompt: both read the user-memory store and the local replica.
+      const memory = await turnContext(s, {
+        promptText: extractLastUserPrompt(output.messages),
+        projectPath: projectRoot,
+        config,
+        userMemoryStore,
+      }).catch((err) => {
+        log.error("turn context threw", { error: errMessage(err) });
+        return null;
+      });
+      if (memory) blocks.push(memory);
 
       if (s.pendingAnchor) {
         blocks.push(formatAnchor(s.pendingAnchor));
