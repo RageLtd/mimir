@@ -109,9 +109,9 @@ test("counts the turn and runs retrieve with the UserPromptSubmit payload, attac
   expect(statuses).toEqual(["↻ Retrieved 1 memory"]);
 });
 
-test("every fifth turn also runs voice-anchor for the next exchange in the rotation", async ($, on) => {
+test("every third turn also runs voice-anchor for the next exchange in the rotation", async ($, on) => {
   session(on);
-  const turn = turnState(on, 4);
+  const turn = turnState(on, 2);
   const runs: Run[] = [];
   on("process.run", (_, e) => {
     runs.push({ argv: e.argv, stdin: e.init?.stdin, env: e.init?.env });
@@ -122,7 +122,7 @@ test("every fifth turn also runs voice-anchor for the next exchange in the rotat
 
   const result = await $.prompt.submit(submitted("still there?", ["prior"]));
 
-  expect(turn.get()).toBe(5);
+  expect(turn.get()).toBe(3);
   expect(runs[1]).toEqual({
     argv: [BIN, "voice-anchor", "--session", SESSION, "--nth", "0"],
     stdin: undefined,
@@ -163,17 +163,17 @@ test("the first prompt after a compaction is anchored whatever the count, and th
 
   await $.prompt.submit(submitted("where were we?"));
 
-  // Turn 7 becomes the next anchor turn, 10: the second exchange in the
-  // rotation now, and the third five prompts on.
+  // Turn 7 becomes the next anchor turn, 9: the third exchange in the
+  // rotation now, and the fourth three prompts on.
   expect(argvs[1]).toEqual([
     BIN,
     "voice-anchor",
     "--session",
     SESSION,
     "--nth",
-    "1",
+    "2",
   ]);
-  expect(turn.get()).toBe(10);
+  expect(turn.get()).toBe(9);
   expect(reanchor.get()).toBe(false);
 });
 
@@ -189,7 +189,7 @@ test("passes the prompt through untouched when neither leg has anything to add",
 
 test("a failing leg costs only itself", async ($, on) => {
   const statuses = session(on);
-  turnState(on, 4);
+  turnState(on, 2);
   on("process.run", (_, e) =>
     e.argv[1] === "retrieve" ? exited(2) : exited(0, ANCHOR),
   );
@@ -202,14 +202,14 @@ test("a failing leg costs only itself", async ($, on) => {
 
 test("fails open, counter advanced, when the binary cannot be run at all", async ($, on) => {
   const statuses = session(on);
-  const turn = turnState(on, 4);
+  const turn = turnState(on, 2);
   on("process.run", () => {
     throw new Error("ENOENT");
   });
 
   const result = await $.prompt.submit(submitted("hello"));
 
-  expect(turn.get()).toBe(5);
+  expect(turn.get()).toBe(3);
   expect(result).toEqual({ text: "hello" });
   expect(statuses).toEqual([
     "mimir: retrieve failed",
@@ -218,10 +218,10 @@ test("fails open, counter advanced, when the binary cannot be run at all", async
 });
 
 test("cadence helpers", async () => {
-  expect(anchorInterval(undefined)).toBe(5);
-  expect(anchorInterval("3")).toBe(3);
-  expect(anchorInterval("0")).toBe(5);
-  expect(anchorInterval("nope")).toBe(5);
+  expect(anchorInterval(undefined)).toBe(3);
+  expect(anchorInterval("5")).toBe(5);
+  expect(anchorInterval("0")).toBe(3);
+  expect(anchorInterval("nope")).toBe(3);
   expect([1, 4, 5, 9, 10, 15].map((t) => anchorIndexFor(t, 5))).toEqual([
     null,
     null,

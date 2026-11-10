@@ -11,11 +11,26 @@
  * Anthropic models drift off the system-prompt persona as conversations
  * lengthen. The system prompt holds the primacy slot; the most recent
  * user message holds the recency slot. Voice anchors occupy the recency
- * slot, sampled on a fixed cadence (default every 5 turns, override
- * via `MIMIR_ANCHOR_INTERVAL`).
+ * slot, sampled on a fixed cadence (DEFAULT_ANCHOR_INTERVAL turns,
+ * override via `MIMIR_ANCHOR_INTERVAL`).
  */
 
 import { markdownToXml } from "./markdown-to-xml";
+
+/**
+ * Developer turns between anchors. Three, not more: in agentic work one
+ * turn is dozens of tool calls and a long report, and the model's own
+ * recent replies outweigh an exemplar it last saw five turns ago. The cc
+ * hooks module cannot import this (it runs in the engine's sandbox) and
+ * keeps the same number in hooks/submit.ts.
+ */
+export const DEFAULT_ANCHOR_INTERVAL = 3;
+
+/** `MIMIR_ANCHOR_INTERVAL` as a positive integer, else the default. */
+export const anchorIntervalFrom = (raw: string | undefined) => {
+  const parsed = raw === undefined ? Number.NaN : Number.parseInt(raw, 10);
+  return parsed > 0 ? parsed : DEFAULT_ANCHOR_INTERVAL;
+};
 
 const VOICE_IN_ACTION_BLOCK = /<voice_in_action>([\s\S]*?)<\/voice_in_action>/;
 const TITLE_LINE = /^\*\*(.+?):\*\*\s*$/;

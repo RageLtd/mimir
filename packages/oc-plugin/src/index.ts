@@ -37,6 +37,7 @@ import { runSyncCommand } from "@mimir/plugin-core/sync/cli";
 import { errMessage, mimirHome } from "@mimir/plugin-core/util";
 import {
   type VoiceAnchor as Anchor,
+  anchorIntervalFrom,
   createSessionVoiceAnchor,
   formatAnchor,
   nextAnchor,
@@ -195,14 +196,9 @@ export const MimirPlugin = Plugin.define({
     // Session → worker role; active tool agents are supplied by V2 hook events.
     const sessionRoles = createSessionRoles(sessionLookupFrom(ctx));
 
-    const anchorIntervalEnv = process.env.MIMIR_ANCHOR_INTERVAL;
-    const anchorInterval = anchorIntervalEnv
-      ? Number.parseInt(anchorIntervalEnv, 10)
-      : 5;
-    const ANCHOR_INTERVAL =
-      Number.isFinite(anchorInterval) && anchorInterval > 0
-        ? anchorInterval
-        : 5;
+    const ANCHOR_INTERVAL = anchorIntervalFrom(
+      process.env.MIMIR_ANCHOR_INTERVAL,
+    );
 
     // V2 tool transforms replay synchronously; store setup stays outside them.
     const tools = {
