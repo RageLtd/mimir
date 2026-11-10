@@ -6,9 +6,10 @@
  * (extractionConfig), and stores the results via the replica's
  * embed→dedupe→store path.
  *
- * Watermark semantics: advance on success OR deliberate skip (gates),
- * keep on extraction transport failure so the next turn retries the same
- * delta. Unconfigured extraction advances too — otherwise the delta grows
+ * Watermark semantics: advance on success; keep on extraction transport
+ * failure so the next turn retries the same delta, and on a gate skip so
+ * the next turn carries it (a turn alone rarely passes the two-user-turn
+ * gate). Unconfigured extraction advances — otherwise the delta grows
  * unboundedly toward an endpoint that will never exist.
  *
  * Exit code is always 0. Returning non-zero from Stop would prevent
@@ -95,8 +96,12 @@ export const runPersistHook = async () => {
   }
 
   if (outcome.skipped) {
-    await writeWatermark(sessionId, newOffset);
-    log.debug("extraction skipped", { sessionId, reason: outcome.skipped });
+    // Too little to distil yet. A turn is one user message, so advancing
+    // here would drop every ordinary turn: the next turn carries it.
+    log.debug("extraction skipped — the next turn carries this delta", {
+      sessionId,
+      reason: outcome.skipped,
+    });
     return 0;
   }
 
