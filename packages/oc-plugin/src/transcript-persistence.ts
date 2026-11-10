@@ -12,10 +12,11 @@
  * vector dedupe absorbs the repeats.
  *
  * Watermark semantics mirror the cc-plugin persist hook: advance on
- * success OR deliberate skip (extraction gates), keep on transport
- * failure so the next idle retries the same delta. Unconfigured
- * extraction advances too — otherwise the delta grows forever toward
- * an endpoint that will never exist.
+ * success; keep on transport failure so the next idle retries the same
+ * delta, and on a gate skip so the next idle carries it (one turn alone
+ * rarely passes the two-user-turn gate). Unconfigured extraction
+ * advances — otherwise the delta grows forever toward an endpoint that
+ * will never exist.
  *
  * Errors are logged but never block the session going idle.
  */
@@ -219,8 +220,13 @@ const persistTranscript = async (
   }
 
   if (outcome.skipped) {
-    advance();
-    log.debug("extraction skipped", { sessionID, reason: outcome.skipped });
+    // Too little to distil yet. An idle usually follows one user message,
+    // so advancing here would drop every ordinary turn: the next idle
+    // carries it.
+    log.debug("extraction skipped — the next idle carries this delta", {
+      sessionID,
+      reason: outcome.skipped,
+    });
     return;
   }
 
