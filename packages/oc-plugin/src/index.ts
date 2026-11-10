@@ -60,7 +60,7 @@ import {
   installTool,
   userMemoryTools,
 } from "./tools";
-import { persistSessionTranscript } from "./transcript-persistence";
+import { distillBeforeCompaction } from "./transcript-persistence";
 import { appendToolText, toolInput, toolText } from "./v2-tool-results";
 import {
   createSessionRoles,
@@ -422,7 +422,7 @@ export const MimirPlugin = Plugin.define({
     await ctx.session.hook("compaction", async (input) => {
       appendSystem(input);
       if (await sessionRoles.isChild(input.sessionID)) return;
-      await persistSessionTranscript(
+      await distillBeforeCompaction(
         input.sessionID,
         projectRoot,
         config,
