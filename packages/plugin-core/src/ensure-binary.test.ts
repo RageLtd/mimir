@@ -10,17 +10,39 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const scriptPath = join(import.meta.dir, "..", "scripts", "ensure-binary.sh");
 
+const SYSTEM_PATH = "/usr/bin:/bin";
+const SH = "/bin/sh";
+/** Everything the script runs short of a download. No gh, no curl. */
+const TOOLS = ["uname", "cat", "mkdir", "rm", "dirname", "chmod", "mv"];
+
 let home = "";
+
+// A PATH holding only TOOLS. "/usr/bin:/bin" is not enough: GitHub's runners
+// ship gh in /usr/bin, so the script found it and asked GitHub for real.
+const toolBin = () => join(home, "toolbin");
 
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), "mimir-ensure-"));
   await mkdir(join(home, ".mimir"), { recursive: true });
+  await mkdir(toolBin());
+  for (const tool of TOOLS) {
+    const path = Bun.which(tool, { PATH: SYSTEM_PATH });
+    if (!path) throw new Error(`${tool} not found on ${SYSTEM_PATH}`);
+    await symlink(path, join(toolBin(), tool));
+  }
 });
 
 afterEach(async () => {
@@ -28,10 +50,10 @@ afterEach(async () => {
 });
 
 const run = async (...args: string[]) => {
-  // Strip gh/curl reachability from PATH so a regression that falls through to
-  // the network path fails the test loudly instead of hitting GitHub.
-  const proc = Bun.spawn(["sh", scriptPath, ...args], {
-    env: { HOME: home, PATH: "/usr/bin:/bin" },
+  // No gh or curl on PATH, so a regression that falls through to the network
+  // path fails the test loudly instead of hitting GitHub.
+  const proc = Bun.spawn([SH, scriptPath, ...args], {
+    env: { HOME: home, PATH: toolBin() },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -109,8 +131,8 @@ const runWithGh = async (...args: string[]) => {
   await mkdir(bin, { recursive: true });
   await writeFile(join(bin, "gh"), FAKE_GH);
   await chmod(join(bin, "gh"), 0o755);
-  const proc = Bun.spawn(["sh", scriptPath, ...args], {
-    env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` },
+  const proc = Bun.spawn([SH, scriptPath, ...args], {
+    env: { HOME: home, PATH: `${bin}:${toolBin()}` },
     stdout: "pipe",
     stderr: "pipe",
   });
