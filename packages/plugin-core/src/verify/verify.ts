@@ -10,8 +10,8 @@
  *   4. toolchain resolution per package root — none resolvable → block
  *      (an unverifiable "done" is worth nothing, so silence is the wrong
  *      default)
- *   5. typecheck → test → check per root; first failure blocks with the
- *      output tail as the reason
+ *   5. typecheck → test → check → vet per root; first failure blocks with
+ *      the output tail as the reason
  *   6. loop guard: after MAX_BLOCKS the worker may stop with
  *      `STATUS: failed` so the coordinator escalates
  */
@@ -40,6 +40,9 @@ import { parseStatus, type WorkerStatus } from "./status";
  *             about to add), so `test` AND `typecheck` are skipped; check
  *             and the sanity rules still run (a skipped or assertion-free
  *             test is still wrong). The impl gate typechecks everything.
+ *             A `vet` needs the code to build, so here the typecheck runs
+ *             first as a probe: when it passes the vet runs, and when it
+ *             fails the vet is skipped and the report says so.
  *   review  — changes nothing; the gate does not apply
  */
 export type VerifyRole = "impl" | "test" | "review";
@@ -70,9 +73,11 @@ export type VerifyOptions = {
 
 export type CommandRun = {
   readonly root: string;
-  readonly kind: "typecheck" | "test" | "check";
+  readonly kind: CommandKind;
   readonly command: string;
   readonly ok: boolean;
+  /** Why the command was not run, when it was skipped. */
+  readonly skipped?: string;
 };
 
 export type VerifyOutcome =
@@ -85,15 +90,24 @@ export type VerifyOutcome =
       readonly blocks: number;
     };
 
-const COMMAND_ORDER = ["typecheck", "test", "check"] as const;
+const COMMAND_ORDER = ["typecheck", "test", "check", "vet"] as const;
+
+type CommandKind = (typeof COMMAND_ORDER)[number];
+
+/** The test role with a vet to run: check, then the build probe, then the vet. */
+const TEST_WITH_VET: readonly CommandKind[] = ["check", "typecheck", "vet"];
+const TEST_WITHOUT_VET: readonly CommandKind[] = ["check"];
+
+const NOT_BUILT =
+  "the code does not build yet, which a red test is allowed to cause";
 
 /** A file path at the worktree root — `findPackageRoot` of it is the root. */
 const INTEGRATION_PROBE = "integration";
 
-const commandsFor = (role: VerifyRole) =>
-  role === "test"
-    ? COMMAND_ORDER.filter((kind) => kind === "check")
-    : COMMAND_ORDER;
+const commandsFor = (role: VerifyRole, vet: string | undefined) => {
+  if (role !== "test") return COMMAND_ORDER;
+  return vet ? TEST_WITH_VET : TEST_WITHOUT_VET;
+};
 
 const runToolchain = async (
   toolchain: ResolvedToolchain,
@@ -103,19 +117,27 @@ const runToolchain = async (
   tail: number,
 ) => {
   const runs: CommandRun[] = [];
-  for (const kind of commandsFor(role)) {
+  const { root } = toolchain;
+  const { vet } = toolchain.commands;
+  for (const kind of commandsFor(role, vet)) {
     const command = toolchain.commands[kind];
     if (!command) continue;
-    const result = await run(shellArgv(command), toolchain.root, timeoutMs);
+    const result = await run(shellArgv(command), root, timeoutMs);
     const ok = result.code === 0 && !result.timedOut;
-    runs.push({ root: toolchain.root, kind, command, ok });
+    if (!ok && role === "test" && kind === "typecheck" && vet) {
+      // The build was only a probe: not building is not a fault in a red
+      // test, but it does mean the vet cannot say anything.
+      runs.push({ root, kind: "vet", command: vet, ok, skipped: NOT_BUILT });
+      return { runs, failure: null };
+    }
+    runs.push({ root, kind, command, ok });
     if (!ok) {
       const why = result.timedOut
         ? `timed out after ${timeoutMs}ms`
         : `exit ${result.code}`;
       return {
         runs,
-        failure: `\`${command}\` in ${toolchain.root} failed (${why}):\n${tailLines(result, tail)}`,
+        failure: `\`${command}\` in ${root} failed (${why}):\n${tailLines(result, tail)}`,
       };
     }
   }
@@ -195,7 +217,7 @@ export const runVerify = async (options: VerifyOptions) => {
     // Same principle as an unresolved root: a pass that ran nothing is
     // worth nothing, so silence is the wrong default.
     return block(
-      `No verification command ran for ${[...toolchains.keys()].join(", ")}: the resolved toolchain has no ${commandsFor(role).join("/")} command for the ${role} role. Add it to the [verify] table in mimir.toml so this hand-back can be checked.`,
+      `No verification command ran for ${[...toolchains.keys()].join(", ")}: the resolved toolchain has no ${commandsFor(role, "vet").join("/")} command for the ${role} role. Add it to the [verify] table in mimir.toml so this hand-back can be checked.`,
     );
   }
 
