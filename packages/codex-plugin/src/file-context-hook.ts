@@ -164,7 +164,7 @@ const localFileInfo = async (
       rootPath,
       filePath,
       projectId,
-      // MIM-85 vector leg; cold/absent embedder degrades to FTS-only.
+      // MIM-85 vector leg; a cold or absent embedder gives no memories.
       embedQuery: createEmbedQuery(),
     }),
   );

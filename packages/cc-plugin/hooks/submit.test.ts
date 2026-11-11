@@ -101,6 +101,7 @@ test("counts the turn and runs retrieve with the UserPromptSubmit payload, attac
         hook_event_name: "UserPromptSubmit",
         prompt: "what do we know?",
         cwd: CWD,
+        window_reset: false,
       }),
       env: { MIMIR_ACTIVE: "1" },
     },
@@ -156,12 +157,18 @@ test("the first prompt after a compaction is anchored whatever the count, and th
   session(on, {}, reanchor);
   const turn = turnState(on, 6);
   const argvs: (readonly string[])[] = [];
+  const stdins: (string | undefined)[] = [];
   on("process.run", (_, e) => {
     argvs.push(e.argv);
+    stdins.push(e.init?.stdin);
     return exited(0);
   });
 
   await $.prompt.submit(submitted("where were we?"));
+
+  // Retrieval is told the window was replaced, so it may send again what
+  // it sent before the compaction.
+  expect(JSON.parse(stdins[0] ?? "{}")).toMatchObject({ window_reset: true });
 
   // Turn 7 becomes the next anchor turn, 9: the third exchange in the
   // rotation now, and the fourth three prompts on.

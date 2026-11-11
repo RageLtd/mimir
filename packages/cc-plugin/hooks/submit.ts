@@ -84,6 +84,9 @@ export const registerSubmit: Register = (on) => {
       hook_event_name: "UserPromptSubmit",
       prompt: e.text,
       cwd: await $.session.cwd(),
+      // The compaction replaced the window, so retrieval may send again
+      // what it sent before.
+      window_reset: isReanchor,
     };
     const [retrieve, anchor] = await Promise.allSettled([
       $.process.run(

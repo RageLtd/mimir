@@ -35,9 +35,9 @@ Tailor responses accordingly: match their communication style, reference their s
 const buildUserProfileSection = (store: UserMemoryStore) =>
   buildUserContext(store);
 
-// Boot budgets mirror the cc-plugin's (memory topK 10 with related,
-// 3 summaries) — richer first-turn priming than per-turn micro-retrieval.
-const BOOT_BUDGETS = { topK: 10, includeRelated: true, summaryCount: 3 };
+// Boot budgets (up to 10 facts and 3 summaries) — richer first-turn
+// priming than per-turn micro-retrieval.
+const BOOT_BUDGETS = { topK: 10, summaryCount: 3 };
 /** Per-prompt retrieval takes retrieveLocalContext's own, smaller defaults. */
 const TURN_BUDGETS = {};
 
@@ -53,7 +53,6 @@ const buildSessionContext = async (
   projectId: string | null,
   budgets: {
     readonly topK?: number;
-    readonly includeRelated?: boolean;
     readonly summaryCount?: number;
   } = BOOT_BUDGETS,
 ) => {
@@ -73,7 +72,7 @@ const buildSessionContext = async (
     retrieveLocalContext(replica, query, {
       ...budgets,
       projectId: projectId ?? undefined,
-      // MIM-85: local llama-server vector leg; null/cold → FTS-only boot.
+      // MIM-85: local llama-server vector leg; null/cold → nothing retrieved.
       embedQuery: createEmbedQuery(),
     }),
   );

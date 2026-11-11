@@ -25,8 +25,15 @@ import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
 import { retrieveLocalContext } from "@mimir/plugin-core/brain/retrieve";
-import { getOrResolveProjectId } from "@mimir/plugin-core/project";
+import {
+  getOrResolveProjectId,
+  readProjectNames,
+} from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
+import {
+  readInjectedIds,
+  recordInjectedIds,
+} from "@mimir/plugin-core/retrieve-state";
 import { readConfig } from "@mimir/plugin-core/shared-config";
 import {
   createOrgReplica,
@@ -57,20 +64,23 @@ const ensureMarker = async (sessionId: string) => {
   return false;
 };
 
-const emitInjection = (
-  block: string,
-  memoryCount: number,
-  summaryCount: number,
-) => {
+const EMBEDDER_UNAVAILABLE_STATUS =
+  "↻ Retrieval skipped: the embedder gave no vector";
+
+const emitInjection = (block: string, status: string) => {
   process.stdout.write(
     JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "UserPromptSubmit",
         additionalContext: block,
       },
-      systemMessage: `↻ Retrieved ${memoryCount} memories / ${summaryCount} summaries (local)`,
+      systemMessage: status,
     }),
   );
+};
+
+const emitStatus = (status: string) => {
+  process.stdout.write(JSON.stringify({ systemMessage: status }));
 };
 
 /**
@@ -111,7 +121,7 @@ export const runRetrieveHook = async () => {
     return 0;
   }
 
-  // Project id for the scoring tiebreaker + playbook scope + the
+  // Project id for the wider same-project gate + playbook scope + the
   // <active_project> prefix. Disk-cached after first resolution; the
   // config/server is only consulted on a cache miss.
   const config = await readConfig();
@@ -121,11 +131,26 @@ export const runRetrieveHook = async () => {
       )
     : null;
 
-  const [retrieveErr, result] = await attempt(() =>
+  // Rows already in this session's context window are not sent again.
+  // Without a session id there is no window to track: nothing is skipped
+  // and nothing recorded.
+  const stateId = input.session_id;
+  const [seenErr, seen] = await attempt(async () =>
+    stateId === undefined ? new Set<string>() : readInjectedIds(stateId),
+  );
+  if (seenErr) {
+    log.warn("retrieve state unreadable — nothing is skipped this prompt", {
+      sessionId,
+      error: seenErr.message,
+    });
+  }
+
+  const [retrieveErr, result] = await attempt(async () =>
     retrieveLocalContext(replica, prompt, {
       projectId: projectId ?? undefined,
-      // MIM-85: local llama-server vector leg; null/cold → FTS-only turn.
       embedQuery: createEmbedQuery(),
+      exclude: seen ?? new Set<string>(),
+      projectNames: await readProjectNames(),
     }),
   );
   replica.close();
@@ -134,7 +159,15 @@ export const runRetrieveHook = async () => {
     return 0;
   }
 
+  if (result.embedderUnavailable) {
+    log.warn(
+      "the embedder gave no query vector — memories and summaries not retrieved",
+      { sessionId },
+    );
+  }
+
   if (result.contextBlock.length === 0) {
+    if (result.embedderUnavailable) emitStatus(EMBEDDER_UNAVAILABLE_STATUS);
     log.debug("empty retrieval — no memories or summaries to inject");
     return 0;
   }
@@ -146,7 +179,24 @@ export const runRetrieveHook = async () => {
     : "";
   const contextBlock = `${projectPrefix}${result.contextBlock}`;
 
-  emitInjection(contextBlock, result.memoryCount, result.summaryCount);
+  emitInjection(
+    contextBlock,
+    result.embedderUnavailable
+      ? EMBEDDER_UNAVAILABLE_STATUS
+      : `↻ Retrieved ${result.memoryCount} memories / ${result.summaryCount} summaries (local)`,
+  );
+
+  const [recordErr] = await attempt(async () => {
+    if (stateId !== undefined) {
+      await recordInjectedIds(stateId, result.injectedIds);
+    }
+  });
+  if (recordErr) {
+    log.warn("retrieve state not saved — these rows may be sent again", {
+      sessionId,
+      error: recordErr.message,
+    });
+  }
 
   log.info("retrieved context injected (local replica)", {
     sessionId,

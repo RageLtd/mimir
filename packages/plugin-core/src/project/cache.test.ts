@@ -19,6 +19,7 @@ import {
   getCachedProjectId,
   readCache,
   readProjectIdAliases,
+  readProjectNames,
   setCachedProjectId,
   setProjectIdAlias,
   writeCache,
@@ -39,6 +40,31 @@ afterEach(async () => {
     process.env.MIMIR_HOME = originalMimirHome;
   }
   await rm(tmp, { recursive: true, force: true });
+});
+
+describe("readProjectNames", () => {
+  test("names each project after its folder", async () => {
+    await writeCache({
+      "/home/dev/mimir": "project:a",
+      "/home/dev/data-services": "project:b",
+    });
+    expect(await readProjectNames()).toEqual({
+      "project:a": "mimir",
+      "project:b": "data-services",
+    });
+  });
+
+  test("the shortest path wins when several share an id", async () => {
+    await writeCache({
+      "/home/dev/mimir/packages/cc-plugin": "project:a",
+      "/home/dev/mimir": "project:a",
+    });
+    expect(await readProjectNames()).toEqual({ "project:a": "mimir" });
+  });
+
+  test("no cache, no names", async () => {
+    expect(await readProjectNames()).toEqual({});
+  });
 });
 
 describe("readCache", () => {
