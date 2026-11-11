@@ -13,15 +13,22 @@ on:
 jobs:
   test:
     name: Install & Test
-    # A Linux arm64 container on the Mac's runner, in the image that carries
-    # git, Node and Bun (built from rageltd/ci-images).
-    runs-on: docker-arm64
+    # The x86_64 runner, in the image that carries git, Node and Bun (built
+    # from rageltd/ci-images). x86_64 on purpose: Mimir ships for linux-x64
+    # and darwin-arm64, and the tests that install binaries take the
+    # unsupported-platform path on Linux arm64.
+    runs-on: docker
     container:
       image: git.rageltd.ca/rageltd/ci-node:wolfi
     steps:
       # No marketplace actions: a checkout is a fetch of the ref being built,
       # which is a branch for a dispatch and refs/pull/N/head for a pull
       # request.
+      #
+      # Steps start as root, and root can remove anything, which breaks the
+      # tests of what happens when a file cannot be removed. So the checkout
+      # is handed to the image's ordinary user, and everything after runs as
+      # that user.
       - name: Check out
         run: |
           git init -q .
@@ -29,12 +36,13 @@ jobs:
             "$(echo "$GITHUB_SERVER_URL" | sed "s#://#://token:${{ github.token }}@#")/$GITHUB_REPOSITORY.git"
           git fetch -q --depth 1 origin "$GITHUB_REF"
           git checkout -q FETCH_HEAD
+          chown -R ci:ci .
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: su ci -c 'bun install --frozen-lockfile'
 
       - name: Typecheck
-        run: bun run typecheck
+        run: su ci -c 'bun run typecheck'
 
       - name: Run tests
-        run: bun run test
+        run: su ci -c 'bun run test' < /dev/null
