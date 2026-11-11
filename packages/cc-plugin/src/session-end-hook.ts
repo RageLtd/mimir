@@ -46,6 +46,10 @@ import {
 import { syncAfterDistill } from "@mimir/plugin-core/sync/after-distill";
 import { extractionConfig, readConfig } from "./config";
 import { type ApiMessage, toModelMessages } from "./conversation";
+import {
+  type FileContextSweepOutcome,
+  sweepFileContextState,
+} from "./file-context-sweep";
 import { createLogger } from "./logger";
 import {
   readHandOff,
@@ -100,13 +104,21 @@ type HookDeps = {
   readonly markPending: (projectId: string) => Promise<string>;
   readonly clearPending: (projectId: string, token: string) => Promise<unknown>;
   readonly spawnWorker: (handOff: WorkerInput) => Promise<unknown>;
-  readonly log: Log;
+  readonly sweepFileContextState: (
+    now: number,
+  ) => Promise<FileContextSweepOutcome>;
+  readonly log: Log & {
+    readonly error: (msg: string, data?: Record<string, unknown>) => void;
+  };
 };
 
 /** The project's mark and its owner token, or none if marking failed. */
 const markFor = async (
   projectId: string,
-  deps: Pick<HookDeps, "markPending" | "log">,
+  deps: {
+    readonly markPending: (projectId: string) => Promise<string>;
+    readonly log: Log;
+  },
 ) => {
   const [markErr, token] = await attempt(() => deps.markPending(projectId));
   if (!markErr) return token;
@@ -179,11 +191,8 @@ const assertNever = (value: never) => {
   throw new Error(`Unhandled session-end plan: ${JSON.stringify(value)}`);
 };
 
-/** The runner: decide, and to summarise, hand off and return. Never throws. */
-export const runSessionEndHook = async (
-  input: SessionEndInput,
-  deps: HookDeps,
-) => {
+/** Decide, and to summarise, hand the window off. */
+const endSession = async (input: SessionEndInput, deps: HookDeps) => {
   const sessionId = input.session_id;
   const reason = input.reason ?? "unknown";
   const cwd = input.cwd ?? process.cwd();
@@ -209,6 +218,39 @@ export const runSessionEndHook = async (
     default:
       return assertNever(plan);
   }
+};
+
+/** Prune the file-context state; a failed sweep is logged, never surfaced. */
+const sweepState = async (deps: HookDeps) => {
+  const [sweepErr, outcome] = await attempt(() =>
+    deps.sweepFileContextState(Date.now()),
+  );
+  if (sweepErr) {
+    deps.log.error("session-end: file-context sweep failed", {
+      error: sweepErr.message,
+    });
+    return;
+  }
+  if (outcome.failures.length > 0) {
+    deps.log.error("session-end: file-context sweep left entries behind", {
+      removed: outcome.removed,
+      failures: outcome.failures,
+    });
+  }
+};
+
+/**
+ * The runner: end the session, then sweep. The sweep runs after the
+ * hand-off so the chain's shared wall-clock bound never costs the summary.
+ * Never throws.
+ */
+export const runSessionEndHook = async (
+  input: SessionEndInput,
+  deps: HookDeps,
+) => {
+  const code = await endSession(input, deps);
+  await sweepState(deps);
+  return code;
 };
 
 type SummaryOutcome = Pick<
@@ -390,6 +432,7 @@ const runHook = async () => {
     markPending: (projectId) => markSummaryPending(projectId),
     clearPending: (projectId, token) => clearSummaryPending(projectId, token),
     spawnWorker,
+    sweepFileContextState,
     log,
   });
 };

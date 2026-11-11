@@ -80,6 +80,9 @@ export const countMemories = (info: FileInfoResponse) => {
 
 const STATE_DIR = "file-context-state";
 const RECORD_SUFFIX = ".json";
+
+/** Where every session's file-context state lives; file-context-sweep.ts prunes it. */
+export const fileContextStateDir = () => join(mimirHome(), STATE_DIR);
 const DRAFT_SUFFIX = ".draft";
 
 const digest = (text: string) =>
@@ -93,7 +96,7 @@ const digest = (text: string) =>
  * directory and is never read: under it, nothing is recorded.
  */
 const recordDir = (sessionId: string, filePath: string) =>
-  join(mimirHome(), STATE_DIR, sessionId, digest(filePath));
+  join(fileContextStateDir(), sessionId, digest(filePath));
 
 const recordName = (contentHash: string) =>
   `${digest(contentHash)}${RECORD_SUFFIX}`;

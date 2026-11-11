@@ -49,6 +49,9 @@ const LONG_API: ApiMessage[] = LINES.map((text, i) => ({
 
 // Under the floor.
 const SHORT: ModelMessage[] = [user("hi")];
+const SHORT_API: ApiMessage[] = [
+  { role: "user", content: [{ type: "text", text: "hi" }] },
+];
 
 const PROJECT = "project:abc";
 const CWD = "/work/repo";
@@ -89,32 +92,55 @@ type Logged = { readonly msg: string; readonly data?: Record<string, unknown> };
 const recordingLog = () => {
   const info: Logged[] = [];
   const warn: Logged[] = [];
+  const error: Logged[] = [];
   return {
     info,
     warn,
+    error,
     log: {
       info: (msg: string, data?: Record<string, unknown>) =>
         info.push({ msg, data }),
       warn: (msg: string, data?: Record<string, unknown>) =>
         warn.push({ msg, data }),
+      error: (msg: string, data?: Record<string, unknown>) =>
+        error.push({ msg, data }),
     },
   };
 };
+
+type SweepOutcome = {
+  readonly removed: number;
+  readonly failures: readonly {
+    readonly path: string;
+    readonly error: string;
+  }[];
+};
+
+const SWEPT: SweepOutcome = { removed: 3, failures: [] };
+const SWEEP = "sweep";
 
 /** The runner's deps, recording each call in `order`. */
 const runner = (options: {
   readonly extraction?: ExtractionConfig | null;
   readonly cached?: string | null;
   readonly spawn?: () => void | Promise<void>;
+  readonly sweep?: () => Promise<SweepOutcome>;
 }) => {
   const order: string[] = [];
   const spawned: unknown[] = [];
+  const sweptAt: number[] = [];
   const logs = recordingLog();
   return {
     order,
     spawned,
+    sweptAt,
     logs,
     deps: {
+      sweepFileContextState: async (now: number) => {
+        order.push(SWEEP);
+        sweptAt.push(now);
+        return options.sweep ? options.sweep() : SWEPT;
+      },
       extraction: options.extraction === undefined ? BYOK : options.extraction,
       cachedProjectId: async (cwd: string) => {
         order.push(`cached:${cwd}`);
@@ -171,7 +197,7 @@ describe("runSessionEndHook", () => {
     const code = await runSessionEndHook(ending(), deps);
 
     expect(code).toBe(0);
-    expect(order).toEqual([`cached:${CWD}`, "spawn"]);
+    expect(order).toEqual([`cached:${CWD}`, "spawn", SWEEP]);
     expect(spawned).toEqual([{ cwd: CWD, window: toModelMessages(LONG_API) }]);
   });
 
@@ -212,6 +238,111 @@ describe("runSessionEndHook", () => {
     );
     expect(logs.warn.length).toBeGreaterThan(0);
   });
+});
+
+/** Every way a session can end, as the runner sees it. */
+const ENDINGS = [
+  ["summarise, cached project", {}, LONG_API],
+  ["summarise, no cached project", { cached: null }, LONG_API],
+  ["unconfigured", { extraction: null }, LONG_API],
+  ["skip, empty window", {}, []],
+  ["skip, window under the floor", {}, SHORT_API],
+  [
+    "failed hand-off",
+    {
+      spawn: () => {
+        throw new Error("EACCES");
+      },
+    },
+    LONG_API,
+  ],
+] satisfies readonly (readonly [
+  string,
+  Parameters<typeof runner>[0],
+  readonly ApiMessage[],
+])[];
+
+describe("runSessionEndHook sweeps the file-context state", () => {
+  for (const [what, options, window] of ENDINGS) {
+    test(`${what}: the sweep runs once, at the current time, and a clean sweep logs no error`, async () => {
+      const { order, sweptAt, logs, deps } = runner(options);
+      const before = Date.now();
+      const code = await runSessionEndHook(ending(window), deps);
+      const after = Date.now();
+
+      expect(code).toBe(0);
+      expect(order.filter((step) => step === SWEEP)).toHaveLength(1);
+      expect(sweptAt).toHaveLength(1);
+      expect(sweptAt[0]).toBeGreaterThanOrEqual(before);
+      expect(sweptAt[0]).toBeLessThanOrEqual(after);
+      expect(logs.error).toEqual([]);
+    });
+
+    for (const [failure, sweep] of [
+      [
+        "rejects",
+        async () => {
+          throw new Error("EIO");
+        },
+      ],
+      [
+        "reports failures",
+        async () => ({
+          removed: 1,
+          failures: [{ path: "/state/sess-x", error: "EACCES" }],
+        }),
+      ],
+    ] satisfies readonly (readonly [string, () => Promise<SweepOutcome>])[]) {
+      test(`${what}: a sweep that ${failure} leaves the outcome unchanged and logs one error`, async () => {
+        const clean = runner(options);
+        const cleanCode = await runSessionEndHook(ending(window), clean.deps);
+        const failing = runner({ ...options, sweep });
+        const failingCode = await runSessionEndHook(
+          ending(window),
+          failing.deps,
+        );
+
+        expect(failingCode).toBe(cleanCode);
+        expect(failing.order).toEqual(clean.order);
+        expect(failing.spawned).toEqual(clean.spawned);
+        expect(failing.logs.warn).toEqual(clean.logs.warn);
+        expect(failing.logs.error).toHaveLength(1);
+      });
+    }
+  }
+
+  // The hook shares a 1.5 s bound: a slow sweep must never cost the summary.
+  for (const [what, options, window] of ENDINGS.filter(([name]) =>
+    name.startsWith("summarise"),
+  )) {
+    test(`${what}: the worker is handed the summary before the sweep starts`, async () => {
+      const { order, deps } = runner(options);
+      await runSessionEndHook(ending(window), deps);
+
+      const sweep = order.indexOf(SWEEP);
+      expect(sweep).toBeGreaterThanOrEqual(0);
+      expect(order.indexOf("spawn")).toBeGreaterThanOrEqual(0);
+      expect(order.indexOf("spawn")).toBeLessThan(sweep);
+    });
+
+    test(`${what}: a sweep that never settles does not stop the hand-off`, async () => {
+      const pending = Promise.withResolvers<SweepOutcome>();
+      const { order, deps } = runner({
+        ...options,
+        sweep: () => pending.promise,
+      });
+      const run = runSessionEndHook(ending(window), deps);
+      await Bun.sleep(10);
+      const seen = [...order];
+
+      // Settle the sweep before asserting, so no hanging promise outlives the test.
+      pending.resolve(SWEPT);
+      await run;
+
+      expect(seen).toContain(SWEEP);
+      expect(seen).toContain("spawn");
+    });
+  }
 });
 
 type Outcome = {
