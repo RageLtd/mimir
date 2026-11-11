@@ -148,6 +148,7 @@ const distil = async (input: RunInput, deps: PreCompactDeps) => {
   // this window is never summarised again. Its delta's facts are not
   // lost — the rollout is append-only, so the Stop hook still reads them
   // from the unmoved watermark.
+  // Kept in step with settlePrecompact, which writes nothing after a failed summary.
   const factsStored =
     plan.facts && (!summary || summary.ok)
       ? await deps.extractFacts(plan.facts)

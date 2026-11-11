@@ -25,12 +25,13 @@
  * Errors are logged but never block the session going idle.
  */
 
+import {
+  compactionOwed,
+  settleCompaction,
+} from "@mimir/plugin-core/brain/compaction-plan";
 import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
 import { extractFromConversation } from "@mimir/plugin-core/brain/extract";
-import {
-  prepareSummary,
-  summarizeToReplica,
-} from "@mimir/plugin-core/brain/summarize";
+import { summarizeToReplica } from "@mimir/plugin-core/brain/summarize";
 import { getOrResolveProjectId } from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
 import {
@@ -293,11 +294,12 @@ const distillWindow = async (run: Run, ops: typeof closingOperations) => {
   const summarise =
     lastMessageId !== undefined &&
     _summaryWatermarks.get(sessionID) !== lastMessageId;
-  // The summariser gates on the floor itself; checked here only so a
-  // window that cannot clear it, with no delta, resolves no endpoint and
-  // opens no store.
-  const caughtUp =
-    delta.length === 0 && (!summarise || "skipped" in prepareSummary(window));
+  // The summariser gates on the floor itself, so it is still called
+  // whenever `summarise` is set; the owed check is only so a window that
+  // cannot clear the floor, with no delta, resolves no endpoint and opens
+  // no store.
+  const owed = compactionOwed({ window, delta, summaryDue: summarise });
+  const caughtUp = owed.summary === null && owed.facts === null;
   const sizes = {
     messagesInWindow: window.length,
     messagesInDelta: delta.length,
@@ -324,18 +326,9 @@ const distillWindow = async (run: Run, ops: typeof closingOperations) => {
         projectId: store.projectId,
       })
     : null;
-  if (summary && !summary.ok) {
-    store.replica.close();
-    log.error("precompact: summarization failed — keeping watermark", {
-      sessionID,
-      ...sizes,
-      model: extraction.model,
-    });
-    return;
-  }
-
+  // Kept in step with settleCompaction: a failed summary reads no facts.
   const outcome =
-    delta.length > 0
+    delta.length > 0 && (!summary || summary.ok)
       ? await ops.extractFromConversation(extraction, delta, { closing: true })
       : null;
   const facts =
@@ -349,9 +342,19 @@ const distillWindow = async (run: Run, ops: typeof closingOperations) => {
   }
   store.replica.close();
 
+  const settled = settleCompaction({ summary, factsStored: facts.stored });
+  if (!settled.advance) {
+    log.error("precompact: summarization failed — keeping watermark", {
+      sessionID,
+      ...sizes,
+      model: extraction.model,
+    });
+    return;
+  }
+
   advance();
   const summaryId = summary?.id ?? null;
-  if (summaryId !== null && lastMessageId !== undefined) {
+  if (settled.markSummarized && lastMessageId !== undefined) {
     _summaryWatermarks.set(sessionID, lastMessageId);
   }
 
@@ -366,7 +369,7 @@ const distillWindow = async (run: Run, ops: typeof closingOperations) => {
     model: extraction.model,
   });
 
-  if (summaryId !== null || facts.stored > 0) await ops.syncAfterDistill(log);
+  if (settled.sync) await ops.syncAfterDistill(log);
 };
 
 /** Idle and precompaction share a queue so neither distils the same delta concurrently. */

@@ -24,6 +24,7 @@
     "./brain/boot-context": "./src/brain/boot-context.ts",
     "./brain/summarize": "./src/brain/summarize.ts",
     "./brain/hygiene": "./src/brain/hygiene.ts",
+    "./brain/compaction-plan": "./src/brain/compaction-plan.ts",
     "./keys/cli": "./src/keys/cli.ts",
     "./keys/flows": "./src/keys/flows.ts",
     "./keys/client": "./src/keys/client.ts",
