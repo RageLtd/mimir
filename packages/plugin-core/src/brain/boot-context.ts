@@ -57,15 +57,15 @@ const buildUserProfileSection = async (dbPath: string, log: Logger) => {
   return block;
 };
 
-// Boot budgets mirror the historical server /assemble defaults (goldfish
-// retrieval topK 10 with related, 3 summaries) — richer first-turn
+// Boot budgets (up to 10 facts and 3 summaries) — richer first-turn
 // priming than the per-turn micro-retrieval.
 const BOOT_MEMORY_TOP_K = 10;
 const BOOT_SUMMARY_COUNT = 3;
 
 /**
  * Build prior session context from the LOCAL org replica (MIM-84) —
- * summaries, memories, and playbooks with boot-sized budgets. Reads are
+ * summaries, memories, and playbooks with boot-sized budgets, plus the
+ * active project's newest summary when none is near the prompt. Reads are
  * local; no server round-trip on turn one. Returns null when the replica
  * is missing or empty.
  */
@@ -89,10 +89,12 @@ const buildSessionContext = async (
   const [retrieveErr, result] = await attempt(() =>
     retrieveLocalContext(replica, query, {
       topK: BOOT_MEMORY_TOP_K,
-      includeRelated: true,
       summaryCount: BOOT_SUMMARY_COUNT,
       projectId: projectId ?? undefined,
-      // MIM-85: local llama-server vector leg; null/cold → FTS-only boot.
+      // Boot runs on the session's first prompt: the active project's
+      // newest summary arrives even when nothing is near the prompt.
+      sessionStart: true,
+      // MIM-85: local llama-server vector leg; null/cold → nothing retrieved.
       embedQuery: createEmbedQuery(),
     }),
   );
@@ -115,7 +117,13 @@ const wrapSessionContext = (block: string | null) =>
   block ?? "No prior session context — this is the start of the conversation.";
 
 export type BootContextOptions = {
-  readonly promptText: string;
+  /**
+   * The first prompt, the query for the session-context section. Omitted,
+   * that section is left out entirely — for a host whose boot fires before
+   * any prompt exists (Claude Code's `prompt.context`) and retrieves per
+   * turn instead.
+   */
+  readonly promptText?: string;
   readonly projectPath: string;
   /** Consumer's logger — omitted means silent operation. */
   readonly log?: Logger;
@@ -149,16 +157,19 @@ export const assembleBootContext = async (opts: BootContextOptions) => {
 
   const [profile, sessionContext] = await Promise.all([
     buildUserProfileSection(config.userMemoryDb, log),
-    buildSessionContext(opts.promptText, projectId, log),
+    opts.promptText === undefined
+      ? null
+      : buildSessionContext(opts.promptText, projectId, log),
   ]);
 
   const profileSection = wrapProfile(profile);
-  const sessionContextSection = wrapSessionContext(sessionContext);
 
   log.info("boot context assembled", {
     projectId,
     hasProfile: profile !== null,
-    hasSessionContext: sessionContext !== null,
+    // "omitted" = no prompt, so no lookup ran; false = looked, found nothing.
+    hasSessionContext:
+      opts.promptText === undefined ? "omitted" : sessionContext !== null,
   });
 
   const sections = ["<boot_context>"];
@@ -179,12 +190,16 @@ export const assembleBootContext = async (opts: BootContextOptions) => {
     "<user_profile_section>",
     profileSection,
     "</user_profile_section>",
-    "",
-    "<session_context_section>",
-    sessionContextSection,
-    "</session_context_section>",
-    "</boot_context>",
   );
+  if (opts.promptText !== undefined) {
+    sections.push(
+      "",
+      "<session_context_section>",
+      wrapSessionContext(sessionContext),
+      "</session_context_section>",
+    );
+  }
+  sections.push("</boot_context>");
 
   return sections.join("\n");
 };

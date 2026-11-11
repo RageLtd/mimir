@@ -56,8 +56,13 @@ cp "${PKG_DIR}/scripts/ensure-binary.sh" "${HOME}/.mimir/ensure-binary.sh"
 chmod +x "${HOME}/.mimir/ensure-binary.sh"
 touch "${HOME}/.mimir/.cc-dev"
 
+# 5. Land the repo's persona seed where an install lands the server's copy, so
+#    a persona edit can be tried before the server that serves it is redeployed.
+bun scripts/dev-prompt.ts
+
 echo
 echo "dev-install: ${DEST} is now your local ${PLATFORM} build (auto-update pinned off)."
+echo "  • The persona in ~/.mimir is now this checkout's seed; \`mimir-cc update\` restores the server's."
 echo "  • Changed bundled templates or install/config logic? Re-materialize ~/.mimir with:"
 echo "        mimir-cc update"
 echo "  • Resume tracking releases:"

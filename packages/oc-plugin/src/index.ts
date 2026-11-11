@@ -37,6 +37,7 @@ import { runSyncCommand } from "@mimir/plugin-core/sync/cli";
 import { errMessage, mimirHome } from "@mimir/plugin-core/util";
 import {
   type VoiceAnchor as Anchor,
+  anchorIntervalFrom,
   createSessionVoiceAnchor,
   formatAnchor,
   nextAnchor,
@@ -44,7 +45,6 @@ import {
   type VoiceAnchorState,
 } from "@mimir/plugin-core/voice-anchor";
 import { Plugin } from "@opencode/plugin";
-import { assembleBootContext } from "./boot-context";
 import { readConfig } from "./config";
 import { delegateTool, reviewPromptTool } from "./delegate-tools";
 import { OPENCODE_ENVIRONMENT } from "./environment";
@@ -60,12 +60,13 @@ import {
   installTool,
   userMemoryTools,
 } from "./tools";
-import { persistSessionTranscript } from "./transcript-persistence";
+import { distillBeforeCompaction } from "./transcript-persistence";
+import { turnContext } from "./turn-context";
 import { appendToolText, toolInput, toolText } from "./v2-tool-results";
 import {
   createSessionRoles,
+  enforceRoleGuard,
   gateTaskOutput,
-  guardReason,
   sessionLookupFrom,
 } from "./worker-hooks";
 
@@ -75,6 +76,8 @@ type SessionState = {
   voiceAnchor: VoiceAnchorState;
   /** True after the first developer turn for this session. */
   bootDone: boolean;
+  /** A developer prompt was admitted and not yet retrieved against. */
+  pendingRetrieval: boolean;
   /**
    * Anchor chosen by prompt admission (per developer turn) for the next
    * context round to inject and clear. Advancing per-turn but injecting
@@ -99,6 +102,7 @@ const getSession = (
     s = {
       voiceAnchor: createSessionVoiceAnchor(sessionId, libSize),
       bootDone: false,
+      pendingRetrieval: false,
       pendingAnchor: null,
       pendingNudges: [],
     };
@@ -192,14 +196,9 @@ export const MimirPlugin = Plugin.define({
     // Session → worker role; active tool agents are supplied by V2 hook events.
     const sessionRoles = createSessionRoles(sessionLookupFrom(ctx));
 
-    const anchorIntervalEnv = process.env.MIMIR_ANCHOR_INTERVAL;
-    const anchorInterval = anchorIntervalEnv
-      ? Number.parseInt(anchorIntervalEnv, 10)
-      : 5;
-    const ANCHOR_INTERVAL =
-      Number.isFinite(anchorInterval) && anchorInterval > 0
-        ? anchorInterval
-        : 5;
+    const ANCHOR_INTERVAL = anchorIntervalFrom(
+      process.env.MIMIR_ANCHOR_INTERVAL,
+    );
 
     // V2 tool transforms replay synchronously; store setup stays outside them.
     const tools = {
@@ -208,8 +207,12 @@ export const MimirPlugin = Plugin.define({
       ...cartographerTools(projectRoot),
       mimir_install: installTool(),
       mimir_hygiene: hygieneTool(),
-      mimir_delegate: delegateTool(directory),
-      mimir_review_prompt: reviewPromptTool(directory),
+      mimir_delegate: delegateTool(directory, projectRoot),
+      mimir_review_prompt: reviewPromptTool(
+        directory,
+        sessionRoles.coordinatorSession,
+        projectRoot,
+      ),
     };
     await ctx.tool.transform((editor) => {
       for (const [name, definition] of Object.entries(tools))
@@ -246,6 +249,7 @@ export const MimirPlugin = Plugin.define({
         ANCHOR_INTERVAL,
       );
       s.voiceAnchor = step.next;
+      s.pendingRetrieval = true;
       if (step.inject) s.pendingAnchor = step.anchor;
     });
 
@@ -258,22 +262,18 @@ export const MimirPlugin = Plugin.define({
       // once, on the session's first turn), then any pending voice anchor.
       const blocks: string[] = [];
 
-      if (!s.bootDone) {
-        s.bootDone = true;
-        // assembleBootContext reads the user-memory store and the local
-        // org replica (MIM-86), returning a <boot_context> XML block
-        // ready for injection.
-        const boot = await assembleBootContext({
-          promptText: extractLastUserPrompt(output.messages),
-          projectPath: projectRoot,
-          config,
-          userMemoryStore,
-        }).catch((err) => {
-          log.error("assembleBootContext threw", { error: errMessage(err) });
-          return null;
-        });
-        if (boot) blocks.push(boot);
-      }
+      // Boot context on the first request, a retrieval against each later
+      // prompt: both read the user-memory store and the local replica.
+      const memory = await turnContext(s, {
+        promptText: extractLastUserPrompt(output.messages),
+        projectPath: projectRoot,
+        config,
+        userMemoryStore,
+      }).catch((err) => {
+        log.error("turn context threw", { error: errMessage(err) });
+        return null;
+      });
+      if (memory) blocks.push(memory);
 
       if (s.pendingAnchor) {
         blocks.push(formatAnchor(s.pendingAnchor));
@@ -297,7 +297,7 @@ export const MimirPlugin = Plugin.define({
       // coordinator's from the shared state file, secret reads for
       // everyone. Throwing is the plugin's only deny.
       for (const call of calls) {
-        const guard = await guardReason(
+        await enforceRoleGuard(
           sessionRoles,
           { ...input, tool: call.toolName },
           {
@@ -305,16 +305,7 @@ export const MimirPlugin = Plugin.define({
             filePath: call.toolInput.file_path ?? call.toolInput.path,
           },
           projectPath,
-        ).catch((err) => {
-          log.error("role guard crashed — allowing the call", {
-            error: errMessage(err),
-          });
-          return null;
-        });
-        if (guard) {
-          log.info("role guard denied", { tool: input.tool });
-          throw new Error(guard);
-        }
+        );
       }
       const loaded = await loadRules(projectPath).catch((err) => {
         log.error("loadRules failed", { error: errMessage(err) });
@@ -378,13 +369,14 @@ export const MimirPlugin = Plugin.define({
       fileContextCaches.set(event.sessionID, fileContextCache);
       // Verify gate on a finished worker: OpenCode can't block a child's
       // stop, so the verdict is appended to the `task` output the
-      // coordinator reads. A crash lets the output through untouched.
+      // coordinator reads. A crash must not turn an unverified claim into done.
       const gated = await gateTaskOutput(input, output, projectRoot).catch(
         (err) => {
-          log.error("verify gate crashed — output left as is", {
+          log.error("verify gate crashed — blocking hand-back", {
             error: errMessage(err),
           });
-          return null;
+          output.output += `\n\nVerify gate blocked: verification failed: ${errMessage(err)}\nSTATUS: blocked`;
+          return "block";
         },
       );
       if (gated) log.info("verify gate", { kind: gated });
@@ -426,7 +418,7 @@ export const MimirPlugin = Plugin.define({
     await ctx.session.hook("compaction", async (input) => {
       appendSystem(input);
       if (await sessionRoles.isChild(input.sessionID)) return;
-      await persistSessionTranscript(
+      await distillBeforeCompaction(
         input.sessionID,
         projectRoot,
         config,

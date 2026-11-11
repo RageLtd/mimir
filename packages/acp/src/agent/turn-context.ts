@@ -2,17 +2,23 @@
  * Turn-context assembly helpers for the local agent loop (MIM-89).
  *
  * Owns the pieces prompt-server composes before invoking the backend:
- * the synthetic context-injection pair (local successor to the server's
+ * the per-prompt replica retrieval, the synthetic context-injection pair
+ * (local successor to the server's
  * buildContextInjection) and the local TodoWrite tool definition + input
  * parsing for plan-panel rendering.
  */
 
+import {
+  type EmbedQuery,
+  retrieveLocalContext,
+} from "@mimir/plugin-core/brain/retrieve";
 import { toProjectRelative } from "@mimir/plugin-core/project";
 import {
   formatScopedRules,
   type ProjectRulesEntry,
   scopedRulesFor,
 } from "@mimir/plugin-core/rules";
+import type { OrgReplica } from "@mimir/plugin-core/store/org-replica";
 import type { ToolDefinition } from "@mimir/plugin-core/tools/user-memory";
 import type { ChatMessage } from "./types";
 
@@ -93,6 +99,33 @@ export const parseTodos = (v: unknown) => {
     const entry = parseTodoEntry(t);
     return entry ? [entry] : [];
   });
+};
+
+type RetrievalSession = {
+  readonly projectId: string | null;
+  bootSequenceDone: boolean;
+};
+
+/**
+ * One prompt's retrieval from the local replica. The session's first
+ * prompt (boot sequence not yet done) also gets the active project's
+ * newest summary, near the prompt or not; later prompts get only what is
+ * near them. Marks the boot sequence done once retrieval succeeds, so a
+ * failed first retrieval is retried on the next prompt.
+ */
+export const retrieveTurnContext = async (
+  replica: OrgReplica,
+  session: RetrievalSession,
+  promptText: string,
+  embedQuery: EmbedQuery,
+) => {
+  const result = await retrieveLocalContext(replica, promptText, {
+    projectId: session.projectId ?? undefined,
+    embedQuery,
+    sessionStart: !session.bootSequenceDone,
+  });
+  session.bootSequenceDone = true;
+  return result;
 };
 
 /**

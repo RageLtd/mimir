@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { toProjectRelative } from "./paths";
+import { isInsideProject, toProjectRelative } from "./paths";
 
 describe("toProjectRelative", () => {
   test("collapses an absolute path inside the project root to relative", () => {
@@ -32,5 +32,33 @@ describe("toProjectRelative", () => {
     expect(toProjectRelative("/repo", "/repo/src/project/paths.ts")).toBe(
       "src/project/paths.ts",
     );
+  });
+});
+
+describe("isInsideProject", () => {
+  const ROOT = "/work/repo";
+
+  test("accepts an absolute path inside the root", () => {
+    expect(isInsideProject(ROOT, "/work/repo/packages/x/a.ts")).toBe(true);
+  });
+
+  test("accepts a relative path, resolved against the root", () => {
+    expect(isInsideProject(ROOT, "packages/x/a.ts")).toBe(true);
+  });
+
+  test("accepts the root itself", () => {
+    expect(isInsideProject(ROOT, ROOT)).toBe(true);
+  });
+
+  test("rejects a sibling that shares the root as a string prefix", () => {
+    expect(isInsideProject(ROOT, "/work/repo-other/a.ts")).toBe(false);
+  });
+
+  test("rejects a path that escapes the root through ..", () => {
+    expect(isInsideProject(ROOT, "/work/repo/../etc/x")).toBe(false);
+  });
+
+  test("accepts a file at the root whose name starts with two dots", () => {
+    expect(isInsideProject(ROOT, "/work/repo/..hidden")).toBe(true);
   });
 });

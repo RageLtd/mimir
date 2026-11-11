@@ -89,6 +89,72 @@ const runner =
   };
 
 describe("runVerify", () => {
+  test("task base verifies committed tests plus dirty implementation, and next task cannot borrow coverage", async () => {
+    const root = await seedRepo();
+    await git(root, "checkout", "-q", "-b", "integration");
+    const base = await git(root, "rev-parse", "HEAD");
+    await write(
+      root,
+      "add_test.go",
+      'package x\nimport "testing"\nfunc TestAddZero(t *testing.T) { if Add(0,0) != 0 { t.Fatal("bad") } }\n',
+    );
+    await git(root, "add", ".");
+    await git(root, "commit", "-q", "-m", "red tests");
+    await write(
+      root,
+      "add.go",
+      "package x\nfunc Add(a, b int) int { return a + b + 0 }\n",
+    );
+    const options = {
+      worktree: root,
+      base,
+      lastMessage: "STATUS: done",
+      agentId: "task-base",
+      run: runner({}),
+    };
+    const first = await runVerify(options);
+    expect(first.kind).toBe("pass");
+    if (first.kind === "pass") expect(first.report).toContain("M add_test.go");
+    await git(root, "add", ".");
+    await git(root, "commit", "-q", "-m", "implementation");
+    const nextBase = await git(root, "rev-parse", "HEAD");
+    await write(
+      root,
+      "add.go",
+      "package x\nfunc Add(a, b int) int { return a + b + 1 }\n",
+    );
+    const next = await runVerify({ ...options, base: nextBase });
+    expect(next.kind).toBe("block");
+    if (next.kind === "block")
+      expect(next.reason).toContain("No test coverage");
+  });
+
+  test("invalid task base and failed explicit-base diff block before toolchains", async () => {
+    const root = await seedRepo();
+    const base = await git(root, "rev-parse", "HEAD");
+    const seen: string[] = [];
+    const pass = runner({}, seen);
+    const failedDiff: CommandRunner = async (argv, cwd, timeout) =>
+      argv[0] === "git" && argv[1] === "diff"
+        ? { code: 1, stdout: "", stderr: "diff unavailable", timedOut: false }
+        : pass(argv, cwd, timeout);
+    for (const options of [
+      { base: "0".repeat(40), run: pass },
+      { base, run: failedDiff },
+    ]) {
+      const result = await runVerify({
+        worktree: root,
+        lastMessage: "STATUS: done",
+        agentId: "invalid-base",
+        ...options,
+      });
+      expect(result.kind).toBe("block");
+      if (result.kind === "block")
+        expect(result.reason).toContain("Change collection failed");
+    }
+    expect(seen).toEqual([]);
+  });
+
   test("STATUS other than done → skip, nothing runs", async () => {
     const root = await seedRepo();
     const seen: string[] = [];

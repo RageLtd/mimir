@@ -1,9 +1,10 @@
 #!/bin/sh
 #
 # ensure-binary.sh — fetch a released Mimir plugin binary from a GitHub
-# Release and make it runnable on this machine. Invoked by the plugin
-# wrappers before launch and by the install flows, so the live binary at
-# ~/.local/bin tracks the latest released version of its own package.
+# Release and make it runnable on this machine. A plugin and its binary are
+# released under one tag, so a plugin that knows its own version asks for
+# exactly that binary (the cc hooks module does, at every session start);
+# the install flows and a wrapper with no binary yet ask for the latest.
 #
 # CANONICAL SOURCE: packages/plugin-core/scripts/ensure-binary.sh.
 # The copies at packages/{cc-plugin,codex-plugin}/scripts/ensure-binary.sh
@@ -11,9 +12,11 @@
 # checkout must be self-contained, and neither contains plugin-core.
 # Edit here, then re-copy the mirrors.
 #
-# Usage: ensure-binary.sh [flavor]
+# Usage: ensure-binary.sh [flavor] [version]
 #   cc (default) — mimir-cc, tracks cc-plugin/v* releases
 #   codex        — mimir-codex-bin, tracks codex-plugin/v* releases
+#   version      — X.Y.Z: fetch that release, not the latest. Already
+#                  installed is a local check that asks GitHub nothing.
 #
 # RageLtd/mimir is PRIVATE, so release assets require auth. We download with
 # `gh` (uses the caller's own gh auth — works for any repo collaborator) and
@@ -103,7 +106,18 @@ latest_tag() {
   fi
 }
 
-LATEST_TAG="$(latest_tag || true)"
+PINNED_VERSION="${2:-}"
+if [ -n "${PINNED_VERSION}" ]; then
+  case "${PINNED_VERSION}" in
+    *[!0-9.]*|.*|*.|*..*)
+      echo "[mimir] Not a version: ${PINNED_VERSION} (expected X.Y.Z)" >&2
+      exit 1
+      ;;
+  esac
+  LATEST_TAG="${TAG_PREFIX}v${PINNED_VERSION}"
+else
+  LATEST_TAG="$(latest_tag || true)"
+fi
 
 # Offline / auth failure: keep a working binary if we already have one.
 if [ -z "${LATEST_TAG}" ]; then
@@ -127,12 +141,18 @@ fi
 echo "[mimir] Fetching ${BINARY_NAME} ${LATEST_TAG} (${PLATFORM})..." >&2
 mkdir -p "${INSTALL_DIR}"
 
+# Downloaded beside the binary and moved over it: a session may be running
+# the installed one (its MCP servers are), and writing that file in place
+# kills them. A rename leaves the running copy intact until it exits.
+FETCHED="${BINARY_PATH}.fetch.$$"
+trap 'rm -f "${FETCHED}"' EXIT
+
 # --- download ----------------------------------------------------------------
 if have gh; then
   gh release download "${LATEST_TAG}" \
     --repo "${REPO}" \
     --pattern "${ASSET_NAME}" \
-    --output "${BINARY_PATH}" \
+    --output "${FETCHED}" \
     --clobber
 elif [ -n "${GITHUB_TOKEN:-}" ] && have curl; then
   # Private-asset download needs the asset's API URL + an octet-stream Accept.
@@ -149,13 +169,13 @@ elif [ -n "${GITHUB_TOKEN:-}" ] && have curl; then
   curl -fL \
     -H "Authorization: Bearer ${GITHUB_TOKEN}" \
     -H "Accept: application/octet-stream" \
-    "${ASSET_API_URL}" -o "${BINARY_PATH}"
+    "${ASSET_API_URL}" -o "${FETCHED}"
 else
   echo "[mimir] Need either gh (recommended) or curl + GITHUB_TOKEN to download." >&2
   exit 1
 fi
 
-chmod +x "${BINARY_PATH}"
+chmod +x "${FETCHED}"
 
 # --- macOS: re-sign to clear the broken Bun adhoc signature ------------------
 # `bun build --compile` writes a signature that fails codesign --verify, and
@@ -163,8 +183,10 @@ chmod +x "${BINARY_PATH}"
 # re-sign produces a valid signature. CI never signs the darwin asset, so this
 # client-side step is what makes it runnable.
 if [ "${OS}" = "Darwin" ]; then
-  codesign --force --sign - "${BINARY_PATH}" 2>/dev/null || true
+  codesign --force --sign - "${FETCHED}" 2>/dev/null || true
 fi
+
+mv -f "${FETCHED}" "${BINARY_PATH}"
 
 # --- record version ----------------------------------------------------------
 mkdir -p "$(dirname "${VERSION_FILE}")"

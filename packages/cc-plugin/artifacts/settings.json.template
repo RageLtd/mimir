@@ -4,9 +4,17 @@
     "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "3",
     "CLAUDE_CODE_SUBAGENT_MODEL": "opus"
   },
-  "disableAgentView": true,
   "worktree": {
     "baseRef": "head"
+  },
+  "extraKnownMarketplaces": {
+    "rageltd": {
+      "source": {
+        "source": "github",
+        "repo": "RageLtd/claude-plugins"
+      },
+      "autoUpdate": true
+    }
   },
   "permissions": {
     "deny": [
@@ -25,6 +33,5 @@
       "Read(~/.npmrc)",
       "Read(~/.pypirc)"
     ]
-  },
-  "outputStyle": "default"
+  }
 }

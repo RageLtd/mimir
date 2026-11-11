@@ -6,9 +6,10 @@
  * (extractionConfig), and stores the results via the replica's
  * embed→dedupe→store path.
  *
- * Watermark semantics: advance on success OR deliberate skip (gates),
- * keep on extraction transport failure so the next turn retries the same
- * delta. Unconfigured extraction advances too — otherwise the delta grows
+ * Watermark semantics: advance on success; keep on extraction transport
+ * failure so the next turn retries the same delta, and on a gate skip so
+ * the next turn carries it (a turn alone rarely passes the two-user-turn
+ * gate). Unconfigured extraction advances — otherwise the delta grows
  * unboundedly toward an endpoint that will never exist.
  *
  * Exit code is always 0. Returning non-zero from Stop would prevent
@@ -24,7 +25,7 @@ import {
   createOrgReplica,
   defaultOrgReplicaPath,
 } from "@mimir/plugin-core/store/org-replica";
-import { syncFromSharedConfig } from "@mimir/plugin-core/sync/cli";
+import { syncAfterDistill } from "@mimir/plugin-core/sync/after-distill";
 import { storeTyped } from "@mimir/plugin-core/tools/org-memory";
 import { readHookInput } from "./hook-input";
 import { createLogger } from "./logger";
@@ -61,6 +62,32 @@ export const runPersistHook = async () => {
     return 0;
   }
 
+  const [persistErr] = await attempt(() =>
+    persistTurn({ sessionId, transcriptPath, cwd }),
+  );
+  if (persistErr) {
+    log.error("stop hook failed — turn not distilled", {
+      sessionId,
+      transcriptPath,
+      error: persistErr.message,
+    });
+  }
+  return 0;
+};
+
+/**
+ * Distil the delta since the watermark. Rejects on a failed rollout read
+ * or state write; runPersistHook logs it.
+ */
+const persistTurn = async ({
+  sessionId,
+  transcriptPath,
+  cwd,
+}: {
+  readonly sessionId: string;
+  readonly transcriptPath: string;
+  readonly cwd: string;
+}) => {
   const watermark = await readWatermark(sessionId);
   const { messages, newOffset } = await readDelta(transcriptPath, watermark);
 
@@ -69,7 +96,7 @@ export const runPersistHook = async () => {
     // don't re-scan them next turn.
     if (newOffset > watermark) await writeWatermark(sessionId, newOffset);
     log.debug("no new messages in delta", { sessionId, watermark, newOffset });
-    return 0;
+    return;
   }
 
   const extraction = await extractionConfig();
@@ -81,7 +108,7 @@ export const runPersistHook = async () => {
       "extraction unconfigured (MIMIR_EXTRACTION_BASE_URL / extractionBaseUrl) — turn not distilled",
       { sessionId, messages: messages.length },
     );
-    return 0;
+    return;
   }
 
   const outcome = await extractFromConversation(extraction, messages);
@@ -91,13 +118,17 @@ export const runPersistHook = async () => {
       messages: messages.length,
       model: extraction.model,
     });
-    return 0;
+    return;
   }
 
   if (outcome.skipped) {
-    await writeWatermark(sessionId, newOffset);
-    log.debug("extraction skipped", { sessionId, reason: outcome.skipped });
-    return 0;
+    // Too little to distil yet. A turn is one user message, so advancing
+    // here would drop every ordinary turn: the next turn carries it.
+    log.debug("extraction skipped — the next turn carries this delta", {
+      sessionId,
+      reason: outcome.skipped,
+    });
+    return;
   }
 
   // Project id for memory attribution — disk-cached after first resolution.
@@ -147,25 +178,5 @@ export const runPersistHook = async () => {
     model: extraction.model,
   });
 
-  // Push leg (MIM-88): ship freshly distilled memories through the blind
-  // sync relay. Bounded — the hook process exits after this; a missed
-  // deadline just leaves them dirty for the next boot/persist sync.
-  if (stored > 0) {
-    const SYNC_DEADLINE_MS = 10_000;
-    const [syncErr, synced] = await attempt(() =>
-      Promise.race([
-        syncFromSharedConfig(),
-        new Promise<{ status: "deadline" }>((resolve) =>
-          setTimeout(() => resolve({ status: "deadline" }), SYNC_DEADLINE_MS),
-        ),
-      ]),
-    );
-    if (syncErr) {
-      log.warn("post-distill sync failed", { error: syncErr.message });
-    } else {
-      log.info("post-distill sync", { ...synced });
-    }
-  }
-
-  return 0;
+  if (stored > 0) await syncAfterDistill(log);
 };

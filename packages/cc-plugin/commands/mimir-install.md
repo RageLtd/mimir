@@ -1,10 +1,10 @@
 ---
-description: Install Mimir for Claude Code — sets up ~/.mimir/, the wrapper script, the Mimir output style, and the binary behind the plugin's hooks and MCP servers
+description: Install Mimir for Claude Code — sets up ~/.mimir/ (persona included), the wrapper script, and the binary behind the plugin's hooks and MCP servers
 argument-hint: "[server-url]"
 allowed-tools: ["Bash", "AskUserQuestion"]
 ---
 
-You are installing the Mimir runtime for Claude Code. This is a one-shot setup that lands a wrapper script, MCP config, hook settings, runtime config, and the persona prompt onto the user's machine.
+You are installing the Mimir runtime for Claude Code. This is a one-shot setup that lands the `mimir-cc` binary, a wrapper script and its settings file, runtime config, and the persona prompt onto the user's machine. Hooks and MCP servers are not installed here: they ship in the plugin itself.
 
 Carry out the following steps in order. Do not skip steps. Do not improvise alternatives.
 
@@ -97,7 +97,7 @@ Otherwise call `AskUserQuestion`:
 - question: `Enable Mimir for this project now? This is how the Claude desktop app (and a plain `claude`) runs as Mimir — the plugin's hooks, MCP servers and persona load only in projects where it is enabled.`
 - header: `Enable here`
 - options:
-  - label: `Yes — enable this project`, description: `Writes enabledPlugins + the Mimir output style into this project's .claude/settings.local.json (per-user, gitignored)`
+  - label: `Yes — enable this project`, description: `Writes enabledPlugins into this project's .claude/settings.local.json (per-user, gitignored)`
   - label: `No — I'll use the mimir wrapper`, description: `Terminal only; nothing is written to this project`
 
 If the user picks **Yes**, run:
@@ -115,6 +115,6 @@ Tell the user:
 > Mimir is installed.
 >
 > - **Claude desktop app / plain `claude`:** open a new session in any project where you ran `mimir-cc enable`. To enable another project later, run `~/.local/bin/mimir-cc enable` from inside it (any session's Bash will do — the plugin's commands aren't loaded in projects where it's disabled); `mimir-cc disable` reverses it.
-> - **Terminal:** run `mimir` for a session with the full persona prompt and `/switch-model`. Make sure `~/.local/bin` is on your PATH.
+> - **Terminal:** run `mimir` for a session with the wrapper's settings file applied. Make sure `~/.local/bin` is on your PATH.
 >
 > Hook logs land at `~/.mimir/logs/mimir-cc.log` — `tail -f` it if something misbehaves.

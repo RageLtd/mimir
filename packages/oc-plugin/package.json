@@ -11,8 +11,8 @@
   "module": "dist/mimir-oc.ts",
   "devDependencies": {
     "@mimir/plugin-core": "workspace:*",
-    "@opencode/ai": "^2.0.24",
-    "@opencode/plugin": "^2.0.24"
+    "@opencode/ai": "^2.2.7",
+    "@opencode/plugin": "^2.2.7"
   },
   "exports": {
     ".": "./dist/mimir-oc.ts",

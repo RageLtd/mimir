@@ -35,6 +35,23 @@ afterAll(async () => {
 });
 
 describe("coordinator state", () => {
+  test("task base round-trips across readers; malformed task state fails closed", async () => {
+    const state = {
+      active: true,
+      planFile: "/plan",
+      task: { base: "a".repeat(40), worktree: "/repo" },
+    };
+    await writeCoordinatorState("task", state);
+    expect(await readCoordinatorState("task")).toEqual(state);
+    await Bun.write(
+      coordinatorStatePath("task"),
+      JSON.stringify({ ...state, task: { base: 123 } }),
+    );
+    await expect(readCoordinatorState("task")).rejects.toThrow(
+      "Invalid coordinator task state",
+    );
+  });
+
   test("absent → null; write → read round-trips; clear → null", async () => {
     expect(await readCoordinatorState("s1")).toBeNull();
     await writeCoordinatorState("s1", { active: true, planFile: "/p/plan.md" });

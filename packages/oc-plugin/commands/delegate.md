@@ -1,5 +1,5 @@
 ---
-description: Run a task through the autonomous-worker loop — plan, delegate to mimir-test / mimir-impl / mimir-review, gate every hand-back, hand the developer a branch
+description: Run a change through the autonomous-worker loop — the default for any non-trivial change a test can hold (new behaviour, a reproducible bug, a refactor with a contract). Plan, red test (mimir-test), green implementation (mimir-impl), cold review (mimir-review), verify gate on every hand-back; hands the developer a branch. Not for one-line fixes, config or docs edits, or investigation.
 ---
 
 You are the coordinator for this task. Workers do the implementation; you decompose, dispatch, read gate reports, and integrate. The rules below are the loop. The mechanical parts — the role guard, the verify gate, the loop guard — run whether or not you follow them; following them is how you avoid fighting them.
@@ -17,11 +17,13 @@ Worker models on OpenCode are baked into the agent files at install time — `~/
 
 On OpenCode every worker runs in **this** directory — there is no worktree isolation — so run workers for one task **strictly one at a time**, and commit each accepted result before spawning the next.
 
+At the **beginning of EACH task**, before dispatching or resuming any worker for it, call `mimir_delegate` with `action: "task"`. The host captures the task-start Git commit; verification and generated reviews include committed red tests plus implementation changes since that boundary. Do this once per task, even when reusing a worker from a previous task. **Do not call it again for retries, role assistance, or review fixes**, even when those use fresh workers. Repeated `action: "start"` for the same plan preserves the current boundary; `status` does not change it. A worker cannot be dispatched without a task boundary.
+
 1. **`mimir-test`** — `task` with `subagent_type: "mimir-test"`. Prompt: the task title, the exact behaviour to test, which test file(s) to touch, and "write the test red-first; do not touch implementation". The task result carries the gate report appended (Biome and the sanity rules ran; typecheck and the test suite are skipped for this role, since a red test may not even compile yet). Commit as `test(<package>): <task title>`.
-2. **`mimir-impl`** — `subagent_type: "mimir-impl"`. Prompt: the task title, the failing test(s) by name, the files in scope, and nothing about *how*. The result must end with `✅ Verify gate passed` — typecheck, tests, checks, `Test functions: N → M`. **Never accept a `done` without that report. Read the added tests before accepting.** Run step 3 **before** committing — the reviewer reads the uncommitted diff.
+2. **`mimir-impl`** — `subagent_type: "mimir-impl"`. Prompt: the task title, the failing test(s) by name, the files in scope, and nothing about *how*. The result must end with `✅ Verify gate passed` — typecheck, tests, checks, `Test functions: N → M`. **Never accept a `done` without that report. Read the added tests before accepting.** Run step 3 **before** committing.
 3. **`mimir-review`** — `task` with `subagent_type: "mimir-review"` and exactly this prompt, nothing else:
 
-   > Review the uncommitted change in this directory: run `git diff` (and `git status --short` for new files) and read the files it touches. Task title: "<task title>". You are reviewing cold — judge what is in front of you; do not ask what the plan was. Report findings ordered by severity (blocker, should-fix, nit), each with file and line, what is wrong and why it matters. If there is nothing to report, say "No findings." Do not edit anything. End with exactly one final line: STATUS: done
+   > Call `mimir_review_prompt` with title: "<task title>" and review the generated task diff and files, including committed red tests. You are reviewing cold — judge what is in front of you; do not ask what the plan was. Report findings ordered by severity (blocker, should-fix, nit), each with file and line, what is wrong and why it matters. If there is nothing to report, say "No findings." Do not edit anything. End with exactly one final line: STATUS: done
 
    You write nothing but the title. Blockers and should-fixes go back to `mimir-impl` by resuming it (`task` with its `task_id`) with the findings as the instruction. Nits you note in the plan file. Then commit as `feat(<package>): <task title>` or `fix(<package>): <task title>`; review fixes as `refactor(<package>): <task title> — review follow-up`. Subjects are conventional because the release pipeline versions from them.
 

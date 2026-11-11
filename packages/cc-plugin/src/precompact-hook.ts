@@ -1,57 +1,343 @@
 /**
- * PreCompact hook — belt-and-suspenders distillation before CC discards
+ * `mimir-cc precompact` — run by the hooks module on `session.compact`
+ * with the main conversation's whole window (`window`) and its undistilled
+ * tail (`messages`): distillation before the engine discards them
  * (MIM-86: fully local, nothing ships to the server).
  *
- * Fires when CC is about to compact (/compact or auto-trigger). Whatever
- * transcript delta the Stop hook hasn't yet distilled gets two treatments
- * before CC's local history is summarized away:
- *   1. A type:"summary" replica memory (the narrative record boot-context
- *      reads by recency) — this is the hook's primary purpose.
- *   2. Best-effort fact extraction, same as the Stop hook would have run.
+ * Fires when the engine is about to compact (/compact or auto-trigger).
+ * Before the engine's history is summarized away it gets two treatments:
+ *   1. A type:"summary" replica memory of the window — the narrative
+ *      record of the conversation as it stood, and this run's primary
+ *      purpose. A window over the summary input cap is summarised from an
+ *      opening slice plus the newest messages, the middle elided
+ *      (brain/summarize.ts). A payload without `window` (an older plugin)
+ *      summarises the tail instead.
+ *   2. Best-effort fact extraction over the tail alone, same as persist
+ *      would have run — the rest of the window persist already distilled.
+ * Per-turn persist keeps the tail near-empty, so an empty tail with a
+ * non-empty window still runs; only when both are empty is there nothing
+ * to do.
  *
- * Watermark advances when the SUMMARY succeeds; extraction failure only
- * logs (retrying would re-store a near-identical summary, which is worse
- * than losing one window's facts).
+ * Where the completions run (MIM-134): BYOK in one run when an extraction
+ * endpoint is configured; otherwise, when the module says it can run
+ * completions (`host_completions`), two-phase — phase one answers
+ * `{ advance: false, requests: { summary?, facts? } }` (each only when its
+ * gate passed), the hooks module completes them on the session's model,
+ * and phase two stores what came back. With neither, the window advances
+ * undistilled, with a warning. `precompactPlan` is the pure
+ * decision; the runner owns the side effects.
+ *
+ * Answers `{ advance: true }` when the SUMMARY succeeds (or was gated
+ * out); extraction failure only logs (retrying would re-store a
+ * near-identical summary, which is worse than losing one window's facts).
+ * The module re-anchors on the compacted conversation afterwards either way.
  *
  * Never blocks compaction — exit 0 unconditionally.
  */
 
+import type { ModelMessage } from "@ai-sdk/provider-utils";
 import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
-import { extractFromConversation } from "@mimir/plugin-core/brain/extract";
-import { summarizeToReplica } from "@mimir/plugin-core/brain/summarize";
+import {
+  type ExtractionConfig,
+  extractFromConversation,
+  parseExtraction,
+  prepareExtraction,
+} from "@mimir/plugin-core/brain/extract";
+import {
+  prepareSummary,
+  storeSummary,
+  summarizeToReplica,
+} from "@mimir/plugin-core/brain/summarize";
 import { getOrResolveProjectId } from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
 import {
   createOrgReplica,
   defaultOrgReplicaPath,
 } from "@mimir/plugin-core/store/org-replica";
+import { syncAfterDistill } from "@mimir/plugin-core/sync/after-distill";
 import { storeTyped } from "@mimir/plugin-core/tools/org-memory";
 import { extractionConfig, readConfig } from "./config";
+import {
+  answer,
+  type Completions,
+  completionText,
+  isStalePayload,
+  readDistillInput,
+  SESSION_MODEL_EXTRACTION_CHARS,
+  toModelMessages,
+} from "./conversation";
 import { createLogger } from "./logger";
-import { readDelta, readWatermark, writeWatermark } from "./transcript-delta";
 
 const log = createLogger("precompact-hook");
 
-type HookInput = {
-  readonly session_id?: string;
-  readonly hook_event_name?: string;
-  readonly transcript_path?: string;
-  readonly cwd?: string;
-  readonly trigger?: "manual" | "auto";
+/** The request keys precompact asks the hooks module to complete. */
+const SUMMARY = "summary";
+const FACTS = "facts";
+/** Log label for completions the hooks module ran on the session's model. */
+const SESSION_MODEL = "session";
+
+const assertNever = (value: never) => {
+  throw new Error(`Unhandled precompact plan: ${JSON.stringify(value)}`);
 };
 
-const readStdin = async () => {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of Bun.stdin.stream()) {
-    chunks.push(chunk);
+/**
+ * Phase two's summary: null when gated out (fine, no reason) or failed
+ * (not fine, with the reason).
+ */
+const summaryOutcome = (gated: boolean, completions: Completions) => {
+  if (gated) return { summary: null, ok: true, reason: null };
+  const completion = completionText(completions, SUMMARY);
+  if (!completion.ok) {
+    return { summary: null, ok: false, reason: completion.reason };
   }
-  return Buffer.concat(chunks).toString("utf8");
+  // A blank summary is a failure, as completeChat's null-on-empty makes it
+  // on the BYOK path — storeSummary would store nothing.
+  if (!completion.text.trim()) {
+    return {
+      summary: null,
+      ok: false,
+      reason: `${SUMMARY} completion is blank`,
+    };
+  }
+  return { summary: completion.text, ok: true, reason: null };
 };
 
-const safeParseHookInput = async (raw: string) => {
-  if (raw.trim().length === 0) return {} as HookInput;
-  const [err, parsed] = await attempt(async () => JSON.parse(raw) as HookInput);
-  return err ? ({} as HookInput) : parsed;
+/** Phase two's facts: null when gated out (no reason), failed, or unparseable. */
+const factsOutcome = (gated: boolean, completions: Completions) => {
+  if (gated) return { memories: null, reason: null };
+  const completion = completionText(completions, FACTS);
+  if (!completion.ok) return { memories: null, reason: completion.reason };
+  const memories = parseExtraction(completion.text);
+  return memories === null
+    ? {
+        memories: null,
+        reason: `${FACTS} completion is not a JSON string array`,
+      }
+    : { memories, reason: null };
+};
+
+/**
+ * What this run does with the window. An empty delta and window is
+ * already caught up; BYOK wins whenever configured; a module that cannot
+ * run completions leaves it unconfigured; otherwise phase one settles
+ * when both gates skip or requests what passed, and phase two stores what
+ * came back — advancing unless the summary it asked for failed. The
+ * summary gate reads the window (the delta when there is none), the facts
+ * gate the delta alone.
+ */
+export const precompactPlan = (input: {
+  readonly messages: readonly ModelMessage[];
+  readonly window?: readonly ModelMessage[];
+  readonly completions?: Completions;
+  readonly extraction: ExtractionConfig | null;
+  readonly hostCompletions: boolean;
+}) => {
+  const window = input.window ?? input.messages;
+  if (input.messages.length === 0 && window.length === 0) {
+    return { kind: "caught-up" as const };
+  }
+  if (input.extraction) return { kind: "byok" as const };
+  if (!input.hostCompletions) return { kind: "unconfigured" as const };
+
+  const summary = prepareSummary(window);
+  const facts = prepareExtraction(input.messages, {
+    maxChars: SESSION_MODEL_EXTRACTION_CHARS,
+    closing: true,
+  });
+  if ("skipped" in summary && "skipped" in facts) {
+    return {
+      kind: "settle" as const,
+      advance: true as const,
+      reason: `${SUMMARY}: ${summary.skipped}; ${FACTS}: ${facts.skipped}`,
+    };
+  }
+
+  if (!input.completions) {
+    return {
+      kind: "request" as const,
+      requests: {
+        ...("request" in summary ? { [SUMMARY]: summary.request } : {}),
+        ...("request" in facts ? { [FACTS]: facts.request } : {}),
+      },
+    };
+  }
+
+  const summarised = summaryOutcome("skipped" in summary, input.completions);
+  const extracted = factsOutcome("skipped" in facts, input.completions);
+  return {
+    kind: "store" as const,
+    summary: summarised.summary,
+    memories: extracted.memories,
+    advance: summarised.ok,
+    reasons: [summarised.reason, extracted.reason].filter(
+      (reason) => reason !== null,
+    ),
+  };
+};
+
+type RunContext = {
+  readonly sessionId: string;
+  readonly cwd: string;
+  readonly trigger: string;
+  readonly messages: number;
+  readonly window: number;
+};
+
+/** The replica, embedder and project attribution every store path needs. */
+const openStore = async (cwd: string) => {
+  const config = await readConfig();
+  const projectId = config
+    ? await getOrResolveProjectId(config.serverUrl, cwd, config.apiKey).catch(
+        () => null,
+      )
+    : null;
+  const replica = createOrgReplica(
+    process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
+  );
+  return { projectId, replica, embedQuery: createEmbedQuery() };
+};
+
+/** Store extracted facts; returns how many were new. */
+const storeFacts = async (
+  store: Awaited<ReturnType<typeof openStore>>,
+  memories: readonly string[],
+) => {
+  let stored = 0;
+  for (const memory of memories) {
+    const [storeErr, result] = await attempt(() =>
+      storeTyped(store.replica, store.embedQuery, {
+        content: memory,
+        type: "fact",
+        ...(store.projectId ? { project: store.projectId } : {}),
+      }),
+    );
+    if (storeErr) {
+      log.warn("memory store failed", { error: storeErr.message });
+      continue;
+    }
+    if (result.stored) stored++;
+  }
+  return stored;
+};
+
+const runByok = async (
+  extraction: ExtractionConfig,
+  conversation: {
+    readonly messages: readonly ModelMessage[];
+    readonly window: readonly ModelMessage[];
+  },
+  ctx: RunContext,
+) => {
+  const store = await openStore(ctx.cwd);
+  const { messages, window } = conversation;
+
+  const summary = await summarizeToReplica({
+    config: extraction,
+    replica: store.replica,
+    messages: window,
+    embed: store.embedQuery,
+    projectId: store.projectId,
+  });
+
+  if (!summary.ok) {
+    store.replica.close();
+    answer(false);
+    log.error("precompact: summarization failed", {
+      sessionId: ctx.sessionId,
+      trigger: ctx.trigger,
+      messagesInDelta: ctx.messages,
+      messagesInWindow: ctx.window,
+      model: extraction.model,
+    });
+    return;
+  }
+
+  // Best-effort fact extraction over the delta alone — persist never saw
+  // this tail, so its facts would otherwise be lost with the context.
+  // Failure logs; the delta is settled regardless (see module doc for why).
+  let extracted = 0;
+  const outcome = await extractFromConversation(extraction, messages, {
+    closing: true,
+  });
+  if (outcome.ok && !outcome.skipped) {
+    extracted = await storeFacts(store, outcome.memories);
+  } else if (!outcome.ok) {
+    log.warn("precompact: fact extraction failed (summary still stored)", {
+      sessionId: ctx.sessionId,
+      trigger: ctx.trigger,
+    });
+  }
+
+  store.replica.close();
+  answer(true);
+
+  log.info("precompact: window distilled locally", {
+    sessionId: ctx.sessionId,
+    trigger: ctx.trigger,
+    project: ctx.cwd,
+    projectId: store.projectId,
+    messagesInDelta: ctx.messages,
+    messagesInWindow: ctx.window,
+    summaryId: summary.id,
+    summarySkipped: summary.skipped,
+    factsStored: extracted,
+    model: extraction.model,
+  });
+
+  if (summary.id !== null || extracted > 0) await syncAfterDistill(log);
+};
+
+const runStore = async (
+  plan: {
+    readonly summary: string | null;
+    readonly memories: string[] | null;
+    readonly advance: boolean;
+    readonly reasons: readonly string[];
+  },
+  ctx: RunContext,
+) => {
+  const store = await openStore(ctx.cwd);
+  const summaryId = plan.summary
+    ? await storeSummary({
+        replica: store.replica,
+        embed: store.embedQuery,
+        projectId: store.projectId,
+        text: plan.summary,
+      })
+    : null;
+  const extracted = plan.memories ? await storeFacts(store, plan.memories) : 0;
+  store.replica.close();
+  answer(plan.advance);
+
+  if (!plan.advance) {
+    log.error("precompact: summarization failed", {
+      sessionId: ctx.sessionId,
+      trigger: ctx.trigger,
+      messagesInDelta: ctx.messages,
+      messagesInWindow: ctx.window,
+      model: SESSION_MODEL,
+      factsStored: extracted,
+      reasons: plan.reasons,
+    });
+    return;
+  }
+  log.info("precompact: window distilled locally", {
+    sessionId: ctx.sessionId,
+    trigger: ctx.trigger,
+    project: ctx.cwd,
+    projectId: store.projectId,
+    messagesInDelta: ctx.messages,
+    messagesInWindow: ctx.window,
+    summaryId,
+    // null: the facts gate skipped, or the completion failed or did not
+    // parse — the plan settles either way (see module doc).
+    factsExtracted: plan.memories?.length ?? null,
+    factsStored: extracted,
+    model: SESSION_MODEL,
+    reasons: plan.reasons,
+  });
+
+  if (summaryId !== null || extracted > 0) await syncAfterDistill(log);
 };
 
 /**
@@ -62,115 +348,85 @@ const safeParseHookInput = async (raw: string) => {
 export const runPreCompactHook = async () => {
   if (process.env.MIMIR_ACTIVE !== "1") return 0;
 
-  const raw = await readStdin();
-  const input = await safeParseHookInput(raw);
-
+  const input = await readDistillInput();
   const sessionId = input.session_id;
-  const transcriptPath = input.transcript_path;
   const cwd = input.cwd ?? process.cwd();
   const trigger = input.trigger ?? "unknown";
 
-  if (!sessionId || !transcriptPath) {
-    log.debug("missing session_id or transcript_path — skipping", { trigger });
+  if (!sessionId) {
+    log.debug("no session_id in payload — skipping", { trigger });
     return 0;
   }
 
-  const watermark = await readWatermark(sessionId);
-  const { messages, newOffset } = await readDelta(transcriptPath, watermark);
-
-  if (messages.length === 0) {
-    if (newOffset > watermark) await writeWatermark(sessionId, newOffset);
-    log.info("precompact: nothing new to distill (Stop hook caught up)", {
-      sessionId,
-      trigger,
-      watermark,
-      newOffset,
-    });
+  if (isStalePayload(input)) {
+    // Nothing printed: a classic PreCompact hook reads stdout as its own.
+    log.warn(
+      "payload carries no messages — the installed plugin is older than this binary; window not distilled",
+      { sessionId, trigger },
+    );
     return 0;
   }
 
+  const messages = toModelMessages(input.messages ?? []);
+  // No window (an older plugin's payload): the delta stands in for it.
+  const window = input.window ? toModelMessages(input.window) : messages;
   const extraction = await extractionConfig();
-  if (!extraction) {
-    await writeWatermark(sessionId, newOffset);
-    log.warn("extraction unconfigured — precompact window not distilled", {
-      sessionId,
-      trigger,
-      messages: messages.length,
-    });
-    return 0;
-  }
-
-  const config = await readConfig();
-  const projectId = config
-    ? await getOrResolveProjectId(config.serverUrl, cwd, config.apiKey).catch(
-        () => null,
-      )
-    : null;
-
-  const replica = createOrgReplica(
-    process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
-  );
-  const embedQuery = createEmbedQuery();
-
-  const summary = await summarizeToReplica({
-    config: extraction,
-    replica,
-    messages,
-    embed: embedQuery,
-    projectId,
-  });
-
-  if (!summary.ok) {
-    replica.close();
-    log.error("precompact: summarization failed — keeping watermark", {
-      sessionId,
-      trigger,
-      messages: messages.length,
-      model: extraction.model,
-    });
-    return 0;
-  }
-
-  // Best-effort fact extraction over the same window — the Stop hook
-  // never saw this tail, so its facts would otherwise be lost with the
-  // transcript. Failure logs; the watermark advances regardless (see
-  // module doc for why).
-  let extracted = 0;
-  const outcome = await extractFromConversation(extraction, messages);
-  if (outcome.ok && !outcome.skipped) {
-    for (const memory of outcome.memories) {
-      const [storeErr, result] = await attempt(() =>
-        storeTyped(replica, embedQuery, {
-          content: memory,
-          type: "fact",
-          ...(projectId ? { project: projectId } : {}),
-        }),
-      );
-      if (!storeErr && result.stored) extracted++;
-    }
-  } else if (!outcome.ok) {
-    log.warn("precompact: fact extraction failed (summary still stored)", {
-      sessionId,
-      trigger,
-    });
-  }
-
-  replica.close();
-  await writeWatermark(sessionId, newOffset);
-
-  log.info("precompact: window distilled locally", {
+  const ctx = {
     sessionId,
+    cwd,
     trigger,
-    project: cwd,
-    projectId,
-    watermark,
-    newOffset,
-    messagesInDelta: messages.length,
-    summaryId: summary.id,
-    summarySkipped: summary.skipped,
-    factsStored: extracted,
-    model: extraction.model,
+    messages: messages.length,
+    window: window.length,
+  };
+  const plan = precompactPlan({
+    messages,
+    window,
+    extraction,
+    hostCompletions: input.host_completions === true,
+    ...(input.completions ? { completions: input.completions } : {}),
   });
 
-  return 0;
+  switch (plan.kind) {
+    case "caught-up":
+      answer(true);
+      log.info("precompact: nothing to distill (empty window)", {
+        sessionId,
+        trigger,
+      });
+      return 0;
+    case "byok":
+      // precompactPlan answers byok only when extraction is configured.
+      if (extraction) await runByok(extraction, { messages, window }, ctx);
+      return 0;
+    case "unconfigured":
+      answer(true);
+      log.warn("extraction unconfigured — precompact window not distilled", {
+        sessionId,
+        trigger,
+        messagesInDelta: ctx.messages,
+        messagesInWindow: ctx.window,
+      });
+      return 0;
+    case "settle":
+      answer(plan.advance);
+      log.info("precompact: window too small to distill", {
+        sessionId,
+        trigger,
+        reason: plan.reason,
+      });
+      return 0;
+    case "request":
+      answer(false, plan.requests);
+      log.debug("precompact: distillation handed to the session model", {
+        sessionId,
+        trigger,
+        requests: Object.keys(plan.requests),
+      });
+      return 0;
+    case "store":
+      await runStore(plan, ctx);
+      return 0;
+    default:
+      return assertNever(plan);
+  }
 };

@@ -1,166 +1,82 @@
 /**
- * Voice anchors — periodic persona refresh for Claude Code under Mimir.
+ * `mimir-cc voice-anchor --session <id> --nth <n>` — the n-th voice
+ * anchor of a session's rotation, printed as a `<voice_anchor>` block.
  *
- * Wired as a UserPromptSubmit hook by the installer. Reads the hook payload
- * from stdin, increments per-session turn count, and on a fixed cadence
- * prepends a `<voice_anchor>` block (a dialogue exchange from the system
- * prompt's voice library) to the developer's prompt.
- *
- * The pure parser/rotation/format logic lives in
- * `@mimir/plugin-core/voice-anchor`; this file is the CC-specific hook
- * glue (stdin/stdout protocol, MIMIR_ACTIVE gating, boot-context
- * integration on the first turn).
+ * The hooks module owns the turn counter (`$.state`) and the cadence;
+ * the binary owns the library (parsed from the installed persona) and
+ * the rotation: a per-session start offset (a hash of the session id,
+ * so short sessions don't all open on the same exchange) plus n, modulo
+ * the library. Deterministic, so the binary keeps no state. The pure
+ * parse/rotation/format logic lives in @mimir/plugin-core/voice-anchor.
  *
  * Anthropic models drift off the system-prompt persona as conversations
- * lengthen. The system prompt holds the primacy slot; the most recent user
- * message holds the recency slot. Voice anchors occupy the recency slot.
+ * lengthen. The system prompt holds the primacy slot; the most recent
+ * user message holds the recency slot. Voice anchors occupy the recency
+ * slot.
  */
 
 import { join } from "node:path";
+import { attempt } from "@mimir/plugin-core/result";
 import { errMessage, mimirHome } from "@mimir/plugin-core/util";
 import {
-  type VoiceAnchor as Anchor,
   createSessionVoiceAnchor,
   formatAnchor,
-  nextAnchor,
   parseVoiceAnchors,
-  type VoiceAnchorState,
+  type VoiceAnchor,
 } from "@mimir/plugin-core/voice-anchor";
-import { assembleBootContext } from "./boot-context";
 import { createLogger } from "./logger";
 
 const log = createLogger("voice-anchor");
 
-type HookInput = {
-  readonly session_id?: string;
-  readonly hook_event_name?: string;
-  readonly prompt?: string;
-  readonly cwd?: string;
-};
-
-const readStdin = async (): Promise<string> => {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of Bun.stdin.stream()) {
-    chunks.push(chunk);
+export const parseAnchorArgs = (rest: readonly string[]) => {
+  let session: string | undefined;
+  let nth: number | undefined;
+  for (let i = 0; i < rest.length; i += 2) {
+    const [flag, value] = [rest[i], rest[i + 1]];
+    if (value === undefined) return { error: `${flag} requires a value` };
+    if (flag === "--session") session = value;
+    else if (flag === "--nth") nth = Number.parseInt(value, 10);
+    else return { error: `unknown flag: ${flag}` };
   }
-  return Buffer.concat(chunks).toString("utf8");
-};
-
-const safeParseHookInput = (raw: string): HookInput => {
-  if (raw.trim().length === 0) return {};
-  try {
-    return JSON.parse(raw) as HookInput;
-  } catch {
-    return {};
+  if (session === undefined || nth === undefined || !(nth >= 0)) {
+    return { error: "voice-anchor needs --session <id> and --nth <n>" };
   }
+  return { session, nth };
 };
 
-const voiceStateDir = () => join(mimirHome(), "voice-state");
-const voiceStatePath = (sessionId: string) =>
-  join(voiceStateDir(), `${sessionId}.json`);
-
-const loadState = async (
-  path: string,
-  sessionId: string,
-  libSize: number,
-): Promise<VoiceAnchorState> => {
-  const file = Bun.file(path);
-  if (!(await file.exists())) {
-    return createSessionVoiceAnchor(sessionId, libSize);
-  }
-  try {
-    const parsed = (await file.json()) as Partial<VoiceAnchorState>;
-    if (
-      typeof parsed.turnCount === "number" &&
-      typeof parsed.lastAnchorTurn === "number" &&
-      typeof parsed.anchorIndex === "number"
-    ) {
-      return {
-        turnCount: parsed.turnCount,
-        lastAnchorTurn: parsed.lastAnchorTurn,
-        anchorIndex: parsed.anchorIndex,
-      };
-    }
-  } catch {
-    // fall through to fresh state
-  }
-  return createSessionVoiceAnchor(sessionId, libSize);
+/** The n-th anchor of a session's rotation; null when there are none. */
+export const anchorFor = (
+  library: readonly VoiceAnchor[],
+  session: string,
+  nth: number,
+) => {
+  if (library.length === 0) return null;
+  const start = createSessionVoiceAnchor(session, library.length).anchorIndex;
+  return library[(start + nth) % library.length] ?? null;
 };
 
-const saveState = async (path: string, state: VoiceAnchorState) => {
-  await Bun.write(path, JSON.stringify(state));
-};
-
-/**
- * Entry point invoked from cli.ts when argv[2] === "voice-anchor".
- *
- * Defence-in-depth: silently no-op when MIMIR_ACTIVE !== "1" — the wrapper
- * script exports that flag, and settings.json scoping already restricts the
- * hook to mimir sessions, but a nested `claude` subprocess inside a mimir
- * session would otherwise inherit the same settings file.
- */
-export const runVoiceAnchorHook = async (): Promise<number> => {
+export const runVoiceAnchorCommand = async (rest: readonly string[]) => {
   if (process.env.MIMIR_ACTIVE !== "1") return 0;
 
-  const raw = await readStdin();
-  const input = safeParseHookInput(raw);
-  const sessionId = input.session_id ?? "default";
-
-  const home = mimirHome();
-  const promptPath = join(home, "system-prompt.md");
-  const statePath = voiceStatePath(sessionId);
-
-  const promptFile = Bun.file(promptPath);
-  if (!(await promptFile.exists())) {
-    // No prompt installed — nothing to inject from. Exit silently rather
-    // than blocking the user's turn.
-    return 0;
+  const args = parseAnchorArgs(rest);
+  if ("error" in args) {
+    console.error(args.error);
+    return 1;
   }
 
-  const promptText = await promptFile.text();
-  let library: Anchor[];
-  try {
-    library = parseVoiceAnchors(promptText);
-  } catch (err) {
-    log.error("voice anchor parse failed", { error: errMessage(err) });
-    return 0;
-  }
-  if (library.length === 0) return 0;
+  // No persona installed — nothing to anchor to; not an error.
+  const promptFile = Bun.file(join(mimirHome(), "system-prompt.md"));
+  if (!(await promptFile.exists())) return 0;
 
-  const intervalEnv = process.env.MIMIR_ANCHOR_INTERVAL;
-  const parsedInterval = intervalEnv ? Number.parseInt(intervalEnv, 10) : 5;
-  const interval =
-    Number.isFinite(parsedInterval) && parsedInterval > 0 ? parsedInterval : 5;
-
-  const state = await loadState(statePath, sessionId, library.length);
-
-  // First-turn detection: a state with turnCount === 0 means this is the
-  // first developer prompt for this session — emit the boot-context block
-  // (user profile + prior session context) BEFORE the voice anchor logic
-  // so the model reads it as the leading content of its first user turn.
-  // Voice anchor itself never fires on turn 1 (interval defaults to 5),
-  // so the two never compete for the same prompt.
-  if (state.turnCount === 0) {
-    const boot = await assembleBootContext({
-      promptText: input.prompt ?? "",
-      projectPath: input.cwd ?? process.cwd(),
-    }).catch((err) => {
-      log.error("assembleBootContext threw", { error: errMessage(err) });
-      return null;
-    });
-    if (boot) {
-      process.stdout.write(`${boot}\n\n`);
-    }
+  const [parseErr, library] = await attempt(async () =>
+    parseVoiceAnchors(await promptFile.text()),
+  );
+  if (parseErr) {
+    log.error("voice anchor parse failed", { error: errMessage(parseErr) });
+    return 1;
   }
 
-  const step = nextAnchor(state, library, interval);
-  await saveState(statePath, step.next);
-
-  if (step.inject) {
-    process.stdout.write(formatAnchor(step.anchor));
-  }
-
+  const anchor = anchorFor(library, args.session, args.nth);
+  if (anchor) process.stdout.write(formatAnchor(anchor));
   return 0;
 };
-
-export type { Anchor };

@@ -14,6 +14,9 @@
 import { resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
+const MOD_TSCONFIG = "packages/cc-plugin/hooks/tsconfig.json";
+const MOD_TYPES_TSCONFIG =
+  "packages/cc-plugin/.claude-plugin/types/tsconfig.json";
 const PACKAGES = [
   "server",
   "plugin-core",
@@ -47,6 +50,30 @@ async function main() {
       passed++;
     } else {
       failures.push(pkg);
+    }
+  }
+
+  // The cc-plugin hooks module types against declarations the Claude Code
+  // engine lays into .claude-plugin/types/ when it loads the plugin — they
+  // are build-specific and gitignored, so this leg runs only where a load
+  // has happened (any developer session that opened the plugin).
+  if (!filter || filter === "cc-plugin") {
+    const laid = resolve(ROOT, MOD_TYPES_TSCONFIG);
+    console.log("\n── typecheck cc-plugin hooks module ──");
+    if (await Bun.file(laid).exists()) {
+      const result = Bun.spawnSync(
+        ["bunx", "tsc", "--noEmit", "-p", MOD_TSCONFIG],
+        { cwd: ROOT, stdout: "inherit", stderr: "inherit" },
+      );
+      if (result.exitCode === 0) {
+        passed++;
+      } else {
+        failures.push("cc-plugin hooks module");
+      }
+    } else {
+      console.log(
+        `skipped: ${MOD_TYPES_TSCONFIG} absent — run \`claude --plugin-dir packages/cc-plugin\` once to lay the engine's types`,
+      );
     }
   }
 

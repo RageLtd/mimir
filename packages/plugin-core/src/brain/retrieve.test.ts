@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { createOrgReplica, type OrgReplica } from "../store/org-replica";
 import {
   buildPlaybookContext,
+  CROSS_PROJECT_MAX_DISTANCE,
   retrieveLocalContext,
   retrieveMemoryList,
-  scoreRetrievalCandidate,
+  SAME_PROJECT_MAX_DISTANCE,
 } from "./retrieve";
 
 let replica: OrgReplica;
@@ -18,113 +19,199 @@ const fakeEmbedder = (table: Record<string, number[]>) => {
   return async (text: string) => table[text] ?? null;
 };
 
-describe("scoreRetrievalCandidate (parity with goldfish/memory.ts)", () => {
-  test("confidence multiplies, project bonus adds outside the multiply", () => {
-    const base = scoreRetrievalCandidate({
-      combinedScore: 0.7,
-      freshness: 1,
-      confidence: 1,
-      projectBonus: 0,
-    });
-    const demoted = scoreRetrievalCandidate({
-      combinedScore: 0.7,
-      freshness: 1,
-      confidence: 0.5,
-      projectBonus: 0,
-    });
-    const bonused = scoreRetrievalCandidate({
-      combinedScore: 0.7,
-      freshness: 1,
-      confidence: 1,
-      projectBonus: 0.02,
-    });
-    expect(demoted).toBeCloseTo(base / 2, 6);
-    expect(bonused).toBeCloseTo(base + 0.02, 6);
+const QUERY = "why does the gateway time out";
+const embedQuery = fakeEmbedder({ [QUERY]: [1, 0, 0] });
+
+/** A unit vector at exactly this cosine distance from the query vector. */
+const at = (distance: number) => {
+  const cos = 1 - distance;
+  return [cos, Math.sqrt(1 - cos * cos), 0];
+};
+
+const NEAR = 0.2;
+/** Between the two cutoffs: admitted only for the active project. */
+const MIDDLE = (CROSS_PROJECT_MAX_DISTANCE + SAME_PROJECT_MAX_DISTANCE) / 2;
+const FAR = 0.6;
+
+const store = (
+  id: string,
+  distance: number,
+  over: {
+    content?: string;
+    project_id?: string;
+    type?: "fact" | "summary" | "playbook";
+    created_at?: string;
+    confidence?: number;
+  } = {},
+) =>
+  replica.upsertMemory({
+    id,
+    content: over.content ?? `content of ${id}`,
+    embedding: at(distance),
+    created_at: over.created_at ?? "2026-10-18 09:30:00",
+    ...(over.project_id ? { project_id: over.project_id } : {}),
+    ...(over.type ? { type: over.type } : {}),
+    ...(over.confidence !== undefined ? { confidence: over.confidence } : {}),
   });
 
-  test("zero combined score falls back to neutral 0.5", () => {
+describe("retrieveMemoryList — the distance gate", () => {
+  test("a near row is admitted, a far one is not", async () => {
+    store("memory:near", NEAR);
+    store("memory:far", FAR);
+    const memories = await retrieveMemoryList(replica, QUERY, { embedQuery });
+    expect(memories).toEqual(["[2026-10-18] content of memory:near"]);
+  });
+
+  test("nothing near enough is null, not a weak match", async () => {
+    store("memory:far", FAR);
+    expect(await retrieveMemoryList(replica, QUERY, { embedQuery })).toBeNull();
+  });
+
+  test("the active project's rows get a wider cutoff", async () => {
+    store("memory:ours", MIDDLE, { project_id: "project:a" });
+    store("memory:theirs", MIDDLE, { project_id: "project:b" });
+    store("memory:unscoped", MIDDLE);
+    const memories = await retrieveMemoryList(replica, QUERY, {
+      embedQuery,
+      projectId: "project:a",
+    });
+    expect(memories).toEqual(["[2026-10-18] content of memory:ours"]);
+  });
+
+  test("a near row from another project is admitted and says where it is from", async () => {
+    store("memory:theirs", NEAR, { project_id: "project:b" });
+    const named = await retrieveMemoryList(replica, QUERY, {
+      embedQuery,
+      projectId: "project:a",
+      projectNames: { "project:b": "data-services" },
+    });
+    expect(named).toEqual([
+      "[2026-10-18, from data-services] content of memory:theirs",
+    ]);
+
+    const unnamed = await retrieveMemoryList(replica, QUERY, {
+      embedQuery,
+      projectId: "project:a",
+    });
+    expect(unnamed).toEqual([
+      "[2026-10-18, from another project] content of memory:theirs",
+    ]);
+  });
+
+  test("nearest first, capped at topK", async () => {
+    store("memory:second", 0.25);
+    store("memory:first", 0.1);
+    store("memory:third", 0.3);
+    const memories = await retrieveMemoryList(replica, QUERY, {
+      embedQuery,
+      topK: 2,
+    });
+    expect(memories).toEqual([
+      "[2026-10-18] content of memory:first",
+      "[2026-10-18] content of memory:second",
+    ]);
+  });
+
+  test("the project allowance ranks as well as admits", async () => {
+    // Same distance: the active project's row has more room under its
+    // cutoff, so it leads.
+    store("memory:theirs", 0.3, { project_id: "project:b" });
+    store("memory:ours", 0.3, { project_id: "project:a" });
+    const memories = await retrieveMemoryList(replica, QUERY, {
+      embedQuery,
+      projectId: "project:a",
+      topK: 1,
+    });
+    expect(memories).toEqual(["[2026-10-18] content of memory:ours"]);
+  });
+
+  test("a demoted row ranks below an equally near one", async () => {
+    store("memory:demoted", 0.2, { confidence: 0.3 });
+    store("memory:trusted", 0.2);
+    const memories = await retrieveMemoryList(replica, QUERY, {
+      embedQuery,
+      topK: 1,
+    });
+    expect(memories).toEqual(["[2026-10-18] content of memory:trusted"]);
+  });
+
+  test("playbooks and summaries are not facts", async () => {
+    store("memory:playbook", NEAR, { type: "playbook" });
+    store("memory:summary", NEAR, { type: "summary" });
+    expect(await retrieveMemoryList(replica, QUERY, { embedQuery })).toBeNull();
+  });
+
+  test("skipped ids are not returned again", async () => {
+    store("memory:seen", 0.1);
+    store("memory:new", 0.2);
+    const memories = await retrieveMemoryList(replica, QUERY, {
+      embedQuery,
+      exclude: new Set(["memory:seen"]),
+    });
+    expect(memories).toEqual(["[2026-10-18] content of memory:new"]);
+  });
+
+  test("retrieval does not count as access", async () => {
+    store("memory:near", NEAR);
+    await retrieveMemoryList(replica, QUERY, { embedQuery });
+    const row = replica.getMemory("memory:near");
+    expect(row?.access_count).toBe(0);
+    expect(row?.last_accessed).toBeNull();
+  });
+
+  test("a graph neighbour of an admitted row still has to pass the gate", async () => {
+    store("memory:near", NEAR);
+    store("memory:neighbour", FAR, { content: "neighbouring detail" });
+    replica.createRelation("memory:near", "memory:neighbour", 0.9);
+    const memories = await retrieveMemoryList(replica, QUERY, { embedQuery });
+    expect(memories).toEqual(["[2026-10-18] content of memory:near"]);
+  });
+
+  test("the cutoffs sit where they say", async () => {
+    const EDGE = 0.01;
+    store("memory:in", CROSS_PROJECT_MAX_DISTANCE - EDGE);
+    store("memory:out", CROSS_PROJECT_MAX_DISTANCE + EDGE);
+    store("memory:ours-in", SAME_PROJECT_MAX_DISTANCE - EDGE, {
+      project_id: "project:a",
+    });
+    store("memory:ours-out", SAME_PROJECT_MAX_DISTANCE + EDGE, {
+      project_id: "project:a",
+    });
+    const memories = await retrieveMemoryList(replica, QUERY, {
+      embedQuery,
+      projectId: "project:a",
+    });
+    expect(memories?.sort()).toEqual([
+      "[2026-10-18] content of memory:in",
+      "[2026-10-18] content of memory:ours-in",
+    ]);
+  });
+
+  test("with no active project every row takes the narrower cutoff, unlabelled", async () => {
+    store("memory:middle", MIDDLE, { project_id: "project:b" });
+    store("memory:near", NEAR, { project_id: "project:b" });
+    const memories = await retrieveMemoryList(replica, QUERY, {
+      embedQuery,
+      projectNames: { "project:b": "data-services" },
+    });
+    expect(memories).toEqual(["[2026-10-18] content of memory:near"]);
+  });
+});
+
+describe("retrieveMemoryList — no vector, no retrieval", () => {
+  test("a text match alone injects nothing", async () => {
+    replica.storeMemory({ content: "the gateway time out was a 30s default" });
+    expect(await retrieveMemoryList(replica, QUERY)).toBeNull();
     expect(
-      scoreRetrievalCandidate({
-        combinedScore: 0,
-        freshness: 1,
-        confidence: 1,
-        projectBonus: 0,
+      await retrieveMemoryList(replica, QUERY, {
+        embedQuery: async () => null,
       }),
-    ).toBe(0.5);
-  });
-});
-
-describe("retrieveMemoryList — FTS-only degradation (pre-MIM-85)", () => {
-  test("retrieves by text match without any embedder", async () => {
-    replica.storeMemory({ content: "the surreal bridge uses HS256 JWTs" });
-    replica.storeMemory({ content: "biome runs on every commit" });
-    const memories = await retrieveMemoryList(replica, "surreal bridge JWT", {
-      topK: 3,
-    });
-    expect(memories).not.toBeNull();
-    expect(memories?.[0]).toContain("surreal bridge");
+    ).toBeNull();
   });
 
-  test("returns null for empty query and empty store", async () => {
-    expect(await retrieveMemoryList(replica, "   ")).toBeNull();
-    expect(await retrieveMemoryList(replica, "anything")).toBeNull();
-  });
-
-  test("excludes playbooks from the fact budget", async () => {
-    replica.storeMemory({
-      content: "deploy procedure body mentioning kubernetes",
-      type: "playbook",
-      name: "Deploy",
-      trigger: "use when deploying kubernetes",
-    });
-    expect(await retrieveMemoryList(replica, "kubernetes")).toBeNull();
-  });
-
-  test("touches retrieved memories", async () => {
-    const id = replica.storeMemory({ content: "touchable zanzibar fact" });
-    await retrieveMemoryList(replica, "zanzibar");
-    expect(replica.getMemory(id)?.access_count).toBe(1);
-  });
-
-  test("includeRelated folds in graph neighbours with prefix", async () => {
-    const a = replica.storeMemory({ content: "zanzibar main fact" });
-    const b = replica.storeMemory({ content: "neighbouring detail" });
-    replica.createRelation(a, b, 0.9);
-    const memories = await retrieveMemoryList(replica, "zanzibar", {
-      includeRelated: true,
-    });
-    expect(memories).toContain("[related] neighbouring detail");
-  });
-});
-
-describe("retrieveMemoryList — vector leg", () => {
-  test("vector-matched memory outranks weak text match", async () => {
-    replica.storeMemory({
-      content: "vectors are semantically close here",
-      embedding: [1, 0, 0],
-    });
-    replica.storeMemory({ content: "query mentions semantically once" });
-    const memories = await retrieveMemoryList(replica, "semantically", {
-      embedQuery: fakeEmbedder({ semantically: [1, 0.05, 0] }),
-      topK: 2,
-    });
-    expect(memories?.[0]).toContain("vectors are semantically close");
-  });
-
-  test("project bonus breaks true ties (tiebreaker, not override)", async () => {
-    // Same token count, same single matched term → identical BM25 →
-    // only the project bonus separates them. A genuinely better
-    // cross-project match must still win (server spec: tiebreaker).
-    replica.storeMemory({
-      content: "zanzibar fact alpha",
-      project_id: "proj-a",
-    });
-    replica.storeMemory({ content: "zanzibar fact beta" });
-    const memories = await retrieveMemoryList(replica, "zanzibar", {
-      projectId: "proj-a",
-      topK: 2,
-    });
-    expect(memories?.[0]).toBe("zanzibar fact alpha");
+  test("an empty query is null", async () => {
+    store("memory:near", NEAR);
+    expect(await retrieveMemoryList(replica, "   ", { embedQuery })).toBeNull();
   });
 });
 
@@ -175,22 +262,55 @@ describe("buildPlaybookContext", () => {
   });
 });
 
-describe("retrieveLocalContext — /v1/context/retrieve parity", () => {
-  test("empty replica → empty contextBlock contract", async () => {
-    const result = await retrieveLocalContext(replica, "anything");
+describe("retrieveLocalContext", () => {
+  test("injection does not count as access", async () => {
+    store("memory:fact", NEAR);
+    store("memory:sum", NEAR, { type: "summary" });
+    const result = await retrieveLocalContext(replica, QUERY, { embedQuery });
+    expect(result.injectedIds.length).toBe(2);
+    for (const id of result.injectedIds) {
+      const row = replica.getMemory(id);
+      expect(row?.access_count).toBe(0);
+      expect(row?.last_accessed).toBeNull();
+    }
+  });
+
+  test("a summary spends the same budget the facts do", async () => {
+    store("memory:sum", 0.1, { type: "summary", content: "s".repeat(80) });
+    store("memory:fact", 0.2, { content: "f".repeat(40) });
+    const result = await retrieveLocalContext(replica, QUERY, {
+      embedQuery,
+      maxChars: 100,
+    });
+    expect(result.injectedIds).toEqual(["memory:sum"]);
+  });
+
+  test("an empty replica injects nothing", async () => {
+    const result = await retrieveLocalContext(replica, QUERY, { embedQuery });
     expect(result).toEqual({
       contextBlock: "",
       memoryCount: 0,
       summaryCount: 0,
+      injectedIds: [],
+      embedderUnavailable: false,
+      summaryDeferred: false,
     });
   });
 
-  test("wraps memories + summaries + playbooks in <retrieved_context>", async () => {
-    replica.storeMemory({ content: "zanzibar memory fact" });
-    replica.upsertMemory({
-      id: "memory:sum1",
-      content: "we built the replica store",
+  test("a prompt nothing matches injects nothing", async () => {
+    store("memory:far", FAR);
+    store("memory:far-summary", FAR, { type: "summary" });
+    const result = await retrieveLocalContext(replica, QUERY, { embedQuery });
+    expect(result.contextBlock).toBe("");
+    expect(result.injectedIds).toEqual([]);
+  });
+
+  test("wraps the matching summary, memories and playbooks", async () => {
+    store("memory:fact", NEAR, { content: "gateway timeout was 30s" });
+    store("memory:sum", NEAR, {
       type: "summary",
+      content: "we raised the gateway timeout",
+      created_at: "2026-11-10 03:33:24",
     });
     replica.storeMemory({
       content: "playbook body",
@@ -199,30 +319,179 @@ describe("retrieveLocalContext — /v1/context/retrieve parity", () => {
       trigger: "use when importing",
     });
 
-    const result = await retrieveLocalContext(replica, "zanzibar");
+    const result = await retrieveLocalContext(replica, QUERY, { embedQuery });
     expect(result.contextBlock).toStartWith("<retrieved_context>\n");
     expect(result.contextBlock).toEndWith("\n</retrieved_context>");
     expect(result.contextBlock).toContain(
-      "<summaries>\n[Summary 1]\nwe built the replica store\n</summaries>",
+      "<summaries>\n[Summary 1, 2026-11-10]\nwe raised the gateway timeout\n</summaries>",
     );
     expect(result.contextBlock).toContain(
-      "<memories>\n- zanzibar memory fact\n</memories>",
+      "<memories>\n- [2026-10-18] gateway timeout was 30s\n</memories>",
     );
     expect(result.contextBlock).toContain("<playbooks>");
     expect(result.memoryCount).toBe(1);
     expect(result.summaryCount).toBe(1);
+    expect(result.injectedIds.sort()).toEqual(["memory:fact", "memory:sum"]);
   });
 
-  test("summaries alone still produce a block (no memory match)", async () => {
-    replica.upsertMemory({
-      id: "memory:sum2",
-      content: "session summary only",
+  test("another project's summary is not injected for an unrelated prompt", async () => {
+    // The newest summary in the replica, from another project, far away.
+    store("memory:their-summary", FAR, {
       type: "summary",
+      project_id: "project:b",
+      created_at: "2026-11-10 12:00:00",
     });
-    const result = await retrieveLocalContext(replica, "nomatchword");
-    expect(result.contextBlock).toContain("<summaries>");
-    expect(result.contextBlock).not.toContain("<memories>");
-    expect(result.memoryCount).toBe(0);
+    const result = await retrieveLocalContext(replica, QUERY, {
+      embedQuery,
+      projectId: "project:a",
+    });
+    expect(result.contextBlock).toBe("");
+    expect(result.summaryCount).toBe(0);
+  });
+
+  test("a matching summary from another project says where it is from", async () => {
+    store("memory:their-summary", NEAR, {
+      type: "summary",
+      project_id: "project:b",
+      content: "fixed the same timeout there",
+    });
+    const result = await retrieveLocalContext(replica, QUERY, {
+      embedQuery,
+      projectId: "project:a",
+      projectNames: { "project:b": "data-services" },
+    });
+    expect(result.contextBlock).toContain(
+      "[Summary 1, 2026-10-18, from data-services]\nfixed the same timeout there",
+    );
+  });
+
+  test("at most one summary per prompt, the best match", async () => {
+    store("memory:sum-near", 0.1, { type: "summary" });
+    store("memory:sum-next", 0.2, { type: "summary" });
+    const result = await retrieveLocalContext(replica, QUERY, { embedQuery });
     expect(result.summaryCount).toBe(1);
+    expect(result.injectedIds).toEqual(["memory:sum-near"]);
+  });
+
+  test("summaryCount raises the cap for boot-sized retrievals", async () => {
+    store("memory:sum-near", 0.1, { type: "summary" });
+    store("memory:sum-next", 0.2, { type: "summary" });
+    const result = await retrieveLocalContext(replica, QUERY, {
+      embedQuery,
+      summaryCount: 3,
+    });
+    expect(result.summaryCount).toBe(2);
+  });
+
+  test("rows that do not fit the character budget are left out", async () => {
+    store("memory:big", 0.1, { content: "x".repeat(300) });
+    store("memory:small", 0.2, { content: "small fact" });
+    const result = await retrieveLocalContext(replica, QUERY, {
+      embedQuery,
+      maxChars: 100,
+    });
+    expect(result.injectedIds).toEqual(["memory:small"]);
+    expect(result.memoryCount).toBe(1);
+    expect(result.contextBlock).not.toContain("xxx");
+  });
+
+  test("skipped ids are not injected again", async () => {
+    store("memory:fact", NEAR);
+    store("memory:sum", NEAR, { type: "summary" });
+    const first = await retrieveLocalContext(replica, QUERY, { embedQuery });
+    const second = await retrieveLocalContext(replica, QUERY, {
+      embedQuery,
+      exclude: new Set(first.injectedIds),
+    });
+    expect(first.injectedIds.length).toBe(2);
+    expect(second.contextBlock).toBe("");
+    expect(second.injectedIds).toEqual([]);
+  });
+
+  test("without a query vector nothing is retrieved, and it says so", async () => {
+    replica.storeMemory({ content: "the gateway time out was a 30s default" });
+    store("memory:near", NEAR);
+    const result = await retrieveLocalContext(replica, QUERY, {
+      embedQuery: async () => null,
+    });
+    expect(result.memoryCount).toBe(0);
+    expect(result.summaryCount).toBe(0);
+    expect(result.injectedIds).toEqual([]);
+    expect(result.embedderUnavailable).toBe(true);
+  });
+});
+
+describe("retrieveLocalContext — a session's first prompt", () => {
+  const OURS = "project:a";
+  const first = { embedQuery, projectId: OURS, sessionStart: true };
+  /** Far from the prompt, so only the recency path can bring it. */
+  const summary = (id: string, day: string, project_id?: string) =>
+    store(id, FAR, {
+      type: "summary",
+      project_id,
+      content: `${id} `.repeat(30),
+      created_at: `2026-11-${day} 09:00:00`,
+    });
+  const ids = async (opts: Parameters<typeof retrieveLocalContext>[2]) =>
+    (await retrieveLocalContext(replica, QUERY, opts)).injectedIds;
+
+  test("the active project's newest summary fills the slot, outside the budget and without a vector", async () => {
+    summary("memory:older", "01", OURS);
+    summary("memory:newest", "09", OURS);
+    const noVector = { projectId: OURS, sessionStart: true };
+    for (const { opts, unavailable } of [
+      { opts: first, unavailable: false },
+      { opts: { ...first, maxChars: 10 }, unavailable: false },
+      {
+        opts: { ...noVector, embedQuery: async () => null },
+        unavailable: true,
+      },
+      { opts: noVector, unavailable: true },
+    ]) {
+      const result = await retrieveLocalContext(replica, QUERY, opts);
+      expect(result.contextBlock).toMatch(
+        /<summaries>[\s\S]*memory:newest[\s\S]*<\/summaries>/,
+      );
+      expect(result.summaryCount).toBe(1);
+      expect(result.injectedIds).toEqual(["memory:newest"]);
+      expect(result.embedderUnavailable).toBe(unavailable);
+    }
+  });
+
+  test("an excluded summary gives way to the next newest; none left is none", async () => {
+    summary("memory:older", "01", OURS);
+    summary("memory:newest", "09", OURS);
+    const newest = new Set(["memory:newest"]);
+    expect(await ids({ ...first, exclude: newest })).toEqual(["memory:older"]);
+    const both = new Set(["memory:newest", "memory:older"]);
+    expect(await ids({ ...first, exclude: both })).toEqual([]);
+  });
+
+  test("a summary admitted by distance wins; nothing is added on top", async () => {
+    store("memory:near", NEAR, { type: "summary", project_id: OURS });
+    summary("memory:newest", "09", OURS);
+    for (const summaryCount of [undefined, 3]) {
+      const result = await retrieveLocalContext(replica, QUERY, {
+        ...first,
+        summaryCount,
+      });
+      expect(result.summaryCount).toBe(1);
+      expect(result.injectedIds).toEqual(["memory:near"]);
+    }
+  });
+
+  test("never another project's summary or an unscoped one", async () => {
+    summary("memory:theirs", "09", "project:b");
+    summary("memory:unscoped", "10");
+    const result = await retrieveLocalContext(replica, QUERY, first);
+    expect(result.contextBlock).toBe("");
+    expect(result.summaryCount).toBe(0);
+  });
+
+  test("not the first prompt, or no active project: no recency summary", async () => {
+    summary("memory:newest", "09", OURS);
+    expect(await ids({ embedQuery, projectId: OURS })).toEqual([]);
+    expect(await ids({ ...first, sessionStart: false })).toEqual([]);
+    expect(await ids({ embedQuery, sessionStart: true })).toEqual([]);
   });
 });

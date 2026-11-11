@@ -10,9 +10,9 @@
  *   2. Fetch the canonical system prompt from /v1/system-prompt.
  *   3. Convert it to Anthropic-optimised XML (toAnthropicXml).
  *   4. Materialise the canonical ~/.mimir/system-prompt.md, CC-only
- *      ~/.mimir/cc/system-prompt.xml, settings.json, and config.json
- *      and the "Mimir" output style under Claude Code's config dir — the
- *      persona a desktop-app session selects per project (`mimir-cc enable`).
+ *      ~/.mimir/cc/system-prompt.xml (what the plugin's hooks module
+ *      composes into every session's system prompt), settings.json, and
+ *      config.json.
  *   5. Materialise ~/.local/bin/{mimir, mimir-cc}.
  *
  * Templates are bundled into the compiled binary as text imports so the
@@ -23,7 +23,6 @@
 import { chmod, copyFile, mkdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { toAnthropicXml } from "@mimir/plugin-core/anthropic-xml";
 import { embedderDir } from "@mimir/plugin-core/brain/embedder";
 import { installEmbedderArtifacts } from "@mimir/plugin-core/brain/embedder-install";
 import { resolveCartographerBinary } from "@mimir/plugin-core/cartographer/resolve";
@@ -37,8 +36,10 @@ import wrapperTemplate from "../artifacts/wrapper.sh.template" with {
 import ensureBinaryScript from "../scripts/ensure-binary.sh" with {
   type: "text",
 };
+import { checkClaudeVersion, MIN_CLAUDE_CODE_VERSION } from "./cc-version";
 import { extractionConfig, readConfig, writeConfig } from "./config";
-import { claudeConfigDir, OUTPUT_STYLE_NAME } from "./project-settings";
+import { writePersonaFiles } from "./persona-files";
+import { claudeConfigDir } from "./project-settings";
 
 // `as const` keeps the discriminant literal so the ok/err union
 // discriminates without a return annotation blinding the compiler.
@@ -169,26 +170,11 @@ export type InstallOptions = {
 };
 
 /**
- * The persona as a Claude Code output style. A custom style replaces
- * Claude Code's software-engineering instructions with its body while the
- * rest of the default prompt stays — the closest a flag-less session (the
- * desktop app) gets to the wrapper's full replacement. Not forced for the
- * plugin: a forced style would also stack onto wrapper sessions, which
- * already carry the prompt via --system-prompt-file. Projects select it
- * through `mimir-cc enable`.
+ * Where older installs wrote the persona as a "Mimir" output style for
+ * flag-less (desktop-app) sessions. The hooks module now composes the
+ * persona into every session's prompt, so an update removes the file.
  */
-export const renderOutputStyle = (xml: string) =>
-  [
-    "---",
-    `name: ${OUTPUT_STYLE_NAME}`,
-    "description: Mimir persona — served by mimir-server, installed by mimir-cc. Select per project with `mimir-cc enable`.",
-    "---",
-    "",
-    xml,
-    "",
-  ].join("\n");
-
-const outputStylePath = () =>
+const legacyOutputStylePath = () =>
   join(claudeConfigDir(), "output-styles", "mimir.md");
 
 export const runInstall = async (
@@ -197,6 +183,24 @@ export const runInstall = async (
 ) => {
   const urlResult = validateUrl(opts.serverUrl);
   if (!urlResult.ok) return urlResult;
+
+  // The plugin's hooks are a hooks module; an older Claude Code ignores
+  // it and runs Mimir with no hooks at all, silently. Refuse that up front.
+  const claude = await checkClaudeVersion();
+  switch (claude.kind) {
+    case "too-old":
+      return err(
+        `Claude Code ${claude.version} is older than ${MIN_CLAUDE_CODE_VERSION}, ` +
+          "the first release with hooks-module support — update Claude Code and re-run.",
+      );
+    case "missing":
+      log(
+        `warning: \`claude\` not found on PATH — Mimir needs Claude Code ${MIN_CLAUDE_CODE_VERSION} or newer.`,
+      );
+      break;
+    case "ok":
+      break;
+  }
 
   // Resolve the cartographer binary BEFORE the server fetch: an explicit
   // --cartographer path is validated (a typo'd path used to install
@@ -213,33 +217,27 @@ export const runInstall = async (
   const promptResult = await fetchSystemPrompt(urlResult.value, opts.apiKey);
   if (!promptResult.ok) return promptResult;
 
-  const xml = toAnthropicXml(promptResult.value.content);
-
   const home = mimirHome();
   const binDir = join(homedir(), ".local", "bin");
 
   const userMemoryDb = opts.userMemoryDb ?? join(home, "user-memories.db");
 
-  const promptPath = join(home, "system-prompt.md");
-  const ccPromptPath = join(home, "cc", "system-prompt.xml");
   const settingsPath = join(home, "settings.json");
-  const stylePath = outputStylePath();
   const wrapperPath = join(binDir, "mimir");
   const selfPath = join(binDir, "mimir-cc");
 
   const ensureBinaryPath = join(home, "ensure-binary.sh");
 
-  // Shared persona stays byte-for-byte canonical; CC enrichment is host-local.
-  await writeText(promptPath, promptResult.value.content);
-  await writeText(ccPromptPath, xml);
-  await writeText(stylePath, renderOutputStyle(xml));
+  await writePersonaFiles(promptResult.value.content);
   await writeText(settingsPath, settingsTemplate);
   // Retired files an update removes: workers moved into the plugin's
   // agents/ directory; MCP servers moved into the plugin's .mcp.json (a
   // stale mcp.json is harmless — the wrapper no longer passes it — but
-  // leaving it invites someone to edit the wrong file).
+  // leaving it invites someone to edit the wrong file); the persona
+  // output style moved into the plugin's hooks module.
   await rm(join(home, "agents.json"), { force: true });
   await rm(join(home, "mcp.json"), { force: true });
+  await rm(legacyOutputStylePath(), { force: true });
   await writeExecutable(wrapperPath, wrapperTemplate);
   // The wrapper self-updates the binary on launch by running this from
   // ~/.mimir, so it must not depend on the plugin clone still being present.
@@ -279,7 +277,6 @@ export const runInstall = async (
   return ok({
     home,
     binDir,
-    stylePath,
     version: promptResult.value.version,
     cartographerBinary,
   });
@@ -304,7 +301,7 @@ export const runInstallCommand = async (opts: InstallOptions) => {
     return 1;
   }
 
-  const { home, binDir, stylePath, version, cartographerBinary } = result.value;
+  const { home, binDir, version, cartographerBinary } = result.value;
   const carto = `  Cartographer:   ${cartographerBinary}`;
 
   // Effective extraction status AFTER config write (env wins over
@@ -323,8 +320,7 @@ export const runInstallCommand = async (opts: InstallOptions) => {
       `Mimir installed.`,
       ``,
       `  System prompt:  ${home}/system-prompt.md  (version ${version})`,
-      `  CC prompt:      ${home}/cc/system-prompt.xml  (wrapper sessions)`,
-      `  Output style:   ${stylePath}  ("${OUTPUT_STYLE_NAME}")`,
+      `  CC prompt:      ${home}/cc/system-prompt.xml  (every session, via the plugin)`,
       `  Settings:       ${home}/settings.json  (wrapper sessions)`,
       `  Runtime config: ${home}/config.json`,
       `  User memories:  ${opts.userMemoryDb ?? join(home, "user-memories.db")}`,
@@ -343,7 +339,7 @@ export const runInstallCommand = async (opts: InstallOptions) => {
       `      in a project to turn Mimir on there (and only there), then open`,
       `      a new session in it.`,
       `  Terminal:  make sure ${binDir} is on your PATH and run \`mimir\` —`,
-      `      full persona prompt plus /switch-model.`,
+      `      claude with the wrapper's settings file.`,
     ].join("\n"),
   );
   return 0;

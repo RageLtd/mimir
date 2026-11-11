@@ -35,19 +35,31 @@ Tailor responses accordingly: match their communication style, reference their s
 const buildUserProfileSection = (store: UserMemoryStore) =>
   buildUserContext(store);
 
-// Boot budgets mirror the cc-plugin's (memory topK 10 with related,
-// 3 summaries) — richer first-turn priming than per-turn micro-retrieval.
-const BOOT_MEMORY_TOP_K = 10;
-const BOOT_SUMMARY_COUNT = 3;
+// Boot budgets (up to 10 facts and 3 summaries) — richer first-turn
+// priming than per-turn micro-retrieval. Boot runs on the session's first
+// prompt, so the active project's newest summary arrives even when nothing
+// is near the prompt.
+const BOOT_BUDGETS = { topK: 10, summaryCount: 3, sessionStart: true };
+/** Per-prompt retrieval takes retrieveLocalContext's own, smaller defaults. */
+const TURN_BUDGETS = {};
 
 /**
  * Build prior session context from the LOCAL org replica (MIM-86) —
- * summaries, memories, and playbooks with boot-sized budgets. Replaces
+ * summaries, memories, and playbooks with boot-sized budgets, plus the
+ * active project's newest summary when none is near the prompt. Replaces
  * the /v1/context/assemble fetch: reads are local now, so the turn-one
  * boot no longer waits on a server round-trip. Returns null when the
  * replica is missing or empty.
  */
-const buildSessionContext = async (query: string, projectId: string | null) => {
+const buildSessionContext = async (
+  query: string,
+  projectId: string | null,
+  budgets: {
+    readonly topK?: number;
+    readonly summaryCount?: number;
+    readonly sessionStart?: boolean;
+  } = BOOT_BUDGETS,
+) => {
   const replicaPath =
     process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath();
   const [openErr, replica] = await attempt(async () =>
@@ -62,11 +74,9 @@ const buildSessionContext = async (query: string, projectId: string | null) => {
   }
   const [retrieveErr, result] = await attempt(() =>
     retrieveLocalContext(replica, query, {
-      topK: BOOT_MEMORY_TOP_K,
-      includeRelated: true,
-      summaryCount: BOOT_SUMMARY_COUNT,
+      ...budgets,
       projectId: projectId ?? undefined,
-      // MIM-85: local llama-server vector leg; null/cold → FTS-only boot.
+      // MIM-85: local llama-server vector leg; null/cold → nothing retrieved.
       embedQuery: createEmbedQuery(),
     }),
   );
@@ -165,6 +175,24 @@ export const assembleBootContext = async (opts: BootContextOptions) => {
   );
 
   return sections.join("\n");
+};
+
+/**
+ * The `<retrieved_context>` block for one developer prompt after the
+ * first: memories, summaries and playbooks from the local replica matched
+ * against the prompt's own text, led by the project id so the model can
+ * pass it to the memory tools. Null when nothing matches.
+ */
+export const retrieveTurnContext = async (opts: BootContextOptions) => {
+  const { config, projectPath, promptText } = opts;
+  const projectId = await getOrResolveProjectId(
+    config.serverUrl,
+    projectPath,
+    config.apiKey,
+  ).catch(() => null);
+  const block = await buildSessionContext(promptText, projectId, TURN_BUDGETS);
+  if (!block) return null;
+  return projectId ? `<active_project id="${projectId}" />\n${block}` : block;
 };
 
 // Re-export for any caller that wants to use the shared user-context

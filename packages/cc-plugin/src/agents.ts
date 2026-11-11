@@ -2,7 +2,7 @@
  * Claude Code worker definitions — the subagent markdown files shipped
  * in the plugin's `agents/` directory. `scripts/render-agents.ts` renders
  * them from the server's system-prompt seed; the files are committed and
- * `agents.test.ts` fails when they drift from the renderer.
+ * `agents.spec.ts` fails when they drift from the renderer.
  *
  * Shipped in the plugin rather than passed as `--agents`: the plugin
  * directory is what Claude Code re-reads on `/reload-plugins`, on an

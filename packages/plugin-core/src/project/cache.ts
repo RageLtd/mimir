@@ -18,7 +18,7 @@
  */
 
 import { mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { attempt } from "@mimir/plugin-core/result";
 import { mimirHome } from "@mimir/plugin-core/util";
@@ -45,6 +45,21 @@ export const readCache = async () => readMap(cachePath());
 
 export const readProjectIdAliases = async () => readMap(aliasesPath());
 
+/**
+ * Project id → its folder name, for saying where a retrieved row came
+ * from. When several cached paths share an id, the shortest is the root.
+ */
+export const readProjectNames = async () => {
+  const roots = new Map<string, string>();
+  for (const [path, id] of Object.entries(await readCache())) {
+    const known = roots.get(id);
+    if (known === undefined || path.length < known.length) roots.set(id, path);
+  }
+  return Object.fromEntries(
+    [...roots].map(([id, path]) => [id, basename(path)]),
+  );
+};
+
 export const writeCache = async (cache: ProjectPathCache) => {
   const path = cachePath();
   await mkdir(dirname(path), { recursive: true }).catch(() => undefined);
@@ -63,6 +78,13 @@ export const setCachedProjectId = async (
 ) => {
   const cache = await readCache();
   cache[projectPath] = projectId;
+  await writeCache(cache);
+};
+
+export const deleteCachedProjectId = async (projectPath: string) => {
+  const cache = await readCache();
+  if (!(projectPath in cache)) return;
+  delete cache[projectPath];
   await writeCache(cache);
 };
 

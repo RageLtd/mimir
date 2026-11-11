@@ -75,6 +75,45 @@ describe("resolveBase", () => {
 });
 
 describe("collectChanges", () => {
+  test("explicit task base includes committed tests and dirty implementation, not older branch tests", async () => {
+    const root = await seedIntegrationBranch();
+    const base = await git(root, "rev-parse", "HEAD");
+    await write(
+      root,
+      "src/a.test.ts",
+      'test("a", () => { expect(a).toBe(3); });\n',
+    );
+    await git(root, "add", ".");
+    await git(root, "commit", "-q", "-m", "task tests");
+    await write(root, "src/a.ts", "export const a = 3;\n");
+    const changes = await collectChanges(runCommand, root, base);
+    expect(changes?.base).toBe(base);
+    expect(changes?.files.map((f) => f.path)).toEqual([
+      "src/a.test.ts",
+      "src/a.ts",
+    ]);
+    expect(changes?.branchPaths).toEqual([]);
+    const nextBase = await git(root, "rev-parse", "HEAD");
+    expect(
+      (await collectChanges(runCommand, root, nextBase))?.files.map(
+        (f) => f.path,
+      ),
+    ).toEqual(["src/a.ts"]);
+  });
+
+  test("explicit base rejects unknown commits, refs, and non-ancestors without fallback", async () => {
+    const root = await seedRepo();
+    await git(root, "checkout", "-q", "--orphan", "unrelated");
+    await git(root, "commit", "-q", "-m", "unrelated");
+    const unrelated = await git(root, "rev-parse", "HEAD");
+    await git(root, "checkout", "-q", "main");
+    for (const base of ["HEAD", "0".repeat(40), unrelated]) {
+      await expect(collectChanges(runCommand, root, base)).rejects.toThrow(
+        "base",
+      );
+    }
+  });
+
   test("uncommitted edits, untracked files, and deletions in a worktree", async () => {
     const root = await seedRepo();
     const wt = join(root, ".claude", "worktrees", "w2");

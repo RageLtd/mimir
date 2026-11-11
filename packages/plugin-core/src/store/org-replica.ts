@@ -288,17 +288,25 @@ export const createOrgReplica = (dbPath: string) => {
       .all(limit)
       .map(stripEmbedding);
 
-  const getLastSummaries = (count = 3) =>
+  /** Newest live summaries first. With a project, only that project's —
+   *  unscoped summaries and other projects' never answer for it. */
+  const getLastSummaries = (count = 3, projectId?: string) =>
     db
       .query<
-        { content: string; token_count: number | null; created_at: string },
-        [number]
+        {
+          id: string;
+          content: string;
+          token_count: number | null;
+          created_at: string;
+        },
+        [string | null, number]
       >(
-        `SELECT content, token_count, created_at
+        `SELECT id, content, token_count, created_at
          FROM memory WHERE type = 'summary' AND tombstone = 0
-         ORDER BY created_at DESC LIMIT ?`,
+           AND (?1 IS NULL OR project_id = ?1)
+         ORDER BY created_at DESC LIMIT ?2`,
       )
-      .all(count);
+      .all(projectId ?? null, count);
 
   const listPlaybooks = () =>
     db

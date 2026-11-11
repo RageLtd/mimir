@@ -1,10 +1,10 @@
 /**
- * Rules engine PreToolUse hook adapter.
+ * Rules engine on a tool call — `mimir-cc rules`.
  *
- * Wired into ~/.mimir/settings.json as a PreToolUse hook command. CC
- * invokes it with the hook payload on stdin; we read it, run the rule
- * engine against `.claude/**\/*.enforce.toml` files in the session's
- * project root, and answer in the CC hook protocol:
+ * Run by the hooks module's `tool.call` hook with the PreToolUse payload
+ * on stdin; we read it, run the rule engine against
+ * `.claude/**\/*.enforce.toml` files in the session's project root, and
+ * answer in the PreToolUse protocol, which the module maps onto the call:
  *
  *   blocking finding → permissionDecision: "deny" with the findings as
  *                      the reason (the call does not run)

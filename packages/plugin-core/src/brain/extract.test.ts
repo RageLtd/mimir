@@ -8,9 +8,12 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   buildExtractionText,
   type ConversationMessage,
+  EXTRACTION_MAX_CHARS,
   type ExtractionConfig,
   extractFromConversation,
   extractMemories,
+  parseExtraction,
+  prepareExtraction,
 } from "./extract";
 
 // Stub HTTP round-trips starve under `bun test --parallel`; the runner's 5s
@@ -168,15 +171,55 @@ describe("buildExtractionText", () => {
   });
 
   test("keeps the last message whole and fills backward within budget", () => {
-    const filler = "x".repeat(3000);
+    const filler = "x".repeat(EXTRACTION_MAX_CHARS * 0.75);
     const text = buildExtractionText([
       user(filler),
       user(filler),
       user("the final word"),
     ]);
-    // Last message always present; only one filler fits the 4000 budget.
+    // Last message always present; one filler fits the budget whole
+    // and the one before it is cut to what is left.
     expect(text.endsWith("user: the final word")).toBe(true);
-    expect(text.split("\n")).toHaveLength(2);
+    expect(text.split("\n")).toHaveLength(3);
+    expect(text.length).toBeLessThanOrEqual(EXTRACTION_MAX_CHARS + 2);
+  });
+
+  test("an oversized message is cut to the remaining budget, not dropped with everything before it", () => {
+    const text = buildExtractionText([
+      user(
+        `We decided the relay stays blind. ${"x".repeat(EXTRACTION_MAX_CHARS * 2)}`,
+      ),
+      assistant("Merged the branch as 4a33913 and the gate is green."),
+    ]);
+    expect(text.startsWith("user: We decided the relay stays blind.")).toBe(
+      true,
+    );
+    expect(
+      text.endsWith(
+        "assistant: Merged the branch as 4a33913 and the gate is green.",
+      ),
+    ).toBe(true);
+    expect(text.split("\n")[0]?.endsWith("…")).toBe(true);
+    expect(text.length).toBeLessThanOrEqual(EXTRACTION_MAX_CHARS + 1);
+  });
+
+  test("an assistant message takes at most half the budget, so the prompt before it is still read", () => {
+    const text = buildExtractionText([
+      user("We decided the relay stays blind."),
+      assistant("y".repeat(EXTRACTION_MAX_CHARS * 2)),
+    ]);
+    const [first, second] = text.split("\n");
+    expect(first).toBe("user: We decided the relay stays blind.");
+    expect(second?.length).toBeLessThanOrEqual(EXTRACTION_MAX_CHARS / 2);
+    expect(second?.endsWith("…")).toBe(true);
+  });
+
+  test("a sliver of budget is left empty rather than filled with a fragment", () => {
+    const text = buildExtractionText([
+      user("an earlier question that will not fit in what is left"),
+      user("y".repeat(EXTRACTION_MAX_CHARS - 10)),
+    ]);
+    expect(text.split("\n")).toHaveLength(1);
   });
 });
 
@@ -222,6 +265,22 @@ describe("extractFromConversation gates", () => {
     );
   });
 
+  test("a closing run extracts from a single user turn", async () => {
+    await withStub(
+      () => completion('["a closing memory"]'),
+      async (config) => {
+        const padding = "we discussed the compaction threshold ".repeat(10);
+        const outcome = await extractFromConversation(
+          config,
+          [user(padding), assistant(padding)],
+          { closing: true },
+        );
+        expect(outcome.skipped).toBeNull();
+        expect(outcome.memories).toEqual(["a closing memory"]);
+      },
+    );
+  });
+
   test("transport failure reports ok:false", async () => {
     const outcome = await extractFromConversation(
       { baseUrl: "http://127.0.0.1:45991", model: "m" },
@@ -231,5 +290,94 @@ describe("extractFromConversation gates", () => {
       ],
     );
     expect(outcome.ok).toBe(false);
+  });
+});
+
+describe("prepareExtraction", () => {
+  test("single user turn skips", () => {
+    expect(
+      prepareExtraction([
+        user("only one user turn here"),
+        assistant("a reasonably long assistant reply for the filter"),
+      ]),
+    ).toEqual({ skipped: "fewer than 2 user turns" });
+  });
+
+  test("user turns without text do not count toward the gate", () => {
+    expect(
+      prepareExtraction([
+        user("a single real user turn"),
+        { role: "user", content: [{ type: "image", image: "x" }] },
+      ]),
+    ).toEqual({ skipped: "fewer than 2 user turns" });
+  });
+
+  test("a closing run does not wait for a second user turn", () => {
+    const padding = "we discussed the compaction threshold ".repeat(10);
+    const prepared = prepareExtraction([user(padding), assistant(padding)], {
+      closing: true,
+    });
+    expect("request" in prepared).toBe(true);
+  });
+
+  test("a closing run still skips a conversation too short to hold anything", () => {
+    expect(prepareExtraction([user("hi")], { closing: true })).toEqual({
+      skipped: "conversation too short",
+    });
+  });
+
+  test("short rendered conversation skips", () => {
+    expect(prepareExtraction([user("hi"), user("ok")])).toEqual({
+      skipped: "conversation too short",
+    });
+  });
+
+  test("substantive conversation yields the extraction request verbatim", () => {
+    const padding = "we discussed the compaction threshold ".repeat(10);
+    const messages = [user(padding), assistant(padding), user(padding)];
+    const prepared = prepareExtraction(messages);
+    if (!("request" in prepared)) {
+      throw new Error(`expected a request, got skip: ${prepared.skipped}`);
+    }
+    const { request } = prepared;
+    expect(request.system).toContain(
+      "You extract factual memories from development conversations",
+    );
+    expect(request.system).toContain(
+      'Output format: ["memory 1", "memory 2", ...]',
+    );
+    expect(request.prompt).toBe(buildExtractionText(messages));
+    expect(request.maxTokens).toBe(2048);
+  });
+});
+
+describe("parseExtraction", () => {
+  test("plain JSON string array", () => {
+    expect(parseExtraction('["fact one", "fact two"]')).toEqual([
+      "fact one",
+      "fact two",
+    ]);
+  });
+
+  test("empty array is an honest nothing", () => {
+    expect(parseExtraction("[]")).toEqual([]);
+  });
+
+  test("```json fenced array", () => {
+    expect(parseExtraction('```json\n["fenced fact"]\n```')).toEqual([
+      "fenced fact",
+    ]);
+  });
+
+  test("non-JSON is null", () => {
+    expect(parseExtraction("Here are the memories: none")).toBeNull();
+  });
+
+  test("non-array JSON is null", () => {
+    expect(parseExtraction('{"not": "an array"}')).toBeNull();
+  });
+
+  test("array with a non-string element is null", () => {
+    expect(parseExtraction('["ok", 42]')).toBeNull();
   });
 });

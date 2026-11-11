@@ -13,7 +13,7 @@ V2's native configuration key is `plugins`; supported legacy `plugin` configurat
 The plugin matches the Mimir capabilities the cc-plugin exposes under Claude Code:
 
 - **Persona system prompt** — `~/.mimir/system-prompt.md` is appended to every LLM call's system prompt. Markdown form, no XML conversion (the conversion is Claude-specific).
-- **Voice anchor rotation** — on a fixed cadence (default every 5 turns, override `MIMIR_ANCHOR_INTERVAL`), injects a `<voice_anchor>` block into the recency slot to combat persona drift over long sessions.
+- **Voice anchor rotation** — on a fixed cadence (default every 3 turns, override `MIMIR_ANCHOR_INTERVAL`), injects a `<voice_anchor>` block into the recency slot to combat persona drift over long sessions.
 - **Rules engine** — `.claude/**/*.enforce.toml` files in the project are evaluated on every tool call. Violations fail the call with the nudge as the error message.
 - **Project rules** — `.claude/rules/**/*.md` is read at plugin init (OpenCode loads the root `AGENTS.md` itself). Rules without `paths:` frontmatter ride in the system prompt after the persona; rules with `paths:` are appended to the `read` tool's output the first time a matching file is read in a session, which is when Claude Code would load them.
 - **Cartographer reindex** — on every file edit, spawns a one-shot cartographer reindex worker that parses the file and updates the local index (nothing leaves the machine). Full project reindex on session start.

@@ -1,119 +1,131 @@
 /**
- * Stop hook — extract memories from completed CC turns into the LOCAL
- * replica (MIM-86). The server persist/token-report legs are gone: the
- * transcript never leaves the machine. Reads new lines from the session's
- * transcript JSONL since the last watermark, renders them to conversation
- * text, runs extraction on the user-chosen endpoint (extractionConfig),
- * and stores the results via the replica's embed→dedupe→store path.
+ * `mimir-cc persist` — run by the hooks module on `turn.complete` with the
+ * main conversation's messages since the last distillation: extract
+ * memories from them into the LOCAL replica (MIM-86). The server
+ * persist/token-report legs are gone: the conversation never leaves the
+ * machine. Converts the delta to conversation messages, extracts, and
+ * stores the results via the replica's embed→dedupe→store path.
  *
- * Watermark semantics: advance on success OR deliberate skip (gates),
- * keep on extraction transport failure so the next turn retries the same
- * delta. Unconfigured extraction advances too — otherwise the delta grows
- * unboundedly toward an endpoint that will never exist.
+ * Where the completion runs (MIM-134):
+ *   - extraction endpoint configured (extractionConfig) → one run, BYOK,
+ *     as before.
+ *   - not configured, and the module says it can run completions
+ *     (`host_completions`) → two-phase. Phase one gates and renders, then
+ *     answers `{ advance: false, requests: { facts } }`; the hooks module
+ *     completes the request on the session's own model and runs persist
+ *     again with `completions`, and phase two parses and stores.
+ *   - neither → advance unread, with a warning: no endpoint will ever
+ *     consume the delta, so it must not accumulate.
+ * `persistPlan` is the pure decision; the runner owns the side effects.
  *
- * Exit code is always 0. Returning non-zero from Stop would prevent CC
- * from finishing the turn — far worse than a lost extraction cycle.
+ * The module holds the watermark; this run answers `{ advance }`: true on
+ * success OR deliberate skip (gates), false on extraction failure (BYOK
+ * transport, or a phase-two completion that errored or did not parse) so
+ * the next turn carries the same delta again.
+ *
+ * Exit code is always 0: a lost extraction cycle is far better than a
+ * status line on every turn.
  */
 
+import type { ModelMessage } from "@ai-sdk/provider-utils";
 import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
-import { extractFromConversation } from "@mimir/plugin-core/brain/extract";
+import {
+  type ExtractionConfig,
+  extractFromConversation,
+  parseExtraction,
+  prepareExtraction,
+} from "@mimir/plugin-core/brain/extract";
 import { getOrResolveProjectId } from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
 import {
   createOrgReplica,
   defaultOrgReplicaPath,
 } from "@mimir/plugin-core/store/org-replica";
-import { syncFromSharedConfig } from "@mimir/plugin-core/sync/cli";
+import { syncAfterDistill } from "@mimir/plugin-core/sync/after-distill";
 import { storeTyped } from "@mimir/plugin-core/tools/org-memory";
 import { extractionConfig, readConfig } from "./config";
+import {
+  answer,
+  type Completions,
+  completionText,
+  isStalePayload,
+  readDistillInput,
+  SESSION_MODEL_EXTRACTION_CHARS,
+  toModelMessages,
+} from "./conversation";
 import { createLogger } from "./logger";
-import { readDelta, readWatermark, writeWatermark } from "./transcript-delta";
 
 const log = createLogger("persist-hook");
 
-type HookInput = {
-  readonly session_id?: string;
-  readonly hook_event_name?: string;
-  readonly transcript_path?: string;
-  readonly cwd?: string;
-};
+/** The request key persist asks the hooks module to complete. */
+const FACTS = "facts";
+/** Log label for completions the hooks module ran on the session's model. */
+const SESSION_MODEL = "session";
 
-const readStdin = async () => {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of Bun.stdin.stream()) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks).toString("utf8");
-};
-
-const safeParseHookInput = async (raw: string) => {
-  if (raw.trim().length === 0) return {} as HookInput;
-  const [err, parsed] = await attempt(async () => JSON.parse(raw) as HookInput);
-  return err ? ({} as HookInput) : parsed;
+const assertNever = (value: never) => {
+  throw new Error(`Unhandled persist plan: ${JSON.stringify(value)}`);
 };
 
 /**
- * Entry point invoked from cli.ts when argv[2] === "persist".
- * Exit 0 on every path — see module doc.
+ * What this run does with the delta. BYOK wins whenever configured; a
+ * module that cannot run completions leaves it unconfigured; otherwise
+ * phase one (no completions) settles a gate skip or requests the facts
+ * completion, and phase two stores what parsed or asks for a retry.
  */
-export const runPersistHook = async () => {
-  if (process.env.MIMIR_ACTIVE !== "1") return 0;
+export const persistPlan = (input: {
+  readonly messages: readonly ModelMessage[];
+  readonly completions?: Completions;
+  readonly extraction: ExtractionConfig | null;
+  readonly hostCompletions: boolean;
+}) => {
+  if (input.extraction) return { kind: "byok" as const };
+  if (!input.hostCompletions) return { kind: "unconfigured" as const };
 
-  const raw = await readStdin();
-  const input = await safeParseHookInput(raw);
-
-  const sessionId = input.session_id;
-  const transcriptPath = input.transcript_path;
-  const cwd = input.cwd ?? process.cwd();
-
-  if (!sessionId) {
-    log.debug("no session_id in hook payload — skipping");
-    return 0;
+  const prepared = prepareExtraction(input.messages, {
+    maxChars: SESSION_MODEL_EXTRACTION_CHARS,
+  });
+  if ("skipped" in prepared) {
+    // Too little to distil yet. A turn is one user message, so settling
+    // here would drop every ordinary turn: the next turn carries it.
+    return {
+      kind: "settle" as const,
+      advance: false as const,
+      reason: prepared.skipped,
+    };
   }
-  if (!transcriptPath) {
-    log.debug("no transcript_path in hook payload — skipping");
-    return 0;
-  }
-
-  const watermark = await readWatermark(sessionId);
-  const { messages, newOffset } = await readDelta(transcriptPath, watermark);
-
-  if (messages.length === 0) {
-    // Still advance the watermark if we read past empty/meta lines, so we
-    // don't re-scan them next turn.
-    if (newOffset > watermark) await writeWatermark(sessionId, newOffset);
-    log.debug("no new messages in delta", { sessionId, watermark, newOffset });
-    return 0;
+  if (!input.completions) {
+    return {
+      kind: "request" as const,
+      requests: { [FACTS]: prepared.request },
+    };
   }
 
-  const extraction = await extractionConfig();
-  if (!extraction) {
-    // No endpoint will ever consume this delta — advance so it can't
-    // accumulate forever. Loud once per turn in the log.
-    await writeWatermark(sessionId, newOffset);
-    log.warn(
-      "extraction unconfigured (MIMIR_EXTRACTION_BASE_URL / extractionBaseUrl) — turn not distilled",
-      { sessionId, messages: messages.length },
-    );
-    return 0;
+  const completion = completionText(input.completions, FACTS);
+  if (!completion.ok) {
+    return { kind: "retry" as const, reason: completion.reason };
   }
-
-  const outcome = await extractFromConversation(extraction, messages);
-  if (!outcome.ok) {
-    log.error("extraction failed — leaving watermark in place for retry", {
-      sessionId,
-      messages: messages.length,
-      model: extraction.model,
-    });
-    return 0;
+  const memories = parseExtraction(completion.text);
+  if (memories === null) {
+    return {
+      kind: "retry" as const,
+      reason: `${FACTS} completion is not a JSON string array`,
+    };
   }
+  return {
+    kind: "store" as const,
+    memories,
+    replyChars: completion.text.length,
+  };
+};
 
-  if (outcome.skipped) {
-    await writeWatermark(sessionId, newOffset);
-    log.debug("extraction skipped", { sessionId, reason: outcome.skipped });
-    return 0;
-  }
+type RunContext = {
+  readonly sessionId: string;
+  readonly cwd: string;
+  readonly messages: number;
+};
 
+/** Store extracted facts into the local replica, attributed to the project. */
+const storeFacts = async (memories: readonly string[], cwd: string) => {
   // Project id for memory attribution — disk-cached after first resolution.
   const config = await readConfig();
   const projectId = config
@@ -129,7 +141,7 @@ export const runPersistHook = async () => {
 
   let stored = 0;
   let duplicates = 0;
-  for (const memory of outcome.memories) {
+  for (const memory of memories) {
     const [storeErr, result] = await attempt(() =>
       storeTyped(replica, embedQuery, {
         content: memory,
@@ -145,41 +157,152 @@ export const runPersistHook = async () => {
     else duplicates++;
   }
   replica.close();
+  return { projectId, stored, duplicates };
+};
 
-  await writeWatermark(sessionId, newOffset);
+/** Store, settle the delta, then sync anything new. */
+const storeAndSettle = async (
+  memories: readonly string[],
+  ctx: RunContext,
+  model: string,
+) => {
+  const { projectId, stored, duplicates } = await storeFacts(memories, ctx.cwd);
+
+  answer(true);
 
   log.info("turn distilled locally", {
-    sessionId,
-    project: cwd,
+    sessionId: ctx.sessionId,
+    project: ctx.cwd,
     projectId,
-    watermark,
-    newOffset,
-    messagesInDelta: messages.length,
-    extracted: outcome.memories.length,
+    messagesInDelta: ctx.messages,
+    extracted: memories.length,
     stored,
     duplicates,
-    model: extraction.model,
+    model,
   });
 
-  // Push leg (MIM-88): ship freshly distilled memories through the blind
-  // sync relay. Bounded — the hook process exits after this; a missed
-  // deadline just leaves them dirty for the next boot/persist sync.
-  if (stored > 0) {
-    const SYNC_DEADLINE_MS = 10_000;
-    const [syncErr, synced] = await attempt(() =>
-      Promise.race([
-        syncFromSharedConfig(),
-        new Promise<{ status: "deadline" }>((resolve) =>
-          setTimeout(() => resolve({ status: "deadline" }), SYNC_DEADLINE_MS),
-        ),
-      ]),
-    );
-    if (syncErr) {
-      log.warn("post-distill sync failed", { error: syncErr.message });
-    } else {
-      log.info("post-distill sync", { ...synced });
-    }
+  if (stored > 0) await syncAfterDistill(log);
+};
+
+const runByok = async (
+  extraction: ExtractionConfig,
+  messages: readonly ModelMessage[],
+  ctx: RunContext,
+) => {
+  const outcome = await extractFromConversation(extraction, messages);
+  if (!outcome.ok) {
+    answer(false);
+    log.error("extraction failed — the next turn carries this delta again", {
+      sessionId: ctx.sessionId,
+      messages: ctx.messages,
+      model: extraction.model,
+    });
+    return;
   }
 
-  return 0;
+  if (outcome.skipped) {
+    // Carried, like the session-model path: see persistPlan.
+    answer(false);
+    log.debug("extraction skipped — the next turn carries this delta", {
+      sessionId: ctx.sessionId,
+      reason: outcome.skipped,
+    });
+    return;
+  }
+
+  await storeAndSettle(outcome.memories, ctx, extraction.model);
+};
+
+/**
+ * Entry point invoked from cli.ts when argv[2] === "persist".
+ * Exit 0 on every path — see module doc.
+ */
+export const runPersistHook = async () => {
+  if (process.env.MIMIR_ACTIVE !== "1") return 0;
+
+  const input = await readDistillInput();
+  const sessionId = input.session_id;
+  const cwd = input.cwd ?? process.cwd();
+
+  if (!sessionId) {
+    log.debug("no session_id in payload — skipping");
+    return 0;
+  }
+
+  if (isStalePayload(input)) {
+    // Nothing printed: a classic Stop hook reads stdout as its own JSON.
+    log.warn(
+      "payload carries no messages — the installed plugin is older than this binary; turn not distilled",
+      { sessionId },
+    );
+    return 0;
+  }
+
+  const messages = toModelMessages(input.messages ?? []);
+  if (messages.length === 0) {
+    answer(true);
+    log.debug("nothing to distil in the delta", { sessionId });
+    return 0;
+  }
+
+  const extraction = await extractionConfig();
+  const ctx = { sessionId, cwd, messages: messages.length };
+  const plan = persistPlan({
+    messages,
+    extraction,
+    hostCompletions: input.host_completions === true,
+    ...(input.completions ? { completions: input.completions } : {}),
+  });
+
+  switch (plan.kind) {
+    case "byok":
+      // persistPlan answers byok only when extraction is configured.
+      if (extraction) await runByok(extraction, messages, ctx);
+      return 0;
+    case "unconfigured":
+      // No endpoint and a module that cannot complete requests: nothing
+      // will ever consume this delta — advance so it can't accumulate
+      // forever. Loud once per turn in the log.
+      answer(true);
+      log.warn(
+        "extraction unconfigured (MIMIR_EXTRACTION_BASE_URL / extractionBaseUrl) — turn not distilled",
+        { sessionId, messages: ctx.messages },
+      );
+      return 0;
+    case "settle":
+      answer(plan.advance);
+      log.debug("extraction skipped — the next turn carries this delta", {
+        sessionId,
+        messages: ctx.messages,
+        reason: plan.reason,
+      });
+      return 0;
+    case "request":
+      answer(false, plan.requests);
+      log.debug("extraction handed to the session model", {
+        sessionId,
+        messages: ctx.messages,
+        promptChars: plan.requests[FACTS].prompt.length,
+      });
+      return 0;
+    case "retry":
+      answer(false);
+      log.error("extraction failed — the next turn carries this delta again", {
+        sessionId,
+        messages: ctx.messages,
+        model: SESSION_MODEL,
+        reason: plan.reason,
+      });
+      return 0;
+    case "store":
+      log.debug("session model replied", {
+        sessionId,
+        replyChars: plan.replyChars,
+        memories: plan.memories.length,
+      });
+      await storeAndSettle(plan.memories, ctx, SESSION_MODEL);
+      return 0;
+    default:
+      return assertNever(plan);
+  }
 };

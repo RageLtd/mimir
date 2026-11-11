@@ -3,7 +3,7 @@
  * Render the plugin's worker agents into `agents/` from the server's
  * system-prompt seed. Run `bun run agents:render` after editing
  * packages/server/system-prompt.md or plugin-core/src/workers —
- * agents.test.ts fails when the committed files drift from this output.
+ * agents.spec.ts fails when the committed files drift from this output.
  */
 
 import { mkdir } from "node:fs/promises";

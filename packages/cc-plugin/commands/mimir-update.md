@@ -4,7 +4,7 @@ argument-hint: "[server-url]"
 allowed-tools: ["Bash", "AskUserQuestion"]
 ---
 
-You are re-installing the Mimir runtime. This is identical to `install` — it overwrites every file the original install landed. State files in `~/.mimir/voice-state/` and the log file at `~/.mimir/logs/mimir-cc.log` are left alone.
+You are re-installing the Mimir runtime. This is identical to `install` — it overwrites every file the original install landed. The log file at `~/.mimir/logs/mimir-cc.log` is left alone.
 
 Carry out the following steps in order.
 
@@ -56,7 +56,7 @@ Show the binary's output verbatim.
 
 If the binary exited zero, tell the user:
 
-> Mimir updated. Start a new session to pick up the new persona and config — the `mimir` wrapper reads the system prompt at launch, and desktop-app / plain `claude` sessions read the "Mimir" output style at start.
+> Mimir updated. Start a new session to pick up the new persona and config — the plugin's hooks module reads the system prompt when a session starts.
 >
 > Updating from an install that predates the plugin-shipped hooks? The old `~/.mimir/mcp.json` is removed and `~/.mimir/settings.json` no longer carries hooks — both now come from the plugin, so nothing fires twice.
 

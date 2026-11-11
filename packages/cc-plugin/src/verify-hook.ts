@@ -1,11 +1,12 @@
 /**
- * Verify gate — `mimir-cc verify`, wired to two hook events.
+ * Verify gate — `mimir-cc verify`, run by the hooks module from two
+ * events, each handing over its payload on stdin.
  *
- * Primary: PreToolUse on `SubagentHandback`, inside the worker. On
- * Claude Code ≥ 2.1.27x a subagent hands its result back through this
+ * Primary: `tool.call` on `SubagentHandback`, inside the worker (the
+ * PreToolUse payload). A subagent hands its result back through this
  * tool call, and `tool_input.message` is the worker's final text — the
  * `STATUS:` line lives there. The gate answers in the PreToolUse
- * protocol:
+ * protocol, which the module maps onto the call:
  *
  *   block     → permissionDecision "deny" with the reason — the worker
  *               gets it as the tool error and keeps working
@@ -14,8 +15,8 @@
  *   exhausted → "allow", message rewritten to end in STATUS: failed
  *   skip      → silence (STATUS was not `done`)
  *
- * Fallback: SubagentStop, for hosts/versions without handback. Same
- * outcomes, spoken as `decision: "block"` or `additionalContext`. When
+ * Fallback: `classic.SubagentStop`, for hosts/versions without handback.
+ * Same outcomes, spoken as `decision: "block"` or `additionalContext`. When
  * handback is in use, SubagentStop's `last_assistant_message` is
  * boilerplate with no STATUS line, so the gate skips there and never
  * runs twice.
@@ -32,15 +33,18 @@
 
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { attempt } from "@mimir/plugin-core/result";
 import { errMessage } from "@mimir/plugin-core/util";
 import {
   clearBlocks,
+  parseStatus,
   runVerify,
   type VerifyOutcome,
   type VerifyRole,
 } from "@mimir/plugin-core/verify";
 import { roleForAgentType } from "@mimir/plugin-core/workers";
 import { createLogger } from "./logger";
+import { taskProvenance } from "./task-state";
 
 const log = createLogger("verify-hook");
 
@@ -186,7 +190,7 @@ const runVerifyCli = async (args: VerifyCliArgs) => {
   // A worker's block count is its own; the coordinator's shared id
   // starts clean every time so old runs can't exhaust a new one.
   if (!args.agentId) await clearBlocks(agentId);
-  const outcome = await runVerify({
+  const outcome = await verifyForSession(process.env.CLAUDE_CODE_SESSION_ID, {
     role: args.role,
     worktree: resolve(args.worktree),
     lastMessage: "STATUS: done",
@@ -208,6 +212,28 @@ const runVerifyCli = async (args: VerifyCliArgs) => {
     default:
       return assertNever(outcome);
   }
+};
+
+const verifyForSession = async (
+  session: string | undefined,
+  options: Parameters<typeof runVerify>[0],
+) => {
+  if (options.role === "review" || parseStatus(options.lastMessage) !== "done")
+    return runVerify(options);
+  const [error, task] = await attempt(() =>
+    taskProvenance(session, options.worktree),
+  );
+  if (error)
+    return {
+      kind: "block",
+      blocks: 0,
+      reason: `Cannot verify task provenance: ${errMessage(error)}`,
+    } satisfies VerifyOutcome;
+  return runVerify({
+    ...options,
+    base: task?.base,
+    worktree: task?.worktree ?? options.worktree,
+  });
 };
 
 const handbackMessage = (input: HookInput) => {
@@ -249,7 +275,7 @@ export const runVerifyHook = async (args: readonly string[] = []) => {
     ? handbackMessage(input)
     : (input.last_assistant_message ?? "");
 
-  const outcome = await runVerify({
+  const outcome = await verifyForSession(input.session_id, {
     role: roleOf(input.agent_type),
     worktree: input.cwd ?? process.cwd(),
     lastMessage: message,
@@ -270,6 +296,7 @@ export const runVerifyHook = async (args: readonly string[] = []) => {
   log.info("verify gate", {
     agentId,
     agentType: input.agent_type,
+    worktree: input.cwd,
     via: onHandback ? "handback" : "stop",
     kind: outcome.kind,
     ...("blocks" in outcome ? { blocks: outcome.blocks } : {}),

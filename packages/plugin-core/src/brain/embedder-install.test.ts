@@ -19,8 +19,10 @@ import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { $ } from "bun";
+import { attempt } from "../result";
 import { embedderBinaryPath, embedderDir, embedderModelPath } from "./embedder";
 import {
+  installEmbedderArtifacts,
   installEmbedderModel,
   installLlamaServer,
   sha256File,
@@ -156,21 +158,21 @@ describe("installEmbedderModel", () => {
   });
 });
 
-describe("installLlamaServer", () => {
-  /** Real tar.gz mimicking the release layout: llama-<tag>/{files}. */
-  const buildFixtureArchive = async () => {
-    const stage = mkdtempSync(join(tmpdir(), "mimir-llama-fixture-"));
-    const inner = join(stage, `llama-${LLAMA_CPP_RELEASE.tag}`);
-    await mkdir(inner, { recursive: true });
-    await Bun.write(join(inner, "llama-server"), "#!/bin/sh\necho fake\n");
-    await Bun.write(join(inner, "libggml.dylib"), "fake-lib");
-    await Bun.write(join(inner, "llama-cli"), "unwanted-binary");
-    await Bun.write(join(inner, "README.md"), "docs");
-    const archive = join(stage, "release.tar.gz");
-    await $`tar -czf ${archive} -C ${stage} llama-${LLAMA_CPP_RELEASE.tag}`.quiet();
-    return archive;
-  };
+/** Real tar.gz mimicking the release layout: llama-<tag>/{files}. */
+const buildFixtureArchive = async () => {
+  const stage = mkdtempSync(join(tmpdir(), "mimir-llama-fixture-"));
+  const inner = join(stage, `llama-${LLAMA_CPP_RELEASE.tag}`);
+  await mkdir(inner, { recursive: true });
+  await Bun.write(join(inner, "llama-server"), "#!/bin/sh\necho fake\n");
+  await Bun.write(join(inner, "libggml.dylib"), "fake-lib");
+  await Bun.write(join(inner, "llama-cli"), "unwanted-binary");
+  await Bun.write(join(inner, "README.md"), "docs");
+  const archive = join(stage, "release.tar.gz");
+  await $`tar -czf ${archive} -C ${stage} llama-${LLAMA_CPP_RELEASE.tag}`.quiet();
+  return archive;
+};
 
+describe("installLlamaServer", () => {
   test("extracts server + libs only, marks the tag, skips when current", async () => {
     const archiveBytes = new Uint8Array(
       await Bun.file(await buildFixtureArchive()).arrayBuffer(),
@@ -268,5 +270,52 @@ describe("installLlamaServer", () => {
       const [err] = await installLlamaServer(silent, { url });
       expect(err?.message).toContain("did not contain llama-server");
     });
+  });
+});
+
+describe("installEmbedderArtifacts", () => {
+  test("stops a running embedder so the next caller spawns with current settings", async () => {
+    // A stand-in server already running from the pinned binary path — the
+    // way a hook-spawned llama-server from before this update would be.
+    await Bun.write(
+      embedderBinaryPath(),
+      'const s = Bun.serve({ port: 0, fetch: () => Response.json({ status: "ok" }) });\nconsole.log(s.port);\n',
+    );
+    const running = Bun.spawn([process.execPath, embedderBinaryPath()], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const { value } = await running.stdout.getReader().read();
+    const port = new TextDecoder().decode(value).trim();
+    const savedPort = process.env.MIMIR_EMBEDDER_PORT;
+    process.env.MIMIR_EMBEDDER_PORT = port;
+
+    const modelBytes = new TextEncoder().encode("fake-gguf-bytes");
+    const archiveBytes = new Uint8Array(
+      await Bun.file(await buildFixtureArchive()).arrayBuffer(),
+    );
+    const lines: string[] = [];
+    await withByteServer(archiveBytes, (binaryUrl) =>
+      withByteServer(modelBytes, async (modelUrl) => {
+        const err = await installEmbedderArtifacts((m) => lines.push(m), {
+          binaryUrl,
+          modelUrl,
+          expectedSha256: sha256Of(modelBytes),
+        });
+        expect(err).toBeNull();
+      }),
+    ).finally(() => {
+      running.kill();
+      if (savedPort === undefined) delete process.env.MIMIR_EMBEDDER_PORT;
+      else process.env.MIMIR_EMBEDDER_PORT = savedPort;
+    });
+
+    expect(lines).toContainEqual(
+      expect.stringContaining(`stopped running embedder (pid ${running.pid})`),
+    );
+    const [probeErr] = await attempt(() =>
+      fetch(`http://127.0.0.1:${port}/health`),
+    );
+    expect(probeErr).not.toBeNull();
   });
 });

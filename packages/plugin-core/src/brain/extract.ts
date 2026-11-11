@@ -10,11 +10,12 @@
  * endpoints alike. No key required for local endpoints.
  *
  * Failure contract mirrors MIM-74's hard rule transitively: extraction
- * failure returns [] — memories just don't get extracted this turn; the
- * transcript watermark stays put so the next turn retries.
+ * failure returns null — memories just don't get extracted this turn; the
+ * transcript watermark stays put so the next turn retries. [] is an honest
+ * "nothing worth keeping".
  */
 
-import { attempt } from "../result";
+import { attempt, attemptSync } from "../result";
 
 /** User-chosen extraction endpoint. */
 export type ExtractionConfig = {
@@ -139,36 +140,51 @@ export const completeChat = async (
   return content;
 };
 
-const completeExtraction = (
+/**
+ * A completion one leg needs, transport-agnostic: the BYOK path runs it
+ * through completeChat, the cc-plugin path hands it to the host's model.
+ */
+export type CompletionRequest = {
+  readonly system: string;
+  readonly prompt: string;
+  readonly maxTokens: number;
+};
+
+// A prepare step yields one of these. Built through helpers rather than
+// inline literals so the inferred union stays discriminable with `in`
+// (TS normalizes a union of fresh literals, adding `?: undefined` keys).
+export const skipLeg = (skipped: string) => ({ skipped });
+export const requestLeg = (request: CompletionRequest) => ({ request });
+
+const extractionRequest = (conversationText: string) => ({
+  system: EXTRACTION_SYSTEM_PROMPT,
+  prompt: conversationText,
+  maxTokens: EXTRACTION_MAX_TOKENS,
+});
+
+/** Run a prepared request against the user-chosen endpoint. */
+export const completeRequest = (
   config: ExtractionConfig,
-  conversationText: string,
+  request: CompletionRequest,
+  timeoutMs: number,
 ) =>
   completeChat(config, {
-    system: EXTRACTION_SYSTEM_PROMPT,
-    user: conversationText,
-    maxTokens: EXTRACTION_MAX_TOKENS,
-    timeoutMs: EXTRACTION_TIMEOUT_MS,
+    system: request.system,
+    user: request.prompt,
+    maxTokens: request.maxTokens,
+    timeoutMs,
   });
 
 /**
- * Extract memory strings from conversation text. NULL means transport or
- * parse FAILURE (callers keep their watermark and retry next turn); an
- * empty array is an honest "nothing worth keeping".
+ * Parse an extraction completion into memory strings. NULL is a parse
+ * FAILURE (not JSON, or not a string array); [] is an honest "nothing".
  */
-export const extractMemories = async (
-  config: ExtractionConfig,
-  conversationText: string,
-) => {
-  if (!conversationText.trim()) return [];
-
-  const content = await completeExtraction(config, conversationText);
-  if (content === null) return null;
-
-  const [parseErr, memories] = await attempt(async () => {
-    // Models fond of markdown wrap the array in ```json fences.
-    const cleaned = content.replace(/```json\n?|```/g, "").trim();
-    return JSON.parse(cleaned) as unknown;
-  });
+export const parseExtraction = (content: string) => {
+  // Models fond of markdown wrap the array in ```json fences.
+  const cleaned = content.replace(/```json\n?|```/g, "").trim();
+  const [parseErr, memories] = attemptSync(
+    () => JSON.parse(cleaned) as unknown,
+  );
 
   if (
     parseErr ||
@@ -183,6 +199,26 @@ export const extractMemories = async (
   return memories;
 };
 
+/**
+ * Extract memory strings from conversation text. NULL means transport or
+ * parse FAILURE (callers keep their watermark and retry next turn); an
+ * empty array is an honest "nothing worth keeping".
+ */
+export const extractMemories = async (
+  config: ExtractionConfig,
+  conversationText: string,
+) => {
+  if (!conversationText.trim()) return [];
+
+  const content = await completeRequest(
+    config,
+    extractionRequest(conversationText),
+    EXTRACTION_TIMEOUT_MS,
+  );
+  if (content === null) return null;
+  return parseExtraction(content);
+};
+
 // ── Conversation rendering: parity port of server goldfish/memory.ts
 //    buildExtractionText + its gates ──
 
@@ -193,10 +229,21 @@ export type ConversationMessage = {
   readonly content: unknown;
 };
 
-const EXTRACTION_MAX_CHARS = 4000;
+/**
+ * Rendered conversation handed to a configured endpoint. Small on purpose:
+ * a local reasoning model spends EXTRACTION_MAX_TOKENS on thinking as well
+ * as on its answer, and past roughly 12k chars of prompt it thinks the
+ * limit away and answers nothing. A caller with a roomier model passes its
+ * own budget.
+ */
+export const EXTRACTION_MAX_CHARS = 4000;
 const MIN_USER_TURNS = 2;
 const MIN_TEXT_CHARS = 200;
 const MIN_ASSISTANT_CHARS = 20;
+/** Less budget than this is left empty rather than filled with a fragment. */
+const MIN_TRUNCATED_CHARS = 80;
+/** One assistant message takes at most this fraction (1/n) of the budget. */
+const ASSISTANT_SHARE = 2;
 
 /** Text parts only — port of message-utils modelContentToString. */
 export const contentToString = (content: unknown) => {
@@ -214,8 +261,22 @@ export const contentToString = (content: unknown) => {
     .join("\n");
 };
 
-/** Last message untruncated, fill backward within the char budget.
- *  Shared renderer — extraction uses the 4000-char parity budget,
+const cut = (line: string, room: number) => `${line.slice(0, room - 1)}…`;
+
+/** A message as its line. An assistant's is cut to its share of the
+ *  budget: a long reply would otherwise crowd out the prompt it answers,
+ *  and the prompt is where the developer's decisions are. */
+const lineOf = (msg: ConversationMessage, maxChars: number) => {
+  const line = `${msg.role}: ${contentToString(msg.content)}`;
+  const share = Math.floor(maxChars / ASSISTANT_SHARE);
+  return msg.role === "assistant" && line.length > share
+    ? cut(line, share)
+    : line;
+};
+
+/** Last message first, fill backward within the char budget; the message
+ *  that overflows it is cut to fit and nothing earlier is read.
+ *  Shared renderer — extraction uses EXTRACTION_MAX_CHARS,
  *  summarization (brain/summarize.ts) a much larger one. */
 export const renderConversation = (
   messages: readonly ConversationMessage[],
@@ -233,57 +294,98 @@ export const renderConversation = (
 
   const lastMsg = filtered.at(-1);
   if (!lastMsg) return "";
-  const lastLine = `${lastMsg.role}: ${contentToString(lastMsg.content)}`;
+  const fullLast = lineOf(lastMsg, maxChars);
+  const lastLine =
+    fullLast.length > maxChars ? cut(fullLast, maxChars) : fullLast;
   const lines: string[] = [lastLine];
   let totalChars = lastLine.length;
 
   for (let i = filtered.length - 2; i >= 0; i--) {
     const msg = filtered[i];
     if (!msg) continue;
-    const line = `${msg.role}: ${contentToString(msg.content)}`;
-    if (totalChars + line.length > maxChars) break;
+    const line = lineOf(msg, maxChars);
+    // The "\n" that joins this line to the next counts against the budget.
+    const room = maxChars - totalChars - 1;
+    if (line.length > room) {
+      // Cut to what is left: dropped whole, one long message would hide
+      // itself and everything said before it.
+      if (room >= MIN_TRUNCATED_CHARS) {
+        lines.unshift(cut(line, room));
+      }
+      break;
+    }
     lines.unshift(line);
-    totalChars += line.length;
+    totalChars += line.length + 1;
   }
 
   return lines.join("\n");
 };
 
-export const buildExtractionText = (messages: readonly ConversationMessage[]) =>
-  renderConversation(messages, EXTRACTION_MAX_CHARS);
+export const buildExtractionText = (
+  messages: readonly ConversationMessage[],
+  maxChars = EXTRACTION_MAX_CHARS,
+) => renderConversation(messages, maxChars);
+
+export type ExtractionOptions = {
+  /** Render budget; a configured endpoint's by default. */
+  readonly maxChars?: number;
+  /**
+   * The window's last reading: compaction is about to discard it. The
+   * two-user-turn gate waits for more conversation, and none is coming.
+   */
+  readonly closing?: boolean;
+};
 
 /**
- * Full pipeline: gate → render → extract. Server-parity gates: fewer than
- * two user turns or under 200 rendered chars skip extraction (skips are
- * SUCCESS — the caller advances its watermark). `ok: false` is transport
- * failure — keep the watermark, retry next turn. Discriminants are
+ * Gate → render. Fewer than two user turns (unless `closing`) or under
+ * 200 rendered chars skip extraction: a skip is not a failure, and the
+ * caller decides whether to carry the delta or settle it. Otherwise the
+ * request to complete.
+ */
+export const prepareExtraction = (
+  messages: readonly ConversationMessage[],
+  { maxChars = EXTRACTION_MAX_CHARS, closing = false }: ExtractionOptions = {},
+) => {
+  const userTurns = messages.filter(
+    (m) => m.role === "user" && contentToString(m.content),
+  ).length;
+  if (!closing && userTurns < MIN_USER_TURNS) {
+    return skipLeg("fewer than 2 user turns");
+  }
+
+  const text = buildExtractionText(messages, maxChars);
+  if (text.length < MIN_TEXT_CHARS) {
+    return skipLeg("conversation too short");
+  }
+
+  return requestLeg(extractionRequest(text));
+};
+
+/**
+ * Full pipeline: prepare → complete → parse. `ok: false` is transport or
+ * parse failure — keep the watermark, retry next turn. Discriminants are
  * `as const` so the inferred union discriminates without an annotation.
  */
 export const extractFromConversation = async (
   config: ExtractionConfig,
   messages: readonly ConversationMessage[],
+  options: ExtractionOptions = {},
 ) => {
-  const userTurns = messages.filter(
-    (m) => m.role === "user" && contentToString(m.content),
-  ).length;
-  if (userTurns < MIN_USER_TURNS) {
+  const prepared = prepareExtraction(messages, options);
+  if ("skipped" in prepared) {
     return {
       ok: true as const,
       memories: [] as string[],
-      skipped: "fewer than 2 user turns",
+      skipped: prepared.skipped,
     };
   }
 
-  const text = buildExtractionText(messages);
-  if (text.length < MIN_TEXT_CHARS) {
-    return {
-      ok: true as const,
-      memories: [] as string[],
-      skipped: "conversation too short",
-    };
-  }
-
-  const memories = await extractMemories(config, text);
+  const content = await completeRequest(
+    config,
+    prepared.request,
+    EXTRACTION_TIMEOUT_MS,
+  );
+  const memories = content === null ? null : parseExtraction(content);
   if (memories === null) {
     return { ok: false as const, memories: null, skipped: null };
   }
