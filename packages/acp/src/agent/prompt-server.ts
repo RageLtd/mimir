@@ -130,8 +130,8 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
     allTools.map((tool) => tool.function.name),
   );
 
-  // Per-turn local context assembly: replica retrieval (hybrid — the
-  // shared embedder supplies the vector leg, FTS-only when it's
+  // Per-turn local context assembly: replica retrieval (by the shared
+  // embedder's query vector; nothing is retrieved when it is
   // unavailable) + user profile + project rules, composed into ONE
   // synthetic injection pair. Retrieval failure is non-fatal: the turn
   // runs without memories.

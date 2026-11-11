@@ -31,6 +31,7 @@ export {
   getCachedProjectId,
   readCache,
   readProjectIdAliases,
+  readProjectNames,
   setCachedProjectId,
   setProjectIdAlias,
   writeCache,

@@ -50,7 +50,8 @@
     "./verify": "./src/verify/index.ts",
     "./workers": "./src/workers/index.ts",
     "./project": "./src/project/index.ts",
-    "./voice-anchor": "./src/voice-anchor.ts"
+    "./voice-anchor": "./src/voice-anchor.ts",
+    "./retrieve-state": "./src/retrieve-state.ts"
   },
   "scripts": {
     "test": "bun test --parallel src"

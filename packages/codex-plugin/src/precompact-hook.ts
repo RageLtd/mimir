@@ -21,6 +21,7 @@ import { extractFromConversation } from "@mimir/plugin-core/brain/extract";
 import { summarizeToReplica } from "@mimir/plugin-core/brain/summarize";
 import { getOrResolveProjectId } from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
+import { clearInjectedIds } from "@mimir/plugin-core/retrieve-state";
 import { extractionConfig, readConfig } from "@mimir/plugin-core/shared-config";
 import {
   createOrgReplica,
@@ -56,6 +57,19 @@ export const runPreCompactHook = async () => {
   const transcriptPath = input.transcript_path;
   const cwd = input.cwd ?? process.cwd();
   const trigger = input.trigger ?? "unknown";
+
+  // The window is about to be replaced, so the rows retrieval put in it
+  // may be sent again. Needs only the session id, so it comes before the
+  // transcript check.
+  if (sessionId) {
+    const [clearErr] = await attempt(() => clearInjectedIds(sessionId));
+    if (clearErr) {
+      log.warn(
+        "retrieve state not cleared — rows stay skipped after compaction",
+        { sessionId, error: clearErr.message },
+      );
+    }
+  }
 
   if (!sessionId || !transcriptPath) {
     log.debug("missing session_id or transcript_path — skipping", { trigger });

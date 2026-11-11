@@ -5,7 +5,7 @@
  * MCP get a query embedder whose text NEVER leaves the machine. Lifecycle is
  * get-or-start per the repo's reuse-processes rule: probe localhost for a
  * healthy server, spawn one if the pinned artifacts are installed, and
- * degrade to null (FTS-only retrieval) otherwise — an absent embedder is a
+ * degrade to null (no retrieval) otherwise — an absent embedder is a
  * working state, not an error state. The server sleeps after a few idle
  * minutes (model and context freed, listener kept, /health still ok) and
  * reloads on the next task; only install/update stops it (`stopEmbedder`),
@@ -67,7 +67,7 @@ const EMBED_TIMEOUT_MS = 30_000;
 const SPAWN_WAIT_MS = 60_000;
 /** Query-path default — hooks and interactive MCP calls must not blow
  *  their timeouts waiting on a cold load. The spawn still fires; this
- *  turn degrades to FTS-only and the next turn finds a warm server. */
+ *  turn retrieves nothing and the next turn finds a warm server. */
 const QUERY_SPAWN_WAIT_MS = 5_000;
 const SPAWN_POLL_INTERVAL_MS = 300;
 /** Idle seconds before llama-server frees the model and context. It keeps
@@ -182,7 +182,7 @@ export const getOrStartEmbedder = async (opts: EmbedderOpts = {}) => {
   if (await probeHealthy(baseUrl, healthTimeoutMs)) return baseUrl;
   if (!(await embedderInstalled())) {
     logErr(
-      "not installed — run `mimir-cc update` to fetch the model + binary; retrieval degrades to text-only",
+      "not installed — run `mimir-cc update` to fetch the model + binary; nothing is retrieved until then",
     );
     return null;
   }
@@ -202,7 +202,7 @@ type EmbeddingsResponse = {
 };
 
 /**
- * Embed a batch. Null on any failure (callers degrade to FTS-only); the
+ * Embed a batch. Null on any failure (callers retrieve nothing); the
  * why goes to stderr. Output order matches input order.
  */
 export const embedTexts = async (

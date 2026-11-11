@@ -46,9 +46,9 @@ export type LocalFileInfoOpts = {
   readonly rootPath: string;
   /** Project-relative file path — the canonical index key. */
   readonly filePath: string;
-  /** Canonical project UUID for the memory-scoring tiebreaker. */
+  /** Canonical project UUID — its rows get the wider distance gate. */
   readonly projectId?: string | null;
-  /** Vector leg for the memory search; null/omitted → FTS-only. */
+  /** Query embedder for the memory search; null/omitted → no memories. */
   readonly embedQuery?: EmbedQuery | null;
 };
 
@@ -82,7 +82,6 @@ export const buildLocalFileInfo = async (opts: LocalFileInfoOpts) => {
     );
     const list = await retrieveMemoryList(replica, memoryQuery, {
       topK: FILE_INFO_MEMORY_TOP_K,
-      includeRelated: false,
       ...(opts.projectId ? { projectId: opts.projectId } : {}),
       ...(opts.embedQuery ? { embedQuery: opts.embedQuery } : {}),
     });

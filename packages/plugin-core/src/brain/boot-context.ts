@@ -57,8 +57,7 @@ const buildUserProfileSection = async (dbPath: string, log: Logger) => {
   return block;
 };
 
-// Boot budgets mirror the historical server /assemble defaults (goldfish
-// retrieval topK 10 with related, 3 summaries) — richer first-turn
+// Boot budgets (up to 10 facts and 3 summaries) — richer first-turn
 // priming than the per-turn micro-retrieval.
 const BOOT_MEMORY_TOP_K = 10;
 const BOOT_SUMMARY_COUNT = 3;
@@ -89,10 +88,9 @@ const buildSessionContext = async (
   const [retrieveErr, result] = await attempt(() =>
     retrieveLocalContext(replica, query, {
       topK: BOOT_MEMORY_TOP_K,
-      includeRelated: true,
       summaryCount: BOOT_SUMMARY_COUNT,
       projectId: projectId ?? undefined,
-      // MIM-85: local llama-server vector leg; null/cold → FTS-only boot.
+      // MIM-85: local llama-server vector leg; null/cold → nothing retrieved.
       embedQuery: createEmbedQuery(),
     }),
   );
