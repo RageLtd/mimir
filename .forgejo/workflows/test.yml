@@ -1,0 +1,40 @@
+name: Test
+
+# The shared test suite, on the forge: typecheck, then the full root harness
+# across all packages. Runs on pull requests to main, and on request.
+#
+# While this directory exists the forge ignores .github/workflows, so the
+# GitHub release workflows do not also run here.
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Install & Test
+    # A Linux arm64 container on the Mac's runner, in the image that carries
+    # git, Node and Bun (built from rageltd/ci-images).
+    runs-on: docker-arm64
+    container:
+      image: git.rageltd.ca/rageltd/ci-node:wolfi
+    steps:
+      # No marketplace actions: a checkout is a fetch of the ref being built,
+      # which is a branch for a dispatch and refs/pull/N/head for a pull
+      # request.
+      - name: Check out
+        run: |
+          git init -q .
+          git remote add origin \
+            "$(echo "$GITHUB_SERVER_URL" | sed "s#://#://token:${{ github.token }}@#")/$GITHUB_REPOSITORY.git"
+          git fetch -q --depth 1 origin "$GITHUB_REF"
+          git checkout -q FETCH_HEAD
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Run tests
+        run: bun run test

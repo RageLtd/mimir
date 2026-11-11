@@ -1,0 +1,28 @@
+name: Rules Check
+
+# Fails the build when vendored rules drift from .claude/rules-lock.json.
+# The forge's counterpart of .github/workflows/rules-check.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  rules-check:
+    name: Vendored rules match lock
+    runs-on: docker-arm64
+    container:
+      image: git.rageltd.ca/rageltd/ci-node:wolfi
+    steps:
+      - name: Check out
+        run: |
+          git init -q .
+          git remote add origin \
+            "$(echo "$GITHUB_SERVER_URL" | sed "s#://#://token:${{ github.token }}@#")/$GITHUB_REPOSITORY.git"
+          git fetch -q --depth 1 origin "$GITHUB_REF"
+          git checkout -q FETCH_HEAD
+
+      - name: Verify vendored rules
+        run: node .claude/rules-check.mjs
