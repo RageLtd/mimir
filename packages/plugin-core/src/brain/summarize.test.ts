@@ -269,6 +269,7 @@ describe("renderConversation over the cap (extraction path unchanged)", () => {
     expect(text).toContain(marker(99));
     expect(text).not.toContain(marker(0));
     expect(text).not.toContain(SUMMARIZE_ELISION_LINE);
+    expect(text.length).toBeLessThanOrEqual(SUMMARY_CAP);
   });
 });
 

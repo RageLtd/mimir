@@ -69,9 +69,7 @@ const renderSummaryInput = (messages: readonly ConversationMessage[]) => {
   const head = lineEnd > 0 ? slice.slice(0, lineEnd) : slice;
   const budget =
     SUMMARIZE_MAX_CHARS - head.length - SUMMARIZE_ELISION_LINE.length - 2;
-  // renderConversation does not count its "\n" joins against maxChars, so
-  // its output can run a char per line over; trim the oldest end to fit.
-  const newest = renderConversation(messages, budget).slice(-budget);
+  const newest = renderConversation(messages, budget);
   return `${head}\n${SUMMARIZE_ELISION_LINE}\n${newest}`;
 };
 

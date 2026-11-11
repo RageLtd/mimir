@@ -294,7 +294,9 @@ export const renderConversation = (
 
   const lastMsg = filtered.at(-1);
   if (!lastMsg) return "";
-  const lastLine = lineOf(lastMsg, maxChars);
+  const fullLast = lineOf(lastMsg, maxChars);
+  const lastLine =
+    fullLast.length > maxChars ? cut(fullLast, maxChars) : fullLast;
   const lines: string[] = [lastLine];
   let totalChars = lastLine.length;
 
@@ -302,7 +304,8 @@ export const renderConversation = (
     const msg = filtered[i];
     if (!msg) continue;
     const line = lineOf(msg, maxChars);
-    const room = maxChars - totalChars;
+    // The "\n" that joins this line to the next counts against the budget.
+    const room = maxChars - totalChars - 1;
     if (line.length > room) {
       // Cut to what is left: dropped whole, one long message would hide
       // itself and everything said before it.
@@ -312,7 +315,7 @@ export const renderConversation = (
       break;
     }
     lines.unshift(line);
-    totalChars += line.length;
+    totalChars += line.length + 1;
   }
 
   return lines.join("\n");
