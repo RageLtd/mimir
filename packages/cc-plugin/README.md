@@ -92,7 +92,7 @@ There are two ways in. The **marketplace path** is the normal one — no clone, 
 
 4. Either let `/mimir-install` enable the project you're in and open a new desktop-app (or plain `claude`) session there, or run `mimir` from any terminal for the wrapper path.
 
-To track a newer release later, run `/plugin marketplace update rageltd` to refresh the pinned tag, then `/mimir-update` to re-fetch the binary and re-land the runtime (without arguments it reuses the server URL stored in `~/.mimir/config.json`). `ensure-binary.sh` also runs on every `mimir` launch, so simply starting the wrapper usually pulls the latest release on its own — unless you've pinned a dev build (see below).
+To track a newer release later, run `/plugin marketplace update rageltd` to refresh the pinned tag, then `/mimir-update` to re-fetch the binary and re-land the runtime (without arguments it reuses the server URL stored in `~/.mimir/config.json`). After that first update you rarely need to: the installer turns on auto-update for the `rageltd` marketplace in the settings it writes, and at every session start the hooks module fetches the binary released under its own plugin version, so the plugin and its binary move together. The wrapper only fetches a binary when none is installed — unless you've pinned a dev build (see below), which nothing replaces. What changed between releases is on each `cc-plugin/v<version>` GitHub Release.
 
 ### From source (contributors)
 

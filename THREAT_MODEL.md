@@ -9,9 +9,16 @@
 
 Mimir's cloud design keeps tenant content and project metadata outside the
 operator's trust boundary. Conversations, source code, Cartographer indexes,
-embeddings, inference, and project discovery remain local. Memories and
+embeddings, and project discovery never reach the server. Memories and
 playbooks leave a device only as AES-256-GCM envelopes encrypted with an org
 key that the server never receives unwrapped.
+
+Inference and memory distillation go to the model provider the user selects,
+which sits outside this model. Distillation is only as private as the model
+that performs it: a local endpoint keeps the transcript on the device, while
+Claude Code's default sends it to the session's own provider, the party that
+already receives the session's turns. No distribution sends it to the Mimir
+server.
 
 Envelope v2 authenticates the record id, org, kind, key generation, record
 version, and tombstone bit. A server cannot turn a live record into a delete,
@@ -94,13 +101,16 @@ The principal data flows are:
 1. The client derives project identity from a normalized git remote, falling
    back to an absolute local path when no remote exists. Project metadata is
    never sent to the server.
-2. Local extraction writes plaintext memories to the local SQLite replica.
+2. Extraction runs on a user-selected model — a configured endpoint, or on
+   Claude Code by default the session's own model — and writes plaintext
+   memories to the local SQLite replica. The conversation text it reads is
+   sent to that model and to nothing else.
 3. Sync seals dirty rows with the current org key and sends only wire
    envelopes. Pull decrypts and validates them before applying them locally.
 4. Key ceremonies generate user X25519 material locally. The server stores
    public keys, encrypted user keysets, and org keyrings wrapped per member.
-5. Inference and embeddings run locally or go directly to a provider under
-   user-supplied credentials.
+5. Embeddings run locally. Inference runs locally or goes directly to a
+   provider under the user's own credentials.
 6. `/mcp` exposes process logs only after a separate operator bearer token.
    Better Auth tenant sessions and API keys never authorize it.
 

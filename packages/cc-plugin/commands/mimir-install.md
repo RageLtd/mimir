@@ -4,7 +4,7 @@ argument-hint: "[server-url]"
 allowed-tools: ["Bash", "AskUserQuestion"]
 ---
 
-You are installing the Mimir runtime for Claude Code. This is a one-shot setup that lands a wrapper script, MCP config, hook settings, runtime config, and the persona prompt onto the user's machine.
+You are installing the Mimir runtime for Claude Code. This is a one-shot setup that lands the `mimir-cc` binary, a wrapper script and its settings file, runtime config, and the persona prompt onto the user's machine. Hooks and MCP servers are not installed here: they ship in the plugin itself.
 
 Carry out the following steps in order. Do not skip steps. Do not improvise alternatives.
 

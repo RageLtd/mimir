@@ -25,7 +25,7 @@ The only runtime dependencies are the AI SDK provider packages the inference eng
 
 ## The memory brain
 
-Distillation runs entirely on the developer's machine (MIM-86). At session idle, before compaction, and on the host's stop hook, new turns are handed to a configured extraction model and reduced to memories; the transcript never leaves the machine.
+Distillation is driven from the developer's machine and never touches mimir-server (MIM-86). When a turn ends (or the session goes idle, depending on the host) and before compaction, new turns are handed to an extraction model and reduced to memories. Which model that is depends on the distribution — see [Extraction configuration](#extraction-configuration). With a local endpoint the transcript never leaves the machine; on Claude Code's default it goes to the session's own model provider, where the session's turns already go, and nowhere else.
 
 Storage is two SQLite stores with different scopes and different fates:
 
@@ -46,7 +46,18 @@ Resolved by `extractionConfig()` in `shared-config.ts`. Environment always wins 
 | `MIMIR_EXTRACTION_MODEL` | `config.extractionModel` → `MIMIR_SMALL_MODEL` → `config.smallModel` | The distillation/judgment model |
 | `MIMIR_EXTRACTION_API_KEY` | `config.extractionApiKey` → `MIMIR_PROVIDER_API_KEY` → `config.providerApiKey` | Optional — keyless local endpoints need nothing |
 
-When base URL or model can't be resolved, extraction is skipped and logged rather than failing the turn.
+Whether an endpoint is required depends on the distribution:
+
+| Distribution | Endpoint required? | Without one |
+|--------------|--------------------|-------------|
+| Claude Code | No | Distillation runs on the session's own model (`haiku`, through the hooks module). A configured endpoint and model still win |
+| OpenCode | Yes | Extraction is skipped and logged; the turn is never failed |
+| Codex CLI | Yes | Extraction is skipped and logged; the turn is never failed |
+| ACP (Zed) | Yes | Extraction is skipped and logged; the turn is never failed |
+
+Claude Code is the exception because its hooks-module API lends the plugin the session's model client; the other hosts have no equivalent, so the endpoint is their only path. The Claude Code mechanics are in [`packages/cc-plugin/README.md`](../cc-plugin/README.md#hooks-module-plugin-hooksregisterts).
+
+Hygiene has no session-model path on any host, Claude Code included: a sweep needs a configured extraction endpoint (`--model` overrides only the model id).
 
 ## Keys and sync
 

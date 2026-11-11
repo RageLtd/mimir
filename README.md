@@ -4,7 +4,9 @@ A coding agent with persistent memory and a personality, running inside the edit
 
 Mimir is not another chat window. It is a memory brain and a persona that attach to the agent you already have. It remembers the decisions you made three weeks ago, knows how your codebase is wired, enforces your team's rules at the moment you're about to break them, and talks like someone who has opinions about your architecture.
 
-Everything that reads your data runs on your machine: memory extraction, embeddings, retrieval, and inference are all local. The server exists only to sync encrypted memory between your devices and teammates — and it can't read any of it.
+Everything Mimir itself does with your data happens on your machine: storage, embeddings, retrieval, and indexing are all local. The server exists only to sync encrypted memory between your devices and teammates — and it can't read any of it.
+
+The one thing that needs a model is distilling your turns into memories, and that step is exactly as private as the model you point it at. Use a local model and the transcript never leaves your machine. On Claude Code the default is the session's own model — the same provider you already trust to read and write your source — and a local endpoint remains a configuration away. See [Memory](#memory).
 
 > [!IMPORTANT]
 > **Security:** Mimir is built so that the server operator can never read your data — memories, code, and conversations stay on your machine or leave it only as ciphertext. Read exactly what the server can and cannot see in [THREAT_MODEL.md](./THREAT_MODEL.md).
@@ -156,7 +158,12 @@ Mimir stores and recalls on its own, but you can drive it directly by just sayin
 
 The distinction matters: project memory is *facts about this codebase* and travels to your teammates encrypted. User memory is *facts about you* and never leaves the machine.
 
-Memories are distilled by an extraction model you configure (`MIMIR_EXTRACTION_BASE_URL` / `MIMIR_EXTRACTION_MODEL` — a local Ollama works fine). The transcript never leaves your machine.
+Memories are distilled from your turns by an extraction model, and which one depends on the editor:
+
+- **Claude Code** needs nothing configured — distillation runs on the session's own model. If you do configure an extraction endpoint, it is used instead.
+- **OpenCode, Codex CLI and Zed (ACP)** need an extraction endpoint you configure (`MIMIR_EXTRACTION_BASE_URL` / `MIMIR_EXTRACTION_MODEL` — a local Ollama works fine). Without one, nothing is distilled.
+
+With a local endpoint the transcript never leaves your machine; on Claude Code's default it goes only where your session's own turns already go. Details: [`packages/plugin-core/README.md`](packages/plugin-core/README.md#extraction-configuration).
 
 ### Rules
 
