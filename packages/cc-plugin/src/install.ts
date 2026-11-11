@@ -23,7 +23,6 @@
 import { chmod, copyFile, mkdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { toAnthropicXml } from "@mimir/plugin-core/anthropic-xml";
 import { embedderDir } from "@mimir/plugin-core/brain/embedder";
 import { installEmbedderArtifacts } from "@mimir/plugin-core/brain/embedder-install";
 import { resolveCartographerBinary } from "@mimir/plugin-core/cartographer/resolve";
@@ -39,6 +38,7 @@ import ensureBinaryScript from "../scripts/ensure-binary.sh" with {
 };
 import { checkClaudeVersion, MIN_CLAUDE_CODE_VERSION } from "./cc-version";
 import { extractionConfig, readConfig, writeConfig } from "./config";
+import { writePersonaFiles } from "./persona-files";
 import { claudeConfigDir } from "./project-settings";
 
 // `as const` keeps the discriminant literal so the ok/err union
@@ -217,24 +217,18 @@ export const runInstall = async (
   const promptResult = await fetchSystemPrompt(urlResult.value, opts.apiKey);
   if (!promptResult.ok) return promptResult;
 
-  const xml = toAnthropicXml(promptResult.value.content);
-
   const home = mimirHome();
   const binDir = join(homedir(), ".local", "bin");
 
   const userMemoryDb = opts.userMemoryDb ?? join(home, "user-memories.db");
 
-  const promptPath = join(home, "system-prompt.md");
-  const ccPromptPath = join(home, "cc", "system-prompt.xml");
   const settingsPath = join(home, "settings.json");
   const wrapperPath = join(binDir, "mimir");
   const selfPath = join(binDir, "mimir-cc");
 
   const ensureBinaryPath = join(home, "ensure-binary.sh");
 
-  // Shared persona stays byte-for-byte canonical; CC enrichment is host-local.
-  await writeText(promptPath, promptResult.value.content);
-  await writeText(ccPromptPath, xml);
+  await writePersonaFiles(promptResult.value.content);
   await writeText(settingsPath, settingsTemplate);
   // Retired files an update removes: workers moved into the plugin's
   // agents/ directory; MCP servers moved into the plugin's .mcp.json (a
