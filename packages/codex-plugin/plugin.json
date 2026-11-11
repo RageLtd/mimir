@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "mimir",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "description": "Mimir for OpenAI Codex CLI — persona, lifecycle-hook brain, local memory, and cartographer indexing. This plugin is the bootstrap: its skill installs the mimir-codex binary, which lands the real runtime in a dedicated CODEX_HOME.",
   "author": {
     "name": "RageLtd",
