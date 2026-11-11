@@ -50,7 +50,10 @@ export const TEST_CONVENTIONS: readonly TestConvention[] = [
   {
     language: "rust",
     extensions: new Set(["rs"]),
-    testPath: /(?:^|\/)tests\/[^/]+\.rs$|_tests?\.rs$/,
+    // `foo/tests.rs` is a module's own test file (`#[cfg(test)] mod tests;`);
+    // `foo.test.rs` is one pulled in with `#[path = "foo.test.rs"]`.
+    testPath:
+      /(?:^|\/)tests\/[^/]+\.rs$|_tests?\.rs$|(?:^|\/)tests?\.rs$|\.test\.rs$/,
     testMarker: /^\s*#\[(?:\w+::)*test\b/,
     skipMarker: /^\s*#\[ignore\b/,
     assertion: /\bassert(?:_eq|_ne|_matches)?!\s*\(|\bshould_panic\b/,
