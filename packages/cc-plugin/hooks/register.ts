@@ -19,11 +19,13 @@ import { registerGate } from "./gate";
 import { registerLifecycle } from "./lifecycle";
 import { registerPersona } from "./persona";
 import { registerReindex } from "./reindex";
+import { registerSessionEnd } from "./session-end";
 import { registerSubmit } from "./submit";
 
 export const register: Register = (on, options) => {
   registerPersona(on, options);
   registerLifecycle(on, options);
+  registerSessionEnd(on, options);
   registerBoot(on, options);
   registerSubmit(on, options);
   // The edit guard is pure and goes first: a shell edit is refused before

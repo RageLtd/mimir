@@ -267,6 +267,97 @@ describe("precompactPlan", () => {
     expect(plan.reasons[0]?.length).toBeGreaterThan(0);
   });
 
+  test("unconfigured, the summary comes from the whole window though the delta is too small to summarise", () => {
+    const plan = precompactPlan({
+      messages: SHORT,
+      window: LONG,
+      extraction: null,
+      hostCompletions: true,
+    });
+    if (plan.kind !== "request") {
+      throw new Error(`expected a request, got ${JSON.stringify(plan)}`);
+    }
+    expect(Object.keys(plan.requests)).toEqual(["summary"]);
+    expect(plan.requests.summary?.prompt).toBe(
+      renderConversation(LONG, SUMMARY_RENDER_CHARS),
+    );
+  });
+
+  test("unconfigured, with a window the facts still come from the delta alone", () => {
+    const plan = precompactPlan({
+      messages: MID,
+      window: [...LONG, ...MID],
+      extraction: null,
+      hostCompletions: true,
+    });
+    if (plan.kind !== "request") {
+      throw new Error(`expected a request, got ${JSON.stringify(plan)}`);
+    }
+    expect(Object.keys(plan.requests).sort()).toEqual(["facts", "summary"]);
+    expect(plan.requests.summary?.prompt).toBe(
+      renderConversation([...LONG, ...MID], SUMMARY_RENDER_CHARS),
+    );
+    expect(plan.requests.facts?.prompt).toBe(buildExtractionText(MID));
+  });
+
+  test("unconfigured, an empty delta with a window over the floor still requests the summary", () => {
+    const plan = precompactPlan({
+      messages: [],
+      window: LONG,
+      extraction: null,
+      hostCompletions: true,
+    });
+    if (plan.kind !== "request") {
+      throw new Error(`expected a request, got ${JSON.stringify(plan)}`);
+    }
+    expect(Object.keys(plan.requests)).toEqual(["summary"]);
+  });
+
+  test("unconfigured, a window too small to summarise is not rescued by a large delta", () => {
+    const plan = precompactPlan({
+      messages: LONG,
+      window: SHORT,
+      extraction: null,
+      hostCompletions: true,
+    });
+    if (plan.kind !== "request") {
+      throw new Error(`expected a request, got ${JSON.stringify(plan)}`);
+    }
+    expect(Object.keys(plan.requests)).toEqual(["facts"]);
+  });
+
+  test("unconfigured, without a window (an older plugin's payload) the summary comes from the delta", () => {
+    const plan = precompactPlan({
+      messages: LONG,
+      extraction: null,
+      hostCompletions: true,
+    });
+    if (plan.kind !== "request") {
+      throw new Error(`expected a request, got ${JSON.stringify(plan)}`);
+    }
+    expect(plan.requests.summary?.prompt).toBe(
+      renderConversation(LONG, SUMMARY_RENDER_CHARS),
+    );
+  });
+
+  test("unconfigured, phase two with a window and an empty delta stores the summary and advances", () => {
+    expect(
+      precompactPlan({
+        messages: [],
+        window: LONG,
+        extraction: null,
+        hostCompletions: true,
+        completions: { summary: { text: SUMMARY } },
+      }),
+    ).toEqual({
+      kind: "store",
+      summary: SUMMARY,
+      memories: null,
+      advance: true,
+      reasons: [],
+    });
+  });
+
   test("unconfigured, facts alone (summary skipped at phase one) stores the facts, advances, and reports no reasons", () => {
     expect(
       precompactPlan({

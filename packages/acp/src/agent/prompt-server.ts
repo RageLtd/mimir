@@ -15,7 +15,6 @@
  */
 
 import type * as acp from "@agentclientprotocol/sdk";
-import { retrieveLocalContext } from "@mimir/plugin-core/brain/retrieve";
 import { runAndFormat } from "@mimir/plugin-core/rules";
 import type { OrgReplica } from "@mimir/plugin-core/store/org-replica";
 import type { UserMemoryStore } from "@mimir/plugin-core/store/user-memories";
@@ -50,6 +49,7 @@ import {
 import {
   buildLocalContextInjection,
   placeContextInjection,
+  retrieveTurnContext,
   scopedRulesBlockForRead,
   todoWriteToolDef,
 } from "./turn-context";
@@ -133,13 +133,16 @@ export const promptViaServer = async (opts: PromptViaServerOptions) => {
   // Per-turn local context assembly: replica retrieval (by the shared
   // embedder's query vector; nothing is retrieved when it is
   // unavailable) + user profile + project rules, composed into ONE
-  // synthetic injection pair. Retrieval failure is non-fatal: the turn
-  // runs without memories.
+  // synthetic injection pair. The session's first prompt also gets the
+  // active project's newest summary. Retrieval failure is non-fatal: the
+  // turn runs without memories.
   const retrieved = replica
-    ? await retrieveLocalContext(replica, promptText, {
-        projectId: session.projectId ?? undefined,
-        embedQuery: sharedEmbedQuery(),
-      }).catch((err) => {
+    ? await retrieveTurnContext(
+        replica,
+        session,
+        promptText,
+        sharedEmbedQuery(),
+      ).catch((err) => {
         logger.warn("local context retrieval failed:", errMessage(err));
         return { contextBlock: "", memoryCount: 0, summaryCount: 0 };
       })

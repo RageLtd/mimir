@@ -293,6 +293,7 @@ describe("retrieveLocalContext", () => {
       summaryCount: 0,
       injectedIds: [],
       embedderUnavailable: false,
+      summaryDeferred: false,
     });
   });
 
@@ -417,5 +418,80 @@ describe("retrieveLocalContext", () => {
     expect(result.summaryCount).toBe(0);
     expect(result.injectedIds).toEqual([]);
     expect(result.embedderUnavailable).toBe(true);
+  });
+});
+
+describe("retrieveLocalContext — a session's first prompt", () => {
+  const OURS = "project:a";
+  const first = { embedQuery, projectId: OURS, sessionStart: true };
+  /** Far from the prompt, so only the recency path can bring it. */
+  const summary = (id: string, day: string, project_id?: string) =>
+    store(id, FAR, {
+      type: "summary",
+      project_id,
+      content: `${id} `.repeat(30),
+      created_at: `2026-11-${day} 09:00:00`,
+    });
+  const ids = async (opts: Parameters<typeof retrieveLocalContext>[2]) =>
+    (await retrieveLocalContext(replica, QUERY, opts)).injectedIds;
+
+  test("the active project's newest summary fills the slot, outside the budget and without a vector", async () => {
+    summary("memory:older", "01", OURS);
+    summary("memory:newest", "09", OURS);
+    const noVector = { projectId: OURS, sessionStart: true };
+    for (const { opts, unavailable } of [
+      { opts: first, unavailable: false },
+      { opts: { ...first, maxChars: 10 }, unavailable: false },
+      {
+        opts: { ...noVector, embedQuery: async () => null },
+        unavailable: true,
+      },
+      { opts: noVector, unavailable: true },
+    ]) {
+      const result = await retrieveLocalContext(replica, QUERY, opts);
+      expect(result.contextBlock).toMatch(
+        /<summaries>[\s\S]*memory:newest[\s\S]*<\/summaries>/,
+      );
+      expect(result.summaryCount).toBe(1);
+      expect(result.injectedIds).toEqual(["memory:newest"]);
+      expect(result.embedderUnavailable).toBe(unavailable);
+    }
+  });
+
+  test("an excluded summary gives way to the next newest; none left is none", async () => {
+    summary("memory:older", "01", OURS);
+    summary("memory:newest", "09", OURS);
+    const newest = new Set(["memory:newest"]);
+    expect(await ids({ ...first, exclude: newest })).toEqual(["memory:older"]);
+    const both = new Set(["memory:newest", "memory:older"]);
+    expect(await ids({ ...first, exclude: both })).toEqual([]);
+  });
+
+  test("a summary admitted by distance wins; nothing is added on top", async () => {
+    store("memory:near", NEAR, { type: "summary", project_id: OURS });
+    summary("memory:newest", "09", OURS);
+    for (const summaryCount of [undefined, 3]) {
+      const result = await retrieveLocalContext(replica, QUERY, {
+        ...first,
+        summaryCount,
+      });
+      expect(result.summaryCount).toBe(1);
+      expect(result.injectedIds).toEqual(["memory:near"]);
+    }
+  });
+
+  test("never another project's summary or an unscoped one", async () => {
+    summary("memory:theirs", "09", "project:b");
+    summary("memory:unscoped", "10");
+    const result = await retrieveLocalContext(replica, QUERY, first);
+    expect(result.contextBlock).toBe("");
+    expect(result.summaryCount).toBe(0);
+  });
+
+  test("not the first prompt, or no active project: no recency summary", async () => {
+    summary("memory:newest", "09", OURS);
+    expect(await ids({ embedQuery, projectId: OURS })).toEqual([]);
+    expect(await ids({ ...first, sessionStart: false })).toEqual([]);
+    expect(await ids({ embedQuery, sessionStart: true })).toEqual([]);
   });
 });

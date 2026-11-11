@@ -23,6 +23,16 @@ describe("isStalePayload", () => {
     expect(isStalePayload({ session_id: "s", messages: [] })).toBe(false);
   });
 
+  test("an empty delta carrying the whole window is current", () => {
+    expect(
+      isStalePayload({
+        session_id: "s",
+        messages: [],
+        window: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+      }),
+    ).toBe(false);
+  });
+
   test("no payload at all is not a stale plugin", () => {
     expect(isStalePayload({})).toBe(false);
   });

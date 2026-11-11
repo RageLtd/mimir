@@ -46,6 +46,9 @@ export type HookOutput = {
   readonly advance?: boolean;
   /** persist / precompact phase one: completions to run, then run again. */
   readonly requests?: Readonly<Record<string, CompletionRequest>>;
+  /** retrieve: the last session's summary is still being written, so the
+   *  next prompt asks for it again. */
+  readonly summaryPending?: boolean;
 };
 
 /** `argv` for `$.process.run`: the installed binary and one subcommand. */
@@ -66,6 +69,18 @@ export const parseHookOutput = (stdout: string) => {
   // Serialisation boundary: the binary's stdout is JSON of a known shape.
   return JSON.parse(stdout) as HookOutput;
 };
+
+/** `parseHookOutput` as a result: stdout that is not JSON is an error. */
+export const readHookOutput = (stdout: string) =>
+  Promise.resolve(stdout)
+    .then(parseHookOutput)
+    .then(
+      (output) => ({ output, error: null }),
+      (cause: unknown) => ({
+        output: null,
+        error: cause instanceof Error ? cause.message : String(cause),
+      }),
+    );
 
 /** The `$.model.complete` request for one of the binary's requests. */
 export const completionAsk = (request: CompletionRequest, timeoutMs: number) =>

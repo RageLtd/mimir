@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { extractFromConversation } from "@mimir/plugin-core/brain/extract";
 import {
   _extractionWatermarks,
+  _summaryWatermarks,
   convertMessage,
   distillBeforeCompaction,
   persistSessionTranscript,
@@ -14,6 +15,7 @@ import {
 const cleanup: (() => void)[] = [];
 afterEach(() => {
   _extractionWatermarks.clear();
+  _summaryWatermarks.clear();
   for (const close of cleanup.splice(0)) close();
 });
 

@@ -1,15 +1,22 @@
 /**
  * `mimir-cc precompact` — run by the hooks module on `session.compact`
- * with the main conversation's undistilled tail: belt-and-suspenders
- * distillation before the engine discards it (MIM-86: fully local,
- * nothing ships to the server).
+ * with the main conversation's whole window (`window`) and its undistilled
+ * tail (`messages`): distillation before the engine discards them
+ * (MIM-86: fully local, nothing ships to the server).
  *
  * Fires when the engine is about to compact (/compact or auto-trigger).
- * Whatever the turn-end persist hasn't yet distilled gets two treatments
- * before the engine's history is summarized away:
- *   1. A type:"summary" replica memory (the narrative record boot-context
- *      reads by recency) — this run's primary purpose.
- *   2. Best-effort fact extraction, same as persist would have run.
+ * Before the engine's history is summarized away it gets two treatments:
+ *   1. A type:"summary" replica memory of the window — the narrative
+ *      record of the conversation as it stood, and this run's primary
+ *      purpose. A window over the summary input cap is summarised from an
+ *      opening slice plus the newest messages, the middle elided
+ *      (brain/summarize.ts). A payload without `window` (an older plugin)
+ *      summarises the tail instead.
+ *   2. Best-effort fact extraction over the tail alone, same as persist
+ *      would have run — the rest of the window persist already distilled.
+ * Per-turn persist keeps the tail near-empty, so an empty tail with a
+ * non-empty window still runs; only when both are empty is there nothing
+ * to do.
  *
  * Where the completions run (MIM-134): BYOK in one run when an extraction
  * endpoint is configured; otherwise, when the module says it can run
@@ -110,22 +117,29 @@ const factsOutcome = (gated: boolean, completions: Completions) => {
 };
 
 /**
- * What this run does with the window. BYOK wins whenever configured; a
- * module that cannot run completions leaves it unconfigured; otherwise
- * phase one settles when both gates skip or requests what
- * passed, and phase two stores what came back — advancing unless the
- * summary it asked for failed.
+ * What this run does with the window. An empty delta and window is
+ * already caught up; BYOK wins whenever configured; a module that cannot
+ * run completions leaves it unconfigured; otherwise phase one settles
+ * when both gates skip or requests what passed, and phase two stores what
+ * came back — advancing unless the summary it asked for failed. The
+ * summary gate reads the window (the delta when there is none), the facts
+ * gate the delta alone.
  */
 export const precompactPlan = (input: {
   readonly messages: readonly ModelMessage[];
+  readonly window?: readonly ModelMessage[];
   readonly completions?: Completions;
   readonly extraction: ExtractionConfig | null;
   readonly hostCompletions: boolean;
 }) => {
+  const window = input.window ?? input.messages;
+  if (input.messages.length === 0 && window.length === 0) {
+    return { kind: "caught-up" as const };
+  }
   if (input.extraction) return { kind: "byok" as const };
   if (!input.hostCompletions) return { kind: "unconfigured" as const };
 
-  const summary = prepareSummary(input.messages);
+  const summary = prepareSummary(window);
   const facts = prepareExtraction(input.messages, {
     maxChars: SESSION_MODEL_EXTRACTION_CHARS,
     closing: true,
@@ -166,6 +180,7 @@ type RunContext = {
   readonly cwd: string;
   readonly trigger: string;
   readonly messages: number;
+  readonly window: number;
 };
 
 /** The replica, embedder and project attribution every store path needs. */
@@ -207,15 +222,19 @@ const storeFacts = async (
 
 const runByok = async (
   extraction: ExtractionConfig,
-  messages: readonly ModelMessage[],
+  conversation: {
+    readonly messages: readonly ModelMessage[];
+    readonly window: readonly ModelMessage[];
+  },
   ctx: RunContext,
 ) => {
   const store = await openStore(ctx.cwd);
+  const { messages, window } = conversation;
 
   const summary = await summarizeToReplica({
     config: extraction,
     replica: store.replica,
-    messages,
+    messages: window,
     embed: store.embedQuery,
     projectId: store.projectId,
   });
@@ -226,13 +245,14 @@ const runByok = async (
     log.error("precompact: summarization failed", {
       sessionId: ctx.sessionId,
       trigger: ctx.trigger,
-      messages: ctx.messages,
+      messagesInDelta: ctx.messages,
+      messagesInWindow: ctx.window,
       model: extraction.model,
     });
     return;
   }
 
-  // Best-effort fact extraction over the same window — persist never saw
+  // Best-effort fact extraction over the delta alone — persist never saw
   // this tail, so its facts would otherwise be lost with the context.
   // Failure logs; the delta is settled regardless (see module doc for why).
   let extracted = 0;
@@ -257,6 +277,7 @@ const runByok = async (
     project: ctx.cwd,
     projectId: store.projectId,
     messagesInDelta: ctx.messages,
+    messagesInWindow: ctx.window,
     summaryId: summary.id,
     summarySkipped: summary.skipped,
     factsStored: extracted,
@@ -292,7 +313,8 @@ const runStore = async (
     log.error("precompact: summarization failed", {
       sessionId: ctx.sessionId,
       trigger: ctx.trigger,
-      messages: ctx.messages,
+      messagesInDelta: ctx.messages,
+      messagesInWindow: ctx.window,
       model: SESSION_MODEL,
       factsStored: extracted,
       reasons: plan.reasons,
@@ -305,6 +327,7 @@ const runStore = async (
     project: ctx.cwd,
     projectId: store.projectId,
     messagesInDelta: ctx.messages,
+    messagesInWindow: ctx.window,
     summaryId,
     // null: the facts gate skipped, or the completion failed or did not
     // parse — the plan settles either way (see module doc).
@@ -345,35 +368,43 @@ export const runPreCompactHook = async () => {
   }
 
   const messages = toModelMessages(input.messages ?? []);
-  if (messages.length === 0) {
-    answer(true);
-    log.info("precompact: nothing new to distill (persist caught up)", {
-      sessionId,
-      trigger,
-    });
-    return 0;
-  }
-
+  // No window (an older plugin's payload): the delta stands in for it.
+  const window = input.window ? toModelMessages(input.window) : messages;
   const extraction = await extractionConfig();
-  const ctx = { sessionId, cwd, trigger, messages: messages.length };
+  const ctx = {
+    sessionId,
+    cwd,
+    trigger,
+    messages: messages.length,
+    window: window.length,
+  };
   const plan = precompactPlan({
     messages,
+    window,
     extraction,
     hostCompletions: input.host_completions === true,
     ...(input.completions ? { completions: input.completions } : {}),
   });
 
   switch (plan.kind) {
+    case "caught-up":
+      answer(true);
+      log.info("precompact: nothing to distill (empty window)", {
+        sessionId,
+        trigger,
+      });
+      return 0;
     case "byok":
       // precompactPlan answers byok only when extraction is configured.
-      if (extraction) await runByok(extraction, messages, ctx);
+      if (extraction) await runByok(extraction, { messages, window }, ctx);
       return 0;
     case "unconfigured":
       answer(true);
       log.warn("extraction unconfigured — precompact window not distilled", {
         sessionId,
         trigger,
-        messages: ctx.messages,
+        messagesInDelta: ctx.messages,
+        messagesInWindow: ctx.window,
       });
       return 0;
     case "settle":

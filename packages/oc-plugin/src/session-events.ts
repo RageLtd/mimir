@@ -12,6 +12,7 @@ import type { MimirConfig } from "./config";
 import { runFullReindex, runReindexWorker } from "./reindex";
 import {
   _extractionWatermarks,
+  _summaryWatermarks,
   persistSessionTranscript,
   type TranscriptClient,
   type TranscriptLogger,
@@ -76,8 +77,10 @@ export const createEventHandler = (
       event.type === "session.deleted"
     ) {
       sessionRoles.invalidate(sessionID);
-      if (event.type === "session.deleted")
+      if (event.type === "session.deleted") {
         _extractionWatermarks.delete(sessionID);
+        _summaryWatermarks.delete(sessionID);
+      }
       return;
     }
 

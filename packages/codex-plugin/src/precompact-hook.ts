@@ -2,16 +2,27 @@
  * PreCompact hook — belt-and-suspenders distillation before Codex
  * discards history (MIM-86 pattern, ported from cc-plugin).
  *
- * Fires when Codex is about to compact (/compact or auto-trigger).
- * Whatever rollout delta the Stop hook hasn't yet distilled gets two
- * treatments before the local history is summarized away:
- *   1. A type:"summary" replica memory (the narrative record boot-context
- *      reads by recency) — this is the hook's primary purpose.
- *   2. Best-effort fact extraction, same as the Stop hook would have run.
+ * Fires when Codex is about to compact (/compact or auto-trigger). The
+ * rollout is append-only and Codex leaves no readable summary of its own,
+ * so the window being compacted away is the conversation since the last
+ * `compacted` record. It gets two treatments:
+ *   1. A type:"summary" replica memory of that window (the narrative
+ *      record boot-context reads by recency) — the hook's primary purpose.
+ *      The session's previous Mimir summary is carried at the head of the
+ *      summariser's input, so the narrative survives across compactions.
+ *      The summary state records the line of the last message covered, so
+ *      an unchanged window is not summarised twice.
+ *   2. Best-effort fact extraction from the delta the Stop hook has not
+ *      yet distilled — the rest of the window's facts are already stored.
  *
- * Watermark advances when the SUMMARY succeeds; extraction failure only
- * logs (retrying would re-store a near-identical summary, which is worse
- * than losing one window's facts).
+ * Watermark advances when the summary succeeds (or none was planned);
+ * extraction failure only logs (retrying would re-store a near-identical
+ * summary, which is worse than losing one window's facts). A failed
+ * summary moves nothing, but the next window starts after this
+ * compaction's boundary, so this window is not summarised again; the
+ * Stop hook still reads its delta's facts from the append-only rollout.
+ * The decisions live in precompact-plan.ts and the flow in
+ * precompact-runner.ts; this file wires the real deps.
  *
  * Never blocks compaction — exit 0 unconditionally.
  */
@@ -31,7 +42,14 @@ import { syncAfterDistill } from "@mimir/plugin-core/sync/after-distill";
 import { storeTyped } from "@mimir/plugin-core/tools/org-memory";
 import { readHookInput } from "./hook-input";
 import { createLogger } from "./logger";
-import { readDelta, readWatermark, writeWatermark } from "./rollout-delta";
+import { runPreCompact } from "./precompact-runner";
+import {
+  readDelta,
+  readSummaryState,
+  readWatermark,
+  readWindow,
+  writeState,
+} from "./rollout-delta";
 
 const log = createLogger("precompact-hook");
 
@@ -41,6 +59,64 @@ type HookInput = {
   readonly transcript_path?: string;
   readonly cwd?: string;
   readonly trigger?: "manual" | "auto";
+};
+
+const resolveProjectId = async (cwd: string) => {
+  const config = await readConfig();
+  if (!config) return null;
+  return getOrResolveProjectId(config.serverUrl, cwd, config.apiKey).catch(
+    () => null,
+  );
+};
+
+/**
+ * The replica, embedder and project id, opened on first use so a
+ * caught-up compaction touches none of them; `close` is idempotent.
+ */
+const lazyStore = (cwd: string) => {
+  let opened: {
+    readonly replica: ReturnType<typeof createOrgReplica>;
+    readonly embedQuery: ReturnType<typeof createEmbedQuery>;
+    readonly projectId: string | null;
+  } | null = null;
+  const get = async () => {
+    opened ??= {
+      projectId: await resolveProjectId(cwd),
+      replica: createOrgReplica(
+        process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
+      ),
+      embedQuery: createEmbedQuery(),
+    };
+    return opened;
+  };
+  const close = () => {
+    opened?.replica.close();
+    opened = null;
+  };
+  const projectId = () => opened?.projectId ?? null;
+  return { get, close, projectId };
+};
+
+const storeFacts = async (
+  store: Awaited<ReturnType<ReturnType<typeof lazyStore>["get"]>>,
+  memories: readonly string[],
+) => {
+  let stored = 0;
+  for (const memory of memories) {
+    const [storeErr, result] = await attempt(() =>
+      storeTyped(store.replica, store.embedQuery, {
+        content: memory,
+        type: "fact",
+        ...(store.projectId ? { project: store.projectId } : {}),
+      }),
+    );
+    if (storeErr) {
+      log.warn("precompact: memory store failed", { error: storeErr.message });
+      continue;
+    }
+    if (result.stored) stored++;
+  }
+  return stored;
 };
 
 /**
@@ -76,106 +152,52 @@ export const runPreCompactHook = async () => {
     return 0;
   }
 
-  const watermark = await readWatermark(sessionId);
-  const { messages, newOffset } = await readDelta(transcriptPath, watermark);
-
-  if (messages.length === 0) {
-    if (newOffset > watermark) await writeWatermark(sessionId, newOffset);
-    log.info("precompact: nothing new to distill (Stop hook caught up)", {
-      sessionId,
-      trigger,
-      watermark,
-      newOffset,
-    });
-    return 0;
-  }
-
   const extraction = await extractionConfig();
-  if (!extraction) {
-    await writeWatermark(sessionId, newOffset);
-    log.warn("extraction unconfigured — precompact window not distilled", {
-      sessionId,
-      trigger,
-      messages: messages.length,
-    });
-    return 0;
-  }
+  const store = lazyStore(cwd);
 
-  const config = await readConfig();
-  const projectId = config
-    ? await getOrResolveProjectId(config.serverUrl, cwd, config.apiKey).catch(
-        () => null,
-      )
-    : null;
-
-  const replica = createOrgReplica(
-    process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
+  await runPreCompact(
+    { sessionId, transcriptPath, trigger },
+    {
+      readWindow,
+      readDelta,
+      readWatermark,
+      readSummaryState,
+      writeState,
+      summaryText: async (id) =>
+        (await store.get()).replica.getMemory(id)?.content ?? null,
+      summarize: async (messages) => {
+        if (!extraction) return { ok: false, id: null };
+        const { replica, embedQuery, projectId } = await store.get();
+        return summarizeToReplica({
+          config: extraction,
+          replica,
+          messages,
+          embed: embedQuery,
+          projectId,
+        });
+      },
+      extractFacts: async (messages) => {
+        if (!extraction) return 0;
+        const outcome = await extractFromConversation(extraction, messages, {
+          closing: true,
+        });
+        if (!outcome.ok) {
+          log.warn("precompact: fact extraction failed (summary unaffected)", {
+            sessionId,
+            trigger,
+          });
+          return 0;
+        }
+        if (outcome.skipped) return 0;
+        return storeFacts(await store.get(), outcome.memories);
+      },
+      sync: () => syncAfterDistill(log),
+      close: store.close,
+      projectId: store.projectId,
+      extraction,
+      log,
+    },
   );
-  const embedQuery = createEmbedQuery();
-
-  const summary = await summarizeToReplica({
-    config: extraction,
-    replica,
-    messages,
-    embed: embedQuery,
-    projectId,
-  });
-
-  if (!summary.ok) {
-    replica.close();
-    log.error("precompact: summarization failed — keeping watermark", {
-      sessionId,
-      trigger,
-      messages: messages.length,
-      model: extraction.model,
-    });
-    return 0;
-  }
-
-  // Best-effort fact extraction over the same window — the Stop hook
-  // never saw this tail, so its facts would otherwise be lost with the
-  // rollout window. Failure logs; the watermark advances regardless (see
-  // module doc for why).
-  let extracted = 0;
-  const outcome = await extractFromConversation(extraction, messages, {
-    closing: true,
-  });
-  if (outcome.ok && !outcome.skipped) {
-    for (const memory of outcome.memories) {
-      const [storeErr, result] = await attempt(() =>
-        storeTyped(replica, embedQuery, {
-          content: memory,
-          type: "fact",
-          ...(projectId ? { project: projectId } : {}),
-        }),
-      );
-      if (!storeErr && result.stored) extracted++;
-    }
-  } else if (!outcome.ok) {
-    log.warn("precompact: fact extraction failed (summary still stored)", {
-      sessionId,
-      trigger,
-    });
-  }
-
-  replica.close();
-  await writeWatermark(sessionId, newOffset);
-
-  log.info("precompact: window distilled locally", {
-    sessionId,
-    trigger,
-    project: cwd,
-    projectId,
-    watermark,
-    newOffset,
-    messagesInDelta: messages.length,
-    summaryId: summary.id,
-    summarySkipped: summary.skipped,
-    factsStored: extracted,
-    model: extraction.model,
-  });
-
-  if (summary.id !== null || extracted > 0) await syncAfterDistill(log);
 
   return 0;
 };

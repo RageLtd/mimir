@@ -54,6 +54,7 @@ import { runDisableCommand, runEnableCommand } from "./project-settings";
 import { runReindexCommand } from "./reindex-hook";
 import { runRetrieveHook } from "./retrieve-hook";
 import { runRulesHook } from "./rules-hook";
+import { runSessionEndCommand } from "./session-end-hook";
 import { runSessionStartCommand } from "./session-start-hook";
 import { STALE_PLUGIN_NOTICE, staleCaller } from "./stale-caller";
 import { runUserMemoryMcp } from "./user-memory-mcp";
@@ -103,6 +104,8 @@ const USAGE = [
   "  precompact              Distil the undiscarded tail (the delta on stdin; answers { advance }).",
   "  session-start           Key reconcile, org sync, full project re-index",
   "                          (SessionStart payload on stdin).",
+  "  session-end             Summarise the ending session in a detached worker",
+  "                          (the whole window on stdin).",
   "  user-memory-mcp         Stdio MCP server for user-memory tools.",
   "  log-mcp                 Stdio MCP server for reading plugin logs.",
   "  hygiene                 Sweep the local org replica: consolidate, demote,",
@@ -200,6 +203,9 @@ const dispatch = async (argv: readonly string[]): Promise<number> => {
 
     case "session-start":
       return runSessionStartCommand(rest);
+
+    case "session-end":
+      return runSessionEndCommand(rest);
 
     case "user-memory-mcp":
       return runUserMemoryMcp();

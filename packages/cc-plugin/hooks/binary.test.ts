@@ -25,6 +25,20 @@ test("a two-phase answer exposes its requests", () => {
   expect(output.requests).toEqual({ facts: REQUEST });
 });
 
+test("retrieve's pending-summary flag comes through with its status", () => {
+  const output = parseHookOutput(
+    JSON.stringify({
+      summaryPending: true,
+      systemMessage: "↻ Last session's summary is still generating",
+    }),
+  );
+
+  expect(output.summaryPending).toBe(true);
+  expect(output.systemMessage).toBe(
+    "↻ Last session's summary is still generating",
+  );
+});
+
 test("a request becomes a cheap completion with its text verbatim and the leg's deadline", () => {
   const ask = completionAsk(REQUEST, 1234);
 

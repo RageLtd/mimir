@@ -63,12 +63,26 @@ const reanchorState = (on: On, initial = false) => {
   return { get: () => value };
 };
 
+/** Whether the last session's summary is still owed to this one. */
+const summaryOwedState = (on: On) => {
+  let value: boolean | undefined;
+  on("state.get", { key: "summaryOwed" }, () => ({
+    value: { value, version: 0 },
+  }));
+  on("state.set", { key: "summaryOwed" }, (_, e) => {
+    value = e.value;
+    return { value: { isSet: true as const, version: 0 } };
+  });
+  return { get: () => value };
+};
+
 const session = (
   on: On,
   env: Record<string, string> = {},
   reanchor = reanchorState(on),
 ) => {
   void reanchor;
+  summaryOwedState(on);
   mock.env(on, { HOME, ...env });
   on("session.id", () => ({ value: SESSION }));
   on("session.cwd", () => ({ value: CWD }));
@@ -84,9 +98,13 @@ const session = (
 test("counts the turn and runs retrieve with the UserPromptSubmit payload, attaching its context", async ($, on) => {
   const statuses = session(on);
   const turn = turnState(on);
-  const runs: Run[] = [];
+  const runs: Array<Omit<Run, "stdin"> & { stdin: unknown }> = [];
   on("process.run", (_, e) => {
-    runs.push({ argv: e.argv, stdin: e.init?.stdin, env: e.init?.env });
+    runs.push({
+      argv: e.argv,
+      stdin: JSON.parse(e.init?.stdin ?? "null"),
+      env: e.init?.env,
+    });
     return exited(0, retrieved(CONTEXT, "↻ Retrieved 1 memory"));
   });
 
@@ -96,18 +114,162 @@ test("counts the turn and runs retrieve with the UserPromptSubmit payload, attac
   expect(runs).toEqual([
     {
       argv: [BIN, "retrieve"],
-      stdin: JSON.stringify({
+      stdin: {
         session_id: SESSION,
         hook_event_name: "UserPromptSubmit",
         prompt: "what do we know?",
         cwd: CWD,
         window_reset: false,
-      }),
+        session_start: true,
+      },
       env: { MIMIR_ACTIVE: "1" },
     },
   ]);
   expect(result).toEqual({ text: "what do we know?", context: [CONTEXT] });
   expect(statuses).toEqual(["↻ Retrieved 1 memory"]);
+});
+
+test("retrieval is told the session's first prompt, and only that one", async ($, on) => {
+  session(on);
+  turnState(on);
+  const retrieves: unknown[] = [];
+  on("process.run", (_, e) => {
+    if (e.argv[1] === "retrieve") {
+      retrieves.push(JSON.parse(e.init?.stdin ?? "{}"));
+    }
+    return exited(0);
+  });
+
+  await $.prompt.submit(submitted("where were we?"));
+  await $.prompt.submit(submitted("and then?"));
+
+  expect(retrieves).toMatchObject([
+    { prompt: "where were we?", session_start: true },
+    { prompt: "and then?", session_start: false },
+  ]);
+});
+
+const PENDING_STATUS = "↻ Last session's summary is still generating";
+const pending = () =>
+  JSON.stringify({ summaryPending: true, systemMessage: PENDING_STATUS });
+
+/** Retrieve payloads in order, each answered by the next scripted reply. */
+const scriptedRetrieve = (
+  on: On,
+  replies: Array<() => ReturnType<typeof exited>>,
+) => {
+  const payloads: unknown[] = [];
+  on("process.run", (_, e) => {
+    if (e.argv[1] !== "retrieve") return exited(0);
+    payloads.push(JSON.parse(e.init?.stdin ?? "{}"));
+    const reply = replies[payloads.length - 1];
+    return reply ? reply() : exited(0);
+  });
+  return payloads;
+};
+
+test("a summary still generating stays owed: the next prompt asks for it again, and says so on the status line", async ($, on) => {
+  const statuses = session(on);
+  turnState(on);
+  const payloads = scriptedRetrieve(on, [() => exited(0, pending())]);
+
+  await $.prompt.submit(submitted("where were we?"));
+  await $.prompt.submit(submitted("and then?"));
+
+  expect(payloads).toMatchObject([
+    { prompt: "where were we?", session_start: true },
+    { prompt: "and then?", session_start: true },
+  ]);
+  expect(statuses).toContain(PENDING_STATUS);
+});
+
+test("once retrieval answers without a pending summary, it is asked for no more", async ($, on) => {
+  session(on);
+  turnState(on);
+  const payloads = scriptedRetrieve(on, [
+    () => exited(0, pending()),
+    () => exited(0, retrieved(CONTEXT, "↻ Retrieved 1 memory")),
+  ]);
+
+  await $.prompt.submit(submitted("one"));
+  await $.prompt.submit(submitted("two"));
+  await $.prompt.submit(submitted("three"));
+
+  expect(payloads).toMatchObject([
+    { prompt: "one", session_start: true },
+    { prompt: "two", session_start: true },
+    { prompt: "three", session_start: false },
+  ]);
+});
+
+test("a first prompt whose retrieve exits non-zero leaves the summary owed", async ($, on) => {
+  session(on);
+  turnState(on);
+  const payloads = scriptedRetrieve(on, [() => exited(2)]);
+
+  await $.prompt.submit(submitted("one"));
+  await $.prompt.submit(submitted("two"));
+
+  expect(payloads).toMatchObject([
+    { prompt: "one", session_start: true },
+    { prompt: "two", session_start: true },
+  ]);
+});
+
+test("a first prompt whose retrieve cannot run leaves the summary owed", async ($, on) => {
+  session(on);
+  turnState(on);
+  const payloads = scriptedRetrieve(on, [
+    () => {
+      throw new Error("ENOENT");
+    },
+  ]);
+
+  await $.prompt.submit(submitted("one"));
+  await $.prompt.submit(submitted("two"));
+
+  expect(payloads).toMatchObject([
+    { prompt: "one", session_start: true },
+    { prompt: "two", session_start: true },
+  ]);
+});
+
+test("a first prompt whose retrieve prints text that is not JSON fails that leg and leaves the summary owed", async ($, on) => {
+  const statuses = session(on);
+  turnState(on);
+  const payloads = scriptedRetrieve(on, [() => exited(0, "not json at all")]);
+
+  const result = await $.prompt.submit(submitted("one"));
+
+  expect(result).toEqual({ text: "one" });
+  expect(statuses.filter((s) => s?.startsWith("mimir:"))).toHaveLength(1);
+
+  await $.prompt.submit(submitted("two"));
+
+  expect(payloads).toMatchObject([
+    { prompt: "one", session_start: true },
+    { prompt: "two", session_start: true },
+  ]);
+});
+
+test("a first prompt whose retrieve failed inside and printed only summaryPending stays owed, quietly", async ($, on) => {
+  const statuses = session(on);
+  turnState(on);
+  const payloads = scriptedRetrieve(on, [
+    () => exited(0, JSON.stringify({ summaryPending: true })),
+  ]);
+
+  const result = await $.prompt.submit(submitted("one"));
+
+  expect(result).toEqual({ text: "one" });
+  expect(statuses).toEqual([]);
+
+  await $.prompt.submit(submitted("two"));
+
+  expect(payloads).toMatchObject([
+    { prompt: "one", session_start: true },
+    { prompt: "two", session_start: true },
+  ]);
 });
 
 test("every third turn also runs voice-anchor for the next exchange in the rotation", async ($, on) => {

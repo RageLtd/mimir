@@ -5,9 +5,19 @@
  *
  * - The turn count, in `$.state` (`mimir-cc.turn`, types/index.d.ts).
  * - Retrieval, every turn: `mimir-cc retrieve` with the UserPromptSubmit
- *   payload. Its `additionalContext` becomes prompt context — what the
+ *   payload, plus `session_start` on the session's first prompt (no turn
+ *   counted yet). Its `additionalContext` becomes prompt context — what the
  *   model reads beside the prompt and the developer never sees — and its
  *   `systemMessage` (the "↻ Retrieved N memories" line) the status line.
+ * - The last session's summary stays owed (`mimir-cc.summaryOwed`) until a
+ *   `session_start` retrieve settles it. While its summary-pending mark is
+ *   live, retrieve answers `summaryPending` whatever the distance gate
+ *   admitted — a summary near the prompt is still injected, but it does
+ *   not settle the debt — and it answers the flag alone when its own
+ *   retrieval failed. A retrieve that exits non-zero, cannot run or prints
+ *   what is not JSON leaves the summary owed too. Each owed prompt is sent
+ *   as `session_start` again; one readable answer without the flag clears
+ *   the debt.
  * - A voice anchor every MIMIR_ANCHOR_INTERVAL turns (default 3):
  *   `mimir-cc voice-anchor --session <id> --nth <n>`, the next exchange
  *   in the session's rotation, attached after the retrieval. The
@@ -23,10 +33,11 @@
  */
 
 import type { ProcessRunResult, Register } from "claude-code";
-import { mimirCcArgv, mimirCcInit, parseHookOutput } from "./binary";
+import { mimirCcArgv, mimirCcInit, readHookOutput } from "./binary";
 
 const RETRIEVE_TIMEOUT_MS = 15_000;
 const ANCHOR_TIMEOUT_MS = 10_000;
+const UNREADABLE_RETRIEVE_STATUS = "mimir: retrieve failed (output not JSON)";
 /** plugin-core's DEFAULT_ANCHOR_INTERVAL, which the sandbox cannot import. */
 const DEFAULT_INTERVAL = 3;
 
@@ -65,9 +76,10 @@ export const registerSubmit: Register = (on) => {
     const sessionId = await $.session.id();
 
     const interval = anchorInterval(await $.env.get("MIMIR_ANCHOR_INTERVAL"));
-    const [held, reanchor] = await Promise.all([
+    const [held, reanchor, owed] = await Promise.all([
       $.state.get({ plugin: "mimir-cc", key: "turn" }),
       $.state.get({ plugin: "mimir-cc", key: "reanchor" }),
+      $.state.get({ plugin: "mimir-cc", key: "summaryOwed" }),
     ]);
     const counted = (held.value ?? 0) + 1;
     // After a compaction this prompt is an anchor turn whatever the count.
@@ -78,6 +90,9 @@ export const registerSubmit: Register = (on) => {
       await $.state.set({ plugin: "mimir-cc", key: "reanchor" }, false);
     }
     const nth = anchorIndexFor(turn, interval);
+    // No turn counted yet (the session's first prompt), or the last
+    // session's summary is still owed from an earlier one.
+    const sessionStart = held.value === undefined || owed.value === true;
 
     const payload = {
       session_id: sessionId,
@@ -87,6 +102,8 @@ export const registerSubmit: Register = (on) => {
       // The compaction replaced the window, so retrieval may send again
       // what it sent before.
       window_reset: isReanchor,
+      // Asks for the active project's newest summary.
+      session_start: sessionStart,
     };
     const [retrieve, anchor] = await Promise.allSettled([
       $.process.run(
@@ -109,13 +126,27 @@ export const registerSubmit: Register = (on) => {
 
     const context = [...(e.context ?? [])];
 
-    const retrieved = legOutcome("retrieve", retrieve);
+    const ran = legOutcome("retrieve", retrieve);
+    const read =
+      ran.stdout === undefined ? null : await readHookOutput(ran.stdout);
+    // Stdout that is not JSON fails the leg like a non-zero exit.
+    const retrieved =
+      read === null || read.error === null
+        ? ran
+        : { status: UNREADABLE_RETRIEVE_STATUS };
     if (retrieved.status !== undefined) $.ui.status(retrieved.status);
-    if (retrieved.stdout !== undefined) {
-      const out = parseHookOutput(retrieved.stdout);
+    const out = read?.output ?? null;
+    if (out !== null) {
       if (out.systemMessage !== undefined) $.ui.status(out.systemMessage);
       const extra = out.hookSpecificOutput?.additionalContext;
       if (extra !== undefined) context.push(extra);
+    }
+    if (sessionStart) {
+      // Settled only by a retrieve that ran, answered readably and did not
+      // say the summary is still owed; a failed leg leaves it owed.
+      const settled =
+        retrieved.status === undefined && out?.summaryPending !== true;
+      await $.state.set({ plugin: "mimir-cc", key: "summaryOwed" }, !settled);
     }
 
     const anchored = legOutcome("voice anchor", anchor);

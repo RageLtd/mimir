@@ -28,7 +28,7 @@ import {
   session,
 } from "./support.test-helpers";
 
-test("a compaction hands the undistilled tail to precompact and re-anchors on what remains", async ($, on) => {
+test("a compaction hands precompact the whole window and the undistilled tail, and re-anchors on what remains", async ($, on) => {
   session(on);
   const clock = mock.clock(on);
   const anchor = anchorState(on, anchorOf(turnOne));
@@ -47,6 +47,7 @@ test("a compaction hands the undistilled tail to precompact and re-anchors on wh
     cwd: CWD,
     trigger: "manual",
     messages: turnTwo,
+    window: [...turnOne, ...turnTwo],
     host_completions: true,
   });
   expect(result).toMatchObject({ messages: remaining });
@@ -98,6 +99,7 @@ test("a compaction re-anchors at once and runs precompact on the pre-compaction 
     cwd: CWD,
     trigger: "manual",
     messages: turnTwo,
+    window: [...turnOne, ...turnTwo],
     host_completions: true,
   });
   expect(anchor.get()).toEqual(anchorOf(remaining));

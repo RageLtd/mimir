@@ -10,6 +10,8 @@
  * extraction endpoint configured a run is two-phase (MIM-134): phase one
  * answers `{ advance: false, requests }`, the module completes them on the
  * session's model, and phase two receives them back as `completions`.
+ * Precompact also receives the whole pre-compaction conversation as
+ * `window`, converted the same way.
  *
  * Conversion:
  *   - text blocks → text; thinking blocks dropped; other kinds dropped.
@@ -66,6 +68,12 @@ export type DistillInput = {
   readonly cwd?: string;
   readonly trigger?: string;
   readonly messages?: readonly ApiMessage[];
+  /**
+   * Precompact only: the whole conversation before compaction, which the
+   * summary covers; `messages` stays the undistilled delta facts come from.
+   * An older module omits it, and the delta stands in.
+   */
+  readonly window?: readonly ApiMessage[];
   /**
    * Set by a module that can run `requests` on the session's model. The
    * binary updates independently of the pinned plugin, so an older module

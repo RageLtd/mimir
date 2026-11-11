@@ -12,10 +12,18 @@
  *   the last distillation, read from `$.session.messages({ as: "api" })`
  *   and distilled into the local replica.
  * - `session.compact` (main loop, not `precompute`) → `mimir-cc precompact`:
- *   the undistilled tail, summarised before the engine discards it.
+ *   the whole window as `window`, summarised before the engine discards
+ *   it, and the undistilled tail as `messages`, whose facts persist has
+ *   not yet extracted. Per-turn persist keeps that tail near-empty, so a
+ *   non-empty window alone is reason to run — unless a settled run already
+ *   summarised that same window (`summarised` in `$.state`), as a repeated
+ *   skipped compaction would have it. A real compaction records the
+ *   compacted conversation as `summarised` at once, since its run covers
+ *   the window that conversation replaced.
  *
- * Neither distillation leg holds the user: the hook captures the delta and
- * its payload, marks the run `pending` in `$.state`, and hands the rest to
+ * Neither distillation leg holds the user: the hook captures the delta
+ * (and, for precompact, the whole window) into its payload, marks the run
+ * `pending` in `$.state`, and hands the rest to
  * `$.clock.after(0, …)`, a dispatch of its own that runs once the hook has
  * returned. One persist is in flight at a time — a turn that ends while one
  * is pending schedules nothing, and the next turn's delta carries its
@@ -87,6 +95,13 @@ const PENDING = {
   plugin: "mimir-cc",
   key: "pending",
 } satisfies StateRef<"mimir-cc", "pending">;
+const SUMMARISED = {
+  plugin: "mimir-cc",
+  key: "summarised",
+} satisfies StateRef<"mimir-cc", "summarised">;
+
+export const sameAnchor = (a: MimirAnchor | undefined, b: MimirAnchor) =>
+  a !== undefined && a.count === b.count && a.mark === b.mark;
 
 type Leg = {
   readonly name: string;
@@ -139,8 +154,8 @@ const heldAnchor = async ($: EngineInterface) => {
 };
 
 /**
- * The main conversation past the anchor, the anchor it would move to, and
- * the version the anchor stood at when read.
+ * The main conversation whole and past the anchor, the anchor it would
+ * move to, and the version the anchor stood at when read.
  */
 const undistilled = async ($: EngineInterface) => {
   const [messages, held] = await Promise.all([
@@ -148,6 +163,7 @@ const undistilled = async ($: EngineInterface) => {
     heldAnchor($),
   ]);
   return {
+    window: messages.map(slim),
     delta: deltaSince(messages, held.value ?? NO_ANCHOR).map(slim),
     anchor: anchorOf(messages),
     version: held.version,
@@ -210,7 +226,8 @@ const distill = async (
 
 /**
  * Moves the anchor when the binary settled the delta — only while it still
- * stands at the version the hook read — and reports a failed run.
+ * stands at the version the hook read — and reports a failed run. Answers
+ * whether the binary settled it, whether or not the anchor moved.
  */
 const settle = async (
   $: EngineInterface,
@@ -221,16 +238,18 @@ const settle = async (
 ) => {
   if (ran.exitCode !== 0) {
     $.ui.status(`mimir: ${leg} failed (exit ${ran.exitCode})`);
-    return;
+    return false;
   }
-  if (parseHookOutput(ran.stdout).advance !== true) return;
+  if (parseHookOutput(ran.stdout).advance !== true) return false;
   const moved = await $.state.set(DISTILLED, anchor, { ifVersion });
   if (moved.isSet) await keepAnchor($, anchor);
+  return true;
 };
 
 /**
- * Runs a leg in its own dispatch once the hook has returned. However it
- * ends, its `pending` clears — unless a later leg has claimed it since.
+ * Runs a leg in its own dispatch once the hook has returned, then
+ * `onSettled` if the binary settled it. However it ends, its `pending`
+ * clears — unless a later leg has claimed it since.
  */
 const detach = (
   $: EngineInterface,
@@ -238,12 +257,14 @@ const detach = (
   payload: Record<string, unknown>,
   anchor: MimirAnchor,
   versions: { readonly distilled: number; readonly pending: number },
+  onSettled: () => Promise<unknown> = async () => undefined,
 ) => {
   const clear = () =>
     $.state.set(PENDING, null, { ifVersion: versions.pending });
   $.clock.after(0, () =>
     distill($, leg, payload)
       .then((ran) => settle($, leg.name, ran, anchor, versions.distilled))
+      .then((settled) => (settled ? onSettled() : undefined))
       .then(clear, () => {
         $.ui.status(`mimir: ${leg.name} failed`);
         return clear();
@@ -338,18 +359,30 @@ export const registerLifecycle: Register = (on) => {
     // A precompute installs nothing: the conversation goes on, and its
     // tail is distilled turn by turn as usual.
     if (e.agentId !== undefined || e.trigger === "precompute") return next(e);
-    // The tail is captured before the engine discards it; its run waits
+    // The window is captured before the engine discards it; its run waits
     // until after the re-anchor, whose write its own then misses.
-    const { delta, anchor, version } = await undistilled($);
+    const [{ window, delta, anchor, version }, summarised] = await Promise.all([
+      undistilled($),
+      $.state.get(SUMMARISED),
+    ]);
+    // A skipped compaction re-anchors nothing; its repeat over a window
+    // already summarised would only store the same summary again.
     const payload =
-      delta.length > 0
-        ? await distillPayload($, delta, { trigger: e.trigger })
+      window.length > 0 && !sameAnchor(summarised.value, anchor)
+        ? await distillPayload($, delta, { trigger: e.trigger, window })
         : undefined;
     const compacted = await next(e);
-    if (compacted.messages !== undefined) {
-      const reanchored = anchorOf(compacted.messages);
+    const reanchored =
+      compacted.messages !== undefined
+        ? anchorOf(compacted.messages)
+        : undefined;
+    if (reanchored !== undefined) {
       await $.state.set(DISTILLED, reanchored);
       await keepAnchor($, reanchored);
+      // The compacted conversation stands for the window this run
+      // summarises, settled or not, so an end with nothing said since does
+      // not summarise it again (session-end.ts).
+      await $.state.set(SUMMARISED, reanchored);
       // The next prompt gets a voice anchor (submit.ts).
       await $.state.set({ plugin: "mimir-cc", key: "reanchor" }, true);
     }
@@ -376,6 +409,12 @@ export const registerLifecycle: Register = (on) => {
         payload,
         anchor,
         { distilled: version, pending: claimed.version },
+        // Only a skipped compaction leaves this window in the conversation
+        // to be repeated; after a real one `summarised` is already the
+        // compacted conversation's.
+        reanchored === undefined
+          ? () => $.state.set(SUMMARISED, anchor)
+          : undefined,
       );
     }
     return compacted;

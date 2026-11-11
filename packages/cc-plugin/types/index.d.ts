@@ -35,6 +35,15 @@ export type MimirPending = {
   readonly at: number;
 };
 
+/**
+ * A read's claim on a file's file-context run: when it was taken
+ * (`$.clock.now()`), so one left behind by a read that never gave it back
+ * goes stale instead of blocking.
+ */
+export type MimirReading = {
+  readonly at: number;
+};
+
 declare module "claude-code" {
   interface PluginState {
     "mimir-cc": {
@@ -50,10 +59,35 @@ declare module "claude-code" {
        * of the persona's voice.
        */
       reanchor: boolean;
+      /**
+       * The last session's summary is still owed to this one: a first
+       * prompt's retrieve answered `summaryPending` — its summary-pending
+       * mark is live, whatever the distance gate admitted (a near summary
+       * is still injected), or its retrieval failed — or the retrieve
+       * failed, could not run, or printed what is not JSON. Each prompt
+       * goes to retrieve as `session_start` until one answers readably
+       * without `summaryPending`.
+       */
+      summaryOwed: boolean;
+      /**
+       * Files by path whose file-context run is in flight: the claim of the
+       * read that took it until its run settles, null after. A read of a
+       * file under a live claim runs nothing and attaches nothing; a claim
+       * older than `READING_STALE_MS` is dead and blocks nothing.
+       */
+      reading: StateFamily<MimirReading | null>;
       /** Subagents by id, for the gates that run inside them. */
       agents: StateFamily<MimirAgent>;
       /** The main conversation's distilled prefix, advanced by persist. */
       distilled: MimirAnchor;
+      /**
+       * The conversation a summary already covers: the window the last
+       * settled precompact of a skipped compaction summarised — a repeat
+       * over it would otherwise store a near-identical summary — or, after
+       * a real compaction, the compacted conversation, whose replaced
+       * window that compaction's own run summarises.
+       */
+      summarised: MimirAnchor;
       /** The distillation in flight, null once it settles. */
       pending: MimirPending | null;
     };

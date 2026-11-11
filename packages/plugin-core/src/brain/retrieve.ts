@@ -14,6 +14,15 @@
  * substitute: it matches any shared word, which is how unrelated rows used
  * to arrive on every prompt. Callers report `embedderUnavailable`.
  *
+ * One exception to the gate: a session's first prompt gets the active
+ * project's newest summary when no summary is near the prompt, so a new
+ * session knows where the last one left off. While the last session's
+ * summary is still being written (`summaryPending`), the summary is
+ * reported deferred whatever the gate admitted: the newest stored summary
+ * is an older session's, so the fallback stays out of the slot, a summary
+ * near the prompt is still injected, and the caller asks again on the next
+ * prompt.
+ *
  * Retrieval is passive: it never touches a row's access time or count.
  */
 
@@ -59,6 +68,15 @@ export type RetrieveOpts = {
   readonly exclude?: ReadonlySet<string>;
   /** Project id → display name, for labelling rows from other projects. */
   readonly projectNames?: Readonly<Record<string, string>>;
+  /** The session's first prompt: with no summary near the prompt, the
+   *  active project's newest one is injected regardless of distance
+   *  (still within `summaryCount`, so a cap of zero injects none). */
+  readonly sessionStart?: boolean;
+  /** With `sessionStart`: the last session's summary is still being
+   *  written, so the newest stored one is not where it left off. The
+   *  fallback is not filled and the summary is reported deferred
+   *  (`summaryDeferred`), even when a near summary was injected. */
+  readonly summaryPending?: boolean;
 };
 
 type Admitted = {
@@ -252,12 +270,44 @@ export type RetrievedContext = {
   readonly injectedIds: readonly string[];
   /** True when no query vector could be had, so nothing was retrieved. */
   readonly embedderUnavailable: boolean;
+  /** True on a session's first prompt while the last session's summary is
+   *  still being written: the newest-summary fallback was withheld, and
+   *  the caller should ask again — even when a near summary was injected.
+   *  Never with a summary cap of zero. */
+  readonly summaryDeferred: boolean;
+};
+
+/**
+ * On a session's first prompt, the active project's newest summary not
+ * already in context — where the last session left off. It needs no query
+ * vector and no nearness, and it is not charged to the character budget.
+ */
+const newestProjectSummary = (replica: OrgReplica, opts: RetrieveOpts) => {
+  if (!opts.sessionStart || opts.projectId === undefined) return null;
+  const excluded = opts.exclude?.size ?? 0;
+  const row = replica
+    .getLastSummaries(excluded + 1, opts.projectId)
+    .find((s) => !opts.exclude?.has(s.id));
+  if (!row) return null;
+  return {
+    id: row.id,
+    content: row.content,
+    isSummary: true,
+    projectId: opts.projectId,
+    createdAt: row.created_at,
+    score: 0,
+  } satisfies Admitted;
 };
 
 /**
  * One prompt's `<retrieved_context>` block: the best-matching summary, the
  * facts under the gate and the playbook index, inside a character budget.
- * An empty block means inject nothing.
+ * On a session's first prompt with no summary near enough, the active
+ * project's newest summary takes the summary slot instead — unless the
+ * summary cap is zero, or the last session's summary is still pending.
+ * While it is pending (and the cap is not zero) the summary is reported
+ * deferred, near summary injected or not. An empty block means inject
+ * nothing.
  */
 export const retrieveLocalContext = async (
   replica: OrgReplica,
@@ -283,6 +333,17 @@ export const retrieveLocalContext = async (
     kept.push(row);
     remaining -= row.content.length;
   }
+  // A near summary is no stand-in for the one still being written, so the
+  // wait goes on whatever the gate admitted.
+  const summaryDeferred =
+    maxSummaries > 0 &&
+    opts.sessionStart === true &&
+    opts.projectId !== undefined &&
+    opts.summaryPending === true;
+  if (summaries.length === 0 && maxSummaries > 0 && !summaryDeferred) {
+    const newest = newestProjectSummary(replica, opts);
+    if (newest) summaries.push(newest);
+  }
 
   const parts = buildContextParts(
     summaries.map(
@@ -302,5 +363,6 @@ export const retrieveLocalContext = async (
     summaryCount: summaries.length,
     injectedIds: [...summaries, ...facts].map((row) => row.id),
     embedderUnavailable: admitted.embedderUnavailable,
+    summaryDeferred,
   };
 };

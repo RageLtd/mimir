@@ -64,7 +64,8 @@ const BOOT_SUMMARY_COUNT = 3;
 
 /**
  * Build prior session context from the LOCAL org replica (MIM-84) —
- * summaries, memories, and playbooks with boot-sized budgets. Reads are
+ * summaries, memories, and playbooks with boot-sized budgets, plus the
+ * active project's newest summary when none is near the prompt. Reads are
  * local; no server round-trip on turn one. Returns null when the replica
  * is missing or empty.
  */
@@ -90,6 +91,9 @@ const buildSessionContext = async (
       topK: BOOT_MEMORY_TOP_K,
       summaryCount: BOOT_SUMMARY_COUNT,
       projectId: projectId ?? undefined,
+      // Boot runs on the session's first prompt: the active project's
+      // newest summary arrives even when nothing is near the prompt.
+      sessionStart: true,
       // MIM-85: local llama-server vector leg; null/cold → nothing retrieved.
       embedQuery: createEmbedQuery(),
     }),

@@ -22,6 +22,8 @@ const assistant = (text: string): Message => ({
 export const turnOne = [user("hello"), assistant("Aye.")];
 export const turnTwo = [user("and then?"), assistant("Then this.")];
 export const turnThree = [user("and after?"), assistant("After that.")];
+/** The conversation as `remaining` leaves it after a compaction. */
+export const compactedTurns = [user("summary"), assistant("Then this.")];
 
 /** One `$.state.set` as the host saw it: the value, its condition, whether it landed. */
 type Attempt<T> = {
@@ -67,6 +69,16 @@ export const pendingState = (on: On, initial?: MimirPending | null) => {
   const cell = held(initial);
   on("state.get", { key: "pending" }, cell.read);
   on("state.set", { key: "pending" }, (_, e) =>
+    cell.write(e.value, e.ifVersion),
+  );
+  return cell;
+};
+
+/** The conversation as precompact last summarised it, or none. */
+export const summarisedState = (on: On, initial?: MimirAnchor) => {
+  const cell = held(initial);
+  on("state.get", { key: "summarised" }, cell.read);
+  on("state.set", { key: "summarised" }, (_, e) =>
     cell.write(e.value, e.ifVersion),
   );
   return cell;

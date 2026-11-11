@@ -61,6 +61,7 @@ describe("hooks/hooks.json", () => {
       "reindex",
       "retrieve",
       "rules",
+      "session-end",
       "session-start",
       "verify",
       "voice-anchor",

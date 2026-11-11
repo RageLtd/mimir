@@ -36,14 +36,17 @@ const buildUserProfileSection = (store: UserMemoryStore) =>
   buildUserContext(store);
 
 // Boot budgets (up to 10 facts and 3 summaries) — richer first-turn
-// priming than per-turn micro-retrieval.
-const BOOT_BUDGETS = { topK: 10, summaryCount: 3 };
+// priming than per-turn micro-retrieval. Boot runs on the session's first
+// prompt, so the active project's newest summary arrives even when nothing
+// is near the prompt.
+const BOOT_BUDGETS = { topK: 10, summaryCount: 3, sessionStart: true };
 /** Per-prompt retrieval takes retrieveLocalContext's own, smaller defaults. */
 const TURN_BUDGETS = {};
 
 /**
  * Build prior session context from the LOCAL org replica (MIM-86) —
- * summaries, memories, and playbooks with boot-sized budgets. Replaces
+ * summaries, memories, and playbooks with boot-sized budgets, plus the
+ * active project's newest summary when none is near the prompt. Replaces
  * the /v1/context/assemble fetch: reads are local now, so the turn-one
  * boot no longer waits on a server round-trip. Returns null when the
  * replica is missing or empty.
@@ -54,6 +57,7 @@ const buildSessionContext = async (
   budgets: {
     readonly topK?: number;
     readonly summaryCount?: number;
+    readonly sessionStart?: boolean;
   } = BOOT_BUDGETS,
 ) => {
   const replicaPath =

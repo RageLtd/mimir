@@ -197,6 +197,53 @@ describe("touch + listings", () => {
     ]);
   });
 
+  test("getLastSummaries with a project reads only that project's, newest first, with ids", () => {
+    const summary = (id: string, created_at: string, project_id?: string) =>
+      replica.upsertMemory({
+        id,
+        content: `content of ${id}`,
+        type: "summary",
+        created_at,
+        ...(project_id ? { project_id } : {}),
+      });
+    summary("memory:ours-old", "2026-01-01 00:00:00", "project:a");
+    summary("memory:ours-new", "2026-06-01 00:00:00", "project:a");
+    summary("memory:ours-gone", "2026-09-01 00:00:00", "project:a");
+    replica.deleteMemory("memory:ours-gone");
+    summary("memory:theirs", "2026-10-01 00:00:00", "project:b");
+    summary("memory:unscoped", "2026-11-01 00:00:00");
+    replica.upsertMemory({
+      id: "memory:our-fact",
+      content: "a fact",
+      created_at: "2026-12-01 00:00:00",
+      project_id: "project:a",
+    });
+
+    expect(replica.getLastSummaries(5, "project:a")).toMatchObject([
+      {
+        id: "memory:ours-new",
+        content: "content of memory:ours-new",
+        created_at: "2026-06-01 00:00:00",
+      },
+      {
+        id: "memory:ours-old",
+        content: "content of memory:ours-old",
+        created_at: "2026-01-01 00:00:00",
+      },
+    ]);
+    expect(replica.getLastSummaries(1, "project:a").map((s) => s.id)).toEqual([
+      "memory:ours-new",
+    ]);
+    expect(replica.getLastSummaries(5, "project:none")).toEqual([]);
+    // Without a project the read is unchanged: every live summary.
+    expect(replica.getLastSummaries(5).map((s) => s.content)).toEqual([
+      "content of memory:unscoped",
+      "content of memory:theirs",
+      "content of memory:ours-new",
+      "content of memory:ours-old",
+    ]);
+  });
+
   test("listPlaybooks returns only named playbooks", () => {
     replica.storeMemory({
       content: "playbook body",

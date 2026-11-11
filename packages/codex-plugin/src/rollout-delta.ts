@@ -1,13 +1,21 @@
 /**
- * Codex rollout delta — read new lines from the session's rollout JSONL
- * since the last watermark and convert them to AI SDK ModelMessages for
- * local distillation (persist/precompact hooks).
+ * Codex rollout reader — convert the session's rollout JSONL to AI SDK
+ * ModelMessages for local distillation (persist/precompact hooks), as
+ * either the delta since the extraction watermark (`readDelta`) or the
+ * window since the last compaction (`readWindow`).
  *
  * Rollout format (verified on codex-cli 0.144.0, fixture at
  * test-fixtures/rollout-basic-session.jsonl): one JSON object per line
  * with `type` ∈ {session_meta, turn_context, world_state, event_msg,
- * response_item}. Only `response_item` carries conversation; its
- * `payload.type` is one of:
+ * response_item, compacted}.
+ *
+ * The rollout is append-only across compactions: each compaction appends
+ * a top-level `compacted` record (opaque replacement history, no readable
+ * summary), then metadata lines, then the new conversation. The window is
+ * therefore everything after the last `compacted` record — the whole
+ * rollout when there is none.
+ *
+ * Only `response_item` carries conversation; its `payload.type` is one of:
  *   - "message"                  role developer|user|assistant, content
  *                                parts input_text/output_text
  *   - "function_call"            name + JSON-string arguments + call_id
@@ -23,18 +31,19 @@
  *
  * Watermark semantics mirror cc-plugin's transcript-delta: line-offset
  * per session in ~/.mimir/persist-state/<session>.json — advance past
- * every read line, not just kept conversation. Codex session ids are
- * UUIDs so sharing the state directory with cc-plugin cannot collide.
+ * every read line, not just kept conversation. The same file carries the
+ * precompact summary state. Codex session ids are UUIDs so sharing the
+ * state directory with cc-plugin cannot collide.
  */
 
-import { mkdir } from "node:fs/promises";
+import { mkdir, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type {
   AssistantContent,
   ModelMessage,
   ToolContent,
 } from "@ai-sdk/provider-utils";
-import { attemptSync } from "@mimir/plugin-core/result";
+import { attempt, attemptSync } from "@mimir/plugin-core/result";
 import { mimirHome } from "@mimir/plugin-core/util";
 import { createLogger } from "./logger";
 
@@ -64,31 +73,83 @@ const META_CONTENT_PATTERNS = [
 // Watermark
 // ---------------------------------------------------------------------------
 
-type WatermarkRecord = { offset: number };
+/**
+ * One state file per session. `offset` is the extraction watermark;
+ * `summarizedThrough` is the rollout line of the last message the stored
+ * precompact summary covered, so an unchanged window is not summarised
+ * twice, and `summaryId` is that summary's replica row, carried into the
+ * next compaction's summary.
+ *
+ * Each write re-reads the file, merges its own fields and renames a
+ * uniquely named temp file over it, so a reader never sees a torn file and
+ * a sequential writer keeps the other's fields. Under concurrent writers
+ * that is not guaranteed: a writer that read before another's rename
+ * carries the older value of the other's field, and the last rename wins.
+ */
+type StateRecord = {
+  offset: number;
+  summarizedThrough: number;
+  summaryId: string | null;
+};
 
-export const readWatermark = async (sessionId: string) => {
+const lineCount = (value: unknown) =>
+  typeof value === "number" && value >= 0 && Number.isFinite(value) ? value : 0;
+
+const readState = async (sessionId: string) => {
   const file = Bun.file(statePath(sessionId));
-  if (!(await file.exists())) return 0;
+  if (!(await file.exists())) return {};
   const parsed = (await file
     .json()
-    .catch(() => null)) as Partial<WatermarkRecord> | null;
-  if (
-    parsed &&
-    typeof parsed.offset === "number" &&
-    parsed.offset >= 0 &&
-    Number.isFinite(parsed.offset)
-  ) {
-    return parsed.offset;
-  }
-  return 0;
+    .catch(() => null)) as Partial<StateRecord> | null;
+  return parsed && typeof parsed === "object" ? parsed : {};
 };
 
-export const writeWatermark = async (sessionId: string, offset: number) => {
-  await mkdir(dirname(statePath(sessionId)), { recursive: true }).catch(
-    () => undefined,
-  );
-  await Bun.write(statePath(sessionId), JSON.stringify({ offset }));
+/** Merges `fields` into the session's state; absent fields keep their values. */
+export const writeState = async (
+  sessionId: string,
+  fields: Partial<StateRecord>,
+) => {
+  const path = statePath(sessionId);
+  await mkdir(dirname(path), { recursive: true });
+  const temp = `${path}.${crypto.randomUUID()}.tmp`;
+  // Read as late as possible: the gap between this read and the rename is
+  // where a concurrent writer's field can be lost.
+  const current = await readState(sessionId);
+  await Bun.write(temp, JSON.stringify({ ...current, ...fields }));
+  const [renameErr] = await attempt(() => rename(temp, path));
+  if (renameErr) {
+    await rm(temp, { force: true });
+    throw new Error(
+      `persist-state for ${sessionId} not written: ${renameErr.message}`,
+    );
+  }
 };
+
+export const readWatermark = async (sessionId: string) =>
+  lineCount((await readState(sessionId)).offset);
+
+export const writeWatermark = (sessionId: string, offset: number) =>
+  writeState(sessionId, { offset });
+
+export const readSummaryState = async (sessionId: string) => {
+  const state = await readState(sessionId);
+  return {
+    summarizedThrough: lineCount(state.summarizedThrough),
+    summaryId:
+      typeof state.summaryId === "string" && state.summaryId.length > 0
+        ? state.summaryId
+        : null,
+  };
+};
+
+export const writeSummaryState = (
+  sessionId: string,
+  state: { readonly summarizedThrough: number; readonly summaryId: string },
+) =>
+  writeState(sessionId, {
+    summarizedThrough: state.summarizedThrough,
+    summaryId: state.summaryId,
+  });
 
 // ---------------------------------------------------------------------------
 // Rollout item shapes (narrow — only the fields we consume)
@@ -227,50 +288,71 @@ const toolOutputToModelMessage = (
   return { role: "tool", content };
 };
 
-// ---------------------------------------------------------------------------
-// Public: readDelta
-// ---------------------------------------------------------------------------
-
 const TOOL_CALL_TYPES = new Set(["function_call", "custom_tool_call"]);
 const TOOL_OUTPUT_TYPES = new Set([
   "function_call_output",
   "custom_tool_call_output",
 ]);
 
-export const readDelta = async (transcriptPath: string, watermark: number) => {
+const payloadToModelMessages = (
+  payload: RawPayload,
+  toolNameById: Map<string, string>,
+) => {
+  if (payload.type === "message") return messageToModelMessages(payload);
+  if (payload.type && TOOL_CALL_TYPES.has(payload.type)) {
+    const converted = toolCallToModelMessage(payload);
+    return converted ? [converted] : [];
+  }
+  if (payload.type && TOOL_OUTPUT_TYPES.has(payload.type)) {
+    const converted = toolOutputToModelMessage(payload, toolNameById);
+    return converted ? [converted] : [];
+  }
+  // reasoning and unknown payload types are dropped.
+  return [];
+};
+
+/** A parsed rollout record and its 1-based line number in the rollout. */
+type RolloutRecord = { readonly line: number; readonly raw: RawLine };
+
+const readLines = async (transcriptPath: string) => {
   const file = Bun.file(transcriptPath);
   if (!(await file.exists())) {
     log.warn("rollout not found", { transcriptPath });
-    return { messages: [] as ModelMessage[], newOffset: watermark };
+    return null;
   }
+  return (await file.text()).split("\n").filter((l) => l.length > 0);
+};
 
-  const text = await file.text();
-  const lines = text.split("\n").filter((l) => l.length > 0);
-  const totalLines = lines.length;
-
-  if (watermark >= totalLines) {
-    return { messages: [] as ModelMessage[], newOffset: totalLines };
-  }
-
-  const payloads: RawPayload[] = [];
-  for (const line of lines.slice(watermark)) {
+const parseRecords = (lines: readonly string[], from: number) =>
+  lines.slice(from).flatMap((line, i) => {
     const [parseErr, parsed] = attemptSync(() => JSON.parse(line) as RawLine);
     if (parseErr) {
       log.warn("failed to parse rollout line", {
         error: parseErr.message,
         preview: line.slice(0, 120),
       });
-      continue;
+      return [];
     }
-    if (parsed.type !== "response_item" || !parsed.payload) continue;
-    payloads.push(parsed.payload);
-  }
+    const record: RolloutRecord = { line: from + i + 1, raw: parsed };
+    return [record];
+  });
 
-  // Name every tool output across the whole delta first, so an output
+/**
+ * Convert the conversation in `records`; `lastMessageOffset` is the line
+ * of the last record that produced a message (0 when none did).
+ */
+const convertRecords = (records: readonly RolloutRecord[]) => {
+  const items = records.flatMap((record) =>
+    record.raw.type === "response_item" && record.raw.payload
+      ? [{ line: record.line, payload: record.raw.payload }]
+      : [],
+  );
+
+  // Name every tool output across the whole range first, so an output
   // arriving before its call (shouldn't happen, but cheap to tolerate)
   // still resolves.
   const toolNameById = new Map<string, string>();
-  for (const payload of payloads) {
+  for (const { payload } of items) {
     if (
       payload.type &&
       TOOL_CALL_TYPES.has(payload.type) &&
@@ -282,30 +364,79 @@ export const readDelta = async (transcriptPath: string, watermark: number) => {
   }
 
   const messages: ModelMessage[] = [];
-  for (const payload of payloads) {
-    if (payload.type === "message") {
-      messages.push(...messageToModelMessages(payload));
-      continue;
-    }
-    if (payload.type && TOOL_CALL_TYPES.has(payload.type)) {
-      const converted = toolCallToModelMessage(payload);
-      if (converted) messages.push(converted);
-      continue;
-    }
-    if (payload.type && TOOL_OUTPUT_TYPES.has(payload.type)) {
-      const converted = toolOutputToModelMessage(payload, toolNameById);
-      if (converted) messages.push(converted);
-    }
-    // reasoning and unknown payload types are dropped.
+  let lastMessageOffset = 0;
+  for (const { line, payload } of items) {
+    const converted = payloadToModelMessages(payload, toolNameById);
+    if (converted.length === 0) continue;
+    messages.push(...converted);
+    lastMessageOffset = line;
   }
+  return { messages, lastMessageOffset, responseItems: items.length };
+};
+
+// ---------------------------------------------------------------------------
+// Public: readDelta, readWindow
+// ---------------------------------------------------------------------------
+
+export const readDelta = async (transcriptPath: string, watermark: number) => {
+  const lines = await readLines(transcriptPath);
+  if (!lines) return { messages: [] as ModelMessage[], newOffset: watermark };
+  const totalLines = lines.length;
+
+  if (watermark >= totalLines) {
+    return { messages: [] as ModelMessage[], newOffset: totalLines };
+  }
+
+  const { messages, responseItems } = convertRecords(
+    parseRecords(lines, watermark),
+  );
 
   log.debug("delta extracted", {
     transcriptPath,
     watermark,
     newOffset: totalLines,
-    responseItems: payloads.length,
+    responseItems,
     messages: messages.length,
   });
 
   return { messages, newOffset: totalLines };
+};
+
+/**
+ * The conversation since the last `compacted` record (the whole rollout
+ * when there is none). `lastMessageOffset` is the rollout line of the
+ * window's last message, so metadata Codex appends afterwards does not
+ * make an unchanged window look grown. `firstOffset` is the window's
+ * first rollout line: the line after the last `compacted` record, or 1.
+ */
+export const readWindow = async (transcriptPath: string) => {
+  const lines = await readLines(transcriptPath);
+  if (!lines) {
+    return {
+      messages: [] as ModelMessage[],
+      lastMessageOffset: 0,
+      firstOffset: 1,
+    };
+  }
+
+  const records = parseRecords(lines, 0);
+  const boundary = records.findLastIndex(
+    (record) => record.raw.type === "compacted",
+  );
+  const compactedAt = records[boundary]?.line ?? null;
+  const { messages, lastMessageOffset, responseItems } = convertRecords(
+    records.slice(boundary + 1),
+  );
+  const firstOffset = (compactedAt ?? 0) + 1;
+
+  log.debug("window extracted", {
+    transcriptPath,
+    compactedAt,
+    firstOffset,
+    lastMessageOffset,
+    responseItems,
+    messages: messages.length,
+  });
+
+  return { messages, lastMessageOffset, firstOffset };
 };

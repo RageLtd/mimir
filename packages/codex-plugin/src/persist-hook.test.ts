@@ -5,7 +5,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -66,5 +66,22 @@ describe("persist hook watermark", () => {
     });
     expect(exitCode).toBe(0);
     expect(await watermark().json()).toEqual({ offset: 27 });
+  });
+
+  test("a watermark write that throws does not fail the hook", async () => {
+    // A regular file where the state directory belongs: mkdir rejects.
+    const home = mkdtempSync(join(tmpdir(), "mimir-codex-persist-unwritable-"));
+    writeFileSync(join(home, "persist-state"), "not a directory");
+    try {
+      const exitCode = await runPersist({
+        MIMIR_HOME: home,
+        MIMIR_EXTRACTION_BASE_URL: "",
+        MIMIR_EXTRACTION_MODEL: "",
+        MIMIR_SMALL_MODEL: "",
+      });
+      expect(exitCode).toBe(0);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
