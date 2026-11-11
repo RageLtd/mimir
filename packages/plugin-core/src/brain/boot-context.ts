@@ -167,7 +167,9 @@ export const assembleBootContext = async (opts: BootContextOptions) => {
   log.info("boot context assembled", {
     projectId,
     hasProfile: profile !== null,
-    hasSessionContext: sessionContext !== null,
+    // "omitted" = no prompt, so no lookup ran; false = looked, found nothing.
+    hasSessionContext:
+      opts.promptText === undefined ? "omitted" : sessionContext !== null,
   });
 
   const sections = ["<boot_context>"];
