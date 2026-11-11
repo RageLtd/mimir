@@ -4,7 +4,7 @@
  * nor a task runner names the commands.
  *
  * Each matcher looks at one ecosystem's manifest and returns the
- * conventional `test` / `check` / `typecheck` invocations. A package
+ * conventional `test` / `check` / `typecheck` / `vet` invocations. A package
  * root with several manifests (a Tauri app, say) gets them joined with
  * `&&` so every ecosystem present is exercised.
  */
@@ -65,8 +65,11 @@ const cargo = (names: ReadonlySet<string>) =>
   names.has("Cargo.toml")
     ? {
         test: "cargo test",
-        check: "cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+        check: "cargo fmt --check",
         typecheck: "cargo check --all-targets",
+        // Clippy has to build the crate, so it is not part of `check`: a red
+        // test that does not compile yet would fail it for the wrong reason.
+        vet: "cargo clippy --all-targets -- -D warnings",
       }
     : null;
 
@@ -242,7 +245,7 @@ const ruby = async (root: string, names: ReadonlySet<string>) => {
 
 const mergeCommands = (parts: readonly VerifyCommands[]) => {
   const merged: { -readonly [K in keyof VerifyCommands]: string } = {};
-  for (const key of ["test", "check", "typecheck"] as const) {
+  for (const key of ["test", "check", "typecheck", "vet"] as const) {
     const values = parts.map((p) => p[key]).filter((v) => v !== undefined);
     if (values.length > 0) merged[key] = values.join(" && ");
   }

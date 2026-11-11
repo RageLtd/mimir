@@ -192,8 +192,9 @@ describe("manifests", () => {
     await write(dir, "Cargo.toml", '[package]\nname = "x"\n');
     expect((await resolveToolchain(dir))?.commands).toEqual({
       test: "cargo test",
-      check: "cargo fmt --check && cargo clippy --all-targets -- -D warnings",
+      check: "cargo fmt --check",
       typecheck: "cargo check --all-targets",
+      vet: "cargo clippy --all-targets -- -D warnings",
     });
   });
 

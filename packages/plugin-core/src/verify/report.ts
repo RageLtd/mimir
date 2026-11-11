@@ -32,7 +32,11 @@ export const formatPassReport = (input: {
 }) => {
   const files = input.files.map((f) => `  ${f.status} ${f.path}`).join("\n");
   const runs = input.runs
-    .map((r) => `  ✓ ${r.kind}: ${r.command}  (${r.root})`)
+    .map((r) =>
+      r.skipped
+        ? `  – ${r.kind} skipped, ${r.skipped}: ${r.command}  (${r.root})`
+        : `  ✓ ${r.kind}: ${r.command}  (${r.root})`,
+    )
     .join("\n");
   return [
     "✅ Verify gate passed.",

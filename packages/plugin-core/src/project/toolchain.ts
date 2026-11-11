@@ -1,8 +1,8 @@
 /**
  * Polyglot toolchain resolution — which commands verify a package.
  *
- * The verify gate needs `test` / `check` / `typecheck` for whatever the
- * worker touched, in whatever language. Resolution order, first hit wins:
+ * The verify gate needs `test` / `check` / `typecheck` / `vet` for whatever
+ * the worker touched, in whatever language. Resolution order, first hit wins:
  *
  *   1. explicit `[verify]` table in the layered `mimir.toml` (user →
  *      project → nested package) — the developer knows their toolchain;
@@ -35,13 +35,14 @@ export type {
 
 const log = createLoggerFactory("mimir-plugin").createLogger("toolchain");
 
-const COMMAND_KEYS = ["test", "check", "typecheck"] as const;
+const COMMAND_KEYS = ["test", "check", "typecheck", "vet"] as const;
 
 /** Task names accepted for each command, in preference order. */
 const TASK_ALIASES: Record<(typeof COMMAND_KEYS)[number], readonly string[]> = {
   test: ["test"],
   check: ["check", "lint"],
   typecheck: ["typecheck", "type-check", "tsc"],
+  vet: ["vet", "clippy"],
 };
 
 const exists = (filePath: string) => Bun.file(filePath).exists();
