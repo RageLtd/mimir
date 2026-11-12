@@ -1,0 +1,143 @@
+name: server Image (:next)
+
+# Rolling pre-release image for packages/server. While we're in
+# late-alpha/early-beta there are no semver tags — every push to main that
+# touches the server (or the workspace manifests its Docker build depends on)
+# rebuilds and republishes the moving `:next` tag, plus an immutable
+# `sha-<short>` tag for rollback/traceability.
+#
+# Built on the forge's Mac runner and published to GitHub's container
+# registry, where deployments pull it from. The Mac is arm64 and the image is
+# amd64: the Dockerfile cross-compiles, so nothing is emulated but the short
+# start-up check. Docker there keeps its layer cache between runs, which is
+# all the caching this needs.
+#
+# Needs one repository secret:
+#   GH_PACKAGES_TOKEN   a GitHub token that may write packages
+#
+# Nothing is pushed from any branch but main. A run requested on another
+# branch tests, builds and starts the image, then stops: a rehearsal.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/server/**"
+      # The server build resolves the workspace graph, and plugin-core is a
+      # dependency — core changes must rebuild the image too (MIM-96).
+      - "packages/plugin-core/**"
+      - "package.json"
+      - "bun.lock"
+  # Note: this workflow is deliberately NOT in its own paths filter — editing the
+  # build definition shouldn't republish an unchanged image. Use workflow_dispatch
+  # to rebuild on demand after a build-definition change.
+  workflow_dispatch:
+
+# One at a time, and let a build that has started finish (the forge's default
+# for a push would cancel it).
+concurrency:
+  group: mimir-server-image
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/rageltd/mimir-server
+  GH_OWNER: RageLtd
+  SOURCE_URL: https://github.com/RageLtd/mimir
+
+jobs:
+  test:
+    name: Test
+    uses: ./.forgejo/workflows/test.yml
+
+  build-push:
+    name: Build & Push
+    needs: [test]
+    # The Mac's own runner (a `host` label), which can reach OrbStack's
+    # Docker.
+    runs-on: macos-arm64
+    env:
+      # A background service does not get the login shell's PATH.
+      DOCKER_BIN: /Applications/OrbStack.app/Contents/MacOS/xbin
+    steps:
+      # The machine is not wiped between jobs, so start from a clean tree.
+      - name: Check out
+        run: |
+          rm -rf src
+          git init -q src
+          cd src
+          git remote add origin \
+            "$(echo "$GITHUB_SERVER_URL" | sed "s#://#://token:${{ github.token }}@#")/$GITHUB_REPOSITORY.git"
+          git fetch -q --depth 1 origin "$GITHUB_REF"
+          git checkout -q FETCH_HEAD
+
+      # Build context is the monorepo root — the Dockerfile copies the root
+      # manifest + bun.lock + member package.json files to resolve the
+      # `catalog:` dependency graph before compiling the server binary.
+      #
+      # Built under a local name; it only takes its registry names when it is
+      # pushed. The source label is what ties the package to the repository
+      # on GitHub.
+      - name: Build
+        working-directory: src
+        run: |
+          export PATH="$DOCKER_BIN:$PATH"
+          short=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)
+          docker build --pull --platform linux/amd64 \
+            --file packages/server/Dockerfile \
+            --label "org.opencontainers.image.source=$SOURCE_URL" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --tag "mimir-server:ci-$short" .
+
+      # A cross-compiled binary that does not run is worse than no image, and
+      # it would replace :next. Start it and wait for it to listen.
+      - name: Check that it starts
+        run: |
+          export PATH="$DOCKER_BIN:$PATH"
+          short=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)
+          cid=$(docker run -d --platform linux/amd64 "mimir-server:ci-$short")
+          trap 'docker rm -f "$cid" > /dev/null' EXIT
+          for second in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+            if docker logs "$cid" 2>&1 | grep -q "listening"; then
+              echo "the server started and is listening"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "the server did not report listening within 20 seconds:" >&2
+          docker logs "$cid" >&2
+          exit 1
+
+      - name: Push
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+        run: |
+          export PATH="$DOCKER_BIN:$PATH"
+          if [ -z "$GH_PACKAGES_TOKEN" ]; then
+            echo "GH_PACKAGES_TOKEN is not set, so nothing was pushed." >&2
+            exit 1
+          fi
+          short=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)
+          # Registry credentials of the job's own, thrown away afterwards, so
+          # the token is never left on the machine. Written straight into a
+          # Docker config, not with `docker login`: on a Mac that insists on
+          # the login keychain.
+          export DOCKER_CONFIG="$PWD/docker-config"
+          rm -rf "$DOCKER_CONFIG"
+          mkdir -p "$DOCKER_CONFIG"
+          trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+          auth=$(printf '%s:%s' "$GH_OWNER" "$GH_PACKAGES_TOKEN" | base64 | tr -d '\n')
+          (umask 077; printf '{"auths":{"ghcr.io":{"auth":"%s"}}}\n' "$auth" \
+            > "$DOCKER_CONFIG/config.json")
+          for tag in next "sha-$short"; do
+            docker tag "mimir-server:ci-$short" "$IMAGE:$tag"
+            docker push "$IMAGE:$tag"
+            docker rmi "$IMAGE:$tag" > /dev/null
+          done
+
+      # Drop the name, keep the layers: the next build reuses them.
+      - name: Tidy up
+        if: always()
+        run: |
+          export PATH="$DOCKER_BIN:$PATH"
+          short=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)
+          docker rmi "mimir-server:ci-$short" > /dev/null 2>&1 || true

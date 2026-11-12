@@ -1,0 +1,200 @@
+name: cc-plugin Release
+
+# Auto-versioned release for packages/cc-plugin, driven by conventional
+# commits — no manual tagging. On a push to main that touches the package,
+# release-package.sh analyzes commits, bumps plugin.json, commits
+# chore(release), and tags cc-plugin/v<version>. The release job then builds
+# the binaries, publishes a GitHub Release on that tag, and notifies the
+# marketplace.
+#
+# The work happens here on the forge; what it produces is published on
+# GitHub, which is where installed plugins look for it. So the release commit
+# and tag are pushed to both, and these repository secrets are needed:
+#   GH_RELEASE_TOKEN   a GitHub token that may write contents (and workflows)
+#                      on the GitHub repository named in GH_REPO
+#   MARKETPLACE_PAT    a GitHub token that may send a repository_dispatch to
+#                      RageLtd/claude-plugins
+#
+# Nothing is published from any branch but main. A run requested on another
+# branch tests, analyzes and builds, then stops: a rehearsal.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/cc-plugin/**"
+      # The shipped binary bundles plugin-core, so core changes must release
+      # this package too. release-package.sh scans the same two paths.
+      - "packages/plugin-core/**"
+  workflow_dispatch:
+
+# One run of this workflow at a time, and never cancel a release halfway (the
+# forge's default for a push would). Per-workflow, NOT a group shared across
+# the plugin releases: a plugin-core change starts all three, and they must
+# all proceed. The push step below handles the resulting concurrent bumps.
+concurrency:
+  group: mimir-release-cc-plugin
+  cancel-in-progress: false
+
+env:
+  GH_REPO: RageLtd/mimir
+  PKG: cc-plugin
+  MANIFEST: packages/cc-plugin/.claude-plugin/plugin.json
+
+jobs:
+  test:
+    name: Test
+    uses: ./.forgejo/workflows/test.yml
+
+  version-bump:
+    name: Analyze & Bump Version
+    needs: [test]
+    runs-on: docker
+    container:
+      image: git.rageltd.ca/rageltd/ci-node:wolfi
+    outputs:
+      should_release: ${{ steps.dry-run.outputs.should_release }}
+      new_version: ${{ steps.dry-run.outputs.new_version }}
+    steps:
+      # Full history and every tag: the script finds the last release tag and
+      # reads the commits since. Left on the branch itself so it can be pushed.
+      - name: Check out
+        run: |
+          git init -q .
+          git remote add origin \
+            "$(echo "$GITHUB_SERVER_URL" | sed "s#://#://token:${{ github.token }}@#")/$GITHUB_REPOSITORY.git"
+          git fetch -q --tags origin "$GITHUB_REF"
+          git checkout -q -B "$GITHUB_REF_NAME" FETCH_HEAD
+          git config user.name "forgejo-actions[bot]"
+          git config user.email "forgejo-actions[bot]@noreply.git.rageltd.ca"
+
+      - name: Analyze commits (dry run)
+        id: dry-run
+        run: |
+          OUTPUT=$(sh scripts/release-package.sh "$PKG" "$MANIFEST" --dry-run 2>&1)
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -q "Nothing to do"; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            NEW_VERSION=$(echo "$OUTPUT" | grep "Version:" | sed 's/.*→ //' | tr -d '[:space:]')
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump, commit, tag
+        if: steps.dry-run.outputs.should_release == 'true' && github.ref == 'refs/heads/main'
+        run: sh scripts/release-package.sh "$PKG" "$MANIFEST"
+
+      - name: Push to the forge
+        if: steps.dry-run.outputs.should_release == 'true' && github.ref == 'refs/heads/main'
+        # The checkout pinned the trigger commit; another plugin's bump job
+        # may have already landed its release commit on main. Rebase ours on
+        # top (disjoint files — release commits only touch their own package's
+        # manifest) so the push fast-forwards.
+        #
+        # Retried because the releases run concurrently: pull-then-push is not
+        # atomic, so a sibling can land between our rebase and our push and
+        # take the fast-forward. Re-rebasing onto the new tip resolves it.
+        # Fails loudly after three attempts rather than skipping the release
+        # silently.
+        #
+        # A push made with the job's own token starts no workflow, so the
+        # release commit does not set this one off again.
+        run: |
+          for attempt in 1 2 3; do
+            git pull -q --rebase origin main
+            if git push --follow-tags origin main; then
+              exit 0
+            fi
+            echo "push attempt ${attempt} lost the race; retrying" >&2
+            sleep $((attempt * 5))
+          done
+          echo "push failed after 3 attempts" >&2
+          exit 1
+
+      - name: Push to GitHub
+        if: steps.dry-run.outputs.should_release == 'true' && github.ref == 'refs/heads/main'
+        # The release is created on this tag on GitHub, so the commit and tag
+        # must be there first; the forge's push mirror may not have run yet.
+        # The token goes through a credential helper so that it is never part
+        # of a URL or a command line.
+        env:
+          GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
+        run: |
+          if [ -z "$GH_RELEASE_TOKEN" ]; then
+            echo "GH_RELEASE_TOKEN is not set, so the release cannot reach GitHub." >&2
+            exit 1
+          fi
+          git -c credential.helper= \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GH_RELEASE_TOKEN"; }; f' \
+              push --follow-tags "https://github.com/${GH_REPO}.git" main
+
+  release:
+    name: Build & Publish
+    runs-on: docker
+    container:
+      image: git.rageltd.ca/rageltd/ci-node:wolfi
+    needs: [version-bump]
+    # On main, only when there is something to release. Anywhere else, always:
+    # the build is the part of a rehearsal worth having.
+    if: needs.version-bump.outputs.should_release == 'true' || github.ref != 'refs/heads/main'
+    env:
+      NEW_VERSION: ${{ needs.version-bump.outputs.new_version }}
+    steps:
+      # On main, build exactly what was tagged. Elsewhere, the ref the run
+      # was requested on.
+      - name: Check out
+        run: |
+          ref="$GITHUB_REF"
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            ref="refs/tags/${PKG}/v${NEW_VERSION}"
+          fi
+          git init -q .
+          git remote add origin \
+            "$(echo "$GITHUB_SERVER_URL" | sed "s#://#://token:${{ github.token }}@#")/$GITHUB_REPOSITORY.git"
+          git fetch -q --depth 1 origin "$ref"
+          git checkout -q FETCH_HEAD
+
+      # Without this, `bun build` can't resolve the @mimir/plugin-core
+      # workspace imports the CLI bundles (MIM-87/88).
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # build.sh cross-compiles darwin-arm64 + linux-x64 from this Linux
+      # runner and skips its codesign step off-Darwin; ensure-binary.sh
+      # re-signs on the user's Mac after download. No macOS runner or signing
+      # secrets needed here.
+      - name: Build binaries
+        working-directory: packages/cc-plugin
+        run: ./build.sh
+
+      - name: Stage release assets
+        working-directory: packages/cc-plugin
+        run: |
+          cp dist/darwin-arm64/mimir-cc mimir-cc-darwin-arm64
+          cp dist/linux-x64/mimir-cc mimir-cc-linux-x64
+
+      - name: Publish GitHub Release
+        if: github.ref == 'refs/heads/main'
+        working-directory: packages/cc-plugin
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
+        # --verify-tag: fail if the tag did not reach GitHub, instead of
+        # letting GitHub invent one on whatever its main happens to be.
+        run: |
+          gh release create "${PKG}/v${NEW_VERSION}" \
+            mimir-cc-darwin-arm64 \
+            mimir-cc-linux-x64 \
+            --verify-tag \
+            --title "${PKG} v${NEW_VERSION}" \
+            --generate-notes
+
+      - name: Notify marketplace
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.MARKETPLACE_PAT }}
+        run: |
+          gh api repos/RageLtd/claude-plugins/dispatches \
+            -f event_type=plugin-release \
+            -f "client_payload[plugin_name]=mimir-cc" \
+            -f "client_payload[version]=${NEW_VERSION}" \
+            -f "client_payload[ref]=${PKG}/v${NEW_VERSION}"
