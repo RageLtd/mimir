@@ -41,7 +41,7 @@ Self-update: the `mimir-codex` and `mimir-codex-acp` wrappers run
 `codex-plugin/v*` releases land on their own. `codex plugin marketplace
 upgrade` refreshes the bootstrap skill
 itself. Releases are auto-versioned from conventional commits by
-`.github/workflows/codex-plugin-release.yml` (bumps `plugin.json` — the
+`.forgejo/workflows/codex-plugin-release.yml` (bumps `plugin.json` — the
 canonical root manifest with OpenAI settings under
 `extensions.com.openai` — tags `codex-plugin/v<version>`, publishes
 `mimir-codex-bin-{darwin-arm64,linux-x64}` assets).

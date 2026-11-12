@@ -162,14 +162,13 @@ To cut a release:
 # 1. Commit with a conventional-commit message and push to main.
 git commit -m "feat: wire file-context augmentation into read tool"
 git push origin main
-# 2. The .github/workflows/oc-plugin-release.yml workflow:
+# 2. The .forgejo/workflows/oc-plugin-release.yml workflow:
 #    a. version-bump: analyses the commits, bumps the version in
 #       package.json, commits chore(release): oc-plugin v<version>,
 #       creates the oc-plugin/v<version> tag, pushes both.
-#    b. build: builds the bundle, verifies the size tripwire.
-#    c. publish: renames the package to @RageLtd/mimir-oc, runs
-#       `bun publish` against GitHub Packages, creates a GitHub
-#       Release on the new tag.
+#    b. publish: builds the bundle, verifies the size tripwire, renames
+#       the package to @RageLtd/mimir-oc, runs `bun publish` against
+#       GitHub Packages, creates a GitHub Release on the new tag.
 ```
 
 The in-monorepo package name (`@mimir/oc-plugin`) is renamed to the public scope (`@RageLtd/mimir-oc`) at publish time — only the published artifact carries the public name; the monorepo keeps its workspace-style name. The GitHub Release is for visibility — there's no asset to attach, the install is via `opencode plugin add @RageLtd/mimir-oc`.
