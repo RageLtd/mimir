@@ -1,7 +1,6 @@
 name: Rules Check
 
 # Fails the build when vendored rules drift from .claude/rules-lock.json.
-# The forge's counterpart of .github/workflows/rules-check.yml.
 
 on:
   push:

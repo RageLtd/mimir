@@ -307,7 +307,7 @@ Security reviews should begin at these ownership seams:
   migration.
 - `packages/server/src/web/browser/memory-*` for browser validation,
   zeroization, and byte compatibility with the canonical seam.
-- `.github/workflows/*release*` and updater scripts for the unresolved client
+- `.forgejo/workflows/*release*` and updater scripts for the unresolved client
   authenticity boundary.
 
 ## Self-hosted mode

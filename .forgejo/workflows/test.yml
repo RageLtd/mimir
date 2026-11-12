@@ -1,11 +1,10 @@
 name: Test
 
-# The shared test suite, on the forge: typecheck, then the full root harness
-# across all packages. Runs on pull requests to main, and on request.
-#
-# While this directory exists the forge ignores .github/workflows, so the
-# GitHub release workflows do not also run here.
+# The shared test suite: typecheck, then the full root harness across all
+# packages. Runs on pull requests to main and on request, and is called by
+# the release and image workflows as their gate.
 on:
+  workflow_call:
   pull_request:
     branches: [main]
   workflow_dispatch:

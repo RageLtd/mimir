@@ -68,14 +68,14 @@ Outside Docker, `bun run server:dev` from the repo root runs the server with `--
 
 ## Container image
 
-CI publishes a prebuilt image to GitHub Container Registry so you don't have to build on the deploy host. The `server Image (:next)` workflow (`.github/workflows/server-image.yml`) runs on every push to `main` that touches `packages/server/**` or the workspace manifests its build depends on (`package.json`, `bun.lock`), and on manual `workflow_dispatch`. It publishes:
+CI publishes a prebuilt image to GitHub Container Registry so you don't have to build on the deploy host. The `server Image (:next)` workflow (`.forgejo/workflows/server-image.yml`) runs on every push to `main` that touches `packages/server/**` or the workspace manifests its build depends on (`package.json`, `bun.lock`), and on manual `workflow_dispatch`. It publishes:
 
 | Tag | Meaning |
 |-----|---------|
 | `ghcr.io/rageltd/mimir-server:next` | Rolling tag — overwritten by every run. Tracks the tip of `main`. |
 | `ghcr.io/rageltd/mimir-server:sha-<short>` | Immutable per-commit tag. Use it to pin or roll back when `:next` moves under you. |
 
-Images target `linux/amd64` only (the compiled binary is arch-specific). Push-side auth uses the workflow's built-in `GITHUB_TOKEN` — no secret to provision.
+Images target `linux/amd64` only (the compiled binary is arch-specific). The workflow runs on the forge and pushes with a GitHub token that may write packages, stored there as the `GH_PACKAGES_TOKEN` secret.
 
 ### Pulling the published image
 
