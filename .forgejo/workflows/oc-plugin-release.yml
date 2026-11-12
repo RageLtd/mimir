@@ -157,6 +157,7 @@ jobs:
       # was requested on.
       - name: Check out
         run: |
+          echo "version from the bump job: ${NEW_VERSION:-none}"
           ref="$GITHUB_REF"
           if [ "$GITHUB_REF" = "refs/heads/main" ]; then
             ref="refs/tags/${PKG}/v${NEW_VERSION}"
