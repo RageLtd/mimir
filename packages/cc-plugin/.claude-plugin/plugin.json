@@ -1,7 +1,7 @@
 {
   "name": "mimir-cc",
   "description": "Mimir persona and runtime for Claude Code. Ships the lifecycle hooks and local MCP servers; the installer lands the persona, which the hooks module composes into every session's system prompt. Enable the plugin per project with `mimir-cc enable`.",
-  "version": "1.11.1",
+  "version": "1.11.2",
   "types": "./types/index.d.ts",
   "author": {
     "name": "RageLtd"
