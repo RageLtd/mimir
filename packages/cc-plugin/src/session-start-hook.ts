@@ -90,7 +90,12 @@ export const runHook = async (
   // land under the same root the file-context and reindex hooks read.
   const cwd = input.cwd ?? process.cwd();
   const projectRoot = await resolveProjectRoot(cwd);
-  log.info("spawning session-start worker", { cwd, projectRoot, source });
+  log.info("spawning session-start worker", {
+    sessionId: input.session_id,
+    cwd,
+    projectRoot,
+    source,
+  });
   deps.spawnWorker(projectRoot);
   return 0;
 };
