@@ -29,6 +29,9 @@ const STRONG_PREFERENCE =
   "Strong preference: use `bunx` not `npx` — will call this out if he sees the wrong one";
 const UNRELATED = "Runs the Claude Code CLI in auto permission mode.";
 
+// searchMemories returns no more than this many rows.
+const SEARCH_RESULT_CAP = 10;
+
 // The user_memories / user_memories_fts schema as it shipped before the
 // porter tokenizer: no `tokenize` option on the FTS5 table.
 const OLD_SCHEMA = `
@@ -108,7 +111,7 @@ describe("searchMemories", () => {
     store.close();
   });
 
-  test("treats a hyphenated query as words, not FTS5 syntax", () => {
+  test("accepts a hyphenated query", () => {
     const store = openSeededStore([PREFERS_BUNX, UNRELATED]);
 
     expect(contents(store.searchMemories("package-runner"))).toEqual([
@@ -151,6 +154,33 @@ describe("searchMemories", () => {
     expect(store.searchMemories("   \t\n")).toEqual([]);
     store.close();
   });
+
+  test(`returns at most ${SEARCH_RESULT_CAP} memories`, () => {
+    const store = openSeededStore(
+      Array.from(
+        { length: 15 },
+        (_, n) => `Note ${n}: he reaches for bunx in project ${n}.`,
+      ),
+    );
+
+    expect(store.searchMemories("bunx")).toHaveLength(SEARCH_RESULT_CAP);
+    store.close();
+  });
+
+  test("keeps the best-ranked memory when the result cap applies", () => {
+    const both = "He drinks coffee and tea every morning.";
+    const teaOnly = Array.from(
+      { length: 12 },
+      (_, n) => `Evening ${n}: he drinks tea before bed.`,
+    );
+    const store = openSeededStore([...teaOnly, both]);
+
+    const found = contents(store.searchMemories("coffee tea"));
+
+    expect(found).toHaveLength(SEARCH_RESULT_CAP);
+    expect(found[0]).toBe(both);
+    store.close();
+  });
 });
 
 describe("migrating a database created with the unstemmed FTS schema", () => {
@@ -188,6 +218,48 @@ describe("migrating a database created with the unstemmed FTS schema", () => {
     expect(contents(store.searchMemories("preference"))).toEqual([
       PREFERS_BUNX,
     ]);
+    store.close();
+  });
+
+  const idOf = (
+    store: ReturnType<typeof createUserMemoryStore>,
+    content: string,
+  ) => store.getMemories().find((entry) => entry.content === content)?.id;
+
+  test("indexes a memory added after migration", () => {
+    seedOldDatabase([PREFERS_BUNX, UNRELATED]);
+    const added = "Keeps his editor settings in a dotfiles repository.";
+
+    const store = createUserMemoryStore(DB_PATH);
+    store.addMemory(added);
+
+    expect(contents(store.searchMemories("setting"))).toEqual([added]);
+    store.close();
+  });
+
+  test("reindexes a memory updated after migration", () => {
+    seedOldDatabase([PREFERS_BUNX, UNRELATED]);
+    const rewritten = "Runs every agent inside sandboxed containers.";
+
+    const store = createUserMemoryStore(DB_PATH);
+    const id = idOf(store, UNRELATED);
+    expect(id).toBeDefined();
+    if (id !== undefined) store.updateMemory(id, rewritten);
+
+    expect(contents(store.searchMemories("container"))).toEqual([rewritten]);
+    expect(store.searchMemories("permission")).toEqual([]);
+    store.close();
+  });
+
+  test("drops a memory deleted after migration from the index", () => {
+    seedOldDatabase([PREFERS_BUNX, UNRELATED]);
+
+    const store = createUserMemoryStore(DB_PATH);
+    const id = idOf(store, PREFERS_BUNX);
+    expect(id).toBeDefined();
+    if (id !== undefined) store.deleteMemory(id);
+
+    expect(store.searchMemories("bunx")).toEqual([]);
     store.close();
   });
 });
