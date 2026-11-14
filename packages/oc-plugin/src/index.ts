@@ -18,6 +18,7 @@ import { join, resolve } from "node:path";
 import { runKeysCommand } from "@mimir/plugin-core/keys/cli";
 import { createLoggerFactory } from "@mimir/plugin-core/logger";
 import { markdownToXml } from "@mimir/plugin-core/markdown-to-xml";
+import { getOrResolveProjectId } from "@mimir/plugin-core/project";
 import {
   formatRulesForPrompt,
   loadRules,
@@ -200,10 +201,26 @@ export const MimirPlugin = Plugin.define({
       process.env.MIMIR_ANCHOR_INTERVAL,
     );
 
+    // The project a memory search ranks first: an id the model gives is
+    // used as given (never resolved), otherwise this session's project.
+    const resolveSearchProject = async (project: string | undefined) =>
+      project ??
+      (await getOrResolveProjectId(
+        config.serverUrl,
+        projectRoot,
+        config.apiKey,
+      ).catch((err) => {
+        log.warn("project resolution failed — search has no active project", {
+          error: errMessage(err),
+        });
+        return null;
+      })) ??
+      undefined;
+
     // V2 tool transforms replay synchronously; store setup stays outside them.
     const tools = {
       ...userMemoryTools(userMemoryStore),
-      ...orgMemoryTools(orgReplica),
+      ...orgMemoryTools(orgReplica, undefined, resolveSearchProject),
       ...cartographerTools(projectRoot),
       mimir_install: installTool(),
       mimir_hygiene: hygieneTool(),
