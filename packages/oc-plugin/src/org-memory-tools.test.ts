@@ -3,7 +3,11 @@ import {
   createOrgReplica,
   type OrgReplica,
 } from "@mimir/plugin-core/store/org-replica";
-import { orgMemoryToolNames } from "@mimir/plugin-core/tools/org-memory";
+import {
+  orgMemoryToolNames,
+  SEARCH_CROSS_PROJECT_MAX_DISTANCE,
+  SEARCH_SAME_PROJECT_MAX_DISTANCE,
+} from "@mimir/plugin-core/tools/org-memory";
 import type { ToolContext } from "@opencode/plugin/promise/tool";
 import { orgMemoryTools } from "./org-memory-tools";
 
@@ -66,6 +70,81 @@ describe("orgMemoryTools", () => {
       ),
     ) as { results: Array<{ id: string }> };
     expect(search.results.map((result) => result.id)).toContain(stored.id);
+  });
+
+  describe("project_memory_search and the active project", () => {
+    const ACTIVE_PROJECT = "project:active";
+    const QUERY_VECTOR = [1, 0];
+    const embedding = async (_text: string) => QUERY_VECTOR;
+    // Between the two ceilings: near enough only for the active project.
+    const BETWEEN_CEILINGS =
+      (SEARCH_CROSS_PROJECT_MAX_DISTANCE + SEARCH_SAME_PROJECT_MAX_DISTANCE) /
+      2;
+    const vectorAt = (distance: number) => {
+      const cos = 1 - distance;
+      return [cos, Math.sqrt(1 - cos * cos)];
+    };
+    const searchIds = async (
+      tools: ReturnType<typeof orgMemoryTools>,
+      args: Record<string, unknown>,
+    ) => {
+      const result = await tools.project_memory_search.execute(
+        { query: "deployment", ...args },
+        context,
+      );
+      const parsed = JSON.parse(outputText(result)) as {
+        results: Array<{ id: string }>;
+      };
+      return parsed.results.map((row) => row.id);
+    };
+
+    beforeEach(() => {
+      replica.upsertMemory({
+        id: "memory:active",
+        content: "alpha note",
+        project_id: ACTIVE_PROJECT,
+        embedding: vectorAt(BETWEEN_CEILINGS),
+      });
+    });
+
+    test("takes an optional project argument", () => {
+      const { input } = orgMemoryTools(
+        replica,
+        embedding,
+      ).project_memory_search;
+      expect(input.properties).toHaveProperty("project");
+      expect(input.required).toEqual(["query"]);
+    });
+
+    test("the resolver's project gets the active-project ceiling", async () => {
+      const calls: Array<string | undefined> = [];
+      const tools = orgMemoryTools(replica, embedding, async (project) => {
+        calls.push(project);
+        return ACTIVE_PROJECT;
+      });
+
+      expect(await searchIds(tools, {})).toEqual(["memory:active"]);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toBeUndefined();
+    });
+
+    test("a given project reaches the resolver as given", async () => {
+      const calls: Array<string | undefined> = [];
+      const tools = orgMemoryTools(replica, embedding, async (project) => {
+        calls.push(project);
+        return project;
+      });
+
+      expect(await searchIds(tools, { project: ACTIVE_PROJECT })).toEqual([
+        "memory:active",
+      ]);
+      expect(calls).toEqual([ACTIVE_PROJECT]);
+    });
+
+    test("with no resolver the row is held to the cross-project ceiling", async () => {
+      const tools = orgMemoryTools(replica, embedding);
+      expect(await searchIds(tools, {})).toEqual([]);
+    });
   });
 
   test("gracefully degrades when the replica cannot be opened", async () => {

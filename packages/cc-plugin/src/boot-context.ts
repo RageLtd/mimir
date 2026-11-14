@@ -17,7 +17,7 @@ import { createLogger } from "./logger";
 
 const log = createLogger("boot-context");
 
-type Input = { readonly cwd?: string };
+type Input = { readonly cwd?: string; readonly session_id?: string };
 
 const readStdin = async () => {
   const chunks: Uint8Array[] = [];
@@ -33,6 +33,11 @@ export const runBootContextCommand = async () => {
   const raw = await readStdin();
   const [parseErr, input] = await attempt(async () => JSON.parse(raw) as Input);
   const projectPath = (parseErr ? undefined : input.cwd) ?? process.cwd();
+  // Ties the block to a session: a host can fire SessionStart more than once.
+  log.info("boot context requested", {
+    sessionId: parseErr ? undefined : input.session_id,
+    projectPath,
+  });
 
   const [err, block] = await attempt(() =>
     assembleBootContext({ projectPath, log }),

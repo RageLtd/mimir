@@ -4,6 +4,7 @@ import type { OrgReplica } from "@mimir/plugin-core/store/org-replica";
 import {
   executeOrgMemoryTool,
   orgMemoryToolDefs,
+  type ResolveProjectId,
 } from "@mimir/plugin-core/tools/org-memory";
 import { tool } from "./tool-factory";
 
@@ -14,12 +15,20 @@ const description = (name: string) =>
 export const orgMemoryTools = (
   replica: OrgReplica | null,
   embedQuery: EmbedQuery = createEmbedQuery(),
+  /** The project a search ranks first; omitted, there is none. */
+  resolveProjectId?: ResolveProjectId,
 ) => {
   const execute = async (name: string, args: Record<string, unknown>) => {
     if (!replica) {
       return "Project memory unavailable: local replica not initialised.";
     }
-    const result = await executeOrgMemoryTool(replica, name, args, embedQuery);
+    const result = await executeOrgMemoryTool(
+      replica,
+      name,
+      args,
+      embedQuery,
+      resolveProjectId,
+    );
     return result.isError ? `Error: ${result.content}` : result.content;
   };
 
@@ -28,6 +37,12 @@ export const orgMemoryTools = (
       description: description("project_memory_search"),
       args: {
         query: { type: "string", description: "Search query" },
+        project: {
+          type: "string",
+          description:
+            "Project id to rank first (default: the project this session is in)",
+          optional: true,
+        },
         limit: {
           type: "number",
           description: "Maximum results (default: 10)",

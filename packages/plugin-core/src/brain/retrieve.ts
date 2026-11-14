@@ -88,11 +88,38 @@ type Admitted = {
   readonly score: number;
 };
 
+export type DistanceCeilings = {
+  readonly crossProject: number;
+  readonly sameProject: number;
+};
+
+const RETRIEVE_CEILINGS: DistanceCeilings = {
+  crossProject: CROSS_PROJECT_MAX_DISTANCE,
+  sameProject: SAME_PROJECT_MAX_DISTANCE,
+};
+
 /**
- * Rows under the distance gate, best first. Score is the room a row has
- * under its own cutoff, scaled by confidence, so the active project's
- * wider cutoff ranks its rows ahead of equally near ones.
+ * A row's gate score: the room it has under its own ceiling, scaled by
+ * confidence (a missing confidence counts as full), or null when it is
+ * past the ceiling. The active project's wider ceiling ranks its rows
+ * ahead of equally near ones.
  */
+export const gatedScore = (
+  row: {
+    readonly distance: number;
+    readonly confidence: number | null | undefined;
+    readonly sameProject: boolean;
+  },
+  ceilings: DistanceCeilings,
+) => {
+  const ceiling = row.sameProject
+    ? ceilings.sameProject
+    : ceilings.crossProject;
+  const room = ceiling - row.distance;
+  return room > 0 ? room * (row.confidence ?? 1) : null;
+};
+
+/** Rows under the distance gate, best first by `gatedScore`. */
 const admitRows = async (
   replica: OrgReplica,
   query: string,
@@ -110,11 +137,15 @@ const admitRows = async (
       if (m.type === "playbook" || opts.exclude?.has(m.id)) return none;
       const sameProject =
         opts.projectId !== undefined && m.project_id === opts.projectId;
-      const cutoff = sameProject
-        ? SAME_PROJECT_MAX_DISTANCE
-        : CROSS_PROJECT_MAX_DISTANCE;
-      const room = cutoff - m.distance;
-      if (room <= 0) return none;
+      const score = gatedScore(
+        {
+          distance: m.distance,
+          confidence: m.confidence,
+          sameProject,
+        },
+        RETRIEVE_CEILINGS,
+      );
+      if (score === null) return none;
       return [
         {
           id: m.id,
@@ -122,7 +153,7 @@ const admitRows = async (
           isSummary: m.type === "summary",
           projectId: m.project_id,
           createdAt: m.created_at,
-          score: room * (m.confidence ?? 1),
+          score,
         },
       ];
     })

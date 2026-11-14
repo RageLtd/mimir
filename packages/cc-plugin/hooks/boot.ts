@@ -24,7 +24,10 @@ export const registerBoot: Register = (on) => {
     const home = (await $.env.get("HOME")) ?? "";
     const ran = await $.process.run(
       mimirCcArgv(home, "boot-context"),
-      mimirCcInit({ cwd: await $.session.cwd() }, BOOT_TIMEOUT_MS),
+      mimirCcInit(
+        { cwd: await $.session.cwd(), session_id: await $.session.id() },
+        BOOT_TIMEOUT_MS,
+      ),
     );
 
     if (ran.exitCode !== 0) {
