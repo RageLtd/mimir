@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import type { EmbedQuery } from "../brain/retrieve";
 import {
   createOrgReplica,
   type MemoryType,
@@ -84,6 +85,21 @@ const search = async (
     args,
     embedQuery,
     resolveProjectId,
+  );
+  return JSON.parse(result.content) as SearchResult;
+};
+
+/** Like `search`, but the test chooses the embedder (or none at all). */
+const searchWithEmbedder = async (
+  args: Record<string, unknown>,
+  embedder: EmbedQuery | undefined,
+) => {
+  const result = await executeOrgMemoryTool(
+    replica,
+    SEARCH,
+    args,
+    embedder,
+    activeResolver,
   );
   return JSON.parse(result.content) as SearchResult;
 };
@@ -288,6 +304,92 @@ describe("project_memory_search row types and limit", () => {
     }
     const result = await search({ query: "deployment" });
     expect(result.results).toHaveLength(DEFAULT_LIMIT);
+  });
+});
+
+const coldEmbedder: EmbedQuery = async (_text: string) => null;
+
+// No query vector: full-text alone, any shared word, BM25 order.
+describe.each([
+  { label: "no embedQuery supplied", embedder: undefined },
+  { label: "embedQuery resolves null", embedder: coldEmbedder },
+])("project_memory_search without a query vector ($label)", ({ embedder }) => {
+  const QUERY = "sync seam crypto";
+  const ALL_TERMS = "memory:all-terms";
+  const ONE_TERM = "memory:one-term";
+  const ONE_TERM_CONTENT = "crypto keys rotate monthly";
+
+  const putOneTermRow = () =>
+    put({ id: ONE_TERM, content: ONE_TERM_CONTENT, distance: FAR });
+
+  const putTermRows = () => {
+    putOneTermRow();
+    put({
+      id: ALL_TERMS,
+      content: "the sync seam owns all crypto",
+      distance: FAR,
+    });
+  };
+
+  test("a row sharing any one query word is returned", async () => {
+    putTermRows();
+    const result = await searchWithEmbedder({ query: QUERY }, embedder);
+    expect(ids(result).sort()).toEqual([ALL_TERMS, ONE_TERM]);
+  });
+
+  test("results are in BM25 order: more matched terms first", async () => {
+    putTermRows();
+    const result = await searchWithEmbedder({ query: QUERY }, embedder);
+    expect(ids(result)).toEqual([ALL_TERMS, ONE_TERM]);
+  });
+
+  test("every result has null distance and the usual fields", async () => {
+    putTermRows();
+    const result = await searchWithEmbedder({ query: QUERY }, embedder);
+    expect(result.results).toHaveLength(2);
+    for (const row of result.results) {
+      expect(Object.keys(row).sort()).toEqual([
+        "content",
+        "created_at",
+        "distance",
+        "id",
+        "project_id",
+      ]);
+      expect(row.distance).toBeNull();
+      expect(typeof row.created_at).toBe("string");
+    }
+  });
+
+  test("a playbook sharing a query word is not returned", async () => {
+    put({
+      id: "memory:playbook",
+      content: "crypto rotation steps",
+      distance: FAR,
+      type: "playbook",
+    });
+    putOneTermRow();
+    const result = await searchWithEmbedder({ query: QUERY }, embedder);
+    expect(ids(result)).toEqual([ONE_TERM]);
+  });
+
+  test("a query sharing no word with any row finds no memories", async () => {
+    putTermRows();
+    const result = await searchWithEmbedder(
+      { query: "kubernetes ingress" },
+      embedder,
+    );
+    expect(result.results).toEqual([]);
+    expect(result.message).toBe(NO_MEMORIES);
+  });
+
+  test("limit caps the results", async () => {
+    putTermRows();
+    put({ id: "memory:another", content: "crypto audit log", distance: FAR });
+    const result = await searchWithEmbedder(
+      { query: QUERY, limit: 2 },
+      embedder,
+    );
+    expect(result.results).toHaveLength(2);
   });
 });
 
