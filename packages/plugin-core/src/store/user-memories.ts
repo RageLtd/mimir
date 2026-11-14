@@ -6,10 +6,25 @@
  * Two tables (`user_profile`, `user_memories`) plus an FTS5 virtual table
  * and triggers for full-text search. PRAGMA journal_mode=WAL keeps reads
  * concurrent with writes; foreign_keys=ON is the default.
+ * Opening a database with an old unstemmed search index rebuilds that index.
  */
 
 import { Database } from "bun:sqlite";
 import { expandHomePath } from "../util";
+import { escapeFtsQuery } from "./org-replica-support";
+
+// Porter stemming so "preference" finds "Prefers"; unicode61 is FTS5's
+// default tokenizer, kept underneath so token boundaries do not change.
+const STEMMING_TOKENIZER = "porter unicode61";
+
+// An OR-of-words query matches on common words too; the cap keeps a
+// conversational question from returning most of the store.
+const SEARCH_RESULT_CAP = 10;
+
+// The MCP server and a hook can open the database at the same moment; a
+// second opener waits this long for the first one's write lock instead of
+// failing with SQLITE_BUSY.
+const BUSY_TIMEOUT_MS = 5000;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS user_profile (
@@ -29,7 +44,8 @@ CREATE TABLE IF NOT EXISTS user_memories (
 CREATE VIRTUAL TABLE IF NOT EXISTS user_memories_fts USING fts5(
   content,
   content='user_memories',
-  content_rowid='id'
+  content_rowid='id',
+  tokenize='${STEMMING_TOKENIZER}'
 );
 
 CREATE TRIGGER IF NOT EXISTS user_memories_ai AFTER INSERT ON user_memories BEGIN
@@ -76,10 +92,41 @@ export type UserMemoryStore = {
   readonly getProfileAsText: () => string | null;
 };
 
+/**
+ * CREATE ... IF NOT EXISTS never alters an existing FTS table, so a database
+ * created before stemming keeps its unstemmed index. The index is
+ * external-content (it stores no rows of its own), so dropping and
+ * rebuilding it from user_memories touches no memory or profile row.
+ */
+const needsStemmedFtsMigration = (db: Database) => {
+  const existing = db
+    .query<{ sql: string }, []>(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'user_memories_fts'",
+    )
+    .get();
+  return existing !== null && !existing.sql.includes(STEMMING_TOKENIZER);
+};
+
+const migrateToStemmedFts = (db: Database) => {
+  if (!needsStemmedFtsMigration(db)) return;
+  // IMMEDIATE takes the write lock before re-checking, so a process that
+  // lost the race to another opener sees the migrated table and stops.
+  db.transaction(() => {
+    if (!needsStemmedFtsMigration(db)) return;
+    db.run("DROP TABLE user_memories_fts");
+    db.run(SCHEMA);
+    db.run(
+      "INSERT INTO user_memories_fts(user_memories_fts) VALUES ('rebuild')",
+    );
+  }).immediate();
+};
+
 export const createUserMemoryStore = (dbPath: string) => {
   const db = new Database(expandHomePath(dbPath));
+  db.run(`PRAGMA busy_timeout=${BUSY_TIMEOUT_MS}`);
   db.run("PRAGMA journal_mode=WAL");
   db.run("PRAGMA foreign_keys=ON");
+  migrateToStemmedFts(db);
   db.run(SCHEMA);
 
   const getProfile = () =>
@@ -111,12 +158,17 @@ export const createUserMemoryStore = (dbPath: string) => {
       )
       .all();
 
-  const searchMemories = (query: string) =>
-    db
-      .query<UserMemoryEntry, [string]>(
-        "SELECT m.* FROM user_memories m JOIN user_memories_fts f ON m.id = f.rowid WHERE f.content MATCH ? ORDER BY f.rank",
+  // Queries are natural language, not FTS5 syntax: escapeFtsQuery quotes
+  // each word and ORs them, and BM25 rank puts multi-term matches first.
+  const searchMemories = (query: string) => {
+    const ftsQuery = escapeFtsQuery(query);
+    if (ftsQuery.length === 0) return [];
+    return db
+      .query<UserMemoryEntry, [string, number]>(
+        "SELECT m.* FROM user_memories m JOIN user_memories_fts f ON m.id = f.rowid WHERE f.content MATCH ? ORDER BY f.rank LIMIT ?",
       )
-      .all(query);
+      .all(ftsQuery, SEARCH_RESULT_CAP);
+  };
 
   const addMemory = (content: string) => {
     const row = db
