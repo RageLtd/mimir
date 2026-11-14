@@ -9,19 +9,63 @@
  *
  * Embedding seam: `embedQuery` optional, as in brain/retrieve.ts. With no
  * embedder (pre-MIM-85) stores land unembedded (backfilled later via
- * listUnembedded/setEmbedding), dedup/neighbor-linking are skipped, and
- * search runs FTS-only.
+ * listUnembedded/setEmbedding) and dedup/neighbor-linking are skipped.
+ *
+ * Search has two paths:
+ *  - With a query vector, a row is admitted on the same distance gate as
+ *    per-prompt retrieval (brain/retrieve.ts): the active project's rows
+ *    get the wider ceiling and rank ahead, near rows from other projects
+ *    are still returned. A row containing every query term is admitted
+ *    too, ranked as though it sat at TEXT_HIT_EQUIVALENT_DISTANCE; a row
+ *    sharing only some words is left to the vector leg.
+ *  - With no query vector (no embedder, or it returned null), search is
+ *    full-text on any shared word in BM25 order, ungated — there is no
+ *    distance to gate on, and a tool call the model asked for should still
+ *    find what the words match.
+ * Either way playbooks are excluded (they have their own tools) and a
+ * row's distance is null when it was not admitted by vector.
  *
  * Tool definitions live in org-memory-defs.ts (re-exported here).
  */
 
-import type { EmbedQuery } from "../brain/retrieve";
-import { memoryEmbedSource, type OrgReplica } from "../store/org-replica";
+import {
+  CROSS_PROJECT_MAX_DISTANCE,
+  type DistanceCeilings,
+  type EmbedQuery,
+  gatedScore,
+  SAME_PROJECT_MAX_DISTANCE,
+} from "../brain/retrieve";
+import {
+  memoryEmbedSource,
+  type OrgReplica,
+  type ReplicaMemory,
+} from "../store/org-replica";
 
 export { orgMemoryToolDefs, orgMemoryToolNames } from "./org-memory-defs";
 
-const SEARCH_VECTOR_CANDIDATES = 30;
-const SEARCH_TEXT_CANDIDATES = 20;
+/** Turns the tool's `project` argument (or its absence) into the active
+ *  project id; undefined means no active project. */
+export type ResolveProjectId = (
+  project: string | undefined,
+) => Promise<string | undefined>;
+
+// The search ceilings alias retrieve's: the same measured gate applies
+// today, but named separately so an explicit search can be tuned looser
+// or tighter than per-prompt injection without touching the other.
+export const SEARCH_CROSS_PROJECT_MAX_DISTANCE = CROSS_PROJECT_MAX_DISTANCE;
+export const SEARCH_SAME_PROJECT_MAX_DISTANCE = SAME_PROJECT_MAX_DISTANCE;
+/** Where a row matching every query term ranks when the vector gate did
+ *  not admit it: ahead of marginal vector hits, behind close ones. */
+export const TEXT_HIT_EQUIVALENT_DISTANCE = 0.25;
+
+const SEARCH_CEILINGS: DistanceCeilings = {
+  crossProject: SEARCH_CROSS_PROJECT_MAX_DISTANCE,
+  sameProject: SEARCH_SAME_PROJECT_MAX_DISTANCE,
+};
+/** Nearest rows fetched before the gate; far more than it ever admits. */
+const SEARCH_VECTOR_CANDIDATES = 200;
+const SEARCH_TEXT_CANDIDATES = 50;
+const DEFAULT_SEARCH_LIMIT = 10;
 const NEIGHBOR_LIMIT = 5;
 const NEIGHBOR_MAX_DISTANCE = 0.3;
 
@@ -33,6 +77,126 @@ const json = (value: unknown) => ({
   content: JSON.stringify(value),
   isError: false,
 });
+
+/** Lower-cased word tokens, split as FTS5's default unicode61 tokenizer
+ *  splits them. */
+const termsOf = (text: string) =>
+  new Set(text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
+
+/** Every word of the query counts, common ones ("the", "how") included —
+ *  deliberately: there is no stopword list to drift from FTS, and a
+ *  full-sentence query is what the vector leg is for. */
+const hasEveryTerm = (content: string, terms: ReadonlySet<string>) => {
+  const words = termsOf(content);
+  return [...terms].every((term) => words.has(term));
+};
+
+type SearchHit = {
+  readonly id: string;
+  readonly content: string;
+  readonly distance: number | null;
+  readonly project_id: string | null;
+  readonly created_at: string;
+  readonly score: number;
+};
+
+const toHit = (m: ReplicaMemory, distance: number | null, score: number) => ({
+  id: m.id,
+  content: m.content,
+  distance,
+  project_id: m.project_id,
+  created_at: m.created_at,
+  score,
+});
+
+const toResult = ({ score: _score, ...row }: SearchHit) => row;
+
+/** No query vector: any shared word, BM25 order, playbooks excluded. */
+const searchFullText = (replica: OrgReplica, query: string, limit: number) =>
+  termsOf(query).size === 0
+    ? []
+    : replica
+        .searchByText(query, SEARCH_TEXT_CANDIDATES)
+        .filter((m) => m.type !== "playbook")
+        .slice(0, limit)
+        .map((m) => toResult(toHit(m, null, m.score)));
+
+/**
+ * Gated, project-aware search: vector hits under their ceiling plus rows
+ * containing every query term, best score first. A row admitted both ways
+ * keeps its distance and the better of its two scores.
+ */
+const searchGated = (
+  replica: OrgReplica,
+  query: string,
+  embedding: number[],
+  projectId: string | undefined,
+  limit: number,
+) => {
+  const scoreAt = (m: ReplicaMemory, distance: number) =>
+    gatedScore(
+      {
+        distance,
+        confidence: m.confidence,
+        sameProject: projectId !== undefined && m.project_id === projectId,
+      },
+      SEARCH_CEILINGS,
+    );
+
+  const vectorHits: SearchHit[] = replica
+    .searchByVector(embedding, SEARCH_VECTOR_CANDIDATES)
+    .flatMap((m) => {
+      if (m.type === "playbook") return [];
+      const score = scoreAt(m, m.distance);
+      return score === null ? [] : [toHit(m, m.distance, score)];
+    });
+
+  const terms = termsOf(query);
+  const textHits: SearchHit[] = (
+    terms.size > 0 ? replica.searchByText(query, SEARCH_TEXT_CANDIDATES) : []
+  ).flatMap((m) => {
+    if (m.type === "playbook" || !hasEveryTerm(m.content, terms)) return [];
+    const score = scoreAt(m, TEXT_HIT_EQUIVALENT_DISTANCE);
+    return score === null ? [] : [toHit(m, null, score)];
+  });
+
+  const merged = new Map(vectorHits.map((hit) => [hit.id, hit]));
+  for (const hit of textHits) {
+    const existing = merged.get(hit.id);
+    merged.set(
+      hit.id,
+      existing
+        ? { ...existing, score: Math.max(existing.score, hit.score) }
+        : hit,
+    );
+  }
+
+  return [...merged.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(toResult);
+};
+
+const searchMemories = async (
+  replica: OrgReplica,
+  args: Record<string, unknown>,
+  embedQuery: EmbedQuery | undefined,
+  resolveProjectId: ResolveProjectId | undefined,
+) => {
+  const query = str(args.query) ?? "";
+  const limit = num(args.limit) ?? DEFAULT_SEARCH_LIMIT;
+  const projectId = resolveProjectId
+    ? await resolveProjectId(str(args.project))
+    : undefined;
+  const embedding = embedQuery ? await embedQuery(query) : null;
+  const results = embedding
+    ? searchGated(replica, query, embedding, projectId, limit)
+    : searchFullText(replica, query, limit);
+  return json({
+    results,
+    message: results.length === 0 ? "No memories found" : null,
+  });
+};
 
 const findPlaybook = (
   replica: OrgReplica,
@@ -120,30 +284,13 @@ export const executeOrgMemoryTool = async (
   name: string,
   args: Record<string, unknown>,
   embedQuery?: EmbedQuery,
+  /** Omitted, there is no active project and every row is held to the
+   *  cross-project ceiling. */
+  resolveProjectId?: ResolveProjectId,
 ) => {
   switch (name) {
-    case "project_memory_search": {
-      const query = str(args.query) ?? "";
-      const limit = num(args.limit) ?? 10;
-      const embedding = embedQuery ? await embedQuery(query) : null;
-      const vector = embedding
-        ? replica.searchByVector(embedding, SEARCH_VECTOR_CANDIDATES)
-        : [];
-      const text = replica.searchByText(query, SEARCH_TEXT_CANDIDATES);
-      const seen = new Set<string>();
-      const results = [...vector, ...text]
-        .filter((m) => {
-          if (seen.has(m.id)) return false;
-          seen.add(m.id);
-          return true;
-        })
-        .slice(0, limit)
-        .map((m) => ({ id: m.id, content: m.content }));
-      return json({
-        results,
-        message: results.length === 0 ? "No memories found" : null,
-      });
-    }
+    case "project_memory_search":
+      return searchMemories(replica, args, embedQuery, resolveProjectId);
 
     case "project_memory_store": {
       const content = str(args.content);

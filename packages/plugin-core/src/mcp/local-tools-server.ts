@@ -29,6 +29,8 @@
 
 import { join } from "node:path";
 import { createEmbedQuery } from "../brain/embedder";
+import { getOrResolveProjectId } from "../project";
+import { attempt } from "../result";
 import { readConfig } from "../shared-config";
 import {
   createOrgReplica,
@@ -100,6 +102,43 @@ export const resolveUserMemoryDb = async () =>
   (await readConfig())?.userMemoryDb ??
   join(mimirHome(), "user-memories.db");
 
+/** This server's cwd → project id. getOrResolveProjectId caches and may
+ *  migrate ids, so it only ever sees the server's own cwd. */
+const resolveCwdProjectId = async () => {
+  // The resolver derives identity locally; the server fields are legacy.
+  const config = await readConfig();
+  return getOrResolveProjectId(
+    config?.serverUrl ?? "",
+    process.cwd(),
+    config?.apiKey,
+  );
+};
+
+/**
+ * The project a memory search ranks first. A given `project` string is
+ * used as given, whatever it looks like — nothing the model hands over is
+ * resolved. Omitted, this server's cwd is resolved, which does not follow
+ * a session `/cd`; hence the tool asks for the active project id. A failed
+ * or empty resolution is logged (failures) and the search runs with no
+ * active project rather than failing.
+ */
+export const resolveSearchProjectId = async (
+  project: string | undefined,
+  resolveFromCwd: () => Promise<
+    string | null | undefined
+  > = resolveCwdProjectId,
+) => {
+  if (project !== undefined) return project;
+  const [err, id] = await attempt(resolveFromCwd);
+  if (err) {
+    process.stderr.write(
+      `mimir-local: project resolution from cwd failed: ${errMessage(err)}\n`,
+    );
+    return undefined;
+  }
+  return id ?? undefined;
+};
+
 export const runLocalToolsMcp = async () => {
   const dbPath = await resolveUserMemoryDb();
   const replicaPath =
@@ -154,7 +193,13 @@ export const runLocalToolsMcp = async () => {
         const result = cartToolNames.has(name)
           ? await executeCartTool(name, args)
           : orgMemoryToolNames.has(name)
-            ? await executeOrgMemoryTool(replica, name, args, embedQuery)
+            ? await executeOrgMemoryTool(
+                replica,
+                name,
+                args,
+                embedQuery,
+                resolveSearchProjectId,
+              )
             : executeUserMemoryTool(store, name, args);
         respond(id, {
           content: [{ type: "text", text: result.content }],
