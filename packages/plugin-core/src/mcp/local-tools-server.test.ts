@@ -3,7 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeConfig } from "../shared-config";
-import { resolveUserMemoryDb } from "./local-tools-server";
+import {
+  resolveSearchProjectId,
+  resolveUserMemoryDb,
+} from "./local-tools-server";
 
 let home = "";
 let savedHome: string | undefined;
@@ -39,5 +42,58 @@ describe("resolveUserMemoryDb", () => {
 
   test("defaults to ~/.mimir/user-memories.db without env or config", async () => {
     expect(await resolveUserMemoryDb()).toBe(join(home, "user-memories.db"));
+  });
+});
+
+describe("resolveSearchProjectId", () => {
+  const GIVEN_PROJECT = "project:abc";
+  const CWD_PROJECT = "project:from-cwd";
+
+  /** A resolveFromCwd that records each call and resolves `value`. */
+  const counting = (value: string | null | undefined) => {
+    const calls = { count: 0 };
+    const resolve = async () => {
+      calls.count += 1;
+      return value;
+    };
+    return { calls, resolve };
+  };
+
+  test("a given project string is returned unchanged, cwd not consulted", async () => {
+    const { calls, resolve } = counting(CWD_PROJECT);
+    expect(await resolveSearchProjectId(GIVEN_PROJECT, resolve)).toBe(
+      GIVEN_PROJECT,
+    );
+    expect(calls.count).toBe(0);
+  });
+
+  test("a path-like string is returned unchanged, never resolved", async () => {
+    const pathLike = "/some/abs/path";
+    const { calls, resolve } = counting(CWD_PROJECT);
+    expect(await resolveSearchProjectId(pathLike, resolve)).toBe(pathLike);
+    expect(calls.count).toBe(0);
+  });
+
+  test("undefined resolves the cwd project once", async () => {
+    const { calls, resolve } = counting(CWD_PROJECT);
+    expect(await resolveSearchProjectId(undefined, resolve)).toBe(CWD_PROJECT);
+    expect(calls.count).toBe(1);
+  });
+
+  test.each([
+    { label: "null", value: null },
+    { label: "undefined", value: undefined },
+  ])("undefined with a cwd resolving $label gives undefined", async ({
+    value,
+  }) => {
+    const { resolve } = counting(value);
+    expect(await resolveSearchProjectId(undefined, resolve)).toBeUndefined();
+  });
+
+  test("undefined with a rejecting cwd resolver gives undefined, no throw", async () => {
+    const rejecting = async () => {
+      throw new Error("cwd is not a project");
+    };
+    expect(await resolveSearchProjectId(undefined, rejecting)).toBeUndefined();
   });
 });
