@@ -46,8 +46,17 @@ describe("project_memory lifecycle (no embedder — pre-MIM-85)", () => {
     const search = await call("project_memory_search", {
       query: "crypto seam",
     });
-    const results = search.results as Array<{ id: string; content: string }>;
+    const results = search.results as Array<Record<string, unknown>>;
     expect(results.map((r) => r.id)).toContain(id);
+    const hit = results.find((r) => r.id === id);
+    expect(Object.keys(hit ?? {}).sort()).toEqual([
+      "content",
+      "created_at",
+      "distance",
+      "id",
+      "project_id",
+    ]);
+    expect(hit?.distance).toBeNull();
 
     const updated = await call("project_memory_update", {
       id,
