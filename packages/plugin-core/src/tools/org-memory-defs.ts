@@ -13,13 +13,18 @@ export const orgMemoryToolDefs: ToolDefinition[] = [
     function: {
       name: "project_memory_search",
       description:
-        "Search memories scoped to the current project — past architectural decisions, naming conventions, session summaries, pending work, and the reasoning behind choices already made in THIS codebase. Use when starting a task and needing cross-session context about the project, when the developer references a past decision, when a pattern looks deliberate and you want to know why, or when encountering unfamiliar code that may have recorded context. This is project-scoped knowledge, not facts about the developer themselves — use user_memory_search for that.",
+        "Search project memories — past architectural decisions, naming conventions, session summaries, pending work, and the reasoning behind choices already made in a codebase. The active project's memories rank first; close matches from other projects are included too, each tagged with its project_id. Pass the active project id (e.g. from <active_project id=\"…\">, not a path) as `project` whenever you have one: this tool's server does not follow the session's working directory, so without it the project is guessed from where the server started. Use when starting a task and needing cross-session context about the project, when the developer references a past decision, when a pattern looks deliberate and you want to know why, or when encountering unfamiliar code that may have recorded context. This is project knowledge, not facts about the developer themselves — use user_memory_search for that.",
       parameters: {
         type: "object",
         properties: {
           query: {
             type: "string",
             description: "Search query — keywords or natural language question",
+          },
+          project: {
+            type: "string",
+            description:
+              "The active project's id ('project:…', as in <active_project id=\"…\">), used exactly as given — not a path. Pass it whenever known; omitted, the project is resolved from the server's own working directory, which does not follow the session.",
           },
           limit: {
             type: "number",
