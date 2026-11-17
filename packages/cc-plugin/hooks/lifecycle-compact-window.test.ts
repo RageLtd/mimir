@@ -1,8 +1,9 @@
 /**
- * Precompact's whole window: the summary covers the conversation as it
- * stood before compaction, while facts come from the undistilled delta
- * alone. Per-turn persist keeps that delta near-empty, so the window —
- * not the delta — decides whether precompact runs at all.
+ * Precompact and the session journal: the binary summarises the journal's
+ * uncovered messages, so the hook sends no `window`, only the undistilled
+ * tail for the journal to take in. Per-turn persist keeps that tail
+ * near-empty, so an empty tail on a non-empty conversation still runs —
+ * the binary decides from the journal whether a summary is owed.
  */
 
 import type { On } from "claude-code";
@@ -34,7 +35,7 @@ import {
 const ADVANCED = JSON.stringify({ advance: true });
 const whole = [...turnOne, ...turnTwo];
 
-test("an empty delta still runs precompact with the whole window to summarise", async ($, on) => {
+test("an empty tail on a non-empty conversation still runs precompact, with messages [] and no window", async ($, on) => {
   session(on);
   const clock = mock.clock(on);
   const anchor = anchorState(on, anchorOf(whole));
@@ -54,26 +55,25 @@ test("an empty delta still runs precompact with the whole window to summarise", 
     cwd: CWD,
     trigger: "auto",
     messages: [],
-    window: whole,
     host_completions: true,
   });
   expect(result).toMatchObject({ messages: remaining });
   expect(anchor.get()).toEqual(anchorOf(remaining));
 });
 
-test("the window is slimmed like the delta: media blocks never cross stdin", async ($, on) => {
+test("the tail is slimmed: media blocks never cross stdin, and no window is sent", async ($, on) => {
   session(on);
   const clock = mock.clock(on);
   const pictured: Message = {
     role: "user",
     content: [
-      { type: "text", text: "hello" },
+      { type: "text", text: "and then?" },
       { type: "image", source: { data: "…" } },
     ],
   };
-  anchorState(on, anchorOf([pictured, ...turnOne.slice(1)]));
+  anchorState(on, anchorOf(turnOne));
   pendingState(on);
-  conversation(on, [pictured, ...turnOne.slice(1), ...turnTwo]);
+  conversation(on, [...turnOne, pictured, ...turnTwo.slice(1)]);
   const runs = binary(on, () => exited(0, ADVANCED));
   on("session.compact", () => ({ messages: remaining }));
 
@@ -83,7 +83,7 @@ test("the window is slimmed like the delta: media blocks never cross stdin", asy
   const [run] = runsOf(runs, "precompact");
   const payload = parsed(run?.stdin);
   expect(payload.messages).toEqual(turnTwo);
-  expect(payload.window).toEqual(whole);
+  expect("window" in payload).toBe(false);
 });
 
 test("an empty conversation runs no precompact, and the compaction still re-anchors", async ($, on) => {
@@ -126,8 +126,7 @@ test("a precompute or a subagent's compaction runs nothing even with a fully dis
 
 /**
  * A skipped compaction re-anchors nothing, so a repeat of it must not
- * summarise a window its settled run already summarised: summaries are not
- * vector-deduped, and each repeat would store a near-identical row.
+ * summarise a conversation its settled run already summarised.
  */
 const SKIPPED = { skip: "not now" };
 
@@ -144,7 +143,7 @@ const skipping = (on: On, answer: () => ReturnType<typeof exited>) => {
   return { clock, grow, runs };
 };
 
-test("a skipped compaction whose run settled is not summarised again when repeated unchanged", async ($, on) => {
+test("a skipped compaction whose run settled is not run again when repeated unchanged", async ($, on) => {
   const { clock, runs } = skipping(on, () => exited(0, ADVANCED));
 
   await $.session.compact({ trigger: "auto", messages: rows });
@@ -154,13 +153,12 @@ test("a skipped compaction whose run settled is not summarised again when repeat
 
   const precompacts = runsOf(runs, "precompact");
   expect(precompacts).toHaveLength(1);
-  expect(parsed(precompacts[0]?.stdin)).toMatchObject({
-    messages: turnTwo,
-    window: whole,
-  });
+  const payload = parsed(precompacts[0]?.stdin);
+  expect(payload.messages).toEqual(turnTwo);
+  expect("window" in payload).toBe(false);
 });
 
-test("after a settled skipped compaction, a grown conversation sends the whole window and only the new turn", async ($, on) => {
+test("after a settled skipped compaction, a grown conversation sends only the new turn", async ($, on) => {
   const { clock, grow, runs } = skipping(on, () => exited(0, ADVANCED));
 
   await $.session.compact({ trigger: "auto", messages: rows });
@@ -173,7 +171,7 @@ test("after a settled skipped compaction, a grown conversation sends the whole w
   expect(precompacts).toHaveLength(2);
   const second = parsed(precompacts[1]?.stdin);
   expect(second.messages).toEqual(turnThree);
-  expect(second.window).toEqual([...whole, ...turnThree]);
+  expect("window" in second).toBe(false);
 });
 
 const UNSETTLED = [
@@ -185,7 +183,7 @@ const UNSETTLED = [
 ] as const;
 
 for (const [how, answer] of UNSETTLED) {
-  test(`a skipped compaction whose run ${how} sends the same window again`, async ($, on) => {
+  test(`a skipped compaction whose run ${how} sends the same tail again`, async ($, on) => {
     const { clock, runs } = skipping(on, answer);
 
     await $.session.compact({ trigger: "auto", messages: rows });
@@ -195,14 +193,13 @@ for (const [how, answer] of UNSETTLED) {
 
     const precompacts = runsOf(runs, "precompact");
     expect(precompacts).toHaveLength(2);
-    expect(parsed(precompacts[1]?.stdin)).toMatchObject({
-      messages: turnTwo,
-      window: whole,
-    });
+    const second = parsed(precompacts[1]?.stdin);
+    expect(second.messages).toEqual(turnTwo);
+    expect("window" in second).toBe(false);
   });
 }
 
-test("after a real compaction, the next window is the compacted conversation and what followed", async ($, on) => {
+test("after a real compaction, the next run's tail is what followed the compacted conversation", async ($, on) => {
   session(on);
   const clock = mock.clock(on);
   anchorState(on, anchorOf(turnOne));
@@ -222,5 +219,5 @@ test("after a real compaction, the next window is the compacted conversation and
   expect(precompacts).toHaveLength(2);
   const second = parsed(precompacts[1]?.stdin);
   expect(second.messages).toEqual(turnThree);
-  expect(second.window).toEqual([...compactedTurns, ...turnThree]);
+  expect("window" in second).toBe(false);
 });

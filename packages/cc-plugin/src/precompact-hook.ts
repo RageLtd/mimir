@@ -1,21 +1,25 @@
 /**
  * `mimir-cc precompact` — run by the hooks module on `session.compact`
- * with the main conversation's whole window (`window`) and its undistilled
- * tail (`messages`): distillation before the engine discards them
- * (MIM-86: fully local, nothing ships to the server).
+ * with the main conversation's undistilled tail (`messages`): distillation
+ * before the engine discards it (MIM-86: fully local, nothing ships to the
+ * server). A `window` in the payload, which an older plugin may still send,
+ * is ignored.
  *
  * Fires when the engine is about to compact (/compact or auto-trigger).
- * Before the engine's history is summarized away it gets two treatments:
- *   1. A type:"summary" replica memory of the window — the narrative
- *      record of the conversation as it stood, and this run's primary
- *      purpose. A window over the summary input cap is summarised from an
- *      opening slice plus the newest messages, the middle elided
- *      (brain/summarize.ts). A payload without `window` (an older plugin)
- *      summarises the tail instead.
+ * The tail is appended to the session journal (session-journal.ts), then
+ * the conversation gets two treatments:
+ *   1. A type:"summary" replica memory of the session's uncovered journal,
+ *      read after the append and led by the previous summary when one was
+ *      carried — the narrative record of the conversation as it stood, and
+ *      this run's primary purpose. An input over the summary cap is
+ *      summarised from an opening slice plus the newest messages, the
+ *      middle elided (brain/summarize.ts). A stored summary settles the
+ *      journal through what it covered; nothing uncovered, or a journal
+ *      that cannot be read, asks for no summary.
  *   2. Best-effort fact extraction over the tail alone, same as persist
- *      would have run — the rest of the window persist already distilled.
- * Per-turn persist keeps the tail near-empty, so an empty tail with a
- * non-empty window still runs; only when both are empty is there nothing
+ *      would have run — the rest persist already distilled.
+ * Per-turn persist keeps the tail near-empty, so an empty tail with an
+ * uncovered journal still runs; only when both are empty is there nothing
  * to do.
  *
  * Where the completions run (MIM-134): BYOK in one run when an extraction
@@ -67,6 +71,11 @@ import {
   toModelMessages,
 } from "./conversation";
 import { createLogger } from "./logger";
+import {
+  journalMessages,
+  readSummaryInput,
+  settleJournal,
+} from "./session-journal";
 
 const log = createLogger("precompact-hook");
 
@@ -122,8 +131,8 @@ const factsOutcome = (gated: boolean, completions: Completions) => {
  * run completions leaves it unconfigured; otherwise phase one settles
  * when both gates skip or requests what passed, and phase two stores what
  * came back — advancing unless the summary it asked for failed. The
- * summary gate reads the window (the delta when there is none), the facts
- * gate the delta alone.
+ * summary gate reads the window — the runner passes the journal's summary
+ * input — or the delta when there is none; the facts gate the delta alone.
  */
 export const precompactPlan = (input: {
   readonly messages: readonly ModelMessage[];
@@ -181,6 +190,18 @@ type RunContext = {
   readonly trigger: string;
   readonly messages: number;
   readonly window: number;
+  /** Where a stored summary settles the journal; null when it is unread. */
+  readonly cursor: number | null;
+};
+
+/** A stored summary settles the journal through the read it was built from. */
+const settleOnStore = (
+  ctx: RunContext,
+  summaryId: string | null,
+  text: string | null,
+) => {
+  if (summaryId === null || text === null || ctx.cursor === null) return;
+  settleJournal(ctx.sessionId, ctx.cursor, text);
 };
 
 /** The replica, embedder and project attribution every store path needs. */
@@ -238,6 +259,11 @@ const runByok = async (
     embed: store.embedQuery,
     projectId: store.projectId,
   });
+  settleOnStore(
+    ctx,
+    summary.id,
+    "text" in summary ? (summary.text ?? null) : null,
+  );
 
   if (!summary.ok) {
     store.replica.close();
@@ -305,6 +331,7 @@ const runStore = async (
         text: plan.summary,
       })
     : null;
+  settleOnStore(ctx, summaryId, plan.summary);
   const extracted = plan.memories ? await storeFacts(store, plan.memories) : 0;
   store.replica.close();
   answer(plan.advance);
@@ -367,9 +394,12 @@ export const runPreCompactHook = async () => {
     return 0;
   }
 
+  journalMessages(sessionId, input.messages ?? []);
+  // The summary's input; an unreadable journal (logged there) gives none.
+  const journal = readSummaryInput(sessionId);
+
   const messages = toModelMessages(input.messages ?? []);
-  // No window (an older plugin's payload): the delta stands in for it.
-  const window = input.window ? toModelMessages(input.window) : messages;
+  const window = journal?.messages ?? [];
   const extraction = await extractionConfig();
   const ctx = {
     sessionId,
@@ -377,6 +407,7 @@ export const runPreCompactHook = async () => {
     trigger,
     messages: messages.length,
     window: window.length,
+    cursor: journal?.cursor ?? null,
   };
   const plan = precompactPlan({
     messages,

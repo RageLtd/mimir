@@ -16,6 +16,7 @@
     "./store/user-memories": "./src/store/user-memories.ts",
     "./store/org-replica": "./src/store/org-replica.ts",
     "./store/cart-index": "./src/store/cart-index.ts",
+    "./store/session-journal": "./src/store/session-journal.ts",
     "./brain/retrieve": "./src/brain/retrieve.ts",
     "./brain/embedder": "./src/brain/embedder.ts",
     "./brain/embedder-install": "./src/brain/embedder-install.ts",

@@ -1,6 +1,10 @@
 /**
- * `session.end` → `mimir-cc session-end`: the ending session's whole
- * conversation, summarised so the next session picks up its narrative.
+ * `session.end` → `mimir-cc session-end`: `{ session_id, cwd, reason,
+ * messages }`, `messages` the undistilled tail a persist run would send
+ * (media stripped), which the binary takes into the session journal before
+ * summarising the session from it, so the next session picks up its
+ * narrative. No window is sent; with everything distilled the run is still
+ * made, with `messages: []`.
  *
  * It hands off and returns because the engine's `session.end` chain —
  * every hook, its `$` waits and core — shares one short wall-clock bound
@@ -22,17 +26,22 @@
 
 import type { Register, StateRef } from "claude-code";
 import { mimirCcArgv, mimirCcInit } from "./binary";
-import { sameAnchor } from "./lifecycle";
-import { anchorOf, slim } from "./messages";
+import { ANCHOR_PREFIX, asAnchor, sameAnchor } from "./lifecycle";
+import { anchorOf, deltaSince, NO_ANCHOR, slim } from "./messages";
 
 /** The binary only decides and detaches its worker. */
 const SESSION_END_TIMEOUT_MS = 1_000;
 
 /**
- * Precompact's record of the window it last summarised (lifecycle.ts). The
- * engine lists the state a module touches from literals in the calling
- * file, so the reference is spelled here rather than imported.
+ * Precompact's record of the window it last summarised, and where the last
+ * distillation stopped (lifecycle.ts). The engine lists the state a module
+ * touches from literals in the calling file, so the references are spelled
+ * here rather than imported.
  */
+const DISTILLED = {
+  plugin: "mimir-cc",
+  key: "distilled",
+} satisfies StateRef<"mimir-cc", "distilled">;
 const SUMMARISED = {
   plugin: "mimir-cc",
   key: "summarised",
@@ -52,12 +61,18 @@ export const registerSessionEnd: Register = (on) => {
     if (e.reason === "clear" || e.reason === "resume")
       await $.state.set(REANCHOR, true);
     if (e.reason === "resume") await $.state.set(RESUMED, true);
-    const [messages, summarised] = await Promise.all([
+    const [messages, summarised, distilled] = await Promise.all([
       $.session.messages({ as: "api" }),
       $.state.get(SUMMARISED),
+      $.state.get(DISTILLED),
     ]);
     if (messages.length === 0) return next(e);
     if (sameAnchor(summarised.value, anchorOf(messages))) return next(e);
+    // A session resumed in this process holds its anchor in the store only.
+    const anchor =
+      distilled.value ??
+      asAnchor(await $.store.get(`${ANCHOR_PREFIX}${e.sessionId}`)) ??
+      NO_ANCHOR;
     const [home, cwd] = await Promise.all([$.env.get("HOME"), $.session.cwd()]);
     const ran = await $.process.run(
       mimirCcArgv(home ?? "", "session-end"),
@@ -66,7 +81,7 @@ export const registerSessionEnd: Register = (on) => {
           session_id: e.sessionId,
           cwd,
           reason: e.reason,
-          window: messages.map(slim),
+          messages: deltaSince(messages, anchor).map(slim),
         },
         SESSION_END_TIMEOUT_MS,
       ),

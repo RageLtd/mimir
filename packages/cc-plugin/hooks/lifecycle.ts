@@ -7,18 +7,19 @@
  *   the last distillation, read from `$.session.messages({ as: "api" })`
  *   and distilled into the local replica.
  * - `session.compact` (main loop, not `precompute`) → `mimir-cc precompact`:
- *   the whole window as `window`, summarised before the engine discards
- *   it, and the undistilled tail as `messages`, whose facts persist has
- *   not yet extracted. Per-turn persist keeps that tail near-empty, so a
- *   non-empty window alone is reason to run — unless a settled run already
- *   summarised that same window (`summarised` in `$.state`), as a repeated
- *   skipped compaction would have it. A real compaction records the
- *   compacted conversation as `summarised` at once, since its run covers
- *   the window that conversation replaced.
+ *   the undistilled tail as `messages`, which the binary takes into the
+ *   session journal and extracts facts from; it summarises from the
+ *   journal, so no window is sent. Per-turn persist keeps that tail
+ *   near-empty, so a non-empty conversation alone is reason to run —
+ *   unless a settled run already summarised that same conversation
+ *   (`summarised` in `$.state`), as a repeated skipped compaction would
+ *   have it. A real compaction records the compacted conversation as
+ *   `summarised` at once, since its run covers the window that
+ *   conversation replaced.
  *
  * Neither distillation leg holds the user: the hook captures the delta
- * (and, for precompact, the whole window) into its payload, marks the run
- * `pending` in `$.state`, and hands the rest to
+ * into its payload, marks the run `pending` in `$.state`, and hands the
+ * rest to
  * `$.clock.after(0, …)`, a dispatch of its own that runs once the hook has
  * returned. One persist is in flight at a time — a turn that ends while one
  * is pending schedules nothing, and the next turn's delta carries its
@@ -49,22 +50,15 @@ import type {
 } from "claude-code";
 import type { MimirAnchor, MimirPending } from "../types";
 import {
-  type Completion,
-  completionAsk,
-  completionOutcome,
-  completionRefusal,
   mimirCcArgv,
-  mimirCcInit,
   PERSIST_COMPLETION_TIMEOUT_MS,
-  PRECOMPACT_COMPLETION_TIMEOUT_MS,
   parseHookOutput,
 } from "./binary";
+import { distill, type Host, type Leg, precompactLeg } from "./distill";
 import { anchorOf, deltaSince, NO_ANCHOR, slim } from "./messages";
 
 /** Off the turn now, so they bound a run, not the user's wait. */
 const PERSIST_TIMEOUT_MS = 90_000;
-/** BYOK summarise (120 s) then extract (60 s), sequential in the binary. */
-const PRECOMPACT_TIMEOUT_MS = 200_000;
 /**
  * A worst-case persist (two runs and a completion between them) with a
  * minute's slack: a pending this old outlived its session. A pathological
@@ -90,24 +84,17 @@ const SUMMARISED = {
 export const sameAnchor = (a: MimirAnchor | undefined, b: MimirAnchor) =>
   a !== undefined && a.count === b.count && a.mark === b.mark;
 
-type Leg = {
-  readonly name: string;
-  readonly argv: readonly string[];
-  readonly timeoutMs: number;
-  readonly completionTimeoutMs: number;
-};
-
 /**
  * `$.state` lasts as long as the process, so each anchor is also kept in
  * `$.store` under its session: a resumed session picks up where it stopped
  * instead of distilling its whole window again.
  */
-const ANCHOR_PREFIX = "distilled:";
+export const ANCHOR_PREFIX = "distilled:";
 /** Sessions whose anchors the store keeps; the oldest go first. */
 const MAX_KEPT_ANCHORS = 64;
 
 /** A stored value as the anchor it is, or undefined: the store is JSON. */
-const asAnchor = (value: unknown) =>
+export const asAnchor = (value: unknown) =>
   typeof value === "object" &&
   value !== null &&
   "count" in value &&
@@ -150,7 +137,7 @@ const undistilled = async ($: EngineInterface) => {
     heldAnchor($),
   ]);
   return {
-    window: messages.map(slim),
+    isEmpty: messages.length === 0,
     delta: deltaSince(messages, held.value ?? NO_ANCHOR).map(slim),
     anchor: anchorOf(messages),
     version: held.version,
@@ -172,43 +159,6 @@ const distillPayload = async (
   // host_completions tells the binary this module runs its `requests`; a
   // binary that never sees it keeps the single-phase behaviour.
   return { session_id, cwd, messages, ...extra, host_completions: true };
-};
-
-/**
- * Runs a distillation leg. When it answers `requests`, each runs on the
- * session's model in parallel and the leg runs again with the replies as
- * `completions`; the last run is the one to settle on. A completion the
- * engine refuses to send goes back as its error, so the others still land.
- */
-const distill = async (
-  $: EngineInterface,
-  leg: Leg,
-  payload: Record<string, unknown>,
-) => {
-  const run = (input: unknown) =>
-    $.process.run(leg.argv, mimirCcInit(input, leg.timeoutMs));
-  const first = await run(payload);
-  if (first.exitCode !== 0) return first;
-  const { requests } = parseHookOutput(first.stdout);
-  if (requests === undefined) return first;
-  const replies = await Promise.all(
-    Object.entries(requests).map(async ([key, request]) => {
-      const outcome = await $.model
-        .complete(completionAsk(request, leg.completionTimeoutMs))
-        .then(completionOutcome, completionRefusal);
-      return [key, outcome] satisfies [string, Completion];
-    }),
-  );
-  const second = await run({
-    ...payload,
-    completions: Object.fromEntries(replies),
-  });
-  if (
-    second.exitCode === 0 &&
-    parseHookOutput(second.stdout).requests !== undefined
-  )
-    $.ui.status(`mimir: ${leg.name} asked for completions twice`);
-  return second;
 };
 
 /**
@@ -248,8 +198,13 @@ const detach = (
 ) => {
   const clear = () =>
     $.state.set(PENDING, null, { ifVersion: versions.pending });
+  const host = {
+    run: (argv, init) => $.process.run(argv, init),
+    complete: (request) => $.model.complete(request),
+    status: (text) => $.ui.status(text),
+  } satisfies Host;
   $.clock.after(0, () =>
-    distill($, leg, payload)
+    distill(host, leg, payload)
       .then((ran) => settle($, leg.name, ran, anchor, versions.distilled))
       .then((settled) => (settled ? onSettled() : undefined))
       .then(clear, () => {
@@ -301,17 +256,16 @@ export const registerLifecycle: Register = (on) => {
     // A precompute installs nothing: the conversation goes on, and its
     // tail is distilled turn by turn as usual.
     if (e.agentId !== undefined || e.trigger === "precompute") return next(e);
-    // The window is captured before the engine discards it; its run waits
+    // The tail is captured before the engine discards it; its run waits
     // until after the re-anchor, whose write its own then misses.
-    const [{ window, delta, anchor, version }, summarised] = await Promise.all([
-      undistilled($),
-      $.state.get(SUMMARISED),
-    ]);
-    // A skipped compaction re-anchors nothing; its repeat over a window
-    // already summarised would only store the same summary again.
+    const [{ isEmpty, delta, anchor, version }, summarised] = await Promise.all(
+      [undistilled($), $.state.get(SUMMARISED)],
+    );
+    // A skipped compaction re-anchors nothing; its repeat over a
+    // conversation already summarised would only run the same again.
     const payload =
-      window.length > 0 && !sameAnchor(summarised.value, anchor)
-        ? await distillPayload($, delta, { trigger: e.trigger, window })
+      !isEmpty && !sameAnchor(summarised.value, anchor)
+        ? await distillPayload($, delta, { trigger: e.trigger })
         : undefined;
     const compacted = await next(e);
     const reanchored =
@@ -343,18 +297,13 @@ export const registerLifecycle: Register = (on) => {
       });
       detach(
         $,
-        {
-          name: "precompact",
-          argv: mimirCcArgv(home, "precompact"),
-          timeoutMs: PRECOMPACT_TIMEOUT_MS,
-          completionTimeoutMs: PRECOMPACT_COMPLETION_TIMEOUT_MS,
-        },
+        precompactLeg(home),
         payload,
         anchor,
         { distilled: version, pending: claimed.version },
-        // Only a skipped compaction leaves this window in the conversation
-        // to be repeated; after a real one `summarised` is already the
-        // compacted conversation's.
+        // Only a skipped compaction leaves this conversation in place to be
+        // repeated; after a real one `summarised` is already the compacted
+        // conversation's.
         reanchored === undefined
           ? () => $.state.set(SUMMARISED, anchor)
           : undefined,

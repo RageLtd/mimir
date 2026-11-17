@@ -1,9 +1,10 @@
 /**
- * The session-end hand-off file — the whole conversation, passed from the
- * runner to its detached worker — and the command's entry gate. The file
- * lives under the Mimir home, readable by this user alone, and is gone once
- * the worker has read it; one a dead run left behind is swept by the next
- * write. (The preload points MIMIR_HOME at a scratch directory.)
+ * The session-end hand-off file — which session to summarise, passed from
+ * the runner to its detached worker; the conversation itself stays in the
+ * session journal — and the command's entry gate. The file lives under the
+ * Mimir home, readable by this user alone, and is gone once the worker has
+ * read it; one a dead run left behind is swept by the next write. (The
+ * preload points MIMIR_HOME at a scratch directory.)
  */
 
 import { describe, expect, test } from "bun:test";
@@ -18,9 +19,9 @@ import {
 } from "./session-end-hook";
 
 const HANDOFF = {
+  sessionId: "session-1",
   projectId: "project:abc",
   token: "owner-1",
-  window: [{ role: "user" as const, content: "hello" }],
 };
 const SESSION_END = "session-end";
 const OWNER_ONLY = 0o600;
@@ -91,7 +92,7 @@ describe("mimir-cc session-end, run as the hooks module runs it", () => {
     session_id: "session-1",
     cwd: "/work/repo",
     reason: "prompt_input_exit",
-    window: [
+    messages: [
       { role: "user", content: [{ type: "text", text: "x".repeat(600) }] },
       { role: "assistant", content: [{ type: "text", text: "y".repeat(600) }] },
     ],

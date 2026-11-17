@@ -12,13 +12,15 @@
  *      pending wraps, pull/push org memories — no embedder spawn, never
  *      mints secrets. Bounded, because the worker process exits when the
  *      reindex is done and a hung request would otherwise keep it alive.
- *   2. Full project re-index of the brain's cartographer view: every
+ *   2. Idle-journal prune: every session journal not written for
+ *      SESSION_JOURNAL_MAX_IDLE_DAYS is dropped (session-journal.ts).
+ *   3. Full project re-index of the brain's cartographer view: every
  *      git-tracked file parsed via the cartographer binary and written with
  *      `mode: "replace"`, so anything deleted or moved since the last
  *      session drops out. The reindex-hook (Edit/Write/MultiEdit) uses
  *      `mode: "upsert"` thereafter.
  *
- * Both used to be awaited in the hook, bounded at 15 s — which held the
+ * Sync and re-index used to be awaited in the hook, bounded at 15 s — which held the
  * first prompt for ~7 s on a cold start. The hooks module now starts this
  * only after the first prompt's retrieve, so the first turn always sees the
  * replica and index as the last session left them; pulled rows and the
@@ -36,6 +38,7 @@ import { syncFromSharedConfig } from "@mimir/plugin-core/sync/cli";
 import { errMessage } from "@mimir/plugin-core/util";
 import { readConfig } from "./config";
 import { createLogger } from "./logger";
+import { pruneIdleJournals } from "./session-journal";
 
 const log = createLogger("session-start-hook");
 
@@ -249,6 +252,7 @@ export const runWorker = async (
   } else {
     log.info("org sync", { ...synced });
   }
+  pruneIdleJournals();
   await deps.reindex(projectPath);
   return 0;
 };

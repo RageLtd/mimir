@@ -54,6 +54,7 @@ import {
   toModelMessages,
 } from "./conversation";
 import { createLogger } from "./logger";
+import { journalMessages } from "./session-journal";
 
 const log = createLogger("persist-hook");
 
@@ -237,6 +238,8 @@ export const runPersistHook = async () => {
     );
     return 0;
   }
+
+  journalMessages(sessionId, input.messages ?? []);
 
   const messages = toModelMessages(input.messages ?? []);
   if (messages.length === 0) {

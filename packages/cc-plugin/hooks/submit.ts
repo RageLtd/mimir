@@ -34,6 +34,11 @@
  *   the count, and the cadence restarts from it: the window that replaced
  *   the conversation carries none of the voice. Retrieval is told
  *   (`window_reset`).
+ * - A reset the messages show but no `reanchor` flag announced means no
+ *   `session.compact` reached this plugin, so no precompact ran: the hook
+ *   starts `mimir-cc precompact` for the session with `messages: []` and
+ *   no window, two-phase like the lifecycle legs (distill.ts), in a
+ *   dispatch of its own once the hook has returned.
  * - The window is read as `$.session.messages()`'s rows, not the API
  *   form: only its length and one message's mark are used, and the rows
  *   carry no media. A read that fails costs only the reset check: one
@@ -80,6 +85,7 @@ import type {
 } from "claude-code";
 import { mimirCcArgv, mimirCcInit, readHookOutput } from "./binary";
 import { bootCall } from "./boot";
+import { distill, type Host, precompactLeg } from "./distill";
 import { anchorOf, continuesWindow } from "./messages";
 import {
   FETCH_TIMEOUT_MS,
@@ -209,6 +215,43 @@ const startSession = (
     );
 };
 
+/**
+ * The precompact no `session.compact` ran: a reset only the messages show
+ * means the engine compacted without telling this plugin. `messages: []`
+ * and no window — the binary decides from the session journal what is
+ * owed — in a dispatch of its own once the hook has returned.
+ */
+const unannouncedPrecompact = (
+  $: EngineInterface,
+  home: string,
+  sessionId: string,
+  cwd: string,
+) => {
+  const leg = precompactLeg(home);
+  const host = {
+    run: (argv, init) => $.process.run(argv, init),
+    complete: (request) => $.model.complete(request),
+    status: (text) => $.ui.status(text),
+  } satisfies Host;
+  const payload = {
+    session_id: sessionId,
+    cwd,
+    messages: [],
+    host_completions: true,
+  };
+  $.clock.after(0, () =>
+    distill(host, leg, payload).then(
+      (ran) => {
+        if (ran.exitCode !== 0)
+          $.ui.status(`mimir: ${leg.name} failed (exit ${ran.exitCode})`);
+      },
+      () => {
+        $.ui.status(`mimir: ${leg.name} failed`);
+      },
+    ),
+  );
+};
+
 export const registerSubmit: Register = (on) => {
   on("prompt.submit", async ($, e, next) => {
     const home = (await $.env.get("HOME")) ?? "";
@@ -244,6 +287,8 @@ export const registerSubmit: Register = (on) => {
     if (resumed.value === true) await $.state.set(RESUMED, false);
     if (isFirstPrompt || resumed.value === true)
       startSession($, sessionStartCall(home, cwd, sessionId), isFirstPrompt);
+    if (isReset && reanchor.value !== true)
+      unannouncedPrecompact($, home, sessionId, cwd);
     const nth = anchorIndexFor(turn, interval);
     // No turn counted yet (the session's first prompt), or the last
     // session's summary is still owed from an earlier one.

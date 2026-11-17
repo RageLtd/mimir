@@ -1,68 +1,64 @@
 /**
  * `mimir-cc session-end` — run by the hooks module on `session.end` with
- * `{ session_id, cwd, reason, window }`: the whole conversation of the
- * session that is ending, summarised into a type:"summary" replica memory
- * so the next session picks up the narrative.
+ * `{ session_id, cwd, reason, messages }`: the undistilled tail of the
+ * session that is ending. The runner appends it to the session journal
+ * (session-journal.ts), and the journal's uncovered messages — led by the
+ * previous summary when one was carried, as `precompact` builds it — are
+ * summarised into a type:"summary" replica memory so the next session picks
+ * up the narrative. A stored summary settles the journal; nothing here drops
+ * it. A `window` in the payload is ignored.
  *
  * The engine's `session.end` chain shares one short wall-clock bound, so
- * the runner (`runSessionEndHook`) only decides (`sessionEndPlan`) and, to
- * summarise, hands the window to a detached worker through a private file
- * (session-end-handoff.ts) and returns. Nothing slow runs before it does:
+ * the runner (`runSessionEndHook`) only journals, decides
+ * (`sessionEndPlan`) and, to summarise, names the session to a detached
+ * worker through a private file (session-end-handoff.ts) that carries no
+ * conversation text, and returns. Nothing slow runs before it does:
  * the project id is read from the cache alone — no git, no network. With
  * a cached id the runner marks the project's summary in flight
  * (summary-pending) before the worker is spawned, and hands the worker the
  * mark's owner token; without one it hands over the cwd, and the worker
- * (`runSessionEndWorker`) resolves the project and sets the mark itself.
- * Either way the worker summarises against the configured extraction
- * endpoint, clears the mark with its token, and syncs a stored row. The
- * mark is for the next session's first retrieve, which reads it in a later
- * change; nothing reads it yet.
+ * (`runSessionEndWorker`, session-end-worker.ts) resolves the project and
+ * sets the mark itself. Either way the worker reads the session's journal,
+ * summarises against the configured extraction endpoint, settles the
+ * journal on a stored summary, clears the mark with its token, and syncs a
+ * stored row. The mark is for the next session's first retrieve, which
+ * reads it in a later change; nothing reads it yet.
  *
  * There is no session-model path here: the session is gone before a
- * completion could come back, so without an extraction endpoint the window
- * goes unsummarised, with a warning. Every outcome is logged; exit 0.
+ * completion could come back, so without an extraction endpoint the
+ * journal goes unsummarised, with a warning. Every outcome is logged; exit 0.
  */
 
 import type { ModelMessage } from "@ai-sdk/provider-utils";
-import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
 import type { ExtractionConfig } from "@mimir/plugin-core/brain/extract";
-import {
-  prepareSummary,
-  summarizeToReplica,
-} from "@mimir/plugin-core/brain/summarize";
-import {
-  getCachedProjectId,
-  getOrResolveProjectId,
-} from "@mimir/plugin-core/project";
+import { prepareSummary } from "@mimir/plugin-core/brain/summarize";
+import { getCachedProjectId } from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
-import {
-  createOrgReplica,
-  defaultOrgReplicaPath,
-} from "@mimir/plugin-core/store/org-replica";
 import {
   clearSummaryPending,
   markSummaryPending,
 } from "@mimir/plugin-core/summary-pending";
-import { syncAfterDistill } from "@mimir/plugin-core/sync/after-distill";
-import { extractionConfig, readConfig } from "./config";
-import { type ApiMessage, toModelMessages } from "./conversation";
+import { extractionConfig } from "./config";
+import type { ApiMessage } from "./conversation";
 import {
   type FileContextSweepOutcome,
   sweepFileContextState,
 } from "./file-context-sweep";
 import { createLogger } from "./logger";
 import {
-  readHandOff,
   spawnWorker,
   WORKER_FLAG,
   type WorkerInput,
 } from "./session-end-handoff";
+import { type Log, markFor, runWorker } from "./session-end-worker";
+import { journalMessages, readSummaryInput } from "./session-journal";
 
 export {
   HANDOFF_SWEEP_MS,
   readHandOff,
   writeHandOff,
 } from "./session-end-handoff";
+export { runSessionEndWorker } from "./session-end-worker";
 
 const log = createLogger("session-end-hook");
 
@@ -70,18 +66,14 @@ type SessionEndInput = {
   readonly session_id?: string;
   readonly cwd?: string;
   readonly reason?: string;
-  readonly window?: readonly ApiMessage[];
-};
-
-type Log = {
-  readonly info: (msg: string, data?: Record<string, unknown>) => void;
-  readonly warn: (msg: string, data?: Record<string, unknown>) => void;
+  readonly messages?: readonly ApiMessage[];
 };
 
 /**
- * What this run does with the ending session's window: nothing to say
- * skips, a window under the summary floor skips with the floor's reason,
- * no extraction endpoint leaves it unconfigured, otherwise summarise.
+ * What this run does with the ending session's summary input (`window`,
+ * the journal as `readSummaryInput` builds it): nothing to say skips, a
+ * window under the summary floor skips with the floor's reason, no
+ * extraction endpoint leaves it unconfigured, otherwise summarise.
  */
 export const sessionEndPlan = (input: {
   readonly window: readonly ModelMessage[];
@@ -112,30 +104,13 @@ type HookDeps = {
   };
 };
 
-/** The project's mark and its owner token, or none if marking failed. */
-const markFor = async (
-  projectId: string,
-  deps: {
-    readonly markPending: (projectId: string) => Promise<string>;
-    readonly log: Log;
-  },
-) => {
-  const [markErr, token] = await attempt(() => deps.markPending(projectId));
-  if (!markErr) return token;
-  deps.log.warn("session-end: could not mark the summary in flight", {
-    projectId,
-    error: markErr.message,
-  });
-  return null;
-};
-
 /**
  * Mark the summary in flight when the project id is cached, then spawn
  * the worker; a spawn that fails clears the runner's own mark.
  */
 const handOffSummary = async (
   context: {
-    readonly sessionId: string | undefined;
+    readonly sessionId: string;
     readonly reason: string;
     readonly cwd: string;
     readonly window: readonly ModelMessage[];
@@ -154,10 +129,10 @@ const handOffSummary = async (
   const token = projectId === null ? null : await markFor(projectId, deps);
   const handOff: WorkerInput =
     projectId === null
-      ? { cwd, window }
+      ? { sessionId, cwd }
       : token === null
-        ? { projectId, window }
-        : { projectId, token, window };
+        ? { sessionId, projectId }
+        : { sessionId, projectId, token };
 
   const [spawnErr] = await attempt(() => deps.spawnWorker(handOff));
   if (spawnErr) {
@@ -191,12 +166,21 @@ const assertNever = (value: never) => {
   throw new Error(`Unhandled session-end plan: ${JSON.stringify(value)}`);
 };
 
-/** Decide, and to summarise, hand the window off. */
+/** Journal the tail, decide, and to summarise, hand the session off. */
 const endSession = async (input: SessionEndInput, deps: HookDeps) => {
   const sessionId = input.session_id;
   const reason = input.reason ?? "unknown";
   const cwd = input.cwd ?? process.cwd();
-  const window = toModelMessages(input.window ?? []);
+  if (sessionId === undefined) {
+    deps.log.info("session-end: nothing to summarise", {
+      reason,
+      why: "no session_id in payload",
+    });
+    return 0;
+  }
+  journalMessages(sessionId, input.messages ?? []);
+  // An unreadable journal (logged there) leaves nothing to summarise.
+  const window = readSummaryInput(sessionId)?.messages ?? [];
   const plan = sessionEndPlan({ window, extraction: deps.extraction });
 
   switch (plan.kind) {
@@ -253,140 +237,6 @@ export const runSessionEndHook = async (
   return code;
 };
 
-type SummaryOutcome = Pick<
-  Awaited<ReturnType<typeof summarizeToReplica>>,
-  "ok" | "id" | "skipped"
->;
-
-type WorkerOps = {
-  readonly resolveProjectId: (cwd: string) => Promise<string | null>;
-  readonly markPending: (projectId: string) => Promise<string>;
-  readonly clearPending: (projectId: string, token: string) => Promise<unknown>;
-  readonly summarize: (
-    window: readonly ModelMessage[],
-    projectId: string,
-  ) => Promise<SummaryOutcome>;
-  readonly sync: () => Promise<unknown>;
-  readonly log: Log;
-};
-
-/** The project the hand-off names, or the one its cwd resolves to. */
-const workerProjectId = async (input: WorkerInput, ops: WorkerOps) => {
-  if (input.projectId !== undefined) return input.projectId;
-  const cwd = input.cwd;
-  if (cwd === undefined) {
-    ops.log.warn("session-end: hand-off names neither a project nor a cwd");
-    return null;
-  }
-  const [err, projectId] = await attempt(() => ops.resolveProjectId(cwd));
-  if (err || !projectId) {
-    ops.log.warn("session-end: no project id — session not summarised", {
-      cwd,
-      ...(err ? { error: err.message } : {}),
-    });
-    return null;
-  }
-  return projectId;
-};
-
-/**
- * Summarise with the project marked in flight throughout — by the runner,
- * whose token it is handed, or by the worker itself. The mark clears with
- * its owner's token however the summary ends, and only a stored row syncs.
- * Never throws.
- */
-export const runSessionEndWorker = async (
-  input: WorkerInput,
-  ops: WorkerOps,
-) => {
-  const { window } = input;
-  const projectId = await workerProjectId(input, ops);
-  if (projectId === null) return 0;
-  const token = input.token ?? (await markFor(projectId, ops));
-  const [summaryErr, outcome] = await attempt(() =>
-    ops.summarize(window, projectId),
-  );
-  if (token !== null) {
-    const [clearErr] = await attempt(() => ops.clearPending(projectId, token));
-    if (clearErr) {
-      ops.log.warn("session-end: could not clear the in-flight mark", {
-        projectId,
-        error: clearErr.message,
-      });
-    }
-  }
-  if (summaryErr) {
-    ops.log.warn("session-end: summarization threw", {
-      projectId,
-      error: summaryErr.message,
-    });
-    return 0;
-  }
-  if (!outcome.ok) {
-    ops.log.warn("session-end: summarization failed", {
-      projectId,
-      messages: window.length,
-    });
-    return 0;
-  }
-  if (outcome.id === null) {
-    ops.log.info("session-end: summary skipped", {
-      projectId,
-      reason: outcome.skipped,
-    });
-    return 0;
-  }
-  ops.log.info("session-end: session summarised", {
-    projectId,
-    summaryId: outcome.id,
-    messages: window.length,
-  });
-  const [syncErr] = await attempt(ops.sync);
-  if (syncErr) {
-    ops.log.warn("session-end: post-summary sync failed", {
-      error: syncErr.message,
-    });
-  }
-  return 0;
-};
-
-/** The real summarise op: the configured endpoint, into the local replica. */
-const summarize = async (
-  window: readonly ModelMessage[],
-  projectId: string,
-) => {
-  const extraction = await extractionConfig();
-  if (!extraction) return { ok: false, id: null, skipped: null };
-  const replica = createOrgReplica(
-    process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
-  );
-  return summarizeToReplica({
-    config: extraction,
-    replica,
-    messages: window,
-    embed: createEmbedQuery(),
-    projectId,
-  }).finally(() => replica.close());
-};
-
-/** The full resolution, git and all: the worker has the time for it. */
-const resolveProjectId = async (cwd: string) => {
-  const config = await readConfig();
-  return config
-    ? getOrResolveProjectId(config.serverUrl, cwd, config.apiKey)
-    : null;
-};
-
-const workerOps = {
-  resolveProjectId,
-  markPending: (projectId: string) => markSummaryPending(projectId),
-  clearPending: (projectId: string, token: string) =>
-    clearSummaryPending(projectId, token),
-  summarize,
-  sync: () => syncAfterDistill(log),
-  log,
-} satisfies WorkerOps;
-
 /**
  * The cache alone, keyed as `getOrResolveProjectId` writes it; an entry
  * that is not a local project id is one only full resolution may migrate.
@@ -435,19 +285,6 @@ const runHook = async () => {
     sweepFileContextState,
     log,
   });
-};
-
-/** The worker's entry: read and remove the hand-off file, then run. */
-const runWorker = async (path: string) => {
-  const [err, input] = await attempt(() => readHandOff(path));
-  if (err) {
-    log.warn("session-end: could not read the hand-off file", {
-      path,
-      error: err.message,
-    });
-    return 0;
-  }
-  return runSessionEndWorker(input, workerOps);
 };
 
 /** Entry point from cli.ts; exit 0 whatever happens. */

@@ -1,17 +1,20 @@
 /**
- * Tests for `mimir-cc session-end`: `sessionEndPlan`, the pure decision
- * over the ending session's window; `runSessionEndHook`, the runner that
- * decides and detaches; and `runSessionEndWorker`, the detached worker
- * that summarises. The project's summary is marked in flight from before
- * the runner returns until the worker is done, so the next session's first
- * retrieve can tell a summary is still coming. A mark is owned: it clears
- * only with the token its `markPending` returned.
+ * Tests for `mimir-cc session-end`: `sessionEndPlan`, the pure decision;
+ * `runSessionEndHook`, the runner that journals the payload's `messages`,
+ * decides and detaches; and `runSessionEndWorker`, which reads the named
+ * session back from the journal and summarises. The summary is marked in
+ * flight until the worker is done; a mark clears only with its owner token.
+ * Each test gets its own journal through `MIMIR_SESSION_JOURNAL_DB`.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ModelMessage } from "@ai-sdk/provider-utils";
 import type { ExtractionConfig } from "@mimir/plugin-core/brain/extract";
-import { type ApiMessage, toModelMessages } from "./conversation";
+import { createSessionJournal } from "@mimir/plugin-core/store/session-journal";
+import type { ApiMessage } from "./conversation";
 import {
   runSessionEndHook,
   runSessionEndWorker,
@@ -58,6 +61,23 @@ const CWD = "/work/repo";
 const SESSION = "session-1";
 const TOKEN = "owner-1";
 const EXTRACTION_SETTING = "MIMIR_EXTRACTION_BASE_URL";
+const JOURNAL_ENV = "MIMIR_SESSION_JOURNAL_DB";
+
+let journalDir = "";
+let savedJournalEnv: string | undefined;
+
+beforeEach(async () => {
+  journalDir = await mkdtemp(join(tmpdir(), "mimir-session-end-hook-"));
+  savedJournalEnv = process.env[JOURNAL_ENV];
+  process.env[JOURNAL_ENV] = join(journalDir, "session-journal.db");
+});
+
+afterEach(async () => {
+  if (savedJournalEnv === undefined) delete process.env[JOURNAL_ENV];
+  else process.env[JOURNAL_ENV] = savedJournalEnv;
+  if (journalDir) await rm(journalDir, { recursive: true, force: true });
+  journalDir = "";
+});
 
 describe("sessionEndPlan", () => {
   test("an empty window skips, with a reason", () => {
@@ -163,11 +183,11 @@ const runner = (options: {
   };
 };
 
-const ending = (window: readonly ApiMessage[] = LONG_API) => ({
+const ending = (messages: readonly ApiMessage[] = LONG_API) => ({
   session_id: SESSION,
   cwd: CWD,
   reason: "prompt_input_exit",
-  window,
+  messages,
 });
 
 describe("runSessionEndHook", () => {
@@ -183,13 +203,10 @@ describe("runSessionEndHook", () => {
     expect(order.indexOf("resolved")).toBeGreaterThan(mark);
     expect(order.filter((step) => step.startsWith("mark:"))).toHaveLength(1);
     expect(order.some((step) => step.startsWith("clear:"))).toBe(false);
-    expect(spawned).toEqual([
-      {
-        projectId: PROJECT,
-        token: TOKEN,
-        window: toModelMessages(LONG_API),
-      },
-    ]);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]).toMatchObject({ projectId: PROJECT, token: TOKEN });
+    expect(spawned[0]).not.toHaveProperty("cwd");
+    expect(JSON.stringify(spawned[0])).toContain(SESSION);
   });
 
   test("with no cached project id, the runner sets no mark and hands the worker the cwd to resolve", async () => {
@@ -198,7 +215,11 @@ describe("runSessionEndHook", () => {
 
     expect(code).toBe(0);
     expect(order).toEqual([`cached:${CWD}`, "spawn", SWEEP]);
-    expect(spawned).toEqual([{ cwd: CWD, window: toModelMessages(LONG_API) }]);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]).toMatchObject({ cwd: CWD });
+    expect(spawned[0]).not.toHaveProperty("projectId");
+    expect(spawned[0]).not.toHaveProperty("token");
+    expect(JSON.stringify(spawned[0])).toContain(SESSION);
   });
 
   test("unconfigured: one warning naming the extraction endpoint setting; no mark, no spawn", async () => {
@@ -212,14 +233,16 @@ describe("runSessionEndHook", () => {
     expect(order).not.toContain("spawn");
   });
 
-  test("skip: an info line with the reason; no mark, no spawn", async () => {
+  test("skip (nothing journalled): an info line; no mark, no spawn", async () => {
     const { order, logs, deps } = runner({});
     const code = await runSessionEndHook(ending([]), deps);
 
     expect(code).toBe(0);
     expect(logs.warn).toEqual([]);
     expect(logs.info.length).toBeGreaterThan(0);
-    expect(JSON.stringify(logs.info)).toContain("empty window");
+    expect(logs.info.some((line) => typeof line.data?.why === "string")).toBe(
+      true,
+    );
     expect(order.some((step) => step.startsWith("mark:"))).toBe(false);
     expect(order).not.toContain("spawn");
   });
@@ -349,9 +372,10 @@ type Outcome = {
   readonly ok: boolean;
   readonly id: string | null;
   readonly skipped: string | null;
+  readonly text?: string;
 };
 
-const STORED: Outcome = { ok: true, id: "memory:1", skipped: null };
+const STORED: Outcome = { ok: true, id: "memory:1", skipped: null, text: "S" };
 const FAILED: Outcome = { ok: false, id: null, skipped: null };
 const MARKED = "marked-1";
 
@@ -374,8 +398,8 @@ const ops = (summarize: () => Promise<Outcome>, resolved = PROJECT) => {
       clearPending: async (projectId: string, token: string) => {
         order.push(`clear:${projectId}:${token}`);
       },
-      summarize: async (window: readonly ModelMessage[]) => {
-        order.push(`summarize:${window.length}`);
+      summarize: async (messages: readonly ModelMessage[]) => {
+        order.push(`summarize:${messages.length}`);
         return summarize();
       },
       sync: async () => {
@@ -388,13 +412,22 @@ const ops = (summarize: () => Promise<Outcome>, resolved = PROJECT) => {
 };
 
 const CLEARED_OWN = `clear:${PROJECT}:${MARKED}`;
+// The worker summarises what the journal holds for the session it is named.
+const SUMMARISED = `summarize:${LONG_API.length}`;
+const NAMED = { sessionId: SESSION, projectId: PROJECT };
 
 describe("runSessionEndWorker", () => {
+  beforeEach(() => {
+    const journal = createSessionJournal(process.env[JOURNAL_ENV] ?? "");
+    journal.append(SESSION, LONG_API);
+    journal.close();
+  });
+
   test("marks the summary in flight before summarising and clears it with its own token after the row is stored", async () => {
     const { order, ops: worker } = ops(async () => STORED);
-    await runSessionEndWorker({ projectId: PROJECT, window: LONG }, worker);
+    await runSessionEndWorker(NAMED, worker);
     const mark = order.indexOf(`mark:${PROJECT}`);
-    const summarize = order.indexOf(`summarize:${LONG.length}`);
+    const summarize = order.indexOf(SUMMARISED);
     const clear = order.indexOf(CLEARED_OWN);
     expect(mark).toBeGreaterThanOrEqual(0);
     expect(summarize).toBeGreaterThan(mark);
@@ -403,31 +436,28 @@ describe("runSessionEndWorker", () => {
 
   test("given the runner's owner token, it does not mark again and clears with that token", async () => {
     const { order, ops: worker } = ops(async () => STORED);
-    await runSessionEndWorker(
-      { projectId: PROJECT, token: TOKEN, window: LONG },
-      worker,
-    );
+    await runSessionEndWorker({ ...NAMED, token: TOKEN }, worker);
     expect(order.some((step) => step.startsWith("mark:"))).toBe(false);
     expect(order.indexOf(`clear:${PROJECT}:${TOKEN}`)).toBeGreaterThan(
-      order.indexOf(`summarize:${LONG.length}`),
+      order.indexOf(SUMMARISED),
     );
     expect(order).not.toContain(CLEARED_OWN);
   });
 
   test("given only a cwd, it resolves the project, marks it, and clears with the token the mark returned", async () => {
     const { order, ops: worker } = ops(async () => STORED);
-    await runSessionEndWorker({ cwd: CWD, window: LONG }, worker);
+    await runSessionEndWorker({ sessionId: SESSION, cwd: CWD }, worker);
     const resolve = order.indexOf(`resolve:${CWD}`);
     const mark = order.indexOf(`mark:${PROJECT}`);
     expect(resolve).toBeGreaterThanOrEqual(0);
     expect(mark).toBeGreaterThan(resolve);
-    expect(order.indexOf(`summarize:${LONG.length}`)).toBeGreaterThan(mark);
+    expect(order.indexOf(SUMMARISED)).toBeGreaterThan(mark);
     expect(order.indexOf(CLEARED_OWN)).toBeGreaterThan(mark);
   });
 
   test("malformed input — no project id and no cwd — warns and does nothing", async () => {
     const { order, logs, ops: worker } = ops(async () => STORED);
-    const code = await runSessionEndWorker({ window: LONG }, worker);
+    const code = await runSessionEndWorker({ sessionId: SESSION }, worker);
     expect(code).toBe(0);
     expect(order).toEqual([]);
     expect(logs.warn.length).toBeGreaterThan(0);
@@ -435,9 +465,9 @@ describe("runSessionEndWorker", () => {
 
   test("a failed summary still clears the mark", async () => {
     const { order, ops: worker } = ops(async () => FAILED);
-    await runSessionEndWorker({ projectId: PROJECT, window: LONG }, worker);
+    await runSessionEndWorker(NAMED, worker);
     expect(order.indexOf(CLEARED_OWN)).toBeGreaterThan(
-      order.indexOf(`summarize:${LONG.length}`),
+      order.indexOf(SUMMARISED),
     );
   });
 
@@ -445,20 +475,20 @@ describe("runSessionEndWorker", () => {
     const { order, ops: worker } = ops(async () => {
       throw new Error("endpoint unreachable");
     });
-    await runSessionEndWorker({ projectId: PROJECT, window: LONG }, worker);
+    await runSessionEndWorker(NAMED, worker);
     expect(order).toContain(CLEARED_OWN);
     expect(order).not.toContain("sync");
   });
 
   test("a stored summary syncs afterwards; a failed one does not", async () => {
     const stored = ops(async () => STORED);
-    await runSessionEndWorker({ projectId: PROJECT, window: LONG }, stored.ops);
+    await runSessionEndWorker(NAMED, stored.ops);
     expect(stored.order.indexOf("sync")).toBeGreaterThan(
-      stored.order.indexOf(`summarize:${LONG.length}`),
+      stored.order.indexOf(SUMMARISED),
     );
 
     const failed = ops(async () => FAILED);
-    await runSessionEndWorker({ projectId: PROJECT, window: LONG }, failed.ops);
+    await runSessionEndWorker(NAMED, failed.ops);
     expect(failed.order).not.toContain("sync");
   });
 });

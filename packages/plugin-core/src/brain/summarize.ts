@@ -115,7 +115,8 @@ export const storeSummary = async (opts: {
 /**
  * Summarize a conversation window and store it as a type:"summary" memory.
  * Outcome mirrors extractFromConversation: skips are success (advance
- * the watermark), ok:false is transport failure (retry next time).
+ * the watermark), ok:false is transport failure (retry next time). A
+ * stored summary's outcome also carries its `text`.
  */
 export const summarizeToReplica = async (opts: {
   readonly config: ExtractionConfig;
@@ -144,5 +145,12 @@ export const summarizeToReplica = async (opts: {
     projectId: opts.projectId,
     text: summary,
   });
-  return { ok: true as const, id, skipped: null };
+  // The stored row's text rides along for callers that carry it forward
+  // (cc-plugin settles its session journal with it); only a stored row has it.
+  return {
+    ok: true as const,
+    id,
+    skipped: null,
+    ...(id === null ? {} : { text: summary }),
+  };
 };

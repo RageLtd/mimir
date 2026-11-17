@@ -1,10 +1,10 @@
 /**
- * The session-end hand-off: the file that carries the ending session's
- * whole conversation from the `session-end` runner to its detached worker,
- * and the spawn of that worker.
+ * The session-end hand-off: the file that names the ending session for
+ * the `session-end` runner's detached worker, and the spawn of that worker.
+ * It carries no conversation text — the worker reads the session journal.
  *
  * The file lives in `~/.mimir/session-end/`, a directory and a file only
- * this user can read — it is the whole conversation — and the worker
+ * this user can read — it carries the mark's owner token — and the worker
  * removes it once read. A file a dead run left behind is swept by the next
  * write once it is older than HANDOFF_SWEEP_MS.
  */
@@ -13,7 +13,6 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { ModelMessage } from "@ai-sdk/provider-utils";
 import { attempt } from "@mimir/plugin-core/result";
 import { mimirHome } from "@mimir/plugin-core/util";
 import { createLogger } from "./logger";
@@ -27,15 +26,16 @@ export const WORKER_FLAG = "--worker";
 export const HANDOFF_SWEEP_MS = 10 * 60_000;
 
 /**
- * What the runner hands the worker: the project id and, when the runner
- * marked the summary in flight, the mark's owner token — or, when the
- * runner had no cached project id, the cwd for the worker to resolve.
+ * What the runner hands the worker: the session whose journal to summarise,
+ * the project id and, when the runner marked the summary in flight, the
+ * mark's owner token — or, when the runner had no cached project id, the
+ * cwd for the worker to resolve.
  */
 export type WorkerInput = {
+  readonly sessionId: string;
   readonly projectId?: string;
   readonly token?: string;
   readonly cwd?: string;
-  readonly window: readonly ModelMessage[];
 };
 
 const handOffDir = () => join(mimirHome(), SUBCOMMAND);
@@ -79,21 +79,19 @@ const asWorkerInput = (value: unknown) => {
   if (
     typeof value !== "object" ||
     value === null ||
-    !("window" in value) ||
-    !Array.isArray(value.window)
+    !("sessionId" in value) ||
+    typeof value.sessionId !== "string"
   ) {
-    throw new Error("hand-off file carries no window");
+    throw new Error("hand-off file names no session");
   }
   const projectId = "projectId" in value && optionalString(value.projectId);
   const token = "token" in value && optionalString(value.token);
   const cwd = "cwd" in value && optionalString(value.cwd);
-  // Serialisation boundary: the runner wrote these messages.
-  const window: readonly ModelMessage[] = value.window;
   return {
+    sessionId: value.sessionId,
     ...(projectId ? { projectId } : {}),
     ...(token ? { token } : {}),
     ...(cwd ? { cwd } : {}),
-    window,
   } satisfies WorkerInput;
 };
 
