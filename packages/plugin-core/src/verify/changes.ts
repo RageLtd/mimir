@@ -15,6 +15,7 @@
  */
 
 import { join, relative, resolve } from "node:path";
+import { isTestFile } from "../rules/test-conventions";
 import type { CommandRunner } from "./exec";
 
 export type ChangeStatus = "A" | "M" | "D";
@@ -104,15 +105,35 @@ const collectBranchPaths = async (
     .filter((line) => line.length > 0);
 };
 
+type Entry = {
+  readonly path: string;
+  readonly status: ChangeStatus;
+  readonly from?: string;
+};
+
+/** Forces git's similarity-based rename detection whatever `diff.renames` says. */
+const FIND_RENAMES = "-M";
+const RENAME_CODE = "R";
+
+/** Name-status lines as [code, ...paths]; renames/copies list old then new. */
+const nameStatusLines = (text: string) =>
+  text
+    .split("\n")
+    .map((line) => line.split("\t"))
+    .filter((parts) => parts.length > 1 && (parts[0] ?? "").length > 0);
+
+/** A rename is split into its deletion and its addition; `pairMoves` rejoins them. */
 const parseNameStatus = (text: string) => {
-  const entries: { path: string; status: ChangeStatus }[] = [];
-  for (const line of text.split("\n")) {
-    const [code, ...rest] = line.split("\t");
-    if (!code || rest.length === 0) continue;
-    // Renames/copies list old then new; the new path is what changed.
+  const entries: Entry[] = [];
+  for (const [code = "", ...rest] of nameStatusLines(text)) {
     const path = rest[rest.length - 1] ?? "";
+    const from = rest[0] ?? "";
+    if (code.startsWith(RENAME_CODE) && rest.length > 1) {
+      entries.push({ path: from, status: "D" }, { path, status: "A" });
+      continue;
+    }
     const status: ChangeStatus =
-      code.startsWith("A") || code.startsWith("R") || code.startsWith("C")
+      code.startsWith("A") || code.startsWith("C")
         ? "A"
         : code.startsWith("D")
           ? "D"
@@ -120,6 +141,59 @@ const parseNameStatus = (text: string) => {
     entries.push({ path, status });
   }
   return entries;
+};
+
+/** new path → old path for every rename git detected in a name-status diff. */
+const renamePairs = (text: string) => {
+  const pairs = new Map<string, string>();
+  for (const [code = "", from = "", path = ""] of nameStatusLines(text))
+    if (code.startsWith(RENAME_CODE) && path.length > 0) pairs.set(path, from);
+  return pairs;
+};
+
+/**
+ * Turn each added path paired with a deleted path into one moved entry.
+ * A deleted path is claimed at most once, only a path that is actually
+ * deleted can be claimed, and a test file only moves to a path that is
+ * still a test file — so a pair never invents a deletion or hides one
+ * behind two new files or a non-test path.
+ */
+const pairMoves = (
+  entries: readonly Entry[],
+  pairs: ReadonlyMap<string, string>,
+) => {
+  const deleted = new Set(
+    entries.filter((e) => e.status === "D").map((e) => e.path),
+  );
+  const claimed = new Set<string>();
+  const moved = entries.map((e) => {
+    const from = e.status === "A" ? pairs.get(e.path) : undefined;
+    if (!from || !deleted.has(from) || claimed.has(from)) return e;
+    if (isTestFile(from) && !isTestFile(e.path)) return e;
+    claimed.add(from);
+    return { path: e.path, status: "M", from } satisfies Entry;
+  });
+  return moved.filter((e) => !(e.status === "D" && claimed.has(e.path)));
+};
+
+/**
+ * Added and removed lines between two texts, as line multisets. A moved
+ * file's old content is not on disk and the pair may be one no single
+ * `git diff` shows; the checks only count lines, so order is not needed.
+ */
+const lineDelta = (before: string, after: string) => {
+  const unmatched = new Map<string, number>();
+  for (const line of before.split("\n"))
+    unmatched.set(line, (unmatched.get(line) ?? 0) + 1);
+  const take = (line: string) => {
+    const left = unmatched.get(line) ?? 0;
+    if (left === 0) return false;
+    unmatched.set(line, left - 1);
+    return true;
+  };
+  const added = after.split("\n").filter((line) => !take(line));
+  const removed = before.split("\n").filter(take);
+  return { added: added.join("\n"), removed: removed.join("\n") };
 };
 
 const splitDiff = (diff: string) => {
@@ -173,17 +247,55 @@ export const collectChanges = async (
   const collectGit = (...args: string[]) =>
     taskBase === undefined ? git(run, worktree, ...args) : strictGit(...args);
 
-  const nameStatus = await collectGit("diff", "--name-status", base);
-  const untracked = await collectGit(
-    "ls-files",
-    "--others",
-    "--exclude-standard",
+  const nameStatus = await collectGit(
+    "diff",
+    "--name-status",
+    FIND_RENAMES,
+    base,
   );
-  const entries = parseNameStatus(nameStatus ?? "");
-  for (const path of (untracked ?? "").split("\n")) {
-    if (path.trim().length > 0)
-      entries.push({ path: path.trim(), status: "A" });
+  const untracked = (
+    (await collectGit("ls-files", "--others", "--exclude-standard")) ?? ""
+  )
+    .split("\n")
+    .map((path) => path.trim())
+    .filter((path) => path.length > 0);
+  const listed = [
+    ...parseNameStatus(nameStatus ?? ""),
+    ...untracked.map((path) => ({ path, status: "A" }) satisfies Entry),
+  ];
+  const showBase = (path: string) => collectGit("show", `${base}:${path}`);
+
+  const deleted = listed.filter((e) => e.status === "D").map((e) => e.path);
+
+  // A move against an older task base can hide behind a rewrite committed
+  // in between, so git's pairing is also asked of HEAD → worktree.
+  const head =
+    deleted.length > 0
+      ? (await collectGit("rev-parse", "HEAD"))?.trim()
+      : undefined;
+  const headRenames =
+    head && head !== base
+      ? renamePairs(
+          (await collectGit("diff", "--name-status", FIND_RENAMES, "HEAD")) ??
+            "",
+        )
+      : new Map<string, string>();
+  const pairs = new Map([...headRenames, ...renamePairs(nameStatus ?? "")]);
+  // Untracked files are invisible to git's rename detection; an unstaged
+  // move of a test file pairs only on byte-identical content.
+  const deletedTests = deleted.filter(isTestFile);
+  const untrackedTests = untracked.filter(isTestFile);
+  const baseContent = new Map<string, string | null>();
+  for (const from of untrackedTests.length > 0 ? deletedTests : [])
+    baseContent.set(from, await showBase(from));
+  for (const path of deletedTests.length > 0 ? untrackedTests : []) {
+    if (pairs.has(path)) continue;
+    const content = await readOrNull(join(worktree, path));
+    if (content === null) continue;
+    const from = deletedTests.find((d) => baseContent.get(d) === content);
+    if (from) pairs.set(path, from);
   }
+  const entries = pairMoves(listed, pairs);
 
   const files: ChangedFile[] = [];
   for (const entry of entries) {
@@ -194,13 +306,13 @@ export const collectChanges = async (
         `Cannot collect task changes: failed to read ${entry.path}.`,
       );
     const before =
-      entry.status === "A"
-        ? null
-        : await collectGit("show", `${base}:${entry.path}`);
+      entry.status === "A" ? null : await showBase(entry.from ?? entry.path);
     const diff =
       before === null
         ? { added: after ?? "", removed: "" }
-        : splitDiff((await collectGit("diff", base, "--", entry.path)) ?? "");
+        : entry.from
+          ? lineDelta(before, after ?? "")
+          : splitDiff((await collectGit("diff", base, "--", entry.path)) ?? "");
     files.push({
       path: relative(worktree, abs).split("\\").join("/"),
       status: entry.status,

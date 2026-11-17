@@ -58,7 +58,9 @@ export const sanityCheck = (files: readonly ChangedFile[]) => {
     if (!testy) continue;
 
     if (file.status === "D") {
-      problems.push(`${file.path}: test file deleted`);
+      problems.push(
+        `${file.path}: test file deleted — if it was moved rather than deleted, stage the move (\`git mv\`, or \`git add\` both paths) so the gate can pair it, and keep it at a test path`,
+      );
       continue;
     }
     const added = testSignals(file.path, file.added);

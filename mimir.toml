@@ -10,11 +10,14 @@
 # `tsc -p` against it sweeps every package with the wrong settings. The
 # package's own name narrows it to that package (so one package's red
 # tests don't fail another's gate); at the repo root the name is not a
-# package and the script checks everything. The Biome run is read-only
-# on purpose — the gate reports, the worker fixes.
+# package and the script checks everything. `--require-mod-types` makes
+# the cc-plugin hooks-module leg fail where the engine's declarations are
+# absent: a plain run skips it there, and a gate that skipped passed
+# hooks-module changes nobody had type-checked. The Biome run is
+# read-only on purpose — the gate reports, the worker fixes.
 [verify]
 test = "bun run test"
-typecheck = 'bun run --cwd "$(git rev-parse --show-toplevel)" typecheck "$(basename "$PWD")"'
+typecheck = 'bun run --cwd "$(git rev-parse --show-toplevel)" typecheck "$(basename "$PWD")" --require-mod-types'
 check = "bunx biome check ."
 
 [workers.models.claudeCode]

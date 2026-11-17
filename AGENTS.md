@@ -12,9 +12,9 @@ Bun workspace. Coding conventions live in `.claude/rules/` and are loaded on eve
 
 ## Commands
 
-- `bun run test` — all packages; `bun run test:<package>` for one (`server`, `plugin-core`, `acp`, `cc-plugin`, `oc-plugin`, `codex-plugin`).
+- `bun run test` — all packages, then the repo root's own `tests/`; `bun run test:<package>` for one (`server`, `plugin-core`, `acp`, `cc-plugin`, `oc-plugin`, `codex-plugin`), `bun run test:root` for the root's.
 - `bun run check` — Biome lint and format, writes fixes in place.
-- `bun run typecheck` — `tsc --noEmit` per package. Neither the builds nor the tests type-check, so this is the only gate that catches type errors before release. Its last leg types the cc-plugin hooks module against the declarations Claude Code lays into `packages/cc-plugin/.claude-plugin/types/` when it loads the plugin; absent those (a fresh clone, CI) it skips with a note.
+- `bun run typecheck` — `tsc --noEmit` per package. Neither the builds nor the tests type-check, so this is the only gate that catches type errors before release. Its last leg types the cc-plugin hooks module against the declarations Claude Code lays into `packages/cc-plugin/.claude-plugin/types/` on an interactive load of the plugin (a headless `-p` run lays nothing); absent those (a fresh clone, CI) it skips with a note. The worker verify gate passes `--require-mod-types` (`mimir.toml`), which fails that leg instead of skipping it; worker worktrees get the declarations from the worktree bootstrap, copied from the coordinator's tree.
 - `bun run cc-plugin:mod:validate` / `bun run cc-plugin:mod:test` — `claude plugin validate` and `claude plugin test` for the cc-plugin hooks module (`packages/cc-plugin/hooks/`). Its tests use `claude-code/testing`, not `bun:test`, so `bun run test:cc-plugin` does not run them. The reverse holds too: `claude plugin test` sweeps every `*.test.ts` under the plugin root, which is also the package root, so cc-plugin's Bun tests are named `*.spec.ts` — the one package where that suffix is deliberate.
 - `bun run acp:build`, `bun run cc-plugin:build`, `bun run codex-plugin:build` — release bundles. The two plugin builds run `./build.sh`, which ad-hoc-signs the Darwin binary; without that step the binary dies with SIGKILL.
 - `bun run server:dev` — mimir-server with file watching.

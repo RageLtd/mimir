@@ -10,7 +10,8 @@
   "scripts": {
     "check": "biome check --write .",
     "typecheck": "bun run tests/typecheck.ts",
-    "test": "bun run --parallel --workspaces test",
+    "test": "bun run --parallel --workspaces test && bun run test:root",
+    "test:root": "bun test ./tests",
     "test:server": "bun run --cwd packages/server test",
     "test:acp": "bun run --cwd packages/acp test",
     "test:cc-plugin": "bun run --cwd packages/cc-plugin test",

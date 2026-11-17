@@ -6,18 +6,20 @@
  * there once: a warm Bun cache makes this a couple of seconds, and the
  * worker never burns turns discovering the problem.
  *
- * Only Bun projects for now (a `bun.lock` at the worktree root). The
- * marker lives under ~/.mimir/agents, not in the worktree, so a failed
- * install is not retried on every call and the marker never shows up in
- * the worker's diff.
+ * First it lays the engine's plugin type declarations, which git never
+ * carries, from the coordinator's tree (`worktree-types.ts`); then it
+ * installs. Only Bun projects install for now (a `bun.lock` at the
+ * worktree root). The markers live under ~/.mimir/agents, not in the
+ * worktree, so neither step is retried on every call and no marker shows
+ * up in the worker's diff.
  */
 
 import { existsSync } from "node:fs";
 import { join, sep } from "node:path";
 import { mimirHome } from "@mimir/plugin-core/util";
 import { type CommandRunner, runCommand } from "@mimir/plugin-core/verify";
+import { layEngineTypes, WORKTREES_SEGMENT } from "./worktree-types";
 
-const WORKTREES_SEGMENT = `${sep}.claude${sep}worktrees${sep}`;
 const LOCKFILE = "bun.lock";
 const MODULES = "node_modules";
 const INSTALL: readonly string[] = ["bun", "install", "--frozen-lockfile"];
@@ -41,14 +43,16 @@ export type BootstrapOutcome =
 export const isAgentWorktree = (cwd: string) => cwd.includes(WORKTREES_SEGMENT);
 
 /**
- * Install once. `ready` when nothing was needed (modules present, no
- * lockfile, or already attempted); `installed` / `failed` after a run.
+ * Lay the engine types, then install once. `ready` when nothing was
+ * needed (modules present, no lockfile, or already attempted);
+ * `installed` / `failed` after a run.
  */
 export const bootstrapWorktree = async (
   cwd: string,
   run: CommandRunner = runCommand,
 ) => {
   if (!isAgentWorktree(cwd)) return "not-a-worktree" satisfies BootstrapOutcome;
+  await layEngineTypes(cwd);
   if (!existsSync(join(cwd, LOCKFILE)))
     return "ready" satisfies BootstrapOutcome;
   if (existsSync(join(cwd, MODULES))) return "ready" satisfies BootstrapOutcome;

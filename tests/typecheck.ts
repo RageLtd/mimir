@@ -9,33 +9,38 @@
  * Usage:
  *   bun run tests/typecheck.ts              # all packages
  *   bun run tests/typecheck.ts server       # only @mimir/server
+ *   bun run tests/typecheck.ts --require-mod-types
+ *                                           # fail, not skip, the hooks-module
+ *                                           # leg where its declarations are absent
+ *
+ * What a run does is decided in typecheck-plan.ts; this file runs it.
  */
 
 import { resolve } from "node:path";
+import {
+  isPackage,
+  MOD_TSCONFIG,
+  MOD_TYPES_TSCONFIG,
+  modLeg,
+  packagesToRun,
+  parseArgs,
+} from "./typecheck-plan";
 
 const ROOT = resolve(import.meta.dirname, "..");
-const MOD_TSCONFIG = "packages/cc-plugin/hooks/tsconfig.json";
-const MOD_TYPES_TSCONFIG =
-  "packages/cc-plugin/.claude-plugin/types/tsconfig.json";
-const PACKAGES = [
-  "server",
-  "plugin-core",
-  "acp",
-  "cc-plugin",
-  "oc-plugin",
-  "codex-plugin",
-];
+const MOD_LEG = "cc-plugin hooks module";
+
+const assertNever = (value: never) => {
+  throw new Error(`Unhandled hooks-module leg: ${JSON.stringify(value)}`);
+};
 
 async function main() {
-  const filter = Bun.argv[2];
+  const { filter, requireModTypes } = parseArgs(Bun.argv.slice(2));
 
-  // A name that isn't a package (the verify gate passes `basename $PWD`,
-  // which is the repo name at the root) means the whole workspace.
-  if (filter && !PACKAGES.includes(filter)) {
+  if (filter !== undefined && !isPackage(filter)) {
     console.log(`${filter} is not a package — typechecking all of them`);
   }
 
-  const packages = filter && PACKAGES.includes(filter) ? [filter] : PACKAGES;
+  const packages = packagesToRun(filter);
 
   let passed = 0;
   const failures: string[] = [];
@@ -54,13 +59,21 @@ async function main() {
   }
 
   // The cc-plugin hooks module types against declarations the Claude Code
-  // engine lays into .claude-plugin/types/ when it loads the plugin — they
-  // are build-specific and gitignored, so this leg runs only where a load
-  // has happened (any developer session that opened the plugin).
-  if (!filter || filter === "cc-plugin") {
-    const laid = resolve(ROOT, MOD_TYPES_TSCONFIG);
-    console.log("\n── typecheck cc-plugin hooks module ──");
-    if (await Bun.file(laid).exists()) {
+  // engine lays into .claude-plugin/types/ on an interactive load of the
+  // plugin — they are build-specific and gitignored, so the leg runs only
+  // where they exist; absent, it skips, or fails under the flag.
+  const leg = modLeg({
+    filter,
+    typesPresent: await Bun.file(resolve(ROOT, MOD_TYPES_TSCONFIG)).exists(),
+    requireModTypes,
+  });
+  if (leg.kind !== "not-considered") {
+    console.log(`\n── typecheck ${MOD_LEG} ──`);
+  }
+  switch (leg.kind) {
+    case "not-considered":
+      break;
+    case "run": {
       const result = Bun.spawnSync(
         ["bunx", "tsc", "--noEmit", "-p", MOD_TSCONFIG],
         { cwd: ROOT, stdout: "inherit", stderr: "inherit" },
@@ -68,13 +81,19 @@ async function main() {
       if (result.exitCode === 0) {
         passed++;
       } else {
-        failures.push("cc-plugin hooks module");
+        failures.push(MOD_LEG);
       }
-    } else {
-      console.log(
-        `skipped: ${MOD_TYPES_TSCONFIG} absent — run \`claude --plugin-dir packages/cc-plugin\` once to lay the engine's types`,
-      );
+      break;
     }
+    case "skip":
+      console.log(leg.note);
+      break;
+    case "fail":
+      console.log(leg.message);
+      failures.push(`${MOD_LEG} (not type-checked: declarations absent)`);
+      break;
+    default:
+      assertNever(leg);
   }
 
   console.log(
