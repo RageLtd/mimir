@@ -9,7 +9,8 @@ import type { MimirAnchor, MimirPending } from "../../types";
 import type { Message } from "../messages";
 import { exited } from "../support.test-helpers";
 
-export const parsed = (stdin: string | undefined) => JSON.parse(stdin ?? "{}");
+export const parsed = (payload: string | undefined) =>
+  JSON.parse(payload ?? "{}");
 
 const user = (text: string): Message => ({
   role: "user",

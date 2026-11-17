@@ -83,7 +83,13 @@ import type {
   Register,
   StateRef,
 } from "claude-code";
-import { mimirCcArgv, mimirCcInit, readHookOutput } from "./binary";
+import {
+  type MimirCcCall,
+  mimirCcArgv,
+  mimirCcCall,
+  mimirCcInit,
+  readHookOutput,
+} from "./binary";
 import { bootCall } from "./boot";
 import { distill, type Host, precompactLeg } from "./distill";
 import { anchorOf, continuesWindow } from "./messages";
@@ -156,6 +162,12 @@ const legOutcome = (
   return { status, stdout: status === undefined ? ran?.stdout : undefined };
 };
 
+/** Writes a call's payload file, then runs the binary on it (binary.ts). */
+const runBinary = ($: EngineInterface, call: MimirCcCall) =>
+  $.fs
+    .write(call.path, call.text)
+    .then(() => $.process.run(call.argv, call.init));
+
 /**
  * Asks for the binary released with this plugin (pin-binary.ts). Each hook
  * runs the binary afresh, so they pick the fetched build up as soon as it
@@ -197,7 +209,7 @@ const startSession = (
   pin: boolean,
 ) => {
   $.clock.after(0, () =>
-    $.process.run(call.argv, call.init).then(
+    runBinary($, call).then(
       (ran) => {
         if (ran.exitCode !== 0)
           $.ui.status(`${SESSION_START_FAILED} (exit ${ran.exitCode})`);
@@ -229,7 +241,7 @@ const unannouncedPrecompact = (
 ) => {
   const leg = precompactLeg(home);
   const host = {
-    run: (argv, init) => $.process.run(argv, init),
+    run: (call) => runBinary($, call),
     complete: (request) => $.model.complete(request),
     status: (text) => $.ui.status(text),
   } satisfies Host;
@@ -305,13 +317,11 @@ export const registerSubmit: Register = (on) => {
       // Asks for the active project's newest summary.
       session_start: sessionStart,
     };
-    const boot = bootCall(home, cwd, sessionId);
     const [booted, retrieve, anchor] = await Promise.allSettled([
-      isFirstPrompt || isReset ? $.process.run(boot.argv, boot.init) : null,
-      $.process.run(
-        mimirCcArgv(home, "retrieve"),
-        mimirCcInit(payload, RETRIEVE_TIMEOUT_MS),
-      ),
+      isFirstPrompt || isReset
+        ? runBinary($, bootCall(home, cwd, sessionId))
+        : null,
+      runBinary($, mimirCcCall(home, "retrieve", payload, RETRIEVE_TIMEOUT_MS)),
       nth === null
         ? null
         : $.process.run(
@@ -322,7 +332,7 @@ export const registerSubmit: Register = (on) => {
               "--nth",
               String(nth),
             ],
-            mimirCcInit(undefined, ANCHOR_TIMEOUT_MS),
+            mimirCcInit(ANCHOR_TIMEOUT_MS),
           ),
     ]);
 

@@ -41,6 +41,7 @@ import {
 } from "@mimir/plugin-core/verify";
 import { roleForAgentType } from "@mimir/plugin-core/workers";
 import { withAgentCwd } from "./agent-worktree";
+import { readPayload } from "./hook-payload";
 import { createLogger } from "./logger";
 import { taskProvenance } from "./task-state";
 
@@ -99,12 +100,6 @@ export const handbackOutput = (outcome: VerifyOutcome, message: string) => {
     default:
       return assertNever(outcome);
   }
-};
-
-const readStdin = async () => {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of Bun.stdin.stream()) chunks.push(chunk);
-  return Buffer.concat(chunks).toString("utf8");
 };
 
 const parseInput = (raw: string) =>
@@ -229,7 +224,7 @@ export const runVerifyHook = async (args: readonly string[] = []) => {
   if (cli) return runVerifyCli(cli);
 
   if (process.env.MIMIR_ACTIVE !== "1") return 0;
-  const payload = await parseInput(await readStdin());
+  const payload = await parseInput(await readPayload());
   const agentId = payload.agent_id;
   if (!agentId) {
     log.debug("verify: no agent_id — not inside a subagent, skipping");

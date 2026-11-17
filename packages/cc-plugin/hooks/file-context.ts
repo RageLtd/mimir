@@ -29,7 +29,7 @@ import type {
   ToolCallInput,
 } from "claude-code";
 import type { MimirReading } from "../types";
-import { mimirCcArgv, mimirCcInit } from "./binary";
+import { mimirCcCall } from "./binary";
 import { parsePreToolUseOutput, toolInputOf, toolPayload } from "./payload";
 
 const FILE_CONTEXT_TIMEOUT_MS = 15_000;
@@ -98,14 +98,18 @@ const readWithContext = async <R>(
     $.session.id(),
     $.session.cwd(),
   ]);
-  const payload = toolPayload(e, { sessionId, cwd, agentId: e.agentId });
+  const call = mimirCcCall(
+    home ?? "",
+    "file-context",
+    toolPayload(e, { sessionId, cwd, agentId: e.agentId }),
+    FILE_CONTEXT_TIMEOUT_MS,
+  );
   return Promise.all([
     read(),
     Promise.allSettled([
-      $.process.run(
-        mimirCcArgv(home ?? "", "file-context"),
-        mimirCcInit(payload, FILE_CONTEXT_TIMEOUT_MS),
-      ),
+      $.fs
+        .write(call.path, call.text)
+        .then(() => $.process.run(call.argv, call.init)),
     ]),
   ]);
 };

@@ -9,17 +9,20 @@
  * Pure: `$` never enters this file; submit.ts runs the call it shapes.
  */
 
-import { mimirCcArgv, mimirCcInit } from "./binary";
+import { mimirCcCall } from "./binary";
 
 /** The binary only parses the payload and detaches its worker. */
 const SESSION_START_TIMEOUT_MS = 5_000;
 
-/** `$.process.run`'s argv and init for a session-start run. */
+/** A session-start run: its payload file, then argv and init. */
 export const sessionStartCall = (
   home: string,
   cwd: string,
   sessionId: string,
-) => ({
-  argv: mimirCcArgv(home, "session-start"),
-  init: mimirCcInit({ session_id: sessionId, cwd }, SESSION_START_TIMEOUT_MS),
-});
+) =>
+  mimirCcCall(
+    home,
+    "session-start",
+    { session_id: sessionId, cwd },
+    SESSION_START_TIMEOUT_MS,
+  );

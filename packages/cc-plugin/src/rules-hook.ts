@@ -26,6 +26,7 @@ import {
 } from "@mimir/plugin-core/rules";
 import { errMessage } from "@mimir/plugin-core/util";
 import { withAgentCwd } from "./agent-worktree";
+import { readPayload } from "./hook-payload";
 import { createLogger } from "./logger";
 
 const log = createLogger("rules-hook");
@@ -49,14 +50,6 @@ type HookInput = {
   readonly agent_type?: string;
   readonly tool_name?: string;
   readonly tool_input?: unknown;
-};
-
-const readStdin = async () => {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of Bun.stdin.stream()) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks).toString("utf8");
 };
 
 const safeParseHookInput = (raw: string) => {
@@ -101,7 +94,7 @@ export const buildContext = (input: HookInput) =>
 export const runRulesHook = async () => {
   if (process.env.MIMIR_ACTIVE !== "1") return 0;
 
-  const raw = await readStdin();
+  const raw = await readPayload();
   const { input } = await withAgentCwd(await safeParseHookInput(raw));
   const ctx = buildContext(input);
 

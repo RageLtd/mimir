@@ -47,7 +47,7 @@ test("a main-loop turn hands the messages since the anchor to persist and advanc
   const [run] = persists;
   expect(run?.argv).toEqual([BIN, "persist"]);
   expect(run?.env).toEqual({ MIMIR_ACTIVE: "1" });
-  expect(parsed(run?.stdin)).toEqual({
+  expect(parsed(run?.payload)).toEqual({
     session_id: SESSION,
     cwd: CWD,
     messages: turnTwo,
@@ -87,14 +87,14 @@ test("a main-loop turn only schedules persist: nothing runs until the timer fire
   const persists = runsOf(runs, "persist");
   expect(persists).toHaveLength(2);
   const [first, second] = persists;
-  expect(parsed(first?.stdin)).toEqual({
+  expect(parsed(first?.payload)).toEqual({
     session_id: SESSION,
     cwd: CWD,
     messages: turnTwo,
     host_completions: true,
   });
-  expect(parsed(second?.stdin)).toEqual({
-    ...parsed(first?.stdin),
+  expect(parsed(second?.payload)).toEqual({
+    ...parsed(first?.payload),
     completions: { facts: { text: '["a fact"]' } },
   });
   expect(asks).toHaveLength(1);
@@ -121,7 +121,7 @@ test("a turn ending while persist is pending schedules nothing; the next turn ca
 
   const persists = runsOf(runs, "persist");
   expect(persists).toHaveLength(1);
-  expect(parsed(persists[0]?.stdin).messages).toEqual(turnTwo);
+  expect(parsed(persists[0]?.payload).messages).toEqual(turnTwo);
   expect(anchor.get()).toEqual(anchorOf([...turnOne, ...turnTwo]));
   expect(pending.get()).toBeNull();
 
@@ -130,7 +130,7 @@ test("a turn ending while persist is pending schedules nothing; the next turn ca
 
   const after = runsOf(runs, "persist");
   expect(after).toHaveLength(2);
-  expect(parsed(after[1]?.stdin).messages).toEqual(turnThree);
+  expect(parsed(after[1]?.payload).messages).toEqual(turnThree);
   expect(anchor.get()).toEqual(
     anchorOf([...turnOne, ...turnTwo, ...turnThree]),
   );
@@ -160,7 +160,7 @@ test("a stale pending does not block the next persist", async ($, on) => {
 
   const persists = runsOf(runs, "persist");
   expect(persists).toHaveLength(1);
-  expect(parsed(persists[0]?.stdin).messages).toEqual(turnTwo);
+  expect(parsed(persists[0]?.payload).messages).toEqual(turnTwo);
   expect(pending.get()).toBeNull();
 });
 
@@ -249,8 +249,8 @@ test("persist's requests run on the session's model and their replies go back to
   expect(persists).toHaveLength(2);
   const [first, second] = persists;
   expect(second?.argv).toEqual([BIN, "persist"]);
-  expect(parsed(second?.stdin)).toEqual({
-    ...parsed(first?.stdin),
+  expect(parsed(second?.payload)).toEqual({
+    ...parsed(first?.payload),
     completions: { facts: { text: '["a fact"]' } },
   });
   expect(anchor.get()).toEqual(anchorOf([...turnOne, ...turnTwo]));
@@ -300,7 +300,7 @@ test("a rejected completion goes back to persist as its error, with no status li
   const [, second] = persists;
   // The kit skips a throwing hook and rejects with its own "no implementation
   // for model.complete", so the thrown message never reaches the module.
-  expect(parsed(second?.stdin).completions?.facts?.error).toContain(
+  expect(parsed(second?.payload).completions?.facts?.error).toContain(
     "model.complete",
   );
   expect(statuses).toEqual([]);
@@ -356,7 +356,7 @@ test("an unanswered completion goes back to persist as its reason", async ($, on
   await clock.advance(0);
 
   const [, second] = runsOf(runs, "persist");
-  expect(parsed(second?.stdin).completions?.facts?.error).toContain(
+  expect(parsed(second?.payload).completions?.facts?.error).toContain(
     "api-error",
   );
 });
@@ -428,7 +428,7 @@ test("a resumed session, its $.state gone, finds its anchor in the store", async
   await clock.advance(0);
 
   const [run] = runsOf(runs, "persist");
-  expect(parsed(run?.stdin).messages).toEqual(turnTwo);
+  expect(parsed(run?.payload).messages).toEqual(turnTwo);
 });
 
 test("a stored value that is not an anchor is ignored: the whole window is new", async ($, on) => {
@@ -444,7 +444,7 @@ test("a stored value that is not an anchor is ignored: the whole window is new",
   await clock.advance(0);
 
   const [run] = runsOf(runs, "persist");
-  expect(parsed(run?.stdin).messages).toEqual([...turnOne, ...turnTwo]);
+  expect(parsed(run?.payload).messages).toEqual([...turnOne, ...turnTwo]);
 });
 
 test("an anchor persist advanced is kept in the store; one it did not advance is not", async ($, on) => {

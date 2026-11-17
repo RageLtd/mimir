@@ -9,8 +9,10 @@ import type { On } from "claude-code";
 import { mock } from "claude-code/testing";
 import type { Block, Message } from "../messages";
 import {
+  asRun,
   CWD,
   exited,
+  payloads,
   type Run,
   runsOf,
   SESSION,
@@ -69,7 +71,7 @@ export const retrieved = (context: string, message: string) =>
 
 /** Every `window_reset` retrieval was told, in order. */
 export const windowResets = (runs: readonly Run[]) =>
-  runsOf(runs, "retrieve").map((run) => parsed(run.stdin).window_reset);
+  runsOf(runs, "retrieve").map((run) => parsed(run.payload).window_reset);
 
 /** The `nth` of every voice-anchor run, in order. */
 export const anchorNths = (runs: readonly Run[]) =>
@@ -197,8 +199,9 @@ export const submitSession = (
   });
   let answer = initial;
   const runs: Run[] = [];
+  const written = payloads(on);
   on("process.run", (_, e) => {
-    runs.push({ argv: e.argv, stdin: e.init?.stdin, env: e.init?.env });
+    runs.push(asRun(written, e));
     return answer(e.argv[1] ?? "");
   });
   return {

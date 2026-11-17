@@ -86,7 +86,7 @@ test("a reset seen from the messages alone starts a detached precompact with mes
   const precompacts = runsOf(runs, PRECOMPACT);
   expect(precompacts).toHaveLength(1);
   expect(precompacts[0]?.argv).toEqual([BIN, PRECOMPACT]);
-  const payload = parsed(precompacts[0]?.stdin);
+  const payload = parsed(precompacts[0]?.payload);
   expect(payload).toMatchObject({
     session_id: SESSION,
     cwd: CWD,
@@ -113,9 +113,9 @@ test("a first answer carrying requests runs them on the session's model and a se
   const precompacts = runsOf(runs, PRECOMPACT);
   expect(precompacts).toHaveLength(2);
   expect(asks).toHaveLength(1);
-  const first = parsed(precompacts[0]?.stdin);
+  const first = parsed(precompacts[0]?.payload);
   expect(first.messages).toEqual([]);
-  expect(parsed(precompacts[1]?.stdin)).toEqual({
+  expect(parsed(precompacts[1]?.payload)).toEqual({
     ...first,
     completions: { summary: { text: SUMMARY_TEXT } },
   });

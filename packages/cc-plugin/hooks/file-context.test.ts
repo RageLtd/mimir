@@ -2,12 +2,14 @@ import type { On } from "claude-code";
 import { expect, mock, test } from "claude-code/testing";
 import { READING_STALE_MS } from "./file-context";
 import {
+  asRun,
   BIN,
   binary,
   CWD,
   exited,
   HOME,
   nudged,
+  payloads,
   type Run,
   runsOf,
   SESSION,
@@ -53,7 +55,7 @@ test("runs file-context beside the read and attaches its block as context", asyn
   expect(runsOf(runs, "file-context")).toEqual([
     {
       argv: [BIN, "file-context"],
-      stdin: JSON.stringify({
+      payload: JSON.stringify({
         session_id: SESSION,
         hook_event_name: "PreToolUse",
         cwd: CWD,
@@ -100,14 +102,15 @@ const SUMMARY = "↻ File context: 2 dependents, 1 memories";
 /**
  * Holds the first file-context run open until the test releases it, so a
  * second read can start while it is in flight; every later file-context
- * run is answered at once by `answer`, given the run's stdin. The gate's
+ * run is answered at once by `answer`, given the run's payload. The gate's
  * legs (rules, guard) also run on Read and pass clean.
  */
 const heldFirstRun = (
   on: On,
-  answer: (stdin: string) => Answer = () => exited(0),
+  answer: (payload: string) => Answer = () => exited(0),
 ) => {
   const runs: Run[] = [];
+  const written = payloads(on);
   const settle: { release: (outcome: Answer | Error) => void } = {
     release: () => undefined,
   };
@@ -116,10 +119,11 @@ const heldFirstRun = (
     start.mark = resolve;
   });
   on("process.run", (_, e) => {
-    runs.push({ argv: e.argv, stdin: e.init?.stdin, env: e.init?.env });
+    const run = asRun(written, e);
+    runs.push(run);
     if (e.argv[1] !== "file-context") return exited(0);
     if (runsOf(runs, "file-context").length > 1)
-      return answer(e.init?.stdin ?? "");
+      return answer(run.payload ?? "");
     start.mark();
     return new Promise<Answer>((resolve, reject) => {
       settle.release = (outcome) =>
@@ -134,7 +138,7 @@ const heldFirstRun = (
 };
 
 const fileOf = (run: Run) =>
-  JSON.parse(run.stdin ?? "{}").tool_input?.file_path;
+  JSON.parse(run.payload ?? "{}").tool_input?.file_path;
 
 test("a second read of a file whose context is in flight runs nothing and attaches nothing", async ($, on) => {
   const statuses = session(on);
@@ -173,8 +177,8 @@ test("reads of the same file at other offsets count as the same file", async ($,
 
 test("reads of different files in flight at once each run and each get their own block", async ($, on) => {
   session(on);
-  const held = heldFirstRun(on, (stdin) =>
-    stdin.includes(B_PATH) ? exited(0, nudged(BLOCK_B)) : exited(0),
+  const held = heldFirstRun(on, (payload) =>
+    payload.includes(B_PATH) ? exited(0, nudged(BLOCK_B)) : exited(0),
   );
   readTool(on);
 
@@ -406,6 +410,7 @@ test("a fresh claim still collapses: the read runs nothing and the claim stands"
 test("a claim goes stale at 30 s, at least twice the binary run's own timeout", async ($, on) => {
   session(on);
   const timeouts: Array<number | undefined> = [];
+  payloads(on);
   on("process.run", (_, e) => {
     if (e.argv[1] === "file-context") timeouts.push(e.init?.timeoutMs);
     return exited(0);

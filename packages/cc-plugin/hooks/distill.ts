@@ -17,8 +17,8 @@ import {
   completionAsk,
   completionOutcome,
   completionRefusal,
-  mimirCcArgv,
-  mimirCcInit,
+  type MimirCcCall,
+  mimirCcCall,
   PRECOMPACT_COMPLETION_TIMEOUT_MS,
   parseHookOutput,
 } from "./binary";
@@ -28,17 +28,15 @@ export const PRECOMPACT_TIMEOUT_MS = 200_000;
 
 export type Leg = {
   readonly name: string;
-  readonly argv: readonly string[];
-  readonly timeoutMs: number;
+  /** One run of the leg's subcommand on a payload. */
+  readonly call: (payload: unknown) => MimirCcCall;
   readonly completionTimeoutMs: number;
 };
 
 /** What a leg needs from `$`: the binary, the session's model, the status line. */
 export type Host = {
-  readonly run: (
-    argv: readonly string[],
-    init: ReturnType<typeof mimirCcInit>,
-  ) => Promise<ProcessRunResult>;
+  /** Writes the call's payload file, then runs the binary on it. */
+  readonly run: (call: MimirCcCall) => Promise<ProcessRunResult>;
   readonly complete: (
     request: ModelCompleteRequest,
   ) => Promise<ModelCompleteResult>;
@@ -48,8 +46,8 @@ export type Host = {
 export const precompactLeg = (home: string) =>
   ({
     name: "precompact",
-    argv: mimirCcArgv(home, "precompact"),
-    timeoutMs: PRECOMPACT_TIMEOUT_MS,
+    call: (payload) =>
+      mimirCcCall(home, "precompact", payload, PRECOMPACT_TIMEOUT_MS),
     completionTimeoutMs: PRECOMPACT_COMPLETION_TIMEOUT_MS,
   }) satisfies Leg;
 
@@ -64,8 +62,7 @@ export const distill = async (
   leg: Leg,
   payload: Record<string, unknown>,
 ) => {
-  const run = (input: unknown) =>
-    host.run(leg.argv, mimirCcInit(input, leg.timeoutMs));
+  const run = (input: unknown) => host.run(leg.call(input));
   const first = await run(payload);
   if (first.exitCode !== 0) return first;
   const { requests } = parseHookOutput(first.stdout);

@@ -14,24 +14,17 @@
 import { assembleBootContext } from "@mimir/plugin-core/brain/boot-context";
 import { attempt } from "@mimir/plugin-core/result";
 import { errMessage } from "@mimir/plugin-core/util";
+import { readPayload } from "./hook-payload";
 import { createLogger } from "./logger";
 
 const log = createLogger("boot-context");
 
 type Input = { readonly cwd?: string; readonly session_id?: string };
 
-const readStdin = async () => {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of Bun.stdin.stream()) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks).toString("utf8");
-};
-
 export const runBootContextCommand = async () => {
   if (process.env.MIMIR_ACTIVE !== "1") return 0;
 
-  const raw = await readStdin();
+  const raw = await readPayload();
   const [parseErr, input] = await attempt(async () => JSON.parse(raw) as Input);
   const projectPath = (parseErr ? undefined : input.cwd) ?? process.cwd();
   // Ties the block to a session: a host can fire SessionStart more than once.

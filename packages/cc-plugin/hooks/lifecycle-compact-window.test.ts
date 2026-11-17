@@ -50,7 +50,7 @@ test("an empty tail on a non-empty conversation still runs precompact, with mess
   const precompacts = runsOf(runs, "precompact");
   expect(precompacts).toHaveLength(1);
   expect(precompacts[0]?.argv).toEqual([BIN, "precompact"]);
-  expect(parsed(precompacts[0]?.stdin)).toEqual({
+  expect(parsed(precompacts[0]?.payload)).toEqual({
     session_id: SESSION,
     cwd: CWD,
     trigger: "auto",
@@ -61,7 +61,7 @@ test("an empty tail on a non-empty conversation still runs precompact, with mess
   expect(anchor.get()).toEqual(anchorOf(remaining));
 });
 
-test("the tail is slimmed: media blocks never cross stdin, and no window is sent", async ($, on) => {
+test("the tail is slimmed: media blocks never reach the binary, and no window is sent", async ($, on) => {
   session(on);
   const clock = mock.clock(on);
   const pictured: Message = {
@@ -81,7 +81,7 @@ test("the tail is slimmed: media blocks never cross stdin, and no window is sent
   await clock.advance(0);
 
   const [run] = runsOf(runs, "precompact");
-  const payload = parsed(run?.stdin);
+  const payload = parsed(run?.payload);
   expect(payload.messages).toEqual(turnTwo);
   expect("window" in payload).toBe(false);
 });
@@ -153,7 +153,7 @@ test("a skipped compaction whose run settled is not run again when repeated unch
 
   const precompacts = runsOf(runs, "precompact");
   expect(precompacts).toHaveLength(1);
-  const payload = parsed(precompacts[0]?.stdin);
+  const payload = parsed(precompacts[0]?.payload);
   expect(payload.messages).toEqual(turnTwo);
   expect("window" in payload).toBe(false);
 });
@@ -169,7 +169,7 @@ test("after a settled skipped compaction, a grown conversation sends only the ne
 
   const precompacts = runsOf(runs, "precompact");
   expect(precompacts).toHaveLength(2);
-  const second = parsed(precompacts[1]?.stdin);
+  const second = parsed(precompacts[1]?.payload);
   expect(second.messages).toEqual(turnThree);
   expect("window" in second).toBe(false);
 });
@@ -193,7 +193,7 @@ for (const [how, answer] of UNSETTLED) {
 
     const precompacts = runsOf(runs, "precompact");
     expect(precompacts).toHaveLength(2);
-    const second = parsed(precompacts[1]?.stdin);
+    const second = parsed(precompacts[1]?.payload);
     expect(second.messages).toEqual(turnTwo);
     expect("window" in second).toBe(false);
   });
@@ -217,7 +217,7 @@ test("after a real compaction, the next run's tail is what followed the compacte
 
   const precompacts = runsOf(runs, "precompact");
   expect(precompacts).toHaveLength(2);
-  const second = parsed(precompacts[1]?.stdin);
+  const second = parsed(precompacts[1]?.payload);
   expect(second.messages).toEqual(turnThree);
   expect("window" in second).toBe(false);
 });

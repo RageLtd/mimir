@@ -49,7 +49,7 @@ test("the session's first prompt runs mimir-cc boot-context with its cwd and id,
   expect(runsOf(runs, "boot-context")).toEqual([
     {
       argv: [BIN, "boot-context"],
-      stdin: JSON.stringify({ cwd: CWD, session_id: SESSION }),
+      payload: JSON.stringify({ cwd: CWD, session_id: SESSION }),
       env: { MIMIR_ACTIVE: "1" },
     },
   ]);
@@ -105,7 +105,7 @@ for (const [how, boot] of FAILURES) {
     ).toHaveLength(1);
     expect(statuses).toContain(RETRIEVED_STATUS);
     expect(
-      runsOf(runs, "retrieve").map((run) => parsed(run.stdin)),
+      runsOf(runs, "retrieve").map((run) => parsed(run.payload)),
     ).toMatchObject([{ prompt: "hello", session_start: true }]);
   });
 }

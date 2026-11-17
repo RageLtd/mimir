@@ -28,7 +28,10 @@ const settingsTemplate = (await Bun.file(
 ).json()) as Record<string, unknown>;
 const cliSource = await Bun.file(join(ROOT, "src", "cli.ts")).text();
 
-/** Every subcommand a module file spells in `mimirCcArgv(home, "<sub>")`. */
+/**
+ * Every subcommand a module file spells in `mimirCcCall(home, "<sub>", …)`
+ * (a run with a payload) or `mimirCcArgv(home, "<sub>")` (one without).
+ */
 const moduleSubcommands = async () => {
   const dir = join(ROOT, "hooks");
   const files = (await readdir(dir)).filter(
@@ -37,7 +40,9 @@ const moduleSubcommands = async () => {
   const found = new Set<string>();
   for (const file of files) {
     const source = await Bun.file(join(dir, file)).text();
-    for (const m of source.matchAll(/mimirCcArgv\([^,]+,\s*"([a-z-]+)"\)/g)) {
+    for (const m of source.matchAll(
+      /mimirCc(?:Argv|Call)\([^,]+,\s*"([a-z-]+)"/g,
+    )) {
       if (m[1]) found.add(m[1]);
     }
   }

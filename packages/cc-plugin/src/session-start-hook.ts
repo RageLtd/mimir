@@ -13,7 +13,8 @@
  *      mints secrets. Bounded, because the worker process exits when the
  *      reindex is done and a hung request would otherwise keep it alive.
  *   2. Idle-journal prune: every session journal not written for
- *      SESSION_JOURNAL_MAX_IDLE_DAYS is dropped (session-journal.ts).
+ *      SESSION_JOURNAL_MAX_IDLE_DAYS is dropped (session-journal.ts), and
+ *      the payload files no run read are swept (hook-payload.ts).
  *   3. Full project re-index of the brain's cartographer view: every
  *      git-tracked file parsed via the cartographer binary and written with
  *      `mode: "replace"`, so anything deleted or moved since the last
@@ -35,6 +36,7 @@ import { attempt } from "@mimir/plugin-core/result";
 import { reconcileAndSync as bootSync } from "@mimir/plugin-core/sync/boot";
 import { syncFromSharedConfig } from "@mimir/plugin-core/sync/cli";
 import { readConfig } from "./config";
+import { readPayload, sweepPayloads } from "./hook-payload";
 import { createLogger } from "./logger";
 import { pruneIdleJournals } from "./session-journal";
 
@@ -49,14 +51,6 @@ export type HookInput = {
 const RESCAN_SOURCES = new Set(["startup", "resume"]);
 /** Reconcile + sync budget inside the worker; a miss retries next session. */
 const BOOT_SYNC_DEADLINE_MS = 60_000;
-
-const readStdin = async () => {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of Bun.stdin.stream()) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks).toString("utf8");
-};
 
 const safeParseHookInput = async (raw: string) => {
   if (raw.trim().length === 0) return {} as HookInput;
@@ -158,8 +152,9 @@ export const runWorker = async (
   projectPath: string,
   deps: {
     readonly reconcileAndSync: () => Promise<Record<string, unknown>>;
+    readonly sweepPayloads: (now: number) => ReturnType<typeof sweepPayloads>;
     readonly reindex: (projectPath: string) => Promise<void>;
-  } = { reconcileAndSync, reindex },
+  } = { reconcileAndSync, sweepPayloads, reindex },
 ) => {
   const [syncErr, synced] = await attempt(deps.reconcileAndSync);
   if (syncErr) {
@@ -168,6 +163,9 @@ export const runWorker = async (
     log.info("org sync", { ...synced });
   }
   pruneIdleJournals();
+  const swept = await deps.sweepPayloads(Date.now());
+  if (swept.removed > 0 || swept.failures.length > 0)
+    log.info("payload sweep", { ...swept });
   await deps.reindex(projectPath);
   return 0;
 };
@@ -182,5 +180,5 @@ export const runSessionStartCommand = async (args: readonly string[]) => {
     return runWorker(projectPath);
   }
   if (process.env.MIMIR_ACTIVE !== "1") return 0;
-  return runHook(await safeParseHookInput(await readStdin()));
+  return runHook(await safeParseHookInput(await readPayload()));
 };

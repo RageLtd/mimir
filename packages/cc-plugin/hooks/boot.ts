@@ -8,12 +8,15 @@
  * Pure: `$` never enters this file; submit.ts runs the call it shapes.
  */
 
-import { mimirCcArgv, mimirCcInit } from "./binary";
+import { mimirCcCall } from "./binary";
 
 const BOOT_TIMEOUT_MS = 15_000;
 
-/** `$.process.run`'s argv and init for a boot-context run. */
-export const bootCall = (home: string, cwd: string, sessionId: string) => ({
-  argv: mimirCcArgv(home, "boot-context"),
-  init: mimirCcInit({ cwd, session_id: sessionId }, BOOT_TIMEOUT_MS),
-});
+/** A boot-context run: its payload file, then argv and init. */
+export const bootCall = (home: string, cwd: string, sessionId: string) =>
+  mimirCcCall(
+    home,
+    "boot-context",
+    { cwd, session_id: sessionId },
+    BOOT_TIMEOUT_MS,
+  );

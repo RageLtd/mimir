@@ -36,6 +36,7 @@ import { attempt } from "@mimir/plugin-core/result";
 import { errMessage } from "@mimir/plugin-core/util";
 import { workerByName } from "@mimir/plugin-core/workers";
 import { withAgentCwd } from "./agent-worktree";
+import { readPayload } from "./hook-payload";
 import { createLogger } from "./logger";
 import { taskProvenance } from "./task-state";
 import { bootstrapWorktree } from "./worktree-bootstrap";
@@ -99,12 +100,6 @@ export const guardOutput = (decision: ReturnType<typeof guardDecision>) =>
           permissionDecisionReason: decision.reason,
         },
       };
-
-const readStdin = async () => {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of Bun.stdin.stream()) chunks.push(chunk);
-  return Buffer.concat(chunks).toString("utf8");
-};
 
 const parseInput = (raw: string) =>
   Promise.resolve()
@@ -183,7 +178,7 @@ export const buildGuardContext = async (role: GuardRole, input: HookInput) => {
 
 export const runGuardHook = async (args: readonly string[]) => {
   if (process.env.MIMIR_ACTIVE !== "1") return 0;
-  const { input } = await withAgentCwd(await parseInput(await readStdin()));
+  const { input } = await withAgentCwd(await parseInput(await readPayload()));
   const role = parseGuardArgs(args) ?? roleFromInput(input);
   if (!role) return 0;
   if (role === "coordinator") {

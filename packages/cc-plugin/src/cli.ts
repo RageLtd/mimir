@@ -44,6 +44,7 @@ import {
 import { runDelegateCommand, runReviewPromptCommand } from "./delegate-command";
 import { runFileContextHook } from "./file-context-hook";
 import { runGuardHook } from "./guard-hook";
+import { withoutPayloadFlag } from "./hook-payload";
 import { runHygieneCommand } from "./hygiene-command";
 import { runInstallCommand } from "./install";
 import { runLogMcp } from "./log-mcp";
@@ -116,6 +117,9 @@ const USAGE = [
   "                          rotate, recovery-setup, recover.",
   "  sync                    Pull + push org memories through the blind sync",
   "                          relay (MIM-88), including embedding backfill.",
+  "",
+  "A subcommand the hooks module runs takes its payload from --payload <file>",
+  "(deleted once read when under ~/.mimir/run), or from stdin without the flag.",
 ].join("\n");
 
 const log = createLogger("cli");
@@ -242,7 +246,9 @@ const dispatch = async (argv: readonly string[]): Promise<number> => {
   }
 };
 
-const code = await dispatch(Bun.argv.slice(2));
+// The payload flag is every hook subcommand's (hook-payload.ts reads it off
+// Bun.argv); none of their own argument parsers should see it.
+const code = await dispatch(withoutPayloadFlag(Bun.argv.slice(2)));
 // Drain pending log writes before exiting — without this, the most
 // recent line (often the one that explains why we're returning early)
 // would race the process tear-down and never hit disk.

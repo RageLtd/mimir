@@ -3,6 +3,7 @@ import { expect, test } from "claude-code/testing";
 import {
   completionAsk,
   completionOutcome,
+  mimirCcCall,
   PERSIST_COMPLETION_TIMEOUT_MS,
   PRECOMPACT_COMPLETION_TIMEOUT_MS,
   parseHookOutput,
@@ -15,6 +16,23 @@ const NO_USAGE = {
   cache_read_input_tokens: 0,
   cache_creation_input_tokens: 0,
 };
+
+test("a payload goes in a file of its own, named in argv, with nothing on stdin", () => {
+  const call = mimirCcCall("/home/t", "persist", { a: 1 }, 5000);
+  const again = mimirCcCall("/home/t", "persist", { a: 1 }, 5000);
+
+  expect(call.path.startsWith("/home/t/.mimir/run/persist-")).toBe(true);
+  expect(call.path.endsWith(".json")).toBe(true);
+  expect(call.text).toBe('{"a":1}');
+  expect(call.argv).toEqual([
+    "/home/t/.local/bin/mimir-cc",
+    "persist",
+    "--payload",
+    call.path,
+  ]);
+  expect(call.init).toEqual({ env: { MIMIR_ACTIVE: "1" }, timeoutMs: 5000 });
+  expect(again.path).not.toBe(call.path);
+});
 
 test("a two-phase answer exposes its requests", () => {
   const output = parseHookOutput(

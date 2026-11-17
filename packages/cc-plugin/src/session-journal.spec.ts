@@ -73,6 +73,7 @@ describe("the session-start worker prunes idle journals", () => {
 
     const code = await runWorker("/work/repo", {
       reconcileAndSync: async () => ({ status: "ok" }),
+      sweepPayloads: async () => ({ removed: 0, failures: [] }),
       reindex: async () => {},
     });
     expect(code).toBe(0);
@@ -88,6 +89,7 @@ describe("the session-start worker prunes idle journals", () => {
     let reindexed = false;
     const code = await runWorker("/work/repo", {
       reconcileAndSync: async () => ({ status: "ok" }),
+      sweepPayloads: async () => ({ removed: 0, failures: [] }),
       reindex: async () => {
         reindexed = true;
       },

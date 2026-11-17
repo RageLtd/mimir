@@ -22,6 +22,7 @@ import {
   binary,
   CWD,
   exited,
+  payloads,
   REANCHOR,
   runsOf,
   SESSION,
@@ -42,7 +43,7 @@ test("a compaction hands precompact the undistilled tail and no window, and re-a
 
   const [run] = runsOf(runs, "precompact");
   expect(run?.argv).toEqual([BIN, "precompact"]);
-  expect(parsed(run?.stdin)).toEqual({
+  expect(parsed(run?.payload)).toEqual({
     session_id: SESSION,
     cwd: CWD,
     trigger: "manual",
@@ -93,7 +94,7 @@ test("a compaction re-anchors at once and runs precompact on the pre-compaction 
 
   const precompacts = runsOf(runs, "precompact");
   expect(precompacts).toHaveLength(1);
-  expect(parsed(precompacts[0]?.stdin)).toEqual({
+  expect(parsed(precompacts[0]?.payload)).toEqual({
     session_id: SESSION,
     cwd: CWD,
     trigger: "manual",
@@ -217,8 +218,8 @@ test("precompact's summary and facts requests each run, and both replies go back
   const precompacts = runsOf(runs, "precompact");
   expect(precompacts).toHaveLength(2);
   const [first, second] = precompacts;
-  expect(parsed(second?.stdin)).toEqual({
-    ...parsed(first?.stdin),
+  expect(parsed(second?.payload)).toEqual({
+    ...parsed(first?.payload),
     completions: {
       summary: { text: "the summary" },
       facts: { text: '["a fact"]' },
@@ -251,7 +252,7 @@ test("a rejected facts completion still lets the summary go back to precompact",
   const precompacts = runsOf(runs, "precompact");
   expect(precompacts).toHaveLength(2);
   const [, second] = precompacts;
-  const { completions } = parsed(second?.stdin);
+  const { completions } = parsed(second?.payload);
   expect(completions?.summary).toEqual({ text: "the summary" });
   expect(completions?.facts?.error).toContain("model.complete");
   expect(statuses).toEqual([]);
@@ -326,6 +327,7 @@ test("a failing leg shows a status line and the event passes on", async ($, on) 
   conversation(on, turnOne);
   on("turn.complete", (_, e) => ({ text: e.answer }));
   on("session.compact", () => ({ messages: remaining }));
+  payloads(on);
   on("process.run", (_, e) => {
     if (e.argv[1] === "precompact") throw new Error("ENOENT");
     return exited(e.argv[1] === "persist" ? 4 : 0);
@@ -342,7 +344,7 @@ test("a failing leg shows a status line and the event passes on", async ($, on) 
   expect(compacted).toMatchObject({ messages: remaining });
   expect(statuses).toEqual([
     "mimir: persist failed (exit 4)",
-    "mimir: precompact failed",
+    "mimir: HooksError: no implementation for process.run (precompact run failed)",
   ]);
 });
 

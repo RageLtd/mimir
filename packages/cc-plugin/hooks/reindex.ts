@@ -14,7 +14,7 @@
  */
 
 import type { Register } from "claude-code";
-import { mimirCcArgv, mimirCcInit } from "./binary";
+import { mimirCcCall } from "./binary";
 import { toolPayload } from "./payload";
 
 const REINDEX_TIMEOUT_MS = 10_000;
@@ -29,15 +29,14 @@ export const registerReindex: Register = (on) => {
       $.session.id(),
       $.session.cwd(),
     ]);
-    const payload = toolPayload(
-      e,
-      { sessionId, cwd, agentId: e.agentId },
-      "PostToolUse",
+    const call = mimirCcCall(
+      home ?? "",
+      "reindex",
+      toolPayload(e, { sessionId, cwd, agentId: e.agentId }, "PostToolUse"),
+      REINDEX_TIMEOUT_MS,
     );
-    const fork = await $.process.run(
-      mimirCcArgv(home ?? "", "reindex"),
-      mimirCcInit(payload, REINDEX_TIMEOUT_MS),
-    );
+    await $.fs.write(call.path, call.text);
+    const fork = await $.process.run(call.argv, call.init);
     if (fork.exitCode !== 0)
       $.ui.status(`mimir: reindex failed (exit ${fork.exitCode})`);
     return ran;

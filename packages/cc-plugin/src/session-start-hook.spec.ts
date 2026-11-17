@@ -77,19 +77,39 @@ describe("runHook", () => {
 });
 
 describe("runWorker", () => {
-  test("reconciles and syncs, then reindexes", async () => {
+  test("reconciles and syncs, sweeps the payload files left behind, then reindexes", async () => {
     const order: string[] = [];
     const code = await runWorker("/work/repo", {
       reconcileAndSync: async () => {
         order.push("sync");
         return { status: "ok" };
       },
+      sweepPayloads: async () => {
+        order.push("sweep");
+        return { removed: 0, failures: [] };
+      },
       reindex: async (path) => {
         order.push(`reindex:${path}`);
       },
     });
     expect(code).toBe(0);
-    expect(order).toEqual(["sync", "reindex:/work/repo"]);
+    expect(order).toEqual(["sync", "sweep", "reindex:/work/repo"]);
+  });
+
+  test("a sweep that cannot remove a file does not stop the reindex", async () => {
+    let reindexed = false;
+    const code = await runWorker("/work/repo", {
+      reconcileAndSync: async () => ({ status: "ok" }),
+      sweepPayloads: async () => ({
+        removed: 0,
+        failures: [{ path: "/home/t/.mimir/run/a.json", error: "EACCES" }],
+      }),
+      reindex: async () => {
+        reindexed = true;
+      },
+    });
+    expect(code).toBe(0);
+    expect(reindexed).toBe(true);
   });
 
   test("a failed reconcile does not stop the reindex", async () => {
@@ -98,6 +118,7 @@ describe("runWorker", () => {
       reconcileAndSync: async () => {
         throw new Error("server unreachable");
       },
+      sweepPayloads: async () => ({ removed: 0, failures: [] }),
       reindex: async () => {
         reindexed = true;
       },

@@ -30,6 +30,7 @@ import type {
 } from "@ai-sdk/provider-utils";
 import type { CompletionRequest } from "@mimir/plugin-core/brain/extract";
 import { attempt } from "@mimir/plugin-core/result";
+import { readPayload } from "./hook-payload";
 
 // ---------------------------------------------------------------------------
 // Input
@@ -83,15 +84,9 @@ export type DistillInput = {
   readonly completions?: Completions;
 };
 
-const readStdin = async () => {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of Bun.stdin.stream()) chunks.push(chunk);
-  return Buffer.concat(chunks).toString("utf8");
-};
-
-/** The payload on stdin; `{}` when there is none or it is not JSON. */
+/** The run's payload; `{}` when there is none or it is not JSON. */
 export const readDistillInput = async () => {
-  const raw = await readStdin();
+  const raw = await readPayload();
   if (raw.trim().length === 0) return {} as DistillInput;
   // Serialisation boundary: the hooks module wrote this JSON.
   const [err, parsed] = await attempt(
