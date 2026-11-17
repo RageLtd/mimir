@@ -1,13 +1,8 @@
 /**
- * The session lifecycle — session start, turn end and compaction — each
- * handing the subcommand written against it what it needs.
+ * The session lifecycle — turn end and compaction — each handing the
+ * subcommand written against it what it needs. Session start runs from
+ * the session's first prompt (submit.ts).
  *
- * - `classic.SessionStart` → `mimir-cc session-start`: on startup or
- *   resume, detaches a worker that reconciles keys, syncs the org replica
- *   and reindexes the project, then returns at once so the first prompt
- *   is never behind it. The classic event is the bridge because it
- *   carries `source`, which the engine's own `session.start` does not.
- *   The same hook asks for the binary released with this plugin.
  * - `turn.complete` (main loop) → `mimir-cc persist`: the messages since
  *   the last distillation, read from `$.session.messages({ as: "api" })`
  *   and distilled into the local replica.
@@ -65,15 +60,7 @@ import {
   parseHookOutput,
 } from "./binary";
 import { anchorOf, deltaSince, NO_ANCHOR, slim } from "./messages";
-import {
-  FETCH_TIMEOUT_MS,
-  manifestPath,
-  manifestVersion,
-  pinArgv,
-} from "./pin-binary";
 
-/** The binary only parses the payload and detaches its worker. */
-const SESSION_START_TIMEOUT_MS = 5_000;
 /** Off the turn now, so they bound a run, not the user's wait. */
 const PERSIST_TIMEOUT_MS = 90_000;
 /** BYOK summarise (120 s) then extract (60 s), sequential in the binary. */
@@ -275,52 +262,7 @@ const detach = (
   );
 };
 
-/**
- * Asks for the binary released with this plugin (pin-binary.ts), in a
- * dispatch of its own: a download takes seconds. Each hook runs the
- * binary afresh, so they pick the fetched build up as soon as it lands;
- * the MCP servers already running keep the old one until the next session.
- */
-const pinBinary = async ($: EngineInterface) => {
-  const root = $.plugin.root;
-  const version = await $.fs
-    .read(manifestPath(root))
-    .then(manifestVersion)
-    .catch(() => undefined);
-  if (version === undefined) {
-    $.ui.status("mimir: plugin.json carries no version");
-    return;
-  }
-  const failed = (detail = "") =>
-    $.ui.status(
-      `mimir: could not fetch the mimir-cc ${version} binary${detail}`,
-    );
-  $.clock.after(0, () =>
-    $.process.run(pinArgv(root, version), { timeoutMs: FETCH_TIMEOUT_MS }).then(
-      (ran) => {
-        if (ran.exitCode !== 0) failed(` (exit ${ran.exitCode})`);
-      },
-      () => failed(),
-    ),
-  );
-};
-
 export const registerLifecycle: Register = (on) => {
-  on("classic.SessionStart", async ($, e, next) => {
-    await pinBinary($);
-    const home = (await $.env.get("HOME")) ?? "";
-    const ran = await $.process.run(
-      mimirCcArgv(home, "session-start"),
-      mimirCcInit(e, SESSION_START_TIMEOUT_MS),
-    );
-    if (ran.exitCode !== 0)
-      $.ui.status(`mimir: session start failed (exit ${ran.exitCode})`);
-    return next(e);
-  }).catch(($, e, next) => {
-    $.ui.status("mimir: session start failed");
-    return next(e);
-  });
-
   on("turn.complete", async ($, e, next) => {
     if (e.agentId !== undefined) return next(e);
     const { delta, anchor, version } = await undistilled($);
@@ -383,7 +325,8 @@ export const registerLifecycle: Register = (on) => {
       // summarises, settled or not, so an end with nothing said since does
       // not summarise it again (session-end.ts).
       await $.state.set(SUMMARISED, reanchored);
-      // The next prompt gets a voice anchor (submit.ts).
+      // The next prompt is a reset: a voice anchor and the boot block
+      // (submit.ts).
       await $.state.set({ plugin: "mimir-cc", key: "reanchor" }, true);
     }
     if (payload !== undefined) {

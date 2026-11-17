@@ -12,7 +12,6 @@
  */
 
 import type { Register } from "claude-code";
-import { registerBoot } from "./boot";
 import { registerEditGuard } from "./edit-guard";
 import { registerFileContext } from "./file-context";
 import { registerGate } from "./gate";
@@ -26,7 +25,6 @@ export const register: Register = (on, options) => {
   registerPersona(on, options);
   registerLifecycle(on, options);
   registerSessionEnd(on, options);
-  registerBoot(on, options);
   registerSubmit(on, options);
   // The edit guard is pure and goes first: a shell edit is refused before
   // the gate pays two binary runs for it.

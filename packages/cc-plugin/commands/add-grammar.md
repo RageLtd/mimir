@@ -144,7 +144,7 @@ Write `$GRAMMARS/<name>/language.json`. Only `extensions` is required.
 
 ## Step 9 — re-index the current project
 
-This is the "restart": the SessionStart worker spawns a fresh cartographer, which loads the new grammar, parses every git-tracked file, and replaces the project's local index.
+This is the "restart": the session-start worker spawns a fresh cartographer, which loads the new grammar, parses every git-tracked file, and replaces the project's local index.
 
 ```bash
 "$HOME/.local/bin/mimir-cc" session-start --worker "$(pwd)"

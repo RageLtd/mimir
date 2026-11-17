@@ -54,11 +54,27 @@ declare module "claude-code" {
        */
       turn: MimirTurn;
       /**
-       * Set by a compaction: the next prompt gets a voice anchor whatever
-       * the count. The summary that replaced the conversation carries none
-       * of the persona's voice.
+       * Set by a compaction, a `/clear` or a resume (`session.end` with
+       * reason `clear` or `resume`): the next prompt is a reset — a voice
+       * anchor whatever the count, the boot block again, and
+       * `window_reset` to retrieval. The window that replaced the
+       * conversation carries none of the persona's voice. A reset is also
+       * seen without it, from `window`.
        */
       reanchor: boolean;
+      /**
+       * Set by a resume in this process (`session.end` with reason
+       * `resume`): the next prompt starts `mimir-cc session-start` for the
+       * session that took the ended one's place.
+       */
+      resumed: boolean;
+      /**
+       * The conversation window the last prompt saw, taken on
+       * `prompt.submit` from `$.session.messages()`'s rows: a prompt whose
+       * messages no longer carry it (a compaction or `/clear` replaced the
+       * window) is a reset.
+       */
+      window: MimirAnchor;
       /**
        * The last session's summary is still owed to this one: a first
        * prompt's retrieve answered `summaryPending` — its summary-pending

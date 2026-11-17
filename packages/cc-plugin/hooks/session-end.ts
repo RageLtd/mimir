@@ -13,6 +13,11 @@
  * An empty conversation, or one precompact already summarised as it
  * stands (`summarised` in `$.state`), runs nothing. A failure shows as a
  * status line and the event passes on.
+ *
+ * After a `/clear` or a resume the process goes on under another session,
+ * so the hook first flags the next prompt as a reset (`reanchor`) and,
+ * for a resume, as one that starts `mimir-cc session-start` again
+ * (`resumed`; submit.ts).
  */
 
 import type { Register, StateRef } from "claude-code";
@@ -32,9 +37,21 @@ const SUMMARISED = {
   plugin: "mimir-cc",
   key: "summarised",
 } satisfies StateRef<"mimir-cc", "summarised">;
+const REANCHOR = {
+  plugin: "mimir-cc",
+  key: "reanchor",
+} satisfies StateRef<"mimir-cc", "reanchor">;
+const RESUMED = {
+  plugin: "mimir-cc",
+  key: "resumed",
+} satisfies StateRef<"mimir-cc", "resumed">;
 
 export const registerSessionEnd: Register = (on) => {
   on("session.end", async ($, e, next) => {
+    // Written before the run, inside the chain's short bound.
+    if (e.reason === "clear" || e.reason === "resume")
+      await $.state.set(REANCHOR, true);
+    if (e.reason === "resume") await $.state.set(RESUMED, true);
     const [messages, summarised] = await Promise.all([
       $.session.messages({ as: "api" }),
       $.state.get(SUMMARISED),

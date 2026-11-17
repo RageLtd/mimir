@@ -3,7 +3,8 @@
  * module's `prompt.submit` hook with the UserPromptSubmit payload.
  *
  * Fires on every developer prompt, the first included (boot context is
- * profile and project only, injected on `prompt.context`). On the first,
+ * profile and project only, attached by the same hook beside this one's
+ * block on the first prompt and after a reset). On the first,
  * flagged `session_start`, retrieval also brings the active project's
  * newest summary, near the prompt or not. Reads the
  * LOCAL org replica (MIM-84) — no server round-trip — and emits:

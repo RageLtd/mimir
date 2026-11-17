@@ -1,11 +1,11 @@
 /**
- * `mimir-cc session-start` — run by the hooks module on
- * `classic.SessionStart` with its payload.
+ * `mimir-cc session-start` — run by the hooks module off the session's
+ * first prompt, with its `session_id` and `cwd` and no `source`.
  *
- * The hook itself does one thing: on `startup` or `resume` it spawns a
- * detached worker and returns, so the developer's first prompt is never
- * behind it. `/clear` and `/compact` don't represent a new working period
- * and spawn nothing.
+ * The hook itself does one thing: on `startup` or `resume` — a payload
+ * without `source` counts as a startup — it spawns a detached worker and
+ * returns, so the developer's first prompt is never behind it. `/clear`
+ * and `/compact` don't represent a new working period and spawn nothing.
  *
  * The worker does the real session-start work, in order:
  *   1. Silent key reconcile (MIM-87) then blind org sync (MIM-88): fulfil
@@ -19,9 +19,10 @@
  *      `mode: "upsert"` thereafter.
  *
  * Both used to be awaited in the hook, bounded at 15 s — which held the
- * first prompt for ~7 s on a cold start. A first-turn retrieve may now race
- * the sync; pulled rows land a few seconds later and are there for the
- * next turn.
+ * first prompt for ~7 s on a cold start. The hooks module now starts this
+ * only after the first prompt's retrieve, so the first turn always sees the
+ * replica and index as the last session left them; pulled rows and the
+ * fresh index are there from a later turn.
  */
 
 import { spawn } from "node:child_process";

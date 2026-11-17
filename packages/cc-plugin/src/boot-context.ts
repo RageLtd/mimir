@@ -1,11 +1,12 @@
 /**
- * `mimir-cc boot-context` — the first-message context block, run by the
- * hooks module's `prompt.context` hook.
+ * `mimir-cc boot-context` — the boot context block, run by the hooks
+ * module's `prompt.submit` hook on the session's first prompt and on the
+ * first prompt after a compaction or `/clear` replaced the window.
  *
- * Reads `{ cwd }` from stdin and prints the `<boot_context>` block (user
- * profile + active project) from the local stores. No session-context
- * section: `prompt.context` fires before any prompt exists to query
- * with, and the module retrieves per turn from turn one instead. The
+ * Reads `{ cwd, session_id }` from stdin and prints the `<boot_context>`
+ * block (user profile + active project) from the local stores. No
+ * session-context section: the same hook retrieves per turn for that,
+ * from turn one. The
  * assembly is shared (@mimir/plugin-core/brain/boot-context); this binds
  * cc-plugin's logger so boot lines keep landing in mimir-cc.log.
  */

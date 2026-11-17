@@ -4,13 +4,13 @@
  * A plugin and its `mimir-cc` binary ship under one tag, and the two
  * speak a private protocol that changes between releases: a module ahead
  * of its binary calls subcommands the binary lacks, and one behind it is
- * answered in a shape it does not read. So at every session start the
- * module (lifecycle.ts) asks the `ensure-binary.sh` it ships for the
+ * answered in a shape it does not read. So at every session's first prompt
+ * the module (submit.ts) asks the `ensure-binary.sh` it ships for the
  * binary of its own version. Already installed is a local file check;
  * otherwise the script downloads that release and moves it into place. A
  * dev build pinned by dev-install.sh is left alone by the script.
  *
- * Pure helpers only: the session-start hook spells the `$` calls itself.
+ * Pure helpers only: the `prompt.submit` hook spells the `$` calls itself.
  */
 
 const MANIFEST = ".claude-plugin/plugin.json";

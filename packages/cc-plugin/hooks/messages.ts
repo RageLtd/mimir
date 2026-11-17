@@ -61,18 +61,47 @@ export const anchorOf = (messages: readonly Textual[]): MimirAnchor => {
     : { count: messages.length, mark: markOf(last) };
 };
 
+/** Where the anchor's message stands now, searched downward; -1 if gone. */
+const markIndex = (messages: readonly Textual[], anchor: MimirAnchor) => {
+  for (let i = Math.min(anchor.count, messages.length) - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message !== undefined && markOf(message) === anchor.mark) return i;
+  }
+  return -1;
+};
+
 /** The messages after the anchor; see the module doc for the relocation. */
 export const deltaSince = <M extends Message>(
   messages: readonly M[],
   anchor: MimirAnchor,
 ) => {
   if (anchor.count === 0) return messages;
-  for (let i = Math.min(anchor.count, messages.length) - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (message !== undefined && markOf(message) === anchor.mark)
-      return messages.slice(i + 1);
-  }
-  return messages;
+  const at = markIndex(messages, anchor);
+  return at < 0 ? messages : messages.slice(at + 1);
+};
+
+/** The most messages the engine hands back; a longer conversation slides. */
+const MESSAGE_CAP = 4096;
+
+/**
+ * Whether `messages` carry on the window `seen` was taken of. Below the cap
+ * a window that carried on is no shorter and still bears `seen`'s mark at
+ * the same place — no longer when a slash command, a prompt typed mid-turn
+ * or a prompt that never reached the conversation came between; a
+ * compaction leaves it shorter, or another message at that place. At the
+ * cap the window slides, so the mark is searched for downward instead.
+ */
+export const continuesWindow = (
+  messages: readonly Textual[],
+  seen: MimirAnchor,
+) => {
+  if (messages.length >= MESSAGE_CAP)
+    return seen.count === 0 || markIndex(messages, seen) >= 0;
+  const last = messages[seen.count - 1];
+  return (
+    messages.length >= seen.count &&
+    (seen.count === 0 || (last !== undefined && markOf(last) === seen.mark))
+  );
 };
 
 const MEDIA_BLOCKS = new Set(["image", "document"]);
