@@ -25,7 +25,8 @@
     "cc-plugin:build": "bun run --filter @mimir/cc-plugin build",
     "cc-plugin:mod:validate": "bun run --cwd packages/cc-plugin mod:validate",
     "cc-plugin:mod:test": "bun run --cwd packages/cc-plugin mod:test",
-    "codex-plugin:build": "bun run --filter @mimir/codex-plugin build"
+    "codex-plugin:build": "bun run --filter @mimir/codex-plugin build",
+    "skills:render": "bun packages/plugin-core/scripts/render-skills.ts"
   },
   "workspaces": {
     "packages": [

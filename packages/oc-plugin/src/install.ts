@@ -40,6 +40,7 @@ import wrapperTemplate from "../artifacts/wrapper.sh.template" with {
 import delegateCommand from "../commands/delegate.md" with { type: "text" };
 import installCommand from "../commands/mimir-install.md" with { type: "text" };
 import updateCommand from "../commands/mimir-update.md" with { type: "text" };
+import refactorCommand from "../commands/refactor.md" with { type: "text" };
 import { renderWorkerAgents } from "./agents";
 import { type MimirConfig, readConfig, writeConfig } from "./config";
 
@@ -386,6 +387,19 @@ export const installMimir = async (
     };
   }
   written.push(delegateCommandPath);
+
+  const refactorCommandPath = join(dirname(updateCommandPath), "refactor.md");
+  const [refactorErr] = await attempt(() =>
+    writeText(refactorCommandPath, refactorCommand),
+  );
+  if (refactorErr) {
+    return {
+      ok: false,
+      message: `Failed to write refactor slash command: ${errMessage(refactorErr)}`,
+      written,
+    };
+  }
+  written.push(refactorCommandPath);
 
   return {
     ok: true,

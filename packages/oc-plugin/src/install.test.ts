@@ -10,6 +10,7 @@ import {
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { renderRefactorSkill } from "@mimir/plugin-core/skills/refactor";
 import { renderDelegateCommand } from "@mimir/plugin-core/workers";
 import opencodeTemplate from "../artifacts/opencode.json.template" with {
   type: "text",
@@ -177,6 +178,9 @@ describe("installMimir", () => {
     expect(
       await Bun.file(join(opencodeDir, "commands", "delegate.md")).text(),
     ).toBe(renderDelegateCommand("opencode"));
+    expect(
+      await Bun.file(join(opencodeDir, "commands", "refactor.md")).text(),
+    ).toBe(renderRefactorSkill("opencode"));
 
     // The installer has to read the opencode namespace: dropping the
     // host argument, or reading claudeCode, still writes agent files —
