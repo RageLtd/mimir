@@ -44,6 +44,7 @@
 
 import type {
   EngineInterface,
+  HookFailure,
   ProcessRunResult,
   Register,
   StateRef,
@@ -207,8 +208,8 @@ const detach = (
     distill(host, leg, payload)
       .then((ran) => settle($, leg.name, ran, anchor, versions.distilled))
       .then((settled) => (settled ? onSettled() : undefined))
-      .then(clear, () => {
-        $.ui.status(`mimir: ${leg.name} failed`);
+      .then(clear, (reason) => {
+        $.ui.status(`mimir: ${leg.name} run failed (${String(reason)})`);
         return clear();
       })
       .then(undefined, () => {
@@ -216,6 +217,10 @@ const detach = (
       }),
   );
 };
+
+/** Why a hook's `.catch` is running: the engine's kind and what it caught. */
+const caught = (error: HookFailure) =>
+  error.message === undefined ? error.kind : `${error.kind}: ${error.message}`;
 
 export const registerLifecycle: Register = (on) => {
   on("turn.complete", async ($, e, next) => {
@@ -248,7 +253,7 @@ export const registerLifecycle: Register = (on) => {
     );
     return next(e);
   }).catch(($, e, next) => {
-    $.ui.status("mimir: persist failed");
+    $.ui.status(`mimir: persist hook failed (${caught(next.error)})`);
     return next(e);
   });
 
@@ -311,7 +316,7 @@ export const registerLifecycle: Register = (on) => {
     }
     return compacted;
   }).catch(($, e, next) => {
-    $.ui.status("mimir: precompact failed");
+    $.ui.status(`mimir: precompact hook failed (${caught(next.error)})`);
     return next(e);
   });
 };

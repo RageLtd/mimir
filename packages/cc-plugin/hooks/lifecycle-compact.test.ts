@@ -342,7 +342,7 @@ test("a failing leg shows a status line and the event passes on", async ($, on) 
   expect(compacted).toMatchObject({ messages: remaining });
   expect(statuses).toEqual([
     "mimir: persist failed (exit 4)",
-    "mimir: precompact failed",
+    "mimir: precompact run failed (HooksError: no implementation for process.run)",
   ]);
 });
 
