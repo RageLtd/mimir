@@ -18,9 +18,12 @@
 import type { Logger } from "../logger";
 import { getOrResolveProjectId } from "../project";
 import { attempt } from "../result";
-import { readConfig } from "../shared-config";
+import { type MimirConfig, readConfig } from "../shared-config";
 import { createOrgReplica, defaultOrgReplicaPath } from "../store/org-replica";
-import { createUserMemoryStore } from "../store/user-memories";
+import {
+  createUserMemoryStore,
+  type UserMemoryStore,
+} from "../store/user-memories";
 import { buildUserContext } from "../tools/user-memory";
 import { errMessage } from "../util";
 import { createEmbedQuery } from "./embedder";
@@ -40,8 +43,15 @@ Tailor responses accordingly: match their communication style, reference their s
 /**
  * Read user profile + memories from the local SQLite store. Returns the
  * `<user_context>` block, or null when the store is empty / unreadable.
+ * A store handed in by the caller is used as-is and left open — the
+ * caller owns it.
  */
-const buildUserProfileSection = async (dbPath: string, log: Logger) => {
+const buildUserProfileSection = async (
+  dbPath: string,
+  given: UserMemoryStore | null,
+  log: Logger,
+) => {
+  if (given) return buildUserContext(given);
   // Defensive open: a missing file would auto-create an empty DB, which
   // is benign for the hook but worth noting. A corrupt file would throw.
   const [openErr, store] = await attempt(async () =>
@@ -57,22 +67,34 @@ const buildUserProfileSection = async (dbPath: string, log: Logger) => {
   return block;
 };
 
+export type SessionContextBudgets = {
+  readonly topK?: number;
+  readonly summaryCount?: number;
+  readonly sessionStart?: boolean;
+};
+
 // Boot budgets (up to 10 facts and 3 summaries) — richer first-turn
-// priming than the per-turn micro-retrieval.
-const BOOT_MEMORY_TOP_K = 10;
-const BOOT_SUMMARY_COUNT = 3;
+// priming than the per-turn micro-retrieval. Boot runs on the session's
+// first prompt, so the active project's newest summary arrives even when
+// nothing is near the prompt.
+const BOOT_BUDGETS: SessionContextBudgets = {
+  topK: 10,
+  summaryCount: 3,
+  sessionStart: true,
+};
 
 /**
  * Build prior session context from the LOCAL org replica (MIM-84) —
- * summaries, memories, and playbooks with boot-sized budgets, plus the
- * active project's newest summary when none is near the prompt. Reads are
- * local; no server round-trip on turn one. Returns null when the replica
- * is missing or empty.
+ * summaries, memories, and playbooks. Budgets default to the boot ones;
+ * an empty object takes retrieval's own per-turn defaults. Reads are
+ * local; no server round-trip. Returns null when the replica is missing,
+ * unreadable, or has nothing for the query.
  */
-const buildSessionContext = async (
+export const buildSessionContext = async (
   query: string,
   projectId: string | null,
   log: Logger,
+  budgets: SessionContextBudgets = BOOT_BUDGETS,
 ) => {
   const replicaPath =
     process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath();
@@ -88,12 +110,8 @@ const buildSessionContext = async (
   }
   const [retrieveErr, result] = await attempt(() =>
     retrieveLocalContext(replica, query, {
-      topK: BOOT_MEMORY_TOP_K,
-      summaryCount: BOOT_SUMMARY_COUNT,
+      ...budgets,
       projectId: projectId ?? undefined,
-      // Boot runs on the session's first prompt: the active project's
-      // newest summary arrives even when nothing is near the prompt.
-      sessionStart: true,
       // MIM-85: local llama-server vector leg; null/cold → nothing retrieved.
       embedQuery: createEmbedQuery(),
     }),
@@ -127,12 +145,20 @@ export type BootContextOptions = {
   readonly projectPath: string;
   /** Consumer's logger — omitted means silent operation. */
   readonly log?: Logger;
+  /** Config to use in place of reading `config.json`. */
+  readonly config?: MimirConfig;
+  /**
+   * Pre-opened user-memory store to build the profile from, in place of
+   * opening `config.userMemoryDb`. Left open: the caller owns it.
+   */
+  readonly userMemoryStore?: UserMemoryStore | null;
 };
 
 /**
  * Assemble the full `<boot_context>` block for first-turn injection.
  * Returns the rendered XML string, or null when boot is not configured
- * (missing config.json) — caller treats null as "skip injection".
+ * (no config given and no config.json) — caller treats null as "skip
+ * injection".
  *
  * Errors during fetch / DB read are logged but never propagated. A
  * partial boot block (e.g. profile populated, session context fetch
@@ -140,7 +166,7 @@ export type BootContextOptions = {
  */
 export const assembleBootContext = async (opts: BootContextOptions) => {
   const log = opts.log ?? NOOP_LOGGER;
-  const config = await readConfig();
+  const config = opts.config ?? (await readConfig());
   if (!config) {
     log.debug("no config — skipping boot context");
     return null;
@@ -156,7 +182,11 @@ export const assembleBootContext = async (opts: BootContextOptions) => {
   ).catch(() => null);
 
   const [profile, sessionContext] = await Promise.all([
-    buildUserProfileSection(config.userMemoryDb, log),
+    buildUserProfileSection(
+      config.userMemoryDb,
+      opts.userMemoryStore ?? null,
+      log,
+    ),
     opts.promptText === undefined
       ? null
       : buildSessionContext(opts.promptText, projectId, log),

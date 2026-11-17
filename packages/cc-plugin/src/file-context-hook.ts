@@ -24,8 +24,11 @@
 
 import { link, mkdir, readdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
-import { buildLocalFileInfo } from "@mimir/plugin-core/cartographer/file-context";
+import {
+  fileContextSummary,
+  lookupFileInfo,
+  renderFileContext,
+} from "@mimir/plugin-core/cartographer/file-context-render";
 import {
   getOrResolveProjectId,
   resolveProjectRoot,
@@ -46,37 +49,7 @@ type HookInput = {
   readonly cwd?: string;
 };
 
-type Symbol = {
-  readonly kind: string;
-  readonly name: string;
-  readonly line: number;
-};
-
-type ImportEntry = { readonly target: string; readonly specifier: string };
-type DependentEntry = { readonly source: string; readonly specifier: string };
-
-type FileInfoResponse = {
-  readonly contentHash?: string;
-  readonly symbols?: readonly Symbol[];
-  readonly imports?: readonly ImportEntry[];
-  readonly dependents?: readonly DependentEntry[];
-  readonly memories?: string | null;
-  /** True memory count from the server. Older servers omit it. */
-  readonly memoryCount?: number;
-};
-
-/**
- * Memory count for the summary line. Prefers the server's memoryCount;
- * against older servers that omit it, counts top-level bullets in the
- * formatted string. Memories are multi-line, so a bare line count would
- * report one memory as dozens (nested bullets can still inflate the
- * fallback — the field is the fix, this is the degraded mode).
- */
-export const countMemories = (info: FileInfoResponse) => {
-  if (typeof info.memoryCount === "number") return info.memoryCount;
-  if (!info.memories) return 0;
-  return info.memories.split("\n").filter((l) => l.startsWith("- ")).length;
-};
+export { countMemories } from "@mimir/plugin-core/cartographer/file-context-render";
 
 const STATE_DIR = "file-context-state";
 const RECORD_SUFFIX = ".json";
@@ -188,66 +161,6 @@ const extractFilePath = (input: HookInput) => {
   return typeof fp === "string" && fp.length > 0 ? fp : null;
 };
 
-const localFileInfo = async (
-  rootPath: string,
-  filePath: string,
-  projectId: string | null,
-) => {
-  const [err, info] = await attempt(() =>
-    buildLocalFileInfo({
-      rootPath,
-      filePath,
-      projectId,
-      // MIM-85 vector leg; a cold or absent embedder gives no memories.
-      embedQuery: createEmbedQuery(),
-    }),
-  );
-  if (err) {
-    log.warn("local file-info failed", { filePath, error: err.message });
-    return null;
-  }
-  const payload: FileInfoResponse = info;
-  return payload;
-};
-
-const renderSymbols = (symbols: readonly Symbol[]) => {
-  if (symbols.length === 0) return "";
-  const lines = symbols.map((s) => `- ${s.kind} ${s.name} (line ${s.line})`);
-  return `<symbols>\n${lines.join("\n")}\n</symbols>`;
-};
-
-const renderImports = (imports: readonly ImportEntry[]) => {
-  if (imports.length === 0) return "";
-  const lines = imports.map((i) =>
-    i.specifier && i.specifier !== i.target
-      ? `- ${i.specifier} → ${i.target}`
-      : `- ${i.target}`,
-  );
-  return `<imports>\n${lines.join("\n")}\n</imports>`;
-};
-
-const renderDependents = (dependents: readonly DependentEntry[]) => {
-  if (dependents.length === 0) return "";
-  const lines = dependents.map((d) => `- ${d.source}`);
-  return `<dependents>\n${lines.join("\n")}\n</dependents>`;
-};
-
-const renderMemories = (memories: string | null | undefined) => {
-  if (!memories || memories.length === 0) return "";
-  return `<memories>\n${memories}\n</memories>`;
-};
-
-const buildBlock = (filePath: string, info: FileInfoResponse) => {
-  const sections = [
-    renderSymbols(info.symbols ?? []),
-    renderImports(info.imports ?? []),
-    renderDependents(info.dependents ?? []),
-    renderMemories(info.memories),
-  ].filter((s) => s.length > 0);
-  if (sections.length === 0) return "";
-  return `<file_context path="${filePath}">\n${sections.join("\n\n")}\n</file_context>`;
-};
-
 const emitInjection = (block: string, summary: string) => {
   process.stdout.write(
     JSON.stringify({
@@ -308,7 +221,12 @@ export const runFileContextHook = async () => {
   // hands us the same file via a path that round-trips differently.
   const relativeFilePath = toProjectRelative(projectRoot, filePath);
 
-  const info = await localFileInfo(projectRoot, relativeFilePath, projectId);
+  const info = await lookupFileInfo({
+    rootPath: projectRoot,
+    filePath: relativeFilePath,
+    projectId,
+    log,
+  });
   if (!info) return 0;
 
   // File not in cartographer index — no contentHash, no content to inject.
@@ -323,7 +241,7 @@ export const runFileContextHook = async () => {
     return 0;
   }
 
-  const block = buildBlock(filePath, info);
+  const block = renderFileContext(filePath, info);
   if (block.length === 0) {
     log.debug("file-info returned empty context — skipping injection", {
       filePath,
@@ -331,9 +249,7 @@ export const runFileContextHook = async () => {
     return 0;
   }
 
-  const dependentCount = info.dependents?.length ?? 0;
-  const memoryCount = countMemories(info);
-  const summary = `↻ File context: ${dependentCount} dependents, ${memoryCount} memories`;
+  const summary = fileContextSummary(info);
 
   // Claimed only once there is a block to emit, and given back if emitting
   // fails — a file is recorded as framed only when its block went out.
@@ -374,7 +290,7 @@ export const runFileContextHook = async () => {
     contentHash: info.contentHash,
     symbols: info.symbols?.length ?? 0,
     imports: info.imports?.length ?? 0,
-    dependents: dependentCount,
+    dependents: info.dependents?.length ?? 0,
     hasMemories: !!info.memories,
     blockChars: block.length,
   });

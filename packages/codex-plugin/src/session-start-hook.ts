@@ -25,7 +25,6 @@
  */
 
 import { spawn } from "node:child_process";
-import type { ParsedFileOutput } from "@mimir/plugin-core/cartographer/client";
 import { reconcileFromSharedConfig } from "@mimir/plugin-core/keys/cli";
 import {
   getOrResolveProjectId,
@@ -33,8 +32,8 @@ import {
 } from "@mimir/plugin-core/project";
 import { attempt } from "@mimir/plugin-core/result";
 import { readConfig } from "@mimir/plugin-core/shared-config";
+import { reconcileAndSync as bootSync } from "@mimir/plugin-core/sync/boot";
 import { syncFromSharedConfig } from "@mimir/plugin-core/sync/cli";
-import { errMessage } from "@mimir/plugin-core/util";
 import { readHookInput } from "./hook-input";
 import { createLogger } from "./logger";
 
@@ -84,131 +83,50 @@ export const runHook = async (
 };
 
 const reconcileAndSync = () =>
-  Promise.race([
-    (async () => {
-      const keys = await reconcileFromSharedConfig();
-      log.info("key reconcile", { ...keys });
-      return syncFromSharedConfig();
-    })(),
-    new Promise<{ status: "deadline" }>((resolve) =>
-      setTimeout(() => resolve({ status: "deadline" }), BOOT_SYNC_DEADLINE_MS),
-    ),
-  ]);
-
-const listGitFiles = async (projectPath: string) => {
-  // `--cached --others --exclude-standard` covers tracked files AND
-  // untracked-but-not-gitignored files — a full reindex must catch
-  // newly-added files that haven't been committed yet.
-  const proc = Bun.spawn(
-    ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
-    {
-      cwd: projectPath,
-      stdout: "pipe",
-      stderr: "pipe",
-    },
+  bootSync(
+    { log, deadlineMs: BOOT_SYNC_DEADLINE_MS },
+    { reconcile: reconcileFromSharedConfig, sync: syncFromSharedConfig },
   );
-  const [readErr, text] = await attempt(() => new Response(proc.stdout).text());
-  const exitCode = await proc.exited;
-  if (readErr || exitCode !== 0) {
-    log.warn("git ls-files failed", {
-      projectPath,
-      exitCode,
-      error: readErr?.message,
-    });
-    return [] as string[];
-  }
-  return text.split("\n").filter((f) => f.length > 0);
-};
 
 const reindex = async (projectPath: string) => {
   const start = Date.now();
 
   const config = await readConfig();
-  const cartographerBinary = config?.cartographerBinary;
-  if (!config || !cartographerBinary) {
+  if (!config?.cartographerBinary) {
     log.debug("no cartographer configured — skipping full reindex", {
       projectPath,
     });
     return;
   }
 
-  const files = await listGitFiles(projectPath);
-  if (files.length === 0) {
-    log.warn("no git-tracked files found — skipping full reindex", {
-      projectPath,
-    });
-    return;
-  }
-
-  log.info("starting full project reindex", {
+  const { reindexProject } = await import(
+    "@mimir/plugin-core/cartographer/reindex"
+  );
+  // Listed paths stay project-root-relative — the form the reindex and
+  // file-context hooks query with.
+  const outcome = await reindexProject({
     projectPath,
-    fileCount: files.length,
+    cartographerBinary: config.cartographerBinary,
+    log,
   });
-
-  const { spawnCartographer } = await import(
-    "@mimir/plugin-core/cartographer/client"
-  );
-  const { syncIndex } = await import("@mimir/plugin-core/cartographer/sync");
-
-  const [spawnErr, client] = await attempt(() =>
-    spawnCartographer(cartographerBinary, projectPath),
-  );
-  if (spawnErr || !client) {
-    log.error("cartographer spawn failed", {
-      projectPath,
-      error: spawnErr?.message,
-    });
-    return;
-  }
-
-  const parsed: ParsedFileOutput[] = [];
-  let parseFailures = 0;
-  for (const file of files) {
-    // git ls-files emits project-root-relative paths — the canonical form
-    // the local cart index stores, so lookups from the reindex and
-    // file-context hooks match.
-    const [err, result] = await attempt(() =>
-      client.parseFile(projectPath, file),
-    );
-    if (err) {
-      parseFailures++;
-      continue;
-    }
-    if (result) parsed.push(result);
-  }
-  client.kill();
-
-  if (parsed.length === 0) {
-    log.warn("no files parsed successfully", {
-      projectPath,
-      attempted: files.length,
-      parseFailures,
-    });
-    return;
-  }
+  if (outcome.status !== "synced") return;
 
   // Deterministic local project identity; no path, remote, or manifest
   // metadata crosses the server boundary.
-  const projectId = await getOrResolveProjectId(
-    config.serverUrl,
-    projectPath,
-    config.apiKey,
-  ).catch(() => null);
-  // Local write (MIM-91): full-scan replace drops deleted/moved files.
-  const result = await syncIndex(projectPath, parsed, "replace").catch(
-    (err) => {
-      log.error("syncIndex threw", { error: errMessage(err) });
-      return { ok: false, error: errMessage(err) };
-    },
+  const [idErr, projectId] = await attempt(() =>
+    getOrResolveProjectId(config.serverUrl, projectPath, config.apiKey),
   );
+  if (idErr) {
+    log.debug("project id unresolved", { projectPath, error: idErr.message });
+  }
 
   log.info("session-start reindex complete", {
     projectPath,
     projectId,
-    attempted: files.length,
-    parsed: parsed.length,
-    parseFailures,
-    syncOk: result.ok,
+    attempted: outcome.attempted,
+    parsed: outcome.parsed,
+    parseFailures: outcome.parseFailures,
+    syncOk: outcome.syncOk,
     elapsed: `${Date.now() - start}ms`,
   });
 };

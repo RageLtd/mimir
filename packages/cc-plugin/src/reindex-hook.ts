@@ -26,7 +26,6 @@ import {
   isInsideProject,
   toProjectRelative,
 } from "@mimir/plugin-core/project";
-import { errMessage } from "@mimir/plugin-core/util";
 import { readConfig } from "./config";
 import { createLogger } from "./logger";
 
@@ -186,42 +185,20 @@ const runWorker = async (
     return 0;
   }
 
-  const { spawnCartographer } = await import(
-    "@mimir/plugin-core/cartographer/client"
+  const { reindexFile } = await import(
+    "@mimir/plugin-core/cartographer/reindex"
   );
-  const { syncIndex } = await import("@mimir/plugin-core/cartographer/sync");
-
-  const client = await spawnCartographer(
-    config.cartographerBinary,
-    projectPath,
-  ).catch((err) => {
-    log.error("cartographer spawn failed", { error: errMessage(err) });
-    return null;
-  });
-  if (!client) return 0;
-
   // tool_input.file_path comes through as an absolute path from CC. The
   // cart_file row needs to land under the canonical relative form so
   // dependents queries can match across the session-start and reindex
-  // paths — see Slice 1 plan, "Path representation".
-  const relativePath = toProjectRelative(projectPath, filePath);
-  const parsed = await client
-    .parseFile(projectPath, relativePath)
-    .catch((err) => {
-      log.error("parseFile failed", { filePath, error: errMessage(err) });
-      return null;
-    });
-  client.kill();
-  if (!parsed) return 0;
-
-  // Single-file reindex MUST use upsert mode — replace mode would wipe
-  // the project's entire local index on every Edit and leave only the one
-  // file we just parsed. The SessionStart hook owns full-project replace.
-  // Local write (MIM-91): no server, no projectId — rootPath is the key.
-  const result = await syncIndex(projectPath, [parsed], "upsert");
-  if (!result.ok) {
-    log.error("syncIndex returned !ok", { filePath, error: result.error });
-  }
+  // paths — see Slice 1 plan, "Path representation". Failures are logged
+  // by reindexFile; the worker always exits 0.
+  await reindexFile({
+    projectPath,
+    filePath: toProjectRelative(projectPath, filePath),
+    cartographerBinary: config.cartographerBinary,
+    log,
+  });
   return 0;
 };
 

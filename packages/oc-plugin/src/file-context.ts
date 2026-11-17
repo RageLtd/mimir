@@ -16,35 +16,19 @@
  * file's content_hash, so the comparison is exact.
  */
 
-import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
-import { buildLocalFileInfo } from "@mimir/plugin-core/cartographer/file-context";
+import {
+  countMemories,
+  type FileInfoResponse,
+  lookupFileInfo,
+  renderFileContext,
+} from "@mimir/plugin-core/cartographer/file-context-render";
+import type { Logger } from "@mimir/plugin-core/logger";
 import {
   getOrResolveProjectId,
   toProjectRelative,
 } from "@mimir/plugin-core/project";
 import { errMessage } from "@mimir/plugin-core/util";
 import type { MimirConfig } from "./config";
-
-// ── Response shape (narrow) ──
-
-type FileInfoResponse = {
-  readonly contentHash?: string;
-  readonly symbols?: ReadonlyArray<{
-    readonly kind: string;
-    readonly name: string;
-    readonly line: number;
-  }>;
-  readonly imports?: ReadonlyArray<{
-    readonly target: string;
-    readonly specifier: string;
-  }>;
-  readonly dependents?: ReadonlyArray<{
-    readonly source: string;
-    readonly specifier: string;
-  }>;
-  readonly memories?: string | null;
-  readonly memoryCount?: number;
-};
 
 // ── OpenCode read tool shape (narrow) ──
 
@@ -80,83 +64,6 @@ type FileContextCache = Map<string, CacheEntry>;
  */
 const createFileContextCache = (): FileContextCache => new Map();
 
-// ── Render ──
-
-const renderSymbols = (
-  symbols: NonNullable<FileInfoResponse["symbols"]>,
-): string => {
-  if (symbols.length === 0) return "";
-  const lines = symbols.map((s) => `- ${s.kind} ${s.name} (line ${s.line})`);
-  return `<symbols>\n${lines.join("\n")}\n</symbols>`;
-};
-
-const renderImports = (
-  imports: NonNullable<FileInfoResponse["imports"]>,
-): string => {
-  if (imports.length === 0) return "";
-  const lines = imports.map((i) =>
-    i.specifier && i.specifier !== i.target
-      ? `- ${i.specifier} → ${i.target}`
-      : `- ${i.target}`,
-  );
-  return `<imports>\n${lines.join("\n")}\n</imports>`;
-};
-
-const renderDependents = (
-  dependents: NonNullable<FileInfoResponse["dependents"]>,
-): string => {
-  if (dependents.length === 0) return "";
-  const lines = dependents.map((d) => `- ${d.source}`);
-  return `<dependents>\n${lines.join("\n")}\n</dependents>`;
-};
-
-const renderMemories = (memories: string | null | undefined): string => {
-  if (!memories || memories.length === 0) return "";
-  return `<memories>\n${memories}\n</memories>`;
-};
-
-const countMemories = (info: FileInfoResponse): number => {
-  if (typeof info.memoryCount === "number") return info.memoryCount;
-  if (!info.memories) return 0;
-  return info.memories.split("\n").filter((l) => l.startsWith("- ")).length;
-};
-
-const renderFileContext = (
-  filePath: string,
-  info: FileInfoResponse,
-): string => {
-  const sections = [
-    renderSymbols(info.symbols ?? []),
-    renderImports(info.imports ?? []),
-    renderDependents(info.dependents ?? []),
-    renderMemories(info.memories),
-  ].filter((s) => s.length > 0);
-  if (sections.length === 0) return "";
-  return `<file_context path="${filePath}">\n${sections.join("\n\n")}\n</file_context>`;
-};
-
-// ── Local lookup ──
-
-/**
- * Build file-info from the local cart index + replica. Returns null on
- * any failure — the caller treats that as "no context available, don't
- * augment".
- */
-const localFileInfo = async (
-  rootPath: string,
-  filePath: string,
-  projectId: string | null,
-) => {
-  const info: FileInfoResponse | null = await buildLocalFileInfo({
-    rootPath,
-    filePath,
-    projectId,
-    // MIM-85 vector leg; a cold or absent embedder gives no memories.
-    embedQuery: createEmbedQuery(),
-  }).catch(() => null);
-  return info;
-};
-
 // ── Public entry ──
 
 /**
@@ -174,12 +81,7 @@ export const augmentReadOutput = async (
   output: ReadToolOutput,
   projectPath: string,
   config: MimirConfig,
-  log: {
-    readonly debug: (message: string, context?: unknown) => void;
-    readonly info: (message: string, context?: unknown) => void;
-    readonly warn: (message: string, context?: unknown) => void;
-    readonly error: (message: string, context?: unknown) => void;
-  },
+  log: Logger,
   cache: FileContextCache,
 ): Promise<void> => {
   // Only augment the read tool. Other tools (write, edit, bash, etc.)
@@ -209,7 +111,12 @@ export const augmentReadOutput = async (
   // The index stores project-relative paths — normalize before lookup.
   const relativeFilePath = toProjectRelative(projectPath, filePath);
   const cached = cache.get(filePath);
-  const info = await localFileInfo(projectPath, relativeFilePath, projectId);
+  const info = await lookupFileInfo({
+    rootPath: projectPath,
+    filePath: relativeFilePath,
+    projectId,
+    log,
+  });
   if (!info) return;
 
   // File not in the cartographer index yet — nothing to augment.

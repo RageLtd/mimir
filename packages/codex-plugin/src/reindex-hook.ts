@@ -25,7 +25,6 @@ import {
   toProjectRelative,
 } from "@mimir/plugin-core/project";
 import { readConfig } from "@mimir/plugin-core/shared-config";
-import { errMessage } from "@mimir/plugin-core/util";
 import { readHookInput } from "./hook-input";
 import { createLogger } from "./logger";
 import { editedFilePaths } from "./tool-map";
@@ -161,40 +160,19 @@ const runWorker = async (projectPath: string, filePath: string) => {
     return 0;
   }
 
-  const { spawnCartographer } = await import(
-    "@mimir/plugin-core/cartographer/client"
+  const { reindexFile } = await import(
+    "@mimir/plugin-core/cartographer/reindex"
   );
-  const { syncIndex } = await import("@mimir/plugin-core/cartographer/sync");
-
-  const client = await spawnCartographer(
-    config.cartographerBinary,
-    projectPath,
-  ).catch((err) => {
-    log.error("cartographer spawn failed", { error: errMessage(err) });
-    return null;
-  });
-  if (!client) return 0;
-
   // apply_patch headers carry absolute paths; the cart_file row needs the
   // canonical project-relative form so dependents queries match across
-  // the session-start and reindex paths.
-  const relativePath = toProjectRelative(projectPath, filePath);
-  const parsed = await client
-    .parseFile(projectPath, relativePath)
-    .catch((err) => {
-      log.error("parseFile failed", { filePath, error: errMessage(err) });
-      return null;
-    });
-  client.kill();
-  if (!parsed) return 0;
-
-  // Single-file reindex MUST use upsert mode — replace mode would wipe
-  // the project's entire local index on every edit. The SessionStart
-  // hook owns full-project replace.
-  const result = await syncIndex(projectPath, [parsed], "upsert");
-  if (!result.ok) {
-    log.error("syncIndex returned !ok", { filePath, error: result.error });
-  }
+  // the session-start and reindex paths. Failures are logged by
+  // reindexFile; the worker always exits 0.
+  await reindexFile({
+    projectPath,
+    filePath: toProjectRelative(projectPath, filePath),
+    cartographerBinary: config.cartographerBinary,
+    log,
+  });
   return 0;
 };
 
