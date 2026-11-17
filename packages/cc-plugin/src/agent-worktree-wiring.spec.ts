@@ -10,11 +10,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 const CLI = join(import.meta.dir, "cli.ts");
+// Not the system temp dir: the guard lets any agent delete under it, so a
+// fixture there cannot show a delete being refused. Gitignored, outside src.
+const FIXTURES = join(import.meta.dir, "..", ".cache", "test-fixtures");
 const AGENT = "a0123456789abcdef";
 const SESSION = "cc-agent-worktree-wiring";
 const DENY = '"permissionDecision":"deny"';
@@ -107,7 +109,8 @@ const bash = (command: string, extra: object = {}) =>
   toolCall({ tool_name: "Bash", tool_input: { command }, ...extra });
 
 beforeEach(async () => {
-  dir = realpathSync(mkdtempSync(join(tmpdir(), "mimir-cc-agent-wt-")));
+  mkdirSync(FIXTURES, { recursive: true });
+  dir = realpathSync(mkdtempSync(join(FIXTURES, "mimir-cc-agent-wt-")));
   repo = join(dir, "repo");
   home = join(dir, "home");
   worktree = join(repo, ".claude", "worktrees", `agent-${AGENT}`);
