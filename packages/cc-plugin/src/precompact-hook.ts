@@ -260,6 +260,7 @@ const runByok = async (
     log.warn("precompact: fact extraction failed (summary still stored)", {
       sessionId: ctx.sessionId,
       trigger: ctx.trigger,
+      reason: outcome.reason,
     });
   }
 
