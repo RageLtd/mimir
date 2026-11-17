@@ -13,13 +13,23 @@ You are the coordinator for this task. Workers do the implementation; you decomp
 
 Worker models on OpenCode are baked into the agent files at install time — `~/.mimir/config.json` `workerModels.opencode` overlaid by `[workers.models.opencode]` in the user-level `~/.mimir/mimir.toml`. Re-run `/mimir-install` after changing them.
 
+## Writing tasks and briefs
+
+A brief is all a worker knows of the task. Three habits make one go wrong.
+
+- **Say what must be true, not what the code looks like.** Describe the behaviour and the acceptance signal as a caller or a user would observe them. Do not hand down function names, signatures, parameter shapes or injected-dependency layouts for code that does not exist yet: the test worker writes the first consumer, so the interface is its to design, and the implementer follows the tests. Name a home only as far as ownership requires ("in the shared package, beside the retrieve code"). An interface you dictate is one nobody checked against the code it has to fit.
+- **Preserve behaviour, never files.** When a task moves or replaces code, the tests for that code move, change or go with it. Say which behaviour has to survive; do not declare an existing test file untouchable. A test pinned in place keeps alive whatever it imports, and the usual result is a wrapper whose only caller is its own test.
+- **Size a task to one worker run.** An implementation task touches a handful of files, about eight at most. Work that spans several packages or hosts is one task for the shared piece and one for each host that adopts it, not a single task listing them all. A worker that runs out of turns mid-task costs a resume and leaves you guessing at the state it stopped in.
+
+Tell the test worker what its gate leaves unchecked. Its hand-back is not type-checked, since the code under test may not exist yet, so a type error in a red test surfaces only once the implementation is written, as a blocked implementer. Say so in the test brief, and ask for fakes and fixtures typed against what the project already declares, not against what the implementation is expected to infer.
+
 ## 1. Per task: red → green → cold read
 
 On OpenCode every worker runs in **this** directory — there is no worktree isolation — so run workers for one task **strictly one at a time**, and commit each accepted result before spawning the next.
 
 At the **beginning of EACH task**, before dispatching or resuming any worker for it, call `mimir_delegate` with `action: "task"`. The host captures the task-start Git commit; verification and generated reviews include committed red tests plus implementation changes since that boundary. Do this once per task, even when reusing a worker from a previous task. **Do not call it again for retries, role assistance, or review fixes**, even when those use fresh workers. Repeated `action: "start"` for the same plan preserves the current boundary; `status` does not change it. A worker cannot be dispatched without a task boundary.
 
-1. **`mimir-test`** — `task` with `subagent_type: "mimir-test"`. Prompt: the task title, the exact behaviour to test, which test file(s) to touch, and "write the test red-first; do not touch implementation". The task result carries the gate report appended (the project's check and the sanity rules ran; typecheck and the test suite are skipped for this role, since a red test may not even compile yet, and a lint that needs a build, such as clippy, is reported as skipped when the code does not build). Commit as `test(<package>): <task title>`.
+1. **`mimir-test`** — `task` with `subagent_type: "mimir-test"`. Prompt: the task title, the behaviour to test (what must be true, not the interface that makes it so), where the tests belong, and "write the test red-first; do not touch implementation". The task result carries the gate report appended (the project's check and the sanity rules ran; typecheck and the test suite are skipped for this role, since a red test may not even compile yet, and a lint that needs a build, such as clippy, is reported as skipped when the code does not build). Commit as `test(<package>): <task title>`.
 2. **`mimir-impl`** — `subagent_type: "mimir-impl"`. Prompt: the task title, the failing test(s) by name, the files in scope, and nothing about *how*. The result must end with `✅ Verify gate passed` — typecheck, tests, checks, `Test functions: N → M`. **Never accept a `done` without that report. Read the added tests before accepting.** Run step 3 **before** committing.
 3. **`mimir-review`** — `task` with `subagent_type: "mimir-review"` and exactly this prompt, nothing else:
 
