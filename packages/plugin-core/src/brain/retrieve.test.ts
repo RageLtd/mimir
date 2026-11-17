@@ -331,7 +331,10 @@ describe("retrieveLocalContext", () => {
     expect(result.contextBlock).toContain("<playbooks>");
     expect(result.memoryCount).toBe(1);
     expect(result.summaryCount).toBe(1);
-    expect(result.injectedIds.sort()).toEqual(["memory:fact", "memory:sum"]);
+    expect([...result.injectedIds].sort()).toEqual([
+      "memory:fact",
+      "memory:sum",
+    ]);
   });
 
   test("another project's summary is not injected for an unrelated prompt", async () => {

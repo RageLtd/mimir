@@ -27,10 +27,10 @@ import {
   renderFileContext,
 } from "@mimir/plugin-core/cartographer/file-context-render";
 import {
-  getOrResolveProjectId,
   isInsideProject,
   resolveProjectRoot,
 } from "@mimir/plugin-core/project";
+import { activeProjectId } from "@mimir/plugin-core/project/active";
 import { attempt } from "@mimir/plugin-core/result";
 import {
   formatScopedRules,
@@ -203,11 +203,7 @@ export const runFileContextHook = async () => {
   // repository root internally). Used only as the memory-scoring
   // tiebreaker — the cart lookup itself is keyed by rootPath and needs no
   // server at all.
-  const projectId = await getOrResolveProjectId(
-    config.serverUrl,
-    cwd,
-    config.apiKey,
-  ).catch(() => null);
+  const projectId = await activeProjectId(cwd, { config });
 
   // Scoped rules and cartographer context are independent legs; a hook
   // emits one JSON object, so both are computed first and emitted once.

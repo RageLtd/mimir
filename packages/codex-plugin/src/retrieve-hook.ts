@@ -23,23 +23,11 @@
 
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
-import { retrieveLocalContext } from "@mimir/plugin-core/brain/retrieve";
 import {
-  getOrResolveProjectId,
-  readProjectNames,
-} from "@mimir/plugin-core/project";
-import { attempt } from "@mimir/plugin-core/result";
-import {
-  readInjectedIds,
-  recordInjectedIds,
-} from "@mimir/plugin-core/retrieve-state";
-import { readConfig } from "@mimir/plugin-core/shared-config";
-import {
-  createOrgReplica,
-  defaultOrgReplicaPath,
-} from "@mimir/plugin-core/store/org-replica";
-import { errMessage, mimirHome } from "@mimir/plugin-core/util";
+  promptContextOutput,
+  retrieveForPrompt,
+} from "@mimir/plugin-core/brain/retrieve-prompt";
+import { mimirHome } from "@mimir/plugin-core/util";
 import { readHookInput } from "./hook-input";
 import { createLogger } from "./logger";
 
@@ -62,25 +50,6 @@ const ensureMarker = async (sessionId: string) => {
   await mkdir(dirname(path), { recursive: true }).catch(() => undefined);
   await Bun.write(path, JSON.stringify({ initialized: Date.now() }));
   return false;
-};
-
-const EMBEDDER_UNAVAILABLE_STATUS =
-  "↻ Retrieval skipped: the embedder gave no vector";
-
-const emitInjection = (block: string, status: string) => {
-  process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: "UserPromptSubmit",
-        additionalContext: block,
-      },
-      systemMessage: status,
-    }),
-  );
-};
-
-const emitStatus = (status: string) => {
-  process.stdout.write(JSON.stringify({ systemMessage: status }));
 };
 
 /**
@@ -108,103 +77,18 @@ export const runRetrieveHook = async () => {
     return 0;
   }
 
-  const replicaPath =
-    process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath();
-  const [openErr, replica] = await attempt(async () =>
-    createOrgReplica(replicaPath),
-  );
-  if (openErr) {
-    log.warn("replica open failed — no injection", {
-      replicaPath,
-      error: openErr.message,
-    });
-    return 0;
-  }
-
-  // Project id for the wider same-project gate + playbook scope + the
-  // <active_project> prefix. Disk-cached after first resolution; the
-  // config/server is only consulted on a cache miss.
-  const config = await readConfig();
-  const projectId = config
-    ? await getOrResolveProjectId(config.serverUrl, cwd, config.apiKey).catch(
-        () => null,
-      )
-    : null;
-
-  // Rows already in this session's context window are not sent again.
-  // Without a session id there is no window to track: nothing is skipped
-  // and nothing recorded.
-  const stateId = input.session_id;
-  const [seenErr, seen] = await attempt(async () =>
-    stateId === undefined ? new Set<string>() : readInjectedIds(stateId),
-  );
-  if (seenErr) {
-    log.warn("retrieve state unreadable — nothing is skipped this prompt", {
-      sessionId,
-      error: seenErr.message,
-    });
-  }
-
-  const [retrieveErr, result] = await attempt(async () =>
-    retrieveLocalContext(replica, prompt, {
-      projectId: projectId ?? undefined,
-      embedQuery: createEmbedQuery(),
-      exclude: seen ?? new Set<string>(),
-      projectNames: await readProjectNames(),
-    }),
-  );
-  replica.close();
-  if (retrieveErr) {
-    log.warn("local retrieval failed", { error: errMessage(retrieveErr) });
-    return 0;
-  }
-
-  if (result.embedderUnavailable) {
-    log.warn(
-      "the embedder gave no query vector — memories and summaries not retrieved",
-      { sessionId },
-    );
-  }
-
-  if (result.contextBlock.length === 0) {
-    if (result.embedderUnavailable) emitStatus(EMBEDDER_UNAVAILABLE_STATUS);
-    log.debug("empty retrieval — no memories or summaries to inject");
-    return 0;
-  }
-
-  // Prepend the project UUID so the model can pass it to MCP tools.
-  // Re-injected every turn so it survives compaction.
-  const projectPrefix = projectId
-    ? `<active_project id="${projectId}" />\n`
-    : "";
-  const contextBlock = `${projectPrefix}${result.contextBlock}`;
-
-  emitInjection(
-    contextBlock,
-    result.embedderUnavailable
-      ? EMBEDDER_UNAVAILABLE_STATUS
-      : `↻ Retrieved ${result.memoryCount} memories / ${result.summaryCount} summaries (local)`,
-  );
-
-  const [recordErr] = await attempt(async () => {
-    if (stateId !== undefined) {
-      await recordInjectedIds(stateId, result.injectedIds);
-    }
+  // No window reset and no session start: compaction and the first prompt
+  // are not tracked here, so no summary is ever owed. Without a session id
+  // there is no window to track: nothing is skipped and nothing recorded.
+  const outcome = await retrieveForPrompt({
+    sessionId: input.session_id,
+    cwd,
+    prompt,
+    log,
   });
-  if (recordErr) {
-    log.warn("retrieve state not saved — these rows may be sent again", {
-      sessionId,
-      error: recordErr.message,
-    });
-  }
+  if (outcome.status !== "retrieved") return 0;
 
-  log.info("retrieved context injected (local replica)", {
-    sessionId,
-    projectId,
-    memoryCount: result.memoryCount,
-    summaryCount: result.summaryCount,
-    chars: result.contextBlock.length,
-  });
-
+  const output = promptContextOutput(outcome.result, outcome);
+  if (output !== null) process.stdout.write(JSON.stringify(output));
   return 0;
 };

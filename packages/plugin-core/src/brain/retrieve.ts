@@ -385,7 +385,7 @@ export const retrieveLocalContext = async (
     playbooks,
   );
 
-  return {
+  const context: RetrievedContext = {
     contextBlock:
       parts.length > 0
         ? `<retrieved_context>\n${parts.join("\n\n")}\n</retrieved_context>`
@@ -396,4 +396,5 @@ export const retrieveLocalContext = async (
     embedderUnavailable: admitted.embedderUnavailable,
     summaryDeferred,
   };
+  return context;
 };

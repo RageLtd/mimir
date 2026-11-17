@@ -18,6 +18,7 @@
     "./store/cart-index": "./src/store/cart-index.ts",
     "./store/session-journal": "./src/store/session-journal.ts",
     "./brain/retrieve": "./src/brain/retrieve.ts",
+    "./brain/retrieve-prompt": "./src/brain/retrieve-prompt.ts",
     "./brain/embedder": "./src/brain/embedder.ts",
     "./brain/embedder-install": "./src/brain/embedder-install.ts",
     "./brain/backfill": "./src/brain/backfill.ts",
@@ -26,6 +27,7 @@
     "./brain/summarize": "./src/brain/summarize.ts",
     "./brain/hygiene": "./src/brain/hygiene.ts",
     "./brain/compaction-plan": "./src/brain/compaction-plan.ts",
+    "./brain/fact-store": "./src/brain/fact-store.ts",
     "./keys/cli": "./src/keys/cli.ts",
     "./keys/flows": "./src/keys/flows.ts",
     "./keys/client": "./src/keys/client.ts",
@@ -55,6 +57,7 @@
     "./verify": "./src/verify/index.ts",
     "./workers": "./src/workers/index.ts",
     "./project": "./src/project/index.ts",
+    "./project/active": "./src/project/active.ts",
     "./voice-anchor": "./src/voice-anchor.ts",
     "./retrieve-state": "./src/retrieve-state.ts",
     "./summary-pending": "./src/summary-pending.ts"

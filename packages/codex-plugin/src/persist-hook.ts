@@ -16,17 +16,12 @@
  * Codex from finishing the turn — far worse than a lost extraction cycle.
  */
 
-import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
 import { extractFromConversation } from "@mimir/plugin-core/brain/extract";
-import { getOrResolveProjectId } from "@mimir/plugin-core/project";
+import { openFactStore, storeFacts } from "@mimir/plugin-core/brain/fact-store";
+import { activeProjectId } from "@mimir/plugin-core/project/active";
 import { attempt } from "@mimir/plugin-core/result";
-import { extractionConfig, readConfig } from "@mimir/plugin-core/shared-config";
-import {
-  createOrgReplica,
-  defaultOrgReplicaPath,
-} from "@mimir/plugin-core/store/org-replica";
+import { extractionConfig } from "@mimir/plugin-core/shared-config";
 import { syncAfterDistill } from "@mimir/plugin-core/sync/after-distill";
-import { storeTyped } from "@mimir/plugin-core/tools/org-memory";
 import { readHookInput } from "./hook-input";
 import { createLogger } from "./logger";
 import { readDelta, readWatermark, writeWatermark } from "./rollout-delta";
@@ -132,36 +127,11 @@ const persistTurn = async ({
   }
 
   // Project id for memory attribution — disk-cached after first resolution.
-  const config = await readConfig();
-  const projectId = config
-    ? await getOrResolveProjectId(config.serverUrl, cwd, config.apiKey).catch(
-        () => null,
-      )
-    : null;
+  const projectId = await activeProjectId(cwd);
 
-  const replica = createOrgReplica(
-    process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
-  );
-  const embedQuery = createEmbedQuery();
-
-  let stored = 0;
-  let duplicates = 0;
-  for (const memory of outcome.memories) {
-    const [storeErr, result] = await attempt(() =>
-      storeTyped(replica, embedQuery, {
-        content: memory,
-        type: "fact",
-        ...(projectId ? { project: projectId } : {}),
-      }),
-    );
-    if (storeErr) {
-      log.warn("memory store failed", { error: storeErr.message });
-      continue;
-    }
-    if (result.stored) stored++;
-    else duplicates++;
-  }
-  replica.close();
+  const store = await openFactStore(projectId);
+  const { stored, duplicates } = await storeFacts(store, outcome.memories, log);
+  store.replica.close();
 
   await writeWatermark(sessionId, newOffset);
 

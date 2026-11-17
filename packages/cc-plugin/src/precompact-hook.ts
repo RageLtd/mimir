@@ -40,7 +40,6 @@
  */
 
 import type { ModelMessage } from "@ai-sdk/provider-utils";
-import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
 import {
   type ExtractionConfig,
   extractFromConversation,
@@ -48,19 +47,18 @@ import {
   prepareExtraction,
 } from "@mimir/plugin-core/brain/extract";
 import {
+  type FactStore,
+  openFactStore,
+  storeFacts,
+} from "@mimir/plugin-core/brain/fact-store";
+import {
   prepareSummary,
   storeSummary,
   summarizeToReplica,
 } from "@mimir/plugin-core/brain/summarize";
-import { getOrResolveProjectId } from "@mimir/plugin-core/project";
-import { attempt } from "@mimir/plugin-core/result";
-import {
-  createOrgReplica,
-  defaultOrgReplicaPath,
-} from "@mimir/plugin-core/store/org-replica";
+import { activeProjectId } from "@mimir/plugin-core/project/active";
 import { syncAfterDistill } from "@mimir/plugin-core/sync/after-distill";
-import { storeTyped } from "@mimir/plugin-core/tools/org-memory";
-import { extractionConfig, readConfig } from "./config";
+import { extractionConfig } from "./config";
 import {
   answer,
   type Completions,
@@ -205,41 +203,12 @@ const settleOnStore = (
 };
 
 /** The replica, embedder and project attribution every store path needs. */
-const openStore = async (cwd: string) => {
-  const config = await readConfig();
-  const projectId = config
-    ? await getOrResolveProjectId(config.serverUrl, cwd, config.apiKey).catch(
-        () => null,
-      )
-    : null;
-  const replica = createOrgReplica(
-    process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
-  );
-  return { projectId, replica, embedQuery: createEmbedQuery() };
-};
+const openStore = async (cwd: string) =>
+  openFactStore(await activeProjectId(cwd));
 
 /** Store extracted facts; returns how many were new. */
-const storeFacts = async (
-  store: Awaited<ReturnType<typeof openStore>>,
-  memories: readonly string[],
-) => {
-  let stored = 0;
-  for (const memory of memories) {
-    const [storeErr, result] = await attempt(() =>
-      storeTyped(store.replica, store.embedQuery, {
-        content: memory,
-        type: "fact",
-        ...(store.projectId ? { project: store.projectId } : {}),
-      }),
-    );
-    if (storeErr) {
-      log.warn("memory store failed", { error: storeErr.message });
-      continue;
-    }
-    if (result.stored) stored++;
-  }
-  return stored;
-};
+const storeNewFacts = async (store: FactStore, memories: readonly string[]) =>
+  (await storeFacts(store, memories, log)).stored;
 
 const runByok = async (
   extraction: ExtractionConfig,
@@ -286,7 +255,7 @@ const runByok = async (
     closing: true,
   });
   if (outcome.ok && !outcome.skipped) {
-    extracted = await storeFacts(store, outcome.memories);
+    extracted = await storeNewFacts(store, outcome.memories);
   } else if (!outcome.ok) {
     log.warn("precompact: fact extraction failed (summary still stored)", {
       sessionId: ctx.sessionId,
@@ -332,7 +301,9 @@ const runStore = async (
       })
     : null;
   settleOnStore(ctx, summaryId, plan.summary);
-  const extracted = plan.memories ? await storeFacts(store, plan.memories) : 0;
+  const extracted = plan.memories
+    ? await storeNewFacts(store, plan.memories)
+    : 0;
   store.replica.close();
   answer(plan.advance);
 

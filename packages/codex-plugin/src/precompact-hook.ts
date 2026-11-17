@@ -27,19 +27,19 @@
  * Never blocks compaction — exit 0 unconditionally.
  */
 
-import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
 import { extractFromConversation } from "@mimir/plugin-core/brain/extract";
+import {
+  type FactStore,
+  openFactStore,
+  storeFacts,
+} from "@mimir/plugin-core/brain/fact-store";
 import { summarizeToReplica } from "@mimir/plugin-core/brain/summarize";
-import { getOrResolveProjectId } from "@mimir/plugin-core/project";
+import type { Logger } from "@mimir/plugin-core/logger";
+import { activeProjectId } from "@mimir/plugin-core/project/active";
 import { attempt } from "@mimir/plugin-core/result";
 import { clearInjectedIds } from "@mimir/plugin-core/retrieve-state";
-import { extractionConfig, readConfig } from "@mimir/plugin-core/shared-config";
-import {
-  createOrgReplica,
-  defaultOrgReplicaPath,
-} from "@mimir/plugin-core/store/org-replica";
+import { extractionConfig } from "@mimir/plugin-core/shared-config";
 import { syncAfterDistill } from "@mimir/plugin-core/sync/after-distill";
-import { storeTyped } from "@mimir/plugin-core/tools/org-memory";
 import { readHookInput } from "./hook-input";
 import { createLogger } from "./logger";
 import { runPreCompact } from "./precompact-runner";
@@ -61,32 +61,14 @@ type HookInput = {
   readonly trigger?: "manual" | "auto";
 };
 
-const resolveProjectId = async (cwd: string) => {
-  const config = await readConfig();
-  if (!config) return null;
-  return getOrResolveProjectId(config.serverUrl, cwd, config.apiKey).catch(
-    () => null,
-  );
-};
-
 /**
  * The replica, embedder and project id, opened on first use so a
  * caught-up compaction touches none of them; `close` is idempotent.
  */
 const lazyStore = (cwd: string) => {
-  let opened: {
-    readonly replica: ReturnType<typeof createOrgReplica>;
-    readonly embedQuery: ReturnType<typeof createEmbedQuery>;
-    readonly projectId: string | null;
-  } | null = null;
+  let opened: FactStore | null = null;
   const get = async () => {
-    opened ??= {
-      projectId: await resolveProjectId(cwd),
-      replica: createOrgReplica(
-        process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
-      ),
-      embedQuery: createEmbedQuery(),
-    };
+    opened ??= await openFactStore(await activeProjectId(cwd));
     return opened;
   };
   const close = () => {
@@ -97,27 +79,14 @@ const lazyStore = (cwd: string) => {
   return { get, close, projectId };
 };
 
-const storeFacts = async (
-  store: Awaited<ReturnType<ReturnType<typeof lazyStore>["get"]>>,
-  memories: readonly string[],
-) => {
-  let stored = 0;
-  for (const memory of memories) {
-    const [storeErr, result] = await attempt(() =>
-      storeTyped(store.replica, store.embedQuery, {
-        content: memory,
-        type: "fact",
-        ...(store.projectId ? { project: store.projectId } : {}),
-      }),
-    );
-    if (storeErr) {
-      log.warn("precompact: memory store failed", { error: storeErr.message });
-      continue;
-    }
-    if (result.stored) stored++;
-  }
-  return stored;
+// This hook's store failures read "precompact: memory store failed".
+const storeLog: Logger = {
+  ...log,
+  warn: (message, context) => log.warn(`precompact: ${message}`, context),
 };
+
+const storeNewFacts = async (store: FactStore, memories: readonly string[]) =>
+  (await storeFacts(store, memories, storeLog)).stored;
 
 /**
  * Entry point invoked from cli.ts when argv[2] === "precompact".
@@ -189,7 +158,7 @@ export const runPreCompactHook = async () => {
           return 0;
         }
         if (outcome.skipped) return 0;
-        return storeFacts(await store.get(), outcome.memories);
+        return storeNewFacts(await store.get(), outcome.memories);
       },
       sync: () => syncAfterDistill(log),
       close: store.close,

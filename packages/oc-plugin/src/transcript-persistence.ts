@@ -29,17 +29,12 @@ import {
   compactionOwed,
   settleCompaction,
 } from "@mimir/plugin-core/brain/compaction-plan";
-import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
 import { extractFromConversation } from "@mimir/plugin-core/brain/extract";
+import { openFactStore, storeFacts } from "@mimir/plugin-core/brain/fact-store";
 import { summarizeToReplica } from "@mimir/plugin-core/brain/summarize";
-import { getOrResolveProjectId } from "@mimir/plugin-core/project";
+import { activeProjectId } from "@mimir/plugin-core/project/active";
 import { attempt } from "@mimir/plugin-core/result";
-import {
-  createOrgReplica,
-  defaultOrgReplicaPath,
-} from "@mimir/plugin-core/store/org-replica";
 import { syncAfterDistill } from "@mimir/plugin-core/sync/after-distill";
-import { storeTyped } from "@mimir/plugin-core/tools/org-memory";
 import { errMessage } from "@mimir/plugin-core/util";
 import { extractionConfig, type MimirConfig } from "./config";
 import {
@@ -161,49 +156,15 @@ const endpointOrAdvance = async (
 };
 
 /** The replica, embedder and project attribution every store path needs. */
-const openStore = async ({ sessionID, projectPath, config, log }: Run) => {
+const openStore = async ({ sessionID, projectPath, config, log }: Run) =>
   // Project id for memory attribution — disk-cached after first resolution.
-  const projectId = await getOrResolveProjectId(
-    config.serverUrl,
-    projectPath,
-    config.apiKey,
-  ).catch((err) => {
-    log.warn("project id resolve failed", {
-      sessionID,
-      error: errMessage(err),
-    });
-    return null;
-  });
-  const replica = createOrgReplica(
-    process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
+  openFactStore(
+    await activeProjectId(projectPath, {
+      config,
+      log,
+      failure: { context: { sessionID } },
+    }),
   );
-  return { projectId, replica, embedQuery: createEmbedQuery() };
-};
-
-const storeFacts = async (
-  store: Awaited<ReturnType<typeof openStore>>,
-  memories: readonly string[],
-  log: TranscriptLogger,
-) => {
-  let stored = 0;
-  let duplicates = 0;
-  for (const memory of memories) {
-    const [storeErr, storeResult] = await attempt(() =>
-      storeTyped(store.replica, store.embedQuery, {
-        content: memory,
-        type: "fact",
-        ...(store.projectId ? { project: store.projectId } : {}),
-      }),
-    );
-    if (storeErr) {
-      log.warn("memory store failed", { error: storeErr.message });
-      continue;
-    }
-    if (storeResult.stored) stored++;
-    else duplicates++;
-  }
-  return { stored, duplicates };
-};
 
 /**
  * Idle: distil the delta's facts into the local replica via the

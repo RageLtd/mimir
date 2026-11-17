@@ -23,11 +23,8 @@ import {
   renderFileContext,
 } from "@mimir/plugin-core/cartographer/file-context-render";
 import type { Logger } from "@mimir/plugin-core/logger";
-import {
-  getOrResolveProjectId,
-  toProjectRelative,
-} from "@mimir/plugin-core/project";
-import { errMessage } from "@mimir/plugin-core/util";
+import { toProjectRelative } from "@mimir/plugin-core/project";
+import { activeProjectId } from "@mimir/plugin-core/project/active";
 import type { MimirConfig } from "./config";
 
 // ── OpenCode read tool shape (narrow) ──
@@ -94,19 +91,14 @@ export const augmentReadOutput = async (
   // Project id resolves via the shared plugin-core helper. Failure
   // here is non-fatal — we just persist the project path as the
   // legacy fallback key.
-  let projectId: string | null = null;
-  try {
-    projectId = await getOrResolveProjectId(
-      config.serverUrl,
-      projectPath,
-      config.apiKey,
-    );
-  } catch (err) {
-    log.warn("project id resolve failed for file-context", {
-      filePath,
-      error: errMessage(err),
-    });
-  }
+  const projectId = await activeProjectId(projectPath, {
+    config,
+    log,
+    failure: {
+      message: "project id resolve failed for file-context",
+      context: { filePath },
+    },
+  });
 
   // The index stores project-relative paths — normalize before lookup.
   const relativeFilePath = toProjectRelative(projectPath, filePath);

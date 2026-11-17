@@ -30,10 +30,10 @@ import {
   renderFileContext,
 } from "@mimir/plugin-core/cartographer/file-context-render";
 import {
-  getOrResolveProjectId,
   resolveProjectRoot,
   toProjectRelative,
 } from "@mimir/plugin-core/project";
+import { activeProjectId } from "@mimir/plugin-core/project/active";
 import { attempt } from "@mimir/plugin-core/result";
 import { mimirHome } from "@mimir/plugin-core/util";
 import { readConfig } from "./config";
@@ -209,11 +209,7 @@ export const runFileContextHook = async () => {
   // repository root internally). Used only as the memory-scoring
   // tiebreaker — the cart lookup itself is keyed by rootPath and needs no
   // server at all.
-  const projectId = await getOrResolveProjectId(
-    config.serverUrl,
-    cwd,
-    config.apiKey,
-  ).catch(() => null);
+  const projectId = await activeProjectId(cwd, { config });
 
   // Cart rows store project-relative paths. Query by the same
   // representation or every lookup misses. The dedup cache key uses the

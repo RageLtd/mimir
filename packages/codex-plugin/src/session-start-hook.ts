@@ -26,10 +26,8 @@
 
 import { spawn } from "node:child_process";
 import { reconcileFromSharedConfig } from "@mimir/plugin-core/keys/cli";
-import {
-  getOrResolveProjectId,
-  resolveProjectRoot,
-} from "@mimir/plugin-core/project";
+import { resolveProjectRoot } from "@mimir/plugin-core/project";
+import { activeProjectId } from "@mimir/plugin-core/project/active";
 import { attempt } from "@mimir/plugin-core/result";
 import { readConfig } from "@mimir/plugin-core/shared-config";
 import { reconcileAndSync as bootSync } from "@mimir/plugin-core/sync/boot";
@@ -113,12 +111,15 @@ const reindex = async (projectPath: string) => {
 
   // Deterministic local project identity; no path, remote, or manifest
   // metadata crosses the server boundary.
-  const [idErr, projectId] = await attempt(() =>
-    getOrResolveProjectId(config.serverUrl, projectPath, config.apiKey),
-  );
-  if (idErr) {
-    log.debug("project id unresolved", { projectPath, error: idErr.message });
-  }
+  const projectId = await activeProjectId(projectPath, {
+    config,
+    log,
+    failure: {
+      level: "debug",
+      message: "project id unresolved",
+      context: { projectPath },
+    },
+  });
 
   log.info("session-start reindex complete", {
     projectPath,

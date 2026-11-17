@@ -12,7 +12,7 @@ import {
   assembleBootContext as coreAssembleBootContext,
 } from "@mimir/plugin-core/brain/boot-context";
 import type { Logger } from "@mimir/plugin-core/logger";
-import { getOrResolveProjectId } from "@mimir/plugin-core/project";
+import { activeProjectId } from "@mimir/plugin-core/project/active";
 import type { UserMemoryStore } from "@mimir/plugin-core/store/user-memories";
 import type { MimirConfig } from "./config";
 
@@ -50,11 +50,7 @@ export const assembleBootContext = (opts: BootContextOptions) =>
  */
 export const retrieveTurnContext = async (opts: BootContextOptions) => {
   const { config, projectPath, promptText } = opts;
-  const projectId = await getOrResolveProjectId(
-    config.serverUrl,
-    projectPath,
-    config.apiKey,
-  ).catch(() => null);
+  const projectId = await activeProjectId(projectPath, { config });
   const block = await buildSessionContext(
     promptText,
     projectId,

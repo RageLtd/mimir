@@ -28,22 +28,16 @@
  */
 
 import type { ModelMessage } from "@ai-sdk/provider-utils";
-import { createEmbedQuery } from "@mimir/plugin-core/brain/embedder";
 import {
   type ExtractionConfig,
   extractFromConversation,
   parseExtraction,
   prepareExtraction,
 } from "@mimir/plugin-core/brain/extract";
-import { getOrResolveProjectId } from "@mimir/plugin-core/project";
-import { attempt } from "@mimir/plugin-core/result";
-import {
-  createOrgReplica,
-  defaultOrgReplicaPath,
-} from "@mimir/plugin-core/store/org-replica";
+import { openFactStore, storeFacts } from "@mimir/plugin-core/brain/fact-store";
+import { activeProjectId } from "@mimir/plugin-core/project/active";
 import { syncAfterDistill } from "@mimir/plugin-core/sync/after-distill";
-import { storeTyped } from "@mimir/plugin-core/tools/org-memory";
-import { extractionConfig, readConfig } from "./config";
+import { extractionConfig } from "./config";
 import {
   answer,
   type Completions,
@@ -126,39 +120,12 @@ type RunContext = {
 };
 
 /** Store extracted facts into the local replica, attributed to the project. */
-const storeFacts = async (memories: readonly string[], cwd: string) => {
+const storeProjectFacts = async (memories: readonly string[], cwd: string) => {
   // Project id for memory attribution — disk-cached after first resolution.
-  const config = await readConfig();
-  const projectId = config
-    ? await getOrResolveProjectId(config.serverUrl, cwd, config.apiKey).catch(
-        () => null,
-      )
-    : null;
-
-  const replica = createOrgReplica(
-    process.env.MIMIR_ORG_REPLICA_DB ?? defaultOrgReplicaPath(),
-  );
-  const embedQuery = createEmbedQuery();
-
-  let stored = 0;
-  let duplicates = 0;
-  for (const memory of memories) {
-    const [storeErr, result] = await attempt(() =>
-      storeTyped(replica, embedQuery, {
-        content: memory,
-        type: "fact",
-        ...(projectId ? { project: projectId } : {}),
-      }),
-    );
-    if (storeErr) {
-      log.warn("memory store failed", { error: storeErr.message });
-      continue;
-    }
-    if (result.stored) stored++;
-    else duplicates++;
-  }
-  replica.close();
-  return { projectId, stored, duplicates };
+  const store = await openFactStore(await activeProjectId(cwd));
+  const counts = await storeFacts(store, memories, log);
+  store.replica.close();
+  return { projectId: store.projectId, ...counts };
 };
 
 /** Store, settle the delta, then sync anything new. */
@@ -167,7 +134,10 @@ const storeAndSettle = async (
   ctx: RunContext,
   model: string,
 ) => {
-  const { projectId, stored, duplicates } = await storeFacts(memories, ctx.cwd);
+  const { projectId, stored, duplicates } = await storeProjectFacts(
+    memories,
+    ctx.cwd,
+  );
 
   answer(true);
 
