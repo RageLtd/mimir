@@ -281,15 +281,56 @@ describe("extractFromConversation gates", () => {
     );
   });
 
-  test("transport failure reports ok:false", async () => {
+  const substantive = [
+    user("a first message with plenty of words inside it".repeat(3)),
+    user("a second message with plenty of words inside it".repeat(3)),
+  ];
+
+  /** The failed outcome's reason, or why the outcome was not a failure. */
+  const failureReason = async (reply: () => Response) => {
+    const seen: { reason: string } = { reason: "extraction did not fail" };
+    await withStub(reply, async (config) => {
+      const outcome = await extractFromConversation(config, substantive);
+      if (!outcome.ok) seen.reason = outcome.reason;
+    });
+    return seen.reason;
+  };
+
+  test("transport failure reports ok:false and what failed", async () => {
     const outcome = await extractFromConversation(
       { baseUrl: "http://127.0.0.1:45991", model: "m" },
-      [
-        user("a first message with plenty of words inside it".repeat(3)),
-        user("a second message with plenty of words inside it".repeat(3)),
-      ],
+      substantive,
     );
     expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.reason).toStartWith("completion failed: ");
+  });
+
+  test("an HTTP error's status and detail are the reason", async () => {
+    expect(
+      await failureReason(() => new Response("overloaded", { status: 500 })),
+    ).toBe("completion failed: HTTP 500: overloaded");
+  });
+
+  test("a model that reasons its token limit away says so: no content, finish_reason length", async () => {
+    expect(
+      await failureReason(() =>
+        Response.json({
+          choices: [
+            {
+              finish_reason: "length",
+              message: { reasoning_content: "Let me think about this…" },
+            },
+          ],
+        }),
+      ),
+    ).toBe("completion returned empty content (finish_reason: length)");
+  });
+
+  test("a completion that is not a string array is named as one", async () => {
+    expect(await failureReason(() => completion('{"not": "an array"}'))).toBe(
+      "completion is not a JSON array of strings",
+    );
   });
 });
 
@@ -347,7 +388,8 @@ describe("prepareExtraction", () => {
       'Output format: ["memory 1", "memory 2", ...]',
     );
     expect(request.prompt).toBe(buildExtractionText(messages));
-    expect(request.maxTokens).toBe(2048);
+    // Room for a local reasoning model to think and still answer.
+    expect(request.maxTokens).toBe(16_384);
   });
 });
 

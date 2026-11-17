@@ -167,6 +167,7 @@ const runByok = async (
       sessionId: ctx.sessionId,
       messages: ctx.messages,
       model: extraction.model,
+      reason: outcome.reason,
     });
     return;
   }

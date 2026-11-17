@@ -70,7 +70,11 @@ Output:
 Output format: ["memory 1", "memory 2", ...]
 Return [] only if there is genuinely nothing technical or factual to extract.`;
 
-const EXTRACTION_MAX_TOKENS = 2048;
+/**
+ * A local reasoning model spends this on thinking before it answers: at
+ * 2048 it thought the whole limit away and returned no content.
+ */
+const EXTRACTION_MAX_TOKENS = 16_384;
 const EXTRACTION_TIMEOUT_MS = 60_000;
 const EXTRACTION_TEMPERATURE = 0.1;
 
@@ -80,24 +84,21 @@ const logErr = (msg: string) => {
 
 /** OpenAI Chat Completions response — serialisation boundary. */
 type ChatCompletionResponse = {
-  choices?: { message?: { content?: string } }[];
+  choices?: { finish_reason?: string; message?: { content?: string } }[];
+};
+
+type ChatOptions = {
+  readonly system: string;
+  readonly user: string;
+  readonly maxTokens: number;
+  readonly timeoutMs: number;
 };
 
 /**
- * One OpenAI-compatible chat completion against the user-chosen endpoint.
- * Shared by extraction and summarization (brain/summarize.ts) so the
- * transport, auth, and error behavior can't drift between the two.
- * Null on any failure.
+ * One OpenAI-compatible chat completion against the user-chosen endpoint:
+ * its content, or the reason there is none — for a caller that logs why.
  */
-export const completeChat = async (
-  config: ExtractionConfig,
-  opts: {
-    readonly system: string;
-    readonly user: string;
-    readonly maxTokens: number;
-    readonly timeoutMs: number;
-  },
-) => {
+const requestChat = async (config: ExtractionConfig, opts: ChatOptions) => {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -129,14 +130,31 @@ export const completeChat = async (
   });
 
   if (err) {
-    logErr(`completion failed: ${err.message}`);
-    return null;
+    return { content: null, reason: `completion failed: ${err.message}` };
   }
-  const content = res.choices?.[0]?.message?.content?.trim();
+  const choice = res.choices?.[0];
+  const content = choice?.message?.content?.trim();
   if (!content) {
-    logErr("completion returned empty content");
-    return null;
+    // `length` here is a model that spent its whole limit reasoning.
+    return {
+      content: null,
+      reason: `completion returned empty content (finish_reason: ${choice?.finish_reason ?? "none"})`,
+    };
   }
+  return { content, reason: null };
+};
+
+/**
+ * `requestChat` as extraction and summarization (brain/summarize.ts) share
+ * it, so the transport, auth, and error behavior can't drift between the
+ * two. Null on any failure, its reason on stderr.
+ */
+export const completeChat = async (
+  config: ExtractionConfig,
+  opts: ChatOptions,
+) => {
+  const { content, reason } = await requestChat(config, opts);
+  if (reason !== null) logErr(reason);
   return content;
 };
 
@@ -162,18 +180,20 @@ const extractionRequest = (conversationText: string) => ({
   maxTokens: EXTRACTION_MAX_TOKENS,
 });
 
+const chatOptions = (request: CompletionRequest, timeoutMs: number) =>
+  ({
+    system: request.system,
+    user: request.prompt,
+    maxTokens: request.maxTokens,
+    timeoutMs,
+  }) satisfies ChatOptions;
+
 /** Run a prepared request against the user-chosen endpoint. */
 export const completeRequest = (
   config: ExtractionConfig,
   request: CompletionRequest,
   timeoutMs: number,
-) =>
-  completeChat(config, {
-    system: request.system,
-    user: request.prompt,
-    maxTokens: request.maxTokens,
-    timeoutMs,
-  });
+) => completeChat(config, chatOptions(request, timeoutMs));
 
 /**
  * Parse an extraction completion into memory strings. NULL is a parse
@@ -363,8 +383,9 @@ export const prepareExtraction = (
 
 /**
  * Full pipeline: prepare → complete → parse. `ok: false` is transport or
- * parse failure — keep the watermark, retry next turn. Discriminants are
- * `as const` so the inferred union discriminates without an annotation.
+ * parse failure — keep the watermark, retry next turn — and carries its
+ * `reason` for the caller's log. Discriminants are `as const` so the
+ * inferred union discriminates without an annotation.
  */
 export const extractFromConversation = async (
   config: ExtractionConfig,
@@ -380,14 +401,24 @@ export const extractFromConversation = async (
     };
   }
 
-  const content = await completeRequest(
+  const failed = (reason: string) => ({
+    ok: false as const,
+    memories: null,
+    skipped: null,
+    reason,
+  });
+  const { content, reason } = await requestChat(
     config,
-    prepared.request,
-    EXTRACTION_TIMEOUT_MS,
+    chatOptions(prepared.request, EXTRACTION_TIMEOUT_MS),
   );
-  const memories = content === null ? null : parseExtraction(content);
+  if (content === null) {
+    logErr(reason);
+    return failed(reason);
+  }
+  // parseExtraction writes its own detail to stderr.
+  const memories = parseExtraction(content);
   if (memories === null) {
-    return { ok: false as const, memories: null, skipped: null };
+    return failed("completion is not a JSON array of strings");
   }
   return { ok: true as const, memories, skipped: null };
 };
