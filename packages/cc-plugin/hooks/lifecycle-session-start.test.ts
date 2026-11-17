@@ -55,7 +55,7 @@ test("the first prompt starts session-start with its session and cwd, no source"
   expect(more).toEqual([]);
   expect(run?.argv).toEqual([BIN, SESSION_START]);
   expect(run?.env).toEqual({ MIMIR_ACTIVE: "1" });
-  const payload = parsed(run?.stdin);
+  const payload = parsed(run?.payload);
   expect(payload).toEqual({ session_id: SESSION, cwd: CWD });
   expect("source" in payload).toBe(false);
   expect(statuses).not.toContainEqual(
@@ -128,7 +128,7 @@ test("a prompt after a replaced window starts neither again", async ($, on) => {
 
   // The reset itself is seen: retrieval is told and the boot block resent.
   expect(
-    runsOf(runs, "retrieve").map((r) => parsed(r.stdin).window_reset),
+    runsOf(runs, "retrieve").map((r) => parsed(r.payload).window_reset),
   ).toEqual([false, false, true]);
   expect(starts(runs)).toHaveLength(1);
   expect(pins(runs)).toHaveLength(1);
@@ -147,7 +147,7 @@ test("a prompt after the reanchor flag starts neither again", async ($, on) => {
   await submit("question 2");
 
   expect(
-    runsOf(runs, "retrieve").map((r) => parsed(r.stdin).window_reset),
+    runsOf(runs, "retrieve").map((r) => parsed(r.payload).window_reset),
   ).toEqual([false, true]);
   expect(starts(runs)).toHaveLength(1);
   expect(pins(runs)).toHaveLength(1);
@@ -195,7 +195,7 @@ test("the first prompt after a resume starts session-start again, with the resum
   await resumeTo(SESSION, RESUMED, RESUMED_CWD);
   await submit("back again");
 
-  const payloads = starts(runs).map((run) => parsed(run.stdin));
+  const payloads = starts(runs).map((run) => parsed(run.payload));
   expect(payloads).toEqual([
     { session_id: SESSION, cwd: CWD },
     { session_id: RESUMED, cwd: RESUMED_CWD },
@@ -229,7 +229,7 @@ test("resuming back to the first session is another resume and starts session-st
   await resumeTo(RESUMED, SESSION, CWD);
   await submit("home again");
 
-  const payloads = starts(runs).map((run) => parsed(run.stdin));
+  const payloads = starts(runs).map((run) => parsed(run.payload));
   expect(payloads).toEqual([
     { session_id: SESSION, cwd: CWD },
     { session_id: RESUMED, cwd: RESUMED_CWD },

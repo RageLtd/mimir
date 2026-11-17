@@ -24,9 +24,11 @@ import {
 } from "./__tests__/lifecycle-fixtures";
 import { anchorOf, type Message } from "./messages";
 import {
+  asRun,
   BIN,
   CWD,
   exited,
+  payloads,
   type Run,
   runsOf,
   SESSION,
@@ -56,8 +58,9 @@ const runs = (
 ) => {
   const seen: Run[] = [];
   const timeouts: Array<number | undefined> = [];
+  const written = payloads(on);
   on("process.run", (_, e) => {
-    seen.push({ argv: e.argv, stdin: e.init?.stdin, env: e.init?.env });
+    seen.push(asRun(written, e));
     timeouts.push(e.init?.timeoutMs);
     return answer();
   });
@@ -88,7 +91,7 @@ test("a session's end hands session-end the undistilled tail and no window, and 
   expect(runsEnded).toHaveLength(1);
   expect(runsEnded[0]?.argv).toEqual([BIN, SESSION_END]);
   expect(runsEnded[0]?.env).toEqual({ MIMIR_ACTIVE: "1" });
-  expect(parsed(runsEnded[0]?.stdin)).toEqual({
+  expect(parsed(runsEnded[0]?.payload)).toEqual({
     session_id: SESSION,
     cwd: CWD,
     reason: "prompt_input_exit",
@@ -98,7 +101,7 @@ test("a session's end hands session-end the undistilled tail and no window, and 
   expect(statuses).toEqual([]);
 });
 
-test("the tail is slimmed like a persist delta: media blocks never cross stdin", async ($, on) => {
+test("the tail is slimmed like a persist delta: media blocks never reach the binary", async ($, on) => {
   const pictured: Message = {
     role: "user",
     content: [
@@ -111,7 +114,7 @@ test("the tail is slimmed like a persist delta: media blocks never cross stdin",
   await $.session.end(ending());
 
   const [run] = runsOf(seen, SESSION_END);
-  const payload = parsed(run?.stdin);
+  const payload = parsed(run?.payload);
   expect(payload.messages).toEqual(turnTwo);
   expect("window" in payload).toBe(false);
 });
@@ -129,7 +132,7 @@ test("with everything distilled the run is still made, with messages []", async 
 
   const runsEnded = runsOf(seen, SESSION_END);
   expect(runsEnded).toHaveLength(1);
-  expect(parsed(runsEnded[0]?.stdin)).toEqual({
+  expect(parsed(runsEnded[0]?.payload)).toEqual({
     session_id: SESSION,
     cwd: CWD,
     reason: "prompt_input_exit",
@@ -149,7 +152,7 @@ test("with nothing distilled yet the whole conversation is the tail", async ($, 
   await $.session.end(ending());
 
   const [run] = runsOf(seen, SESSION_END);
-  expect(parsed(run?.stdin).messages).toEqual(whole);
+  expect(parsed(run?.payload).messages).toEqual(whole);
 });
 
 test("every reason runs session-end, a /clear included", async ($, on) => {
@@ -158,7 +161,7 @@ test("every reason runs session-end, a /clear included", async ($, on) => {
   for (const reason of REASONS) await $.session.end(ending(reason));
 
   const runsEnded = runsOf(seen, SESSION_END);
-  expect(runsEnded.map((run) => parsed(run.stdin).reason)).toEqual([
+  expect(runsEnded.map((run) => parsed(run.payload).reason)).toEqual([
     ...REASONS,
   ]);
 });
@@ -202,7 +205,7 @@ test("a conversation already summarised runs nothing; a turn past it runs with t
 
   const runsEnded = runsOf(seen, SESSION_END);
   expect(runsEnded).toHaveLength(1);
-  expect(parsed(runsEnded[0]?.stdin).messages).toEqual(turnThree);
+  expect(parsed(runsEnded[0]?.payload).messages).toEqual(turnThree);
 });
 
 /**
@@ -258,7 +261,7 @@ test("after a real compaction and a new turn, the end sends that turn as the tai
 
   const runsEnded = runsOf(seen, SESSION_END);
   expect(runsEnded).toHaveLength(1);
-  const payload = parsed(runsEnded[0]?.stdin);
+  const payload = parsed(runsEnded[0]?.payload);
   expect(payload.messages).toEqual(turnThree);
   expect("window" in payload).toBe(false);
 });
@@ -285,6 +288,7 @@ test("a run that throws shows one status line and the event passes on", async ($
   anchorState(on, anchorOf(turnOne));
   summarisedState(on);
   conversation(on, whole);
+  payloads(on);
   on("process.run", () => {
     throw new Error("ENOENT");
   });

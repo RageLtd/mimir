@@ -26,7 +26,7 @@ import type {
   Register,
   ToolCallInput,
 } from "claude-code";
-import { mimirCcArgv, mimirCcInit } from "./binary";
+import { type MimirCcCall, mimirCcCall } from "./binary";
 import { type Loop, parsePreToolUseOutput, toolPayload } from "./payload";
 
 const RULES_TIMEOUT_MS = 15_000;
@@ -78,6 +78,12 @@ export const handbackRewrite = (stdout: string) => {
   return typeof message === "string" ? { deny: undefined, message } : null;
 };
 
+/** Writes a call's payload file, then runs the binary on it (binary.ts). */
+const runBinary = ($: EngineInterface, call: MimirCcCall) =>
+  $.fs
+    .write(call.path, call.text)
+    .then(() => $.process.run(call.argv, call.init));
+
 const loopFor = async ($: EngineInterface, e: ToolCallInput) => {
   const [sessionId, cwd] = await Promise.all([$.session.id(), $.session.cwd()]);
   if (e.agentId === undefined) return { sessionId, cwd } satisfies Loop;
@@ -95,14 +101,8 @@ export const registerGate: Register = (on) => {
     const home = (await $.env.get("HOME")) ?? "";
     const payload = toolPayload(e, await loopFor($, e));
     const [rules, guard] = await Promise.allSettled([
-      $.process.run(
-        mimirCcArgv(home, "rules"),
-        mimirCcInit(payload, RULES_TIMEOUT_MS),
-      ),
-      $.process.run(
-        mimirCcArgv(home, "guard"),
-        mimirCcInit(payload, GUARD_TIMEOUT_MS),
-      ),
+      runBinary($, mimirCcCall(home, "rules", payload, RULES_TIMEOUT_MS)),
+      runBinary($, mimirCcCall(home, "guard", payload, GUARD_TIMEOUT_MS)),
     ]);
     const verdicts = [
       legVerdict("rules", rules),
@@ -129,9 +129,14 @@ export const registerGate: Register = (on) => {
   on("tool.call", { tool: HANDBACK_TOOL }, async ($, e, next) => {
     if (e.agentId === undefined) return next(e);
     const home = (await $.env.get("HOME")) ?? "";
-    const ran = await $.process.run(
-      mimirCcArgv(home, "verify"),
-      mimirCcInit(toolPayload(e, await loopFor($, e)), VERIFY_TIMEOUT_MS),
+    const ran = await runBinary(
+      $,
+      mimirCcCall(
+        home,
+        "verify",
+        toolPayload(e, await loopFor($, e)),
+        VERIFY_TIMEOUT_MS,
+      ),
     );
     if (ran.exitCode !== 0) {
       $.ui.status(`mimir: verify gate failed (exit ${ran.exitCode})`);

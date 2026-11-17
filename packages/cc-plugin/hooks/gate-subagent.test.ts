@@ -91,8 +91,8 @@ const handbackTool = (on: On) => {
   return handed;
 };
 
-const stdinOf = (run: { stdin?: string } | undefined) =>
-  JSON.parse(run?.stdin ?? "{}");
+const payloadOf = (run: { payload?: string } | undefined) =>
+  JSON.parse(run?.payload ?? "{}");
 
 const subagentPayload = (
   toolName: string,
@@ -117,8 +117,8 @@ test("inside a subagent, rules and guard get the session's cwd, the agent's id a
 
   expect(result.deny).toBeUndefined();
   const expected = subagentPayload("Bash", BASH_INPUT);
-  expect(runsOf(runs, "rules").map(stdinOf)).toEqual([expected]);
-  expect(runsOf(runs, "guard").map(stdinOf)).toEqual([expected]);
+  expect(runsOf(runs, "rules").map(payloadOf)).toEqual([expected]);
+  expect(runsOf(runs, "guard").map(payloadOf)).toEqual([expected]);
   expect(runsOf(runs, "rules")[0]?.argv).toEqual([BIN, "rules"]);
   expect(touched).toEqual([]);
 });
@@ -131,8 +131,8 @@ test("a subagent $.agent.list() does not name gets the unknown type", async ($, 
   await $.tool.call({ ...BASH, agentId: AGENT_ID });
 
   const expected = subagentPayload("Bash", BASH_INPUT, UNKNOWN_AGENT_TYPE);
-  expect(runsOf(runs, "rules").map(stdinOf)).toEqual([expected]);
-  expect(runsOf(runs, "guard").map(stdinOf)).toEqual([expected]);
+  expect(runsOf(runs, "rules").map(payloadOf)).toEqual([expected]);
+  expect(runsOf(runs, "guard").map(payloadOf)).toEqual([expected]);
   expect(touched).toEqual([]);
 });
 
@@ -150,8 +150,8 @@ test("on the main loop the payload carries the session's cwd and no agent", asyn
     tool_name: "Bash",
     tool_input: BASH_INPUT,
   };
-  expect(runsOf(runs, "rules").map(stdinOf)).toEqual([expected]);
-  expect(runsOf(runs, "guard").map(stdinOf)).toEqual([expected]);
+  expect(runsOf(runs, "rules").map(payloadOf)).toEqual([expected]);
+  expect(runsOf(runs, "guard").map(payloadOf)).toEqual([expected]);
   expect(touched).toEqual([]);
 });
 
@@ -164,7 +164,7 @@ test("a hand-back sends verify the session's cwd, the agent's id and its listed 
 
   const verify = runsOf(runs, "verify");
   expect(verify.map((run) => run.argv)).toEqual([[BIN, "verify"]]);
-  expect(verify.map(stdinOf)).toEqual([
+  expect(verify.map(payloadOf)).toEqual([
     subagentPayload(HANDBACK, { message: MESSAGE }),
   ]);
   expect(handed).toEqual([MESSAGE]);

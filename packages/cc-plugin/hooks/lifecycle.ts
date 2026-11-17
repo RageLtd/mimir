@@ -51,7 +51,7 @@ import type {
 } from "claude-code";
 import type { MimirAnchor, MimirPending } from "../types";
 import {
-  mimirCcArgv,
+  mimirCcCall,
   PERSIST_COMPLETION_TIMEOUT_MS,
   parseHookOutput,
 } from "./binary";
@@ -200,7 +200,10 @@ const detach = (
   const clear = () =>
     $.state.set(PENDING, null, { ifVersion: versions.pending });
   const host = {
-    run: (argv, init) => $.process.run(argv, init),
+    run: (call) =>
+      $.fs
+        .write(call.path, call.text)
+        .then(() => $.process.run(call.argv, call.init)),
     complete: (request) => $.model.complete(request),
     status: (text) => $.ui.status(text),
   } satisfies Host;
@@ -209,7 +212,9 @@ const detach = (
       .then((ran) => settle($, leg.name, ran, anchor, versions.distilled))
       .then((settled) => (settled ? onSettled() : undefined))
       .then(clear, (reason) => {
-        $.ui.status(`mimir: ${leg.name} run failed (${String(reason)})`);
+        // The reason leads: a status line is cut short, and the leg's name
+        // is the part a reader can do without.
+        $.ui.status(`mimir: ${String(reason)} (${leg.name} run failed)`);
         return clear();
       })
       .then(undefined, () => {
@@ -243,8 +248,8 @@ export const registerLifecycle: Register = (on) => {
       $,
       {
         name: "persist",
-        argv: mimirCcArgv(home, "persist"),
-        timeoutMs: PERSIST_TIMEOUT_MS,
+        call: (payload) =>
+          mimirCcCall(home, "persist", payload, PERSIST_TIMEOUT_MS),
         completionTimeoutMs: PERSIST_COMPLETION_TIMEOUT_MS,
       },
       await distillPayload($, delta),

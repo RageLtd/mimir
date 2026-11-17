@@ -4,12 +4,20 @@
  * The module runs in the engine's sandbox — no Node, no Bun, no bare
  * imports — so everything that touches sqlite, the embedder or the
  * cartographer stays in `~/.local/bin/mimir-cc`. Each leg is a subcommand
- * that reads a hook payload on stdin and answers with the same JSON the
+ * that reads a hook payload and answers with the same JSON the
  * command-hook contract uses.
  *
- * These helpers are pure on purpose: `claude plugin validate` follows `$`
- * only within one file, so a hook spells `$.process.run(argv, init)`
- * itself and this file only shapes the call and reads the answer.
+ * A payload goes by file, never on stdin. Where an organization manages
+ * Claude Code, the engine refuses a plugin's run whose argv or stdin so
+ * much as names a Claude Code settings file, and a payload is a
+ * conversation, a prompt or a tool's input: any of them may. So the module
+ * writes the payload under `~/.mimir/run/` and names the file in argv; the
+ * binary reads it and deletes it.
+ *
+ * These helpers never take `$`: `claude plugin validate` follows it only
+ * within one file, so a hook spells `$.fs.write(path, text)` and
+ * `$.process.run(argv, init)` itself and this file only shapes the call
+ * and reads the answer.
  */
 
 import type { ModelCompleteRequest, ModelCompleteResult } from "claude-code";
@@ -57,12 +65,37 @@ export const mimirCcArgv = (home: string, subcommand: string) => [
   subcommand,
 ];
 
-/** `init` for `$.process.run`: the payload (if any) on stdin, gates passed. */
-export const mimirCcInit = (payload: unknown, timeoutMs: number) => ({
+/** `init` for `$.process.run`: gates passed, and nothing on stdin. */
+export const mimirCcInit = (timeoutMs: number) => ({
   env: { MIMIR_ACTIVE: "1" },
   timeoutMs,
-  ...(payload === undefined ? {} : { stdin: JSON.stringify(payload) }),
 });
+
+/** Where a payload waits for the binary, under the developer's home. */
+const PAYLOAD_DIR = ".mimir/run";
+const PAYLOAD_FLAG = "--payload";
+
+/**
+ * One run of a subcommand with a payload: the file to write first (`text`
+ * at `path`, a name no other run shares), then `argv` and `init` for
+ * `$.process.run`.
+ */
+export const mimirCcCall = (
+  home: string,
+  subcommand: string,
+  payload: unknown,
+  timeoutMs: number,
+) => {
+  const path = `${home}/${PAYLOAD_DIR}/${subcommand}-${crypto.randomUUID()}.json`;
+  return {
+    path,
+    text: JSON.stringify(payload),
+    argv: [...mimirCcArgv(home, subcommand), PAYLOAD_FLAG, path],
+    init: mimirCcInit(timeoutMs),
+  };
+};
+
+export type MimirCcCall = ReturnType<typeof mimirCcCall>;
 
 export const parseHookOutput = (stdout: string) => {
   if (stdout.trim().length === 0) return {};

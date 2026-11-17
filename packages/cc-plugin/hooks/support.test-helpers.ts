@@ -11,7 +11,39 @@ export const BIN = `${HOME}/.local/bin/mimir-cc`;
 export const SESSION = "sess-1";
 export const CWD = "/work/repo";
 
-export type Run = { argv: readonly string[]; stdin?: string; env?: object };
+/**
+ * A binary run as its subcommand takes it: `argv` without the payload flag,
+ * and `payload` the text of the file that flag named.
+ */
+export type Run = { argv: readonly string[]; payload?: string; env?: object };
+
+const PAYLOAD_FLAG = "--payload";
+
+/** The payload files the module wrote (`$.fs.write`), by path. */
+export const payloads = (on: On) => {
+  const written = new Map<string, string>();
+  on("fs.write", (_, e) => {
+    written.set(e.path, e.text);
+    return { value: undefined };
+  });
+  return written;
+};
+
+/** One `process.run` as a Run, its payload read back from `written`. */
+export const asRun = (
+  written: ReadonlyMap<string, string>,
+  e: {
+    readonly argv: readonly string[];
+    readonly init?: { readonly env?: object };
+  },
+) => {
+  const at = e.argv.indexOf(PAYLOAD_FLAG);
+  return {
+    argv: at === -1 ? e.argv : e.argv.filter((_, i) => i < at || i > at + 1),
+    payload: at === -1 ? undefined : written.get(e.argv[at + 1] ?? ""),
+    env: e.init?.env,
+  } satisfies Run;
+};
 
 export const exited = (exitCode: number, stdout = "") => ({
   value: {
@@ -98,8 +130,9 @@ export const binary = (
   answer: (subcommand: string) => ReturnType<typeof exited> = () => exited(0),
 ) => {
   const runs: Run[] = [];
+  const written = payloads(on);
   on("process.run", (_, e) => {
-    runs.push({ argv: e.argv, stdin: e.init?.stdin, env: e.init?.env });
+    runs.push(asRun(written, e));
     return answer(e.argv[1] ?? "");
   });
   return runs;

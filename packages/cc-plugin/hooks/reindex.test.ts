@@ -32,7 +32,7 @@ test("after a write lands, reindex gets the PostToolUse payload and the result s
   expect(runsOf(runs, "reindex")).toEqual([
     {
       argv: [BIN, "reindex"],
-      stdin: JSON.stringify({
+      payload: JSON.stringify({
         session_id: SESSION,
         hook_event_name: "PostToolUse",
         cwd: CWD,

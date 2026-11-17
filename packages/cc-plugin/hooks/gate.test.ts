@@ -7,7 +7,9 @@ import {
   CWD,
   denied,
   exited,
+  HOME,
   nudged,
+  payloads,
   runsOf,
   SESSION,
   session,
@@ -57,15 +59,43 @@ test("runs rules and guard with the PreToolUse payload; a clean call reaches the
     },
   });
   expect(runsOf(runs, "rules")).toEqual([
-    { argv: [BIN, "rules"], stdin: payload, env: { MIMIR_ACTIVE: "1" } },
+    { argv: [BIN, "rules"], payload, env: { MIMIR_ACTIVE: "1" } },
   ]);
   expect(runsOf(runs, "guard")).toEqual([
-    { argv: [BIN, "guard"], stdin: payload, env: { MIMIR_ACTIVE: "1" } },
+    { argv: [BIN, "guard"], payload, env: { MIMIR_ACTIVE: "1" } },
   ]);
   expect(ran).toEqual([EDIT.file_path]);
   expect(result.deny).toBeUndefined();
   expect(result.context).toBeUndefined();
   expect(statuses).toEqual([]);
+});
+
+test("a call that names a Claude Code settings file reaches the gates by file: nothing of it on stdin or in argv", async ($, on) => {
+  session(on);
+  const written = payloads(on);
+  const seen: Array<{ argv: readonly string[]; stdin?: string }> = [];
+  on("process.run", (_, e) => {
+    seen.push({ argv: e.argv, stdin: e.init?.stdin });
+    return exited(0);
+  });
+  editTool(on);
+  const settings = "/work/repo/.claude/settings.json";
+
+  await $.tool.call({ ...EDIT, file_path: settings });
+
+  // The edit lands, so reindex.ts's leg runs after the two gates.
+  expect(seen.map((run) => run.argv[1])).toEqual(["rules", "guard", "reindex"]);
+  for (const run of seen) {
+    expect(run.stdin).toBeUndefined();
+    expect(run.argv.join(" ")).not.toContain("settings.json");
+    const [, , flag, path = ""] = run.argv;
+    expect(flag).toBe("--payload");
+    expect(path.startsWith(`${HOME}/.mimir/run/${run.argv[1]}-`)).toBe(true);
+    expect(JSON.parse(written.get(path) ?? "{}").tool_input.file_path).toBe(
+      settings,
+    );
+  }
+  expect(new Set(seen.map((run) => run.argv[3])).size).toBe(3);
 });
 
 test("a rules deny refuses the call before the tool runs", async ($, on) => {
@@ -110,6 +140,7 @@ test("a nudge rides the tool's result as context", async ($, on) => {
 
 test("a gate leg that cannot run fails open with its own status line", async ($, on) => {
   const statuses = session(on);
+  payloads(on);
   on("process.run", (_, e) => {
     if (e.argv[1] === "guard") throw new Error("ENOENT");
     return exited(e.argv[1] === "rules" ? 3 : 0);

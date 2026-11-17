@@ -27,6 +27,7 @@ import {
   toProjectRelative,
 } from "@mimir/plugin-core/project";
 import { readConfig } from "./config";
+import { readPayload } from "./hook-payload";
 import { createLogger } from "./logger";
 
 const log = createLogger("reindex-hook");
@@ -41,15 +42,6 @@ type HookInput = {
   readonly tool_input?: unknown;
   /** Present only when the hook fires inside a subagent. */
   readonly agent_id?: string;
-};
-
-const readStdin = async (): Promise<string> => {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of Bun.stdin.stream()) {
-    chunks.push(chunk);
-  }
-  const buf = Buffer.concat(chunks);
-  return buf.toString("utf8");
 };
 
 const safeParseHookInput = (raw: string): HookInput => {
@@ -133,14 +125,14 @@ const spawnWorker = (projectPath: string, filePath: string) => {
 };
 
 /**
- * Hook entry — fast path. Reads stdin, validates the tool name + file
+ * Hook entry — fast path. Reads the payload, validates the tool name + file
  * path, spawns the worker, exits 0. All work after this returns to CC's
  * next model turn immediately.
  */
 const runHook = async (): Promise<number> => {
   if (process.env.MIMIR_ACTIVE !== "1") return 0;
 
-  const raw = await readStdin();
+  const raw = await readPayload();
   const input = safeParseHookInput(raw);
 
   // The session cwd follows Bash `cd`; the index keys on the repository root.

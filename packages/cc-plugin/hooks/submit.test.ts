@@ -29,12 +29,12 @@ test("counts the turn and runs retrieve with the UserPromptSubmit payload, attac
   expect(
     runsOf(runs, "retrieve").map((run) => ({
       ...run,
-      stdin: parsed(run.stdin),
+      payload: parsed(run.payload),
     })),
   ).toEqual([
     {
       argv: [BIN, "retrieve"],
-      stdin: {
+      payload: {
         session_id: SESSION,
         hook_event_name: "UserPromptSubmit",
         prompt: "what do we know?",
@@ -55,7 +55,7 @@ test("retrieval is told the session's first prompt, and only that one", async ($
   await converse((t) => $.prompt.submit(submitted(t)), say, 1, 2);
 
   expect(
-    runsOf(runs, "retrieve").map((run) => parsed(run.stdin)),
+    runsOf(runs, "retrieve").map((run) => parsed(run.payload)),
   ).toMatchObject([
     { prompt: "question 1", session_start: true },
     { prompt: "question 2", session_start: false },
@@ -78,7 +78,7 @@ const scripted = (replies: Array<() => ReturnType<typeof exited>>) => {
 };
 
 const retrievePayloads = (runs: Parameters<typeof runsOf>[0]) =>
-  runsOf(runs, "retrieve").map((run) => parsed(run.stdin));
+  runsOf(runs, "retrieve").map((run) => parsed(run.payload));
 
 test("a summary still generating stays owed: the next prompt asks for it again, and says so on the status line", async ($, on) => {
   const { say, statuses, runs } = submitSession(
@@ -204,7 +204,7 @@ test("every third turn also runs voice-anchor for the next exchange in the rotat
   expect(runsOf(runs, "voice-anchor")).toEqual([
     {
       argv: [BIN, "voice-anchor", "--session", SESSION, "--nth", "0"],
-      stdin: undefined,
+      payload: undefined,
       env: { MIMIR_ACTIVE: "1" },
     },
   ]);

@@ -44,6 +44,7 @@ import {
   type FileContextSweepOutcome,
   sweepFileContextState,
 } from "./file-context-sweep";
+import { readPayload } from "./hook-payload";
 import { createLogger } from "./logger";
 import {
   spawnWorker,
@@ -248,9 +249,11 @@ const cachedProjectId = async (cwd: string) => {
 
 /** The hooks module's payload, or null when there is none to act on. */
 const readInput = async () => {
-  const [err, raw] = await attempt(() => Bun.stdin.text());
+  const [err, raw] = await attempt(() => readPayload());
   if (err) {
-    log.warn("session-end: could not read stdin", { error: err.message });
+    log.warn("session-end: could not read the payload", {
+      error: err.message,
+    });
     return null;
   }
   if (raw.trim().length === 0) {

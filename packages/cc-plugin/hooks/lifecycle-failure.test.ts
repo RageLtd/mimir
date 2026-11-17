@@ -8,7 +8,7 @@ import {
   turnTwo,
 } from "./__tests__/lifecycle-fixtures";
 import { anchorOf } from "./messages";
-import { binary, runsOf, session } from "./support.test-helpers";
+import { binary, payloads, runsOf, session } from "./support.test-helpers";
 
 test("a turn hook that throws names what it caught, and the turn passes on", async ($, on) => {
   const statuses = session(on);
@@ -35,6 +35,7 @@ test("a deferred persist that cannot run names what it caught and clears pending
   anchorState(on, anchorOf(turnOne));
   const pending = pendingState(on);
   conversation(on, [...turnOne, ...turnTwo]);
+  payloads(on);
   on("process.run", () => {
     throw new Error("ENOENT");
   });
@@ -43,8 +44,10 @@ test("a deferred persist that cannot run names what it caught and clears pending
   await $.turn.complete(TURN);
   await clock.advance(0);
 
+  // The reason leads: a status line is cut short, and the leg's name is
+  // the part a reader can do without.
   expect(statuses).toEqual([
-    "mimir: persist run failed (HooksError: no implementation for process.run)",
+    "mimir: HooksError: no implementation for process.run (persist run failed)",
   ]);
   expect(pending.get()).toBeNull();
 });

@@ -25,7 +25,7 @@
  */
 
 import type { Register, StateRef } from "claude-code";
-import { mimirCcArgv, mimirCcInit } from "./binary";
+import { mimirCcCall } from "./binary";
 import { ANCHOR_PREFIX, asAnchor, sameAnchor } from "./lifecycle";
 import { anchorOf, deltaSince, NO_ANCHOR, slim } from "./messages";
 
@@ -74,18 +74,19 @@ export const registerSessionEnd: Register = (on) => {
       asAnchor(await $.store.get(`${ANCHOR_PREFIX}${e.sessionId}`)) ??
       NO_ANCHOR;
     const [home, cwd] = await Promise.all([$.env.get("HOME"), $.session.cwd()]);
-    const ran = await $.process.run(
-      mimirCcArgv(home ?? "", "session-end"),
-      mimirCcInit(
-        {
-          session_id: e.sessionId,
-          cwd,
-          reason: e.reason,
-          messages: deltaSince(messages, anchor).map(slim),
-        },
-        SESSION_END_TIMEOUT_MS,
-      ),
+    const call = mimirCcCall(
+      home ?? "",
+      "session-end",
+      {
+        session_id: e.sessionId,
+        cwd,
+        reason: e.reason,
+        messages: deltaSince(messages, anchor).map(slim),
+      },
+      SESSION_END_TIMEOUT_MS,
     );
+    await $.fs.write(call.path, call.text);
+    const ran = await $.process.run(call.argv, call.init);
     if (ran.exitCode !== 0)
       $.ui.status(`mimir: session end failed (exit ${ran.exitCode})`);
     return next(e);
