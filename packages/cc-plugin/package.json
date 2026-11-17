@@ -11,7 +11,8 @@
     "test": "bun test --parallel src",
     "mod:validate": "claude plugin validate .",
     "mod:test": "claude plugin test .",
-    "agents:render": "bun scripts/render-agents.ts"
+    "agents:render": "bun scripts/render-agents.ts",
+    "output-style:render": "bun scripts/render-output-style.ts"
   },
   "dependencies": {
     "@mimir/plugin-core": "workspace:*",

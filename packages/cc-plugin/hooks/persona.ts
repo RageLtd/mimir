@@ -4,7 +4,15 @@
  * Answers `prompt.compose` with its own list, so the engine's sections do
  * not go out — the same replacement the wrapper's `--system-prompt-file`
  * made, now for every host the plugin loads in (terminal, desktop app,
- * SDK) with no output style and no flag.
+ * SDK) with no flag.
+ *
+ * The plugin also ships the persona as a forced output style
+ * (`output-styles/mimir.md`), which carries it where an organization
+ * passes this plugin's hooks over. The engine sends a style not as a
+ * section but as an `output_style_instructions` attachment headed
+ * `# Output Style: <plugin>:Mimir`, so `prompt.compose` cannot drop it;
+ * `prompt.attachment` leaves it out once this hook has composed the
+ * persona, and only then, so the persona goes out once.
  *
  * Three of the engine's sections are kept, because the persona has no
  * answer for them and the engine keeps them current with each release
@@ -48,12 +56,21 @@ const readPersona = async ($: EngineInterface) => {
   );
 };
 
+/** The engine's attachment type for an output style's text. */
+const STYLE_ATTACHMENT = "output_style_instructions";
+
+/** `name` in output-styles/mimir.md; the engine prefixes the plugin's. */
+const STYLE_NAME = "Mimir";
+
 export const registerPersona: Register = (on) => {
   let persona: string | null = null;
+  let composed = false;
 
   on("prompt.compose", async ($, e, next) => {
+    composed = false;
     persona ??= await readPersona($);
     const engine = await next(e);
+    composed = true;
     return {
       sections: [
         ...engine.sections.filter((section) =>
@@ -66,4 +83,11 @@ export const registerPersona: Register = (on) => {
     $.ui.status("mimir: persona unavailable — running as plain Claude Code");
     return next(e);
   });
+
+  on("prompt.attachment", { type: STYLE_ATTACHMENT }, ($, e, next) =>
+    composed &&
+    e.text.startsWith(`# Output Style: ${$.plugin.name}:${STYLE_NAME}\n`)
+      ? { text: null }
+      : next(e),
+  );
 };

@@ -34,11 +34,9 @@ import { markdownToXml } from "@mimir/plugin-core/markdown-to-xml";
  */
 export const LOCAL_TOOL_PREFIX = "mcp__plugin_mimir-cc_mimir-local__";
 
-const ENVIRONMENT_BLOCK = `
-<environment>
-You are running as a Claude Code session with the mimir-cc plugin enabled: Claude Code's engine and tools, with the Mimir persona, MCP servers and lifecycle hooks supplied by the plugin. The plugin's hooks module supplies this text as the session's system prompt on every launch path: the \`mimir\` wrapper, the Claude desktop app, or a plain \`claude\` in a project where the plugin is enabled. Where a line elsewhere in this prompt names you as Claude Code, it names the application you are running in, not who you are. The persona text was fetched from mimir-server and converted to XML at install time.
+const SYSTEM_PROMPT_DELIVERY = `You are running as a Claude Code session with the mimir-cc plugin enabled: Claude Code's engine and tools, with the Mimir persona, MCP servers and lifecycle hooks supplied by the plugin. The plugin's hooks module supplies this text as the session's system prompt on every launch path: the \`mimir\` wrapper, the Claude desktop app, or a plain \`claude\` in a project where the plugin is enabled. Where a line elsewhere in this prompt names you as Claude Code, it names the application you are running in, not who you are. The persona text was fetched from mimir-server and converted to XML at install time.`;
 
-MCP servers wired into this session:
+const SESSION_CONTEXT = `MCP servers wired into this session:
 
 - mimir-local (stdio) is the LOCAL brain: developer-scoped memory + profile (~/.mimir/user-memories.db), org-scoped project memory + playbooks (the local replica), and Cartographer codebase tools (the local index). Tools arrive prefixed as \`${LOCAL_TOOL_PREFIX}\` — e.g. \`${LOCAL_TOOL_PREFIX}project_memory_search\`, \`${LOCAL_TOOL_PREFIX}cartographer_search\`, \`${LOCAL_TOOL_PREFIX}user_profile_get\`. Everything here executes on this machine; no content leaves it.
 - context7 (optional) exposes library documentation lookup. Tools arrive as \`mcp__context7__resolve-library-id\` and \`mcp__context7__query-docs\`, or under a \`mcp__plugin_context7_context7__\` prefix when the context7 plugin provides them.
@@ -52,8 +50,22 @@ Mimir's hooks send four kinds:
 - \`<boot_context>\`, once at session start: the developer's profile and prior session context.
 - \`<retrieved_context>\`, beside each prompt: memories, summaries and playbooks from the local replica that matched it. A match is not a fact; check one against the code before relying on it.
 - \`<file_context>\`, when a file is read: its symbols, imports, dependents and any memories about it.
-- \`<voice_anchor>\`, every few turns and after a compaction: one of the Voice in Action exchanges, sent again on purpose. It shows how Mimir sounds, and its subject is irrelevant. Match its register in the next reply; never quote it, answer it or mention it.
+- \`<voice_anchor>\`, every few turns and after a compaction: one of the Voice in Action exchanges, sent again on purpose. It shows how Mimir sounds, and its subject is irrelevant. Match its register in the next reply; never quote it, answer it or mention it.`;
+
+/**
+ * A Claude Code environment block: the paragraph saying how the text
+ * reached the model, then what every Claude Code delivery shares (MCP
+ * servers, memory stores, what the application sends beside the
+ * conversation). The plugin's output style passes its own delivery.
+ */
+export const claudeCodeEnvironment = (delivery: string) => `
+<environment>
+${delivery}
+
+${SESSION_CONTEXT}
 </environment>`;
+
+const ENVIRONMENT_BLOCK = claudeCodeEnvironment(SYSTEM_PROMPT_DELIVERY);
 
 /**
  * Anthropic-specific model override block.

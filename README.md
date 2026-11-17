@@ -84,7 +84,7 @@ Requires an authenticated `gh` CLI and `~/.local/bin` on your `PATH`. Inside Cla
 /mimir-install
 ```
 
-The installer downloads the prebuilt `mimir-cc` binary, writes the runtime (persona included) under `~/.mimir/`, and lands a `mimir` wrapper. Two ways to run it: in the **Claude desktop app** (or a plain `claude`), enable Mimir per project with `mimir-cc enable` — the plugin's hooks module composes the persona into the system prompt, and its hooks and MCP servers load, wherever it is enabled and nowhere else; or run `mimir` from a terminal for the wrapper's settings file.
+The installer downloads the prebuilt `mimir-cc` binary, writes the runtime (persona included) under `~/.mimir/`, and lands a `mimir` wrapper. Two ways to run it: in the **Claude desktop app** (or a plain `claude`), enable Mimir per project with `mimir-cc enable` — the plugin's hooks module composes the persona into the system prompt (its forced output style carries the same persona, from the seed at release time, where an organization passes over the plugin's hooks), and its hooks and MCP servers load, wherever it is enabled and nowhere else; or run `mimir` from a terminal for the wrapper's settings file.
 
 → Walkthrough, from-source path, hook and MCP reference, troubleshooting: [`packages/cc-plugin/README.md`](packages/cc-plugin/README.md)
 

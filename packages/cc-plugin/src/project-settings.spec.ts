@@ -13,6 +13,8 @@ import {
 } from "./project-settings";
 
 const KEY = "mimir-cc@rageltd";
+/** The style the plugin ships, as Claude Code namespaces it. */
+const PLUGIN_STYLE = "mimir-cc:Mimir";
 /** The marketplace entry the settings template carries. */
 const RAGELTD = {
   source: { source: "github", repo: "RageLtd/claude-plugins" },
@@ -87,9 +89,20 @@ describe("enableProject", () => {
       outputStyle: "Concise",
     });
   });
+
+  test("leaves the plugin's own namespaced style alone", () => {
+    expect(enableProject({ outputStyle: PLUGIN_STYLE }, KEY)).toMatchObject({
+      outputStyle: PLUGIN_STYLE,
+    });
+  });
 });
 
 describe("disableProject", () => {
+  test("leaves the plugin's own namespaced style alone", () => {
+    const enabled = { ...enableProject({}, KEY), outputStyle: PLUGIN_STYLE };
+    expect(disableProject(enabled, KEY)).toEqual({ outputStyle: PLUGIN_STYLE });
+  });
+
   test("exactly reverses enable on an empty file", () => {
     expect(disableProject(enableProject({}, KEY), KEY)).toEqual({});
   });
