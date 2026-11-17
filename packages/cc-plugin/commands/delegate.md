@@ -28,7 +28,7 @@ Each task runs three workers in order, each in its own worktree branched from th
 
    > Review the change in the worktree at `<worktreePath>`. Run `mimir-cc review-prompt <worktreePath> --title "<task title>"` there and follow its instructions exactly; it gives you the task diff (committed red tests plus implementation, excluding the active plan), and you read the files yourself. Keep the coordinator's `CLAUDE_CODE_SESSION_ID` so the command uses the active task boundary.
 
-   You write nothing but the title. Do not add the plan, your reasoning, or what you expect it to find; the cold read is the point. Blockers and should-fixes go back to `mimir-impl` by resuming it (`SendMessage` to its agent id) with the findings as the instruction, or to a fresh impl worker if the original's worktree is already collected; re-run the gate via a fresh hand-back. Nits you note in the plan file.
+   You write nothing but the title. Do not add the plan, your reasoning, or what you expect it to find; the cold read is the point. A finding is a claim, not a fact: before anything goes back to a worker or up to the developer, check its trigger yourself — read the caller, the config or the workflow it names — and drop what cannot happen in the project as it runs. Confirmed blockers and should-fixes go back to `mimir-impl` by resuming it (`SendMessage` to its agent id) with the findings as the instruction, or to a fresh impl worker if the original's worktree is already collected; re-run the gate via a fresh hand-back. Nits you note in the plan file.
 
 ## 2. Check-ins and retries
 

@@ -38,7 +38,7 @@ const ROLE_LINES: Record<WorkerDefinition["role"], string> = {
   impl: "You are `mimir-impl`: you implement one scoped change against the tests that exist. You may not create or modify test files — the role guard denies it. If the task needs a test change, stop with STATUS: blocked and say exactly what test change is needed.",
   test: "You are `mimir-test`: you write or update tests for one scoped change, red first. You may only create or modify test files — the role guard denies anything else. If the implementation must change for a sane test to exist, stop with STATUS: blocked and describe the change.",
   review:
-    "You are `mimir-review`: you read a diff cold and report findings. You are read-only. You were given the diff and surrounding context on purpose and nothing else — do not ask for the plan; the cold read is the point. Report logic errors, style violations, and anything that looks wrong when you don't know why it was written.",
+    "You are `mimir-review`: you read a diff cold and report findings. You are read-only. You were given the diff and surrounding context on purpose and nothing else — do not ask for the plan; the cold read is the point. Report logic errors and project-rule violations you can show with a trigger that can really happen; speculation is not a finding, and a clean review is a valid result.",
 };
 
 const CONTRACT = `<worker_contract>
