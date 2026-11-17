@@ -10,6 +10,7 @@ import {
 
 const source = resolve(import.meta.dir);
 const session = "cc-task-regression";
+const WORKER = "impl-worker";
 let dir: string;
 let repo: string;
 let previousHome: string | undefined;
@@ -66,14 +67,24 @@ const hook = (module: string, fn: string, cwd: string, extra: object) =>
   command(module, fn, [], cwd, {
     session_id: session,
     cwd,
-    agent_id: "impl-worker",
+    agent_id: WORKER,
     agent_type: "mimir-impl",
     hook_event_name: "PreToolUse",
     tool_name: "SubagentHandback",
     tool_input: { message: "STATUS: done" },
     ...extra,
   });
-
+const branchOf = (agent: string) => `worktree-agent-${agent}`;
+/**
+ * A Mimir worker's tree, where Claude Code puts it: a git worktree at
+ * `<root>/.claude/worktrees/agent-<agent id>`, branched from root's HEAD.
+ * A worker's hand-back is gated there and nowhere else.
+ */
+const addWorker = async (agent = WORKER, root = repo) => {
+  const path = join(root, ".claude", "worktrees", `agent-${agent}`);
+  await git(root, "worktree", "add", "-b", branchOf(agent), path);
+  return path;
+};
 beforeEach(async () => {
   previousHome = process.env.MIMIR_HOME;
   dir = mkdtempSync(join(tmpdir(), "mimir-cc-task-"));
@@ -94,6 +105,8 @@ beforeEach(async () => {
   // The toolchain resolver picks the package manager from the lockfile;
   // without one it runs `npm run`, which a Bun-only machine lacks.
   await Bun.write(join(repo, "bun.lock"), "{}\n");
+  // As in a real project: agent worktrees are not part of the session's diff.
+  await Bun.write(join(repo, ".gitignore"), ".claude/worktrees/\n");
   await git(repo, "add", ".");
   await git(repo, "commit", "-m", "baseline");
   await Bun.write(join(repo, "plan.md"), "private plan rationale\n");
@@ -123,13 +136,13 @@ test("explicit boundary survives red commit, separate impl worktree, restart and
   await git(red, "add", "value.spec.ts");
   await git(red, "commit", "-m", "red regression");
   await git(repo, "merge", "--no-ff", "red", "-m", "collect red");
-  const worker = join(dir, "impl");
-  await git(repo, "worktree", "add", "-b", "impl", worker);
+  const worker = await addWorker();
   await Bun.write(join(worker, "value.ts"), "export const value = 1;\n");
   await Bun.write(join(worker, "plan.md"), "private plan rationale\n");
   await delegate("start", "--plan", join(repo, "plan.md"));
   expect((await readCoordinatorState(session))?.task?.base).toBe(base);
-  const result = await hook("verify-hook.ts", "runVerifyHook", worker, {});
+  // Sent from the session's directory; gated in the worker's worktree.
+  const result = await hook("verify-hook.ts", "runVerifyHook", repo, {});
   expect(result.code, result.stderr).toBe(0);
   expect(result.stdout).toContain("Verify gate passed");
   expect(result.stdout).toContain("1 → 1");
@@ -144,19 +157,22 @@ test("explicit boundary survives red commit, separate impl worktree, restart and
   expect(review.stdout).not.toContain("private plan rationale");
   await git(worker, "add", "value.ts");
   await git(worker, "commit", "-m", "green");
-  await git(repo, "merge", "--no-ff", "impl", "-m", "collect impl");
+  await git(repo, "merge", "--no-ff", branchOf(WORKER), "-m", "collect impl");
   expect((await delegate("task")).code).toBe(0);
   expect((await readCoordinatorState(session))?.task?.base).toBe(
     await git(repo, "rev-parse", "HEAD"),
   );
-  await Bun.write(join(repo, "value.ts"), "export const value = 2;\n");
+  const nextAgent = "next-worker";
+  const nextWorker = await addWorker(nextAgent);
+  await Bun.write(join(nextWorker, "value.ts"), "export const value = 2;\n");
   const next = await hook("verify-hook.ts", "runVerifyHook", repo, {
-    agent_id: "next-worker",
+    agent_id: nextAgent,
   });
   expect(next.stdout).toContain("No test coverage");
 });
 
 test("active delegation refuses missing or malformed task provenance at spawn and handback", async () => {
+  await addWorker();
   const spawn = () =>
     hook("guard-hook.ts", "runGuardHook", repo, {
       agent_type: undefined,
@@ -256,6 +272,8 @@ test("manual verify uses task base and rejects a different repository", async ()
   expect(verify.code, verify.stdout + verify.stderr).toBe(0);
   const other = join(dir, "other");
   await git(dir, "clone", repo, other);
+  // The worker's worktree belongs to the foreign repository.
+  await addWorker(WORKER, other);
   const foreign = await hook("verify-hook.ts", "runVerifyHook", other, {});
   expect(foreign.stdout).toContain('"permissionDecision":"deny"');
   expect(foreign.stdout).toContain("repository");
@@ -275,18 +293,18 @@ test("failed next boundary clears previous task before capture", async () => {
 });
 
 test("corrupt state and non-ancestor task bases cannot bypass handback or review", async () => {
+  // Branched before the integration advances below: its HEAD stays behind.
+  const worker = await addWorker();
   await Bun.write(coordinatorStatePath(session), '{"active":true,');
   const corrupt = await hook("verify-hook.ts", "runVerifyHook", repo, {});
   expect(corrupt.stdout).toContain('"permissionDecision":"deny"');
   await delegate("stop");
   await delegate("start", "--plan", join(repo, "plan.md"));
-  const worker = join(dir, "old-worker");
-  await git(repo, "worktree", "add", "-b", "old-worker", worker);
   await Bun.write(join(repo, "later.md"), "next task baseline\n");
   await git(repo, "add", "later.md");
   await git(repo, "commit", "-m", "advance integration");
   await delegate("task");
-  const denied = await hook("verify-hook.ts", "runVerifyHook", worker, {});
+  const denied = await hook("verify-hook.ts", "runVerifyHook", repo, {});
   expect(denied.stdout).toContain('"permissionDecision":"deny"');
   const review = await command(
     "delegate-command.ts",
@@ -319,9 +337,15 @@ test("active task verification and review collect from Git root when invoked in 
   );
   await git(repo, "add", "value.spec.ts");
   await git(repo, "commit", "-m", "red");
-  await Bun.write(join(repo, "value.ts"), "export const value = 1;\n");
-  const nested = join(repo, "nested", "directory");
+  // The red test is collected; the green change is the worker's, in its
+  // worktree. Review and manual verify name a directory nested in that
+  // worktree; the hand-back comes from one nested in the session's.
+  const worker = await addWorker();
+  await Bun.write(join(worker, "value.ts"), "export const value = 1;\n");
+  const nested = join(worker, "nested", "directory");
   mkdirSync(nested, { recursive: true });
+  const sessionNested = join(repo, "nested", "directory");
+  mkdirSync(sessionNested, { recursive: true });
   const review = await command(
     "delegate-command.ts",
     "runReviewPromptCommand",
@@ -339,7 +363,12 @@ test("active task verification and review collect from Git root when invoked in 
   );
   expect(verify.code, verify.stdout + verify.stderr).toBe(0);
   expect(verify.stdout).toContain("Verify gate passed");
-  const handback = await hook("verify-hook.ts", "runVerifyHook", nested, {});
+  const handback = await hook(
+    "verify-hook.ts",
+    "runVerifyHook",
+    sessionNested,
+    {},
+  );
   expect(handback.stdout).toContain("Verify gate passed");
 });
 

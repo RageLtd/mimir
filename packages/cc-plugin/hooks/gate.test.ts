@@ -126,80 +126,67 @@ test("a gate leg that cannot run fails open with its own status line", async ($,
   ]);
 });
 
-test("records a subagent's cwd and type when it starts", async ($, on) => {
-  session(on);
-  const written: unknown[] = [];
-  on("state.set", { key: "agents" }, (_, e) => {
-    written.push({ id: e.id, value: e.value });
+const AGENT_ID = "a1";
+const AGENT_TYPE = "mimir-cc:mimir-impl";
+const WORKTREE = "/work/repo/.claude/worktrees/w1";
+
+/**
+ * Every `$.state` read and write, whatever its key: a gate path keeps no
+ * agent record, so it makes none.
+ */
+const stateCalls = (on: On) => {
+  const written: string[] = [];
+  on("state.get", (_, e) => {
+    written.push(`get ${String(e.key)} ${String(e.id)}`);
+    return { value: { value: undefined, version: 0 } };
+  });
+  on("state.set", (_, e) => {
+    written.push(`set ${String(e.key)} ${String(e.id)}`);
     return { value: { isSet: true as const, version: 1 } };
   });
+  return written;
+};
+
+test("SubagentStart has no hook: no process runs and no agent record is written", async ($, on) => {
+  session(on);
+  const written = stateCalls(on);
+  const runs = binary(on);
+  // The kit's bottom hook throws when nothing answers, so the test answers.
   on("classic.SubagentStart", () => ({}));
 
-  await $.classic.SubagentStart({
-    agent_id: "a1",
-    agent_type: "mimir-cc:mimir-impl",
-    cwd: "/work/repo/.claude/worktrees/w1",
+  const result = await $.classic.SubagentStart({
+    agent_id: AGENT_ID,
+    agent_type: AGENT_TYPE,
+    cwd: WORKTREE,
   });
 
-  expect(written).toEqual([
-    {
-      id: "a1",
-      value: {
-        cwd: "/work/repo/.claude/worktrees/w1",
-        type: "mimir-cc:mimir-impl",
-      },
-    },
-  ]);
+  expect(result).toEqual({});
+  expect(runs).toEqual([]);
+  expect(written).toEqual([]);
 });
 
 const STOP = {
-  agent_id: "a1",
-  agent_type: "mimir-cc:mimir-impl",
+  agent_id: AGENT_ID,
+  agent_type: AGENT_TYPE,
   agent_transcript_path: "/t/a1.jsonl",
   stop_hook_active: false,
   last_assistant_message: "Done.\n\nSTATUS: done",
-  cwd: "/work/repo/.claude/worktrees/w1",
+  cwd: WORKTREE,
 };
 
-test("SubagentStop: the verify gate's block stops the worker with the reason", async ($, on) => {
+test("SubagentStop has no hook: no verify runs and the test's answer stands", async ($, on) => {
   session(on);
+  const written = stateCalls(on);
   const runs = binary(on, () =>
     exited(0, JSON.stringify({ decision: "block", reason: "no tests added" })),
   );
-  on("classic.SubagentStop", () => ({}));
+  on("classic.SubagentStop", () => ({ additionalContext: ["below"] }));
 
   const result = await $.classic.SubagentStop(STOP);
 
-  expect(result).toEqual({ block: "no tests added" });
-  const [run] = runsOf(runs, "verify");
-  expect(run?.argv).toEqual([BIN, "verify"]);
-  expect(JSON.parse(run?.stdin ?? "{}")).toMatchObject({
-    hook_event_name: "SubagentStop",
-    agent_id: "a1",
-    cwd: STOP.cwd,
-    last_assistant_message: STOP.last_assistant_message,
-  });
-});
-
-test("SubagentStop: a pass hands the report on as context; silence passes through", async ($, on) => {
-  session(on);
-  let stdout = JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: "SubagentStop",
-      additionalContext: "✅ gate passed",
-    },
-  });
-  binary(on, () => exited(0, stdout));
-  on("classic.SubagentStop", () => ({ additionalContext: ["below"] }));
-
-  expect(await $.classic.SubagentStop(STOP)).toEqual({
-    additionalContext: ["below", "✅ gate passed"],
-  });
-
-  stdout = "";
-  expect(await $.classic.SubagentStop(STOP)).toEqual({
-    additionalContext: ["below"],
-  });
+  expect(result).toEqual({ additionalContext: ["below"] });
+  expect(runs).toEqual([]);
+  expect(written).toEqual([]);
 });
 
 test("verdict helpers", async () => {

@@ -1,9 +1,9 @@
 /**
- * Verify gate — `mimir-cc verify`, run by the hooks module from two
- * events, each handing over its payload on stdin.
+ * Verify gate — `mimir-cc verify`, run by the hooks module with its
+ * payload on stdin.
  *
- * Primary: `tool.call` on `SubagentHandback`, inside the worker (the
- * PreToolUse payload). A subagent hands its result back through this
+ * `tool.call` on `SubagentHandback`, inside the worker (the PreToolUse
+ * payload). A subagent hands its result back through this
  * tool call, and `tool_input.message` is the worker's final text — the
  * `STATUS:` line lives there. The gate answers in the PreToolUse
  * protocol, which the module maps onto the call:
@@ -15,11 +15,8 @@
  *   exhausted → "allow", message rewritten to end in STATUS: failed
  *   skip      → silence (STATUS was not `done`)
  *
- * Fallback: `classic.SubagentStop`, for hosts/versions without handback.
- * Same outcomes, spoken as `decision: "block"` or `additionalContext`. When
- * handback is in use, SubagentStop's `last_assistant_message` is
- * boilerplate with no STATUS line, so the gate skips there and never
- * runs twice.
+ * Any other payload gets no answer. The payload's `cwd` is the session's
+ * directory; the gate runs in the subagent's worktree (`withAgentCwd`).
  *
  * Always exits 0 as a hook. A crashing gate must never wedge a worker.
  *
@@ -43,6 +40,7 @@ import {
   type VerifyRole,
 } from "@mimir/plugin-core/verify";
 import { roleForAgentType } from "@mimir/plugin-core/workers";
+import { withAgentCwd } from "./agent-worktree";
 import { createLogger } from "./logger";
 import { taskProvenance } from "./task-state";
 
@@ -56,8 +54,6 @@ type HookInput = {
   readonly agent_type?: string;
   readonly tool_name?: string;
   readonly tool_input?: unknown;
-  readonly last_assistant_message?: string;
-  readonly stop_hook_active?: boolean;
 };
 
 export const HANDBACK_TOOL = "SubagentHandback";
@@ -67,27 +63,6 @@ const COMMAND_TIMEOUT_MS = 540_000;
 
 const assertNever = (value: never) => {
   throw new Error(`Unhandled verify outcome: ${String(value)}`);
-};
-
-/** SubagentStop protocol. */
-export const stopOutput = (outcome: VerifyOutcome) => {
-  switch (outcome.kind) {
-    case "skip":
-      return null;
-    case "block":
-      return { decision: "block" as const, reason: outcome.reason };
-    case "pass":
-    case "exhausted":
-      return {
-        hookSpecificOutput: {
-          hookEventName: "SubagentStop" as const,
-          additionalContext:
-            outcome.kind === "pass" ? outcome.report : outcome.reason,
-        },
-      };
-    default:
-      return assertNever(outcome);
-  }
 };
 
 /** PreToolUse-on-handback protocol; `message` is the worker's text. */
@@ -145,9 +120,10 @@ export const roleOf = (agentType: string | undefined) => {
 };
 
 /**
- * A hook payload naming a cwd that no longer exists: the coordinator
- * already collected and removed the worktree, and this is a late re-fire
- * (SubagentStop after the hand-back). Nothing there to verify.
+ * A hook payload whose own cwd no longer exists: one that names a
+ * worktree as `cwd` after the coordinator collected and removed it. Nothing there to
+ * verify. (A payload carrying the session's directory instead is covered
+ * by `withAgentCwd`'s `missing`.)
  */
 export const cwdMissing = (cwd?: string) =>
   cwd !== undefined && !existsSync(cwd);
@@ -253,27 +229,30 @@ export const runVerifyHook = async (args: readonly string[] = []) => {
   if (cli) return runVerifyCli(cli);
 
   if (process.env.MIMIR_ACTIVE !== "1") return 0;
-  const input = await parseInput(await readStdin());
-  const agentId = input.agent_id;
+  const payload = await parseInput(await readStdin());
+  const agentId = payload.agent_id;
   if (!agentId) {
     log.debug("verify: no agent_id — not inside a subagent, skipping");
     return 0;
   }
-  if (cwdMissing(input.cwd)) {
+  if (
+    payload.hook_event_name !== "PreToolUse" ||
+    payload.tool_name !== HANDBACK_TOOL
+  )
+    return 0;
+  if (cwdMissing(payload.cwd)) {
     log.info("verify: worktree already collected — skipping late re-fire", {
       agentId,
-      cwd: input.cwd,
+      cwd: payload.cwd,
     });
     return 0;
   }
 
-  const onHandback =
-    input.hook_event_name === "PreToolUse" && input.tool_name === HANDBACK_TOOL;
-  if (input.hook_event_name === "PreToolUse" && !onHandback) return 0;
-
-  const message = onHandback
-    ? handbackMessage(input)
-    : (input.last_assistant_message ?? "");
+  // A worker without its worktree: the coordinator already collected it.
+  // The session's tree is not the worker's change set, so no gate runs.
+  const { input, missing } = await withAgentCwd(payload);
+  if (missing) return 0;
+  const message = handbackMessage(input);
 
   const outcome = await verifyForSession(input.session_id, {
     role: roleOf(input.agent_type),
@@ -290,14 +269,11 @@ export const runVerifyHook = async (args: readonly string[] = []) => {
   });
   if (!outcome) return 0;
 
-  const output = onHandback
-    ? handbackOutput(outcome, message)
-    : stopOutput(outcome);
+  const output = handbackOutput(outcome, message);
   log.info("verify gate", {
     agentId,
     agentType: input.agent_type,
     worktree: input.cwd,
-    via: onHandback ? "handback" : "stop",
     kind: outcome.kind,
     ...("blocks" in outcome ? { blocks: outcome.blocks } : {}),
   });

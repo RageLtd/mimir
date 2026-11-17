@@ -22,7 +22,7 @@
  *                            on stdin), run by the hooks module.
  *   guard --role <r>         Role guard for workers and the coordinator,
  *                            run by the hooks module.
- *   verify                   Verify gate (hand-back or SubagentStop payload),
+ *   verify                   Verify gate (hand-back payload),
  *                            run by the hooks module.
  *   reindex [--worker ...]   After a file write. Default mode forks a worker
  *                            and exits; worker mode does the cartographer
@@ -89,8 +89,8 @@ const USAGE = [
   "  rules                   Rule engine on a tool call (PreToolUse payload on stdin).",
   "  file-context            Cartographer + memory injection for a Read (stdin).",
   "  guard --role <r>        Role guard (impl|test|review|coordinator) on a tool call.",
-  '  verify                  Verify gate for worker "done" claims (hand-back or',
-  "                          SubagentStop payload on stdin).",
+  '  verify                  Verify gate for worker "done" claims (hand-back',
+  "                          payload on stdin).",
   "  verify --worktree <path> [--role impl|test] [--agent <id>] [--allow-empty]",
   "                          Run the gate by hand: re-check a retained worktree, or",
   "                          (--allow-empty) the merged tree as the integration check.",
@@ -105,7 +105,8 @@ const USAGE = [
   "  session-start           Key reconcile, org sync, full project re-index",
   "                          (SessionStart payload on stdin).",
   "  session-end             Summarise the ending session in a detached worker",
-  "                          (the whole window on stdin).",
+  "                          (the undistilled tail on stdin; summarised from the",
+  "                          session journal).",
   "  user-memory-mcp         Stdio MCP server for user-memory tools.",
   "  log-mcp                 Stdio MCP server for reading plugin logs.",
   "  hygiene                 Sweep the local org replica: consolidate, demote,",

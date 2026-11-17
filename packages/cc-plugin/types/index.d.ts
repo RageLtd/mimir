@@ -6,16 +6,6 @@
 export type MimirTurn = number;
 
 /**
- * What the module knows of one subagent, recorded on `classic.SubagentStart`
- * (the one event that names a worker's cwd — its worktree — beside its
- * id) and read by the tool.call hooks, whose `e` carries `agentId` alone.
- */
-export type MimirAgent = {
-  readonly cwd: string;
-  readonly type: string;
-};
-
-/**
  * Where the last distillation stopped: how many messages of the main
  * conversation it covered and the mark (role and text) of the last one,
  * so the point is found again after the window slides or compacts.
@@ -92,8 +82,6 @@ declare module "claude-code" {
        * older than `READING_STALE_MS` is dead and blocks nothing.
        */
       reading: StateFamily<MimirReading | null>;
-      /** Subagents by id, for the gates that run inside them. */
-      agents: StateFamily<MimirAgent>;
       /** The main conversation's distilled prefix, advanced by persist. */
       distilled: MimirAnchor;
       /**

@@ -3,7 +3,7 @@
  * `tool.call` hook with the PreToolUse payload.
  *
  * One hook covers every role: `tool.call` fires inside subagents too,
- * and there the module fills in `agent_type` (recorded at SubagentStart),
+ * and there the module fills in `agent_type` (from `$.agent.list()`),
  * so the role is read from it — a worker's agent name maps to its role,
  * no `agent_type` is the main session (coordinator), and any other
  * subagent is left alone. Plugin-shipped agents cannot carry frontmatter
@@ -19,7 +19,8 @@
  * and at hand-back, not on every tool call; utility agents need no task.
  *
  * The decision itself is `guardDecision` in plugin-core; this file only
- * builds the context from the CC payload (worktree = cwd, plan-file
+ * builds the context from the CC payload (worktree = cwd, moved into a
+ * subagent's own worktree by `withAgentCwd`; plan-file
  * existence, the project's other git worktrees) and speaks the hook
  * protocol. Always exits 0: a crashing guard would block every call.
  */
@@ -34,6 +35,7 @@ import {
 import { attempt } from "@mimir/plugin-core/result";
 import { errMessage } from "@mimir/plugin-core/util";
 import { workerByName } from "@mimir/plugin-core/workers";
+import { withAgentCwd } from "./agent-worktree";
 import { createLogger } from "./logger";
 import { taskProvenance } from "./task-state";
 import { bootstrapWorktree } from "./worktree-bootstrap";
@@ -45,6 +47,7 @@ type HookInput = {
   readonly cwd?: string;
   readonly tool_name?: string;
   readonly tool_input?: unknown;
+  readonly agent_id?: string;
   readonly agent_type?: string;
 };
 
@@ -180,7 +183,7 @@ export const buildGuardContext = async (role: GuardRole, input: HookInput) => {
 
 export const runGuardHook = async (args: readonly string[]) => {
   if (process.env.MIMIR_ACTIVE !== "1") return 0;
-  const input = await parseInput(await readStdin());
+  const { input } = await withAgentCwd(await parseInput(await readStdin()));
   const role = parseGuardArgs(args) ?? roleFromInput(input);
   if (!role) return 0;
   if (role === "coordinator") {

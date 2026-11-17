@@ -77,9 +77,6 @@ export const session = (
   on("session.id", () => ({ value: SESSION }));
   on("session.cwd", () => ({ value: CWD }));
   on("agent.list", () => ({ value: [] }));
-  on("state.get", { key: "agents" }, () => ({
-    value: { value: undefined, version: 0 },
-  }));
   on("state.get", { key: "reanchor" }, () => ({
     value: { value: kept.get(REANCHOR) === true, version: 0 },
   }));

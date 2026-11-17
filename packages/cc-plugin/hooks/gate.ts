@@ -1,23 +1,20 @@
 /**
  * The gates on tool calls and hand-backs — rules, the role guard and the
- * verify gate — as `tool.call` and `classic.*` hooks.
+ * verify gate — as `tool.call` hooks.
  *
  * - One unmatched `tool.call` hook (the engine takes one per event from
  *   a module) runs `mimir-cc rules` and `mimir-cc guard` at once: a deny
  *   from either refuses the call, rules' reason first; a nudge rides the
  *   result as `context`, what the model reads after the tool's output.
- * - `{ tool: "SubagentHandback" }` is the verify gate's primary trigger:
- *   inside a worker, the hand-back's `message` is its final text. Deny
- *   sends the worker back to work; pass rewrites the message with the
- *   report appended (`updatedInput`), so the coordinator reads numbers.
- * - `classic.SubagentStop` is the gate's fallback for hosts without the
- *   handback tool; the binary skips there when no STATUS line is found.
+ * - `{ tool: "SubagentHandback" }` is the verify gate: inside a worker,
+ *   the hand-back's `message` is its final text. Deny sends the worker
+ *   back to work; pass rewrites the message with the report appended
+ *   (`updatedInput`), so the coordinator reads numbers.
  *
- * A `tool.call` carries the loop's `agentId` and nothing else about it,
- * so `classic.SubagentStart` — which names the worker's cwd (its
- * worktree) and type — records both under `$.state` (`mimir-cc.agents`),
- * and the gates read them back by id. An agent with no record falls back
- * to the session's cwd and `$.agent.list()`.
+ * A `tool.call` carries the loop's `agentId` and nothing else about it:
+ * the gates send the session's cwd beside the id and the type
+ * `$.agent.list()` gives it, and the binary resolves the worker's
+ * worktree from the two.
  *
  * Every gate fails open with a status line, as the command hooks did:
  * a crashing gate must never wedge a session or a worker.
@@ -30,12 +27,7 @@ import type {
   ToolCallInput,
 } from "claude-code";
 import { mimirCcArgv, mimirCcInit } from "./binary";
-import {
-  type Loop,
-  parsePreToolUseOutput,
-  parseSubagentStopOutput,
-  toolPayload,
-} from "./payload";
+import { type Loop, parsePreToolUseOutput, toolPayload } from "./payload";
 
 const RULES_TIMEOUT_MS = 15_000;
 /** The guard installs a worker worktree's dependencies on its first call. */
@@ -49,8 +41,8 @@ const VERIFY_TIMEOUT_MS = 600_000;
  */
 export const HANDBACK_TOOL = /^SubagentHandback$/;
 /**
- * The agent type the guard sees for a subagent the module has no record
- * of: not a known worker, so the guard stays silent rather than mistaking
+ * The agent type the guard sees for a subagent `$.agent.list()` does not
+ * list: not a known worker, so the guard stays silent rather than mistaking
  * it for the coordinator (which is what no `agent_type` means).
  */
 export const UNKNOWN_AGENT_TYPE = "unknown";
@@ -89,35 +81,16 @@ export const handbackRewrite = (stdout: string) => {
 const loopFor = async ($: EngineInterface, e: ToolCallInput) => {
   const [sessionId, cwd] = await Promise.all([$.session.id(), $.session.cwd()]);
   if (e.agentId === undefined) return { sessionId, cwd } satisfies Loop;
-  const { value } = await $.state.get({
-    plugin: "mimir-cc",
-    key: "agents",
-    id: e.agentId,
-  });
-  const listed =
-    value === undefined
-      ? (await $.agent.list()).find((agent) => agent.id === e.agentId)
-      : undefined;
+  const listed = (await $.agent.list()).find((agent) => agent.id === e.agentId);
   return {
     sessionId,
-    cwd: value?.cwd ?? cwd,
+    cwd,
     agentId: e.agentId,
-    agentType: value?.type ?? listed?.type ?? UNKNOWN_AGENT_TYPE,
+    agentType: listed?.type ?? UNKNOWN_AGENT_TYPE,
   } satisfies Loop;
 };
 
 export const registerGate: Register = (on) => {
-  on("classic.SubagentStart", async ($, e, next) => {
-    await $.state.set(
-      { plugin: "mimir-cc", key: "agents", id: e.agent_id },
-      { cwd: e.cwd, type: e.agent_type },
-    );
-    return next(e);
-  }).catch(($, e, next) => {
-    $.ui.status("mimir: agent record failed");
-    return next(e);
-  });
-
   on("tool.call", async ($, e, next) => {
     const home = (await $.env.get("HOME")) ?? "";
     const payload = toolPayload(e, await loopFor($, e));
@@ -169,31 +142,6 @@ export const registerGate: Register = (on) => {
     if (rewrite.deny !== undefined) return { deny: rewrite.deny };
     const rewritten = { ...e, message: rewrite.message };
     return next(rewritten);
-  }).catch(($, e, next) => {
-    $.ui.status("mimir: verify gate failed");
-    return next(e);
-  });
-
-  on("classic.SubagentStop", async ($, e, next) => {
-    const home = (await $.env.get("HOME")) ?? "";
-    const ran = await $.process.run(
-      mimirCcArgv(home, "verify"),
-      mimirCcInit(e, VERIFY_TIMEOUT_MS),
-    );
-    if (ran.exitCode !== 0) {
-      $.ui.status(`mimir: verify gate failed (exit ${ran.exitCode})`);
-      return next(e);
-    }
-    const out = parseSubagentStopOutput(ran.stdout);
-    if (out.decision === "block" && out.reason !== undefined)
-      return { block: out.reason };
-    const report = out.hookSpecificOutput?.additionalContext;
-    if (report === undefined) return next(e);
-    const below = await next(e);
-    return {
-      ...below,
-      additionalContext: [...(below.additionalContext ?? []), report],
-    };
   }).catch(($, e, next) => {
     $.ui.status("mimir: verify gate failed");
     return next(e);

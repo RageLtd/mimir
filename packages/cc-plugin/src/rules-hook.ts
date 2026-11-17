@@ -25,6 +25,7 @@ import {
   runAndPartition,
 } from "@mimir/plugin-core/rules";
 import { errMessage } from "@mimir/plugin-core/util";
+import { withAgentCwd } from "./agent-worktree";
 import { createLogger } from "./logger";
 
 const log = createLogger("rules-hook");
@@ -44,6 +45,8 @@ type HookInput = {
   readonly session_id?: string;
   readonly hook_event_name?: string;
   readonly cwd?: string;
+  readonly agent_id?: string;
+  readonly agent_type?: string;
   readonly tool_name?: string;
   readonly tool_input?: unknown;
 };
@@ -71,7 +74,8 @@ const safeParseHookInput = (raw: string) => {
  * engine then no-ops gracefully because none of its field extractors
  * find the values they need.
  *
- * `cwd` from the hook event is the session's project root, matching
+ * `cwd` is the session's project root — or, for a subagent, its
+ * worktree (`withAgentCwd`) — matching
  * the engine's expectation for builtins like `file-length` that read
  * the on-disk file when relative paths are passed.
  */
@@ -98,7 +102,7 @@ export const runRulesHook = async () => {
   if (process.env.MIMIR_ACTIVE !== "1") return 0;
 
   const raw = await readStdin();
-  const input = await safeParseHookInput(raw);
+  const { input } = await withAgentCwd(await safeParseHookInput(raw));
   const ctx = buildContext(input);
 
   if (!ctx.toolName) return 0;

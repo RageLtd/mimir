@@ -48,21 +48,8 @@ export type PreToolUseOutput = {
   readonly systemMessage?: string;
 };
 
-/** The SubagentStop answer `mimir-cc verify` prints. */
-export type SubagentStopOutput = {
-  readonly decision?: "block";
-  readonly reason?: string;
-  readonly hookSpecificOutput?: { readonly additionalContext?: string };
-};
-
 export const parsePreToolUseOutput = (stdout: string) => {
   if (stdout.trim().length === 0) return {};
   // Serialisation boundary: the binary's stdout is JSON of a known shape.
   return JSON.parse(stdout) as PreToolUseOutput;
-};
-
-export const parseSubagentStopOutput = (stdout: string) => {
-  if (stdout.trim().length === 0) return {};
-  // Serialisation boundary: the binary's stdout is JSON of a known shape.
-  return JSON.parse(stdout) as SubagentStopOutput;
 };

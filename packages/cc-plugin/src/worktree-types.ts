@@ -38,7 +38,7 @@ import { createLogger } from "./logger";
 
 const log = createLogger("worktree-bootstrap");
 
-const WORKTREES_DIRS = [".claude", "worktrees"] as const;
+export const WORKTREES_DIRS = [".claude", "worktrees"] as const;
 /** The path segment every Claude Code agent worktree sits under. */
 export const WORKTREES_SEGMENT = `${sep}${WORKTREES_DIRS.join(sep)}${sep}`;
 const PLUGIN_DIR = ".claude-plugin";
