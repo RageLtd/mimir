@@ -1,6 +1,78 @@
 import { describe, expect, test } from "bun:test";
-import { buildWorkerPrompt, extractWorkerSections } from "./prompt";
+import { join } from "node:path";
+import { toAnthropicXml } from "../anthropic-xml";
+import {
+  buildWorkerPrompt,
+  extractWorkerSections,
+  WORKER_SECTIONS,
+} from "./prompt";
 import { WORKER_DEFINITIONS, workerByName } from "./roles";
+
+/** Code Principles ride in on Required Patterns, not on a tag of their own. */
+const WORKER_SECTIONS_KEEP_REQUIRED_PATTERNS =
+  WORKER_SECTIONS.includes("required_patterns") &&
+  !WORKER_SECTIONS.includes("code_principles");
+
+const SEED_PATH = join(
+  import.meta.dir,
+  "..",
+  "..",
+  "..",
+  "server",
+  "system-prompt.md",
+);
+
+/** Markdown from `heading` to the next heading of the same or a higher level. */
+const markdownSection = (markdown: string, heading: string) => {
+  const level = heading.indexOf(" ");
+  const start = markdown.split("\n").indexOf(heading);
+  if (start === -1) return null;
+  const lines = markdown.split("\n").slice(start + 1);
+  const end = lines.findIndex((line) => {
+    const match = /^(#+) /.exec(line);
+    return match?.[1] !== undefined && match[1].length <= level;
+  });
+  return (end === -1 ? lines : lines.slice(0, end)).join("\n");
+};
+
+/** The `<code_principles>` body nested in `<required_patterns>`, or "". */
+const codePrinciplesIn = (xml: string) => {
+  const patterns =
+    /<required_patterns>[\s\S]*?<\/required_patterns>/.exec(xml)?.[0] ?? "";
+  return (
+    /<code_principles>([\s\S]*?)<\/code_principles>/.exec(patterns)?.[1] ?? ""
+  );
+};
+
+const bulletCount = (text: string) => text.match(/^[-*] /gm)?.length ?? 0;
+
+describe("the seed's Code Principles", () => {
+  test("sit under Required Patterns as an opening paragraph and a list of several principles", async () => {
+    const seed = await Bun.file(SEED_PATH).text();
+    const patterns = markdownSection(seed, "# Required Patterns");
+    expect(patterns).not.toBeNull();
+    const principles = markdownSection(patterns ?? "", "## Code Principles");
+    expect(principles).not.toBeNull();
+    const blocks = (principles ?? "")
+      .split(/\n\s*\n/)
+      .map((block) => block.trim())
+      .filter((block) => block !== "");
+    const opening = blocks[0] ?? "";
+    expect(opening).not.toBe("");
+    expect(bulletCount(opening)).toBe(0);
+    expect(bulletCount(principles ?? "")).toBeGreaterThan(3);
+  });
+
+  test("reach every worker role through the sections the extraction already keeps", async () => {
+    expect(WORKER_SECTIONS_KEEP_REQUIRED_PATTERNS).toBe(true);
+    const xml = toAnthropicXml(await Bun.file(SEED_PATH).text());
+    for (const worker of WORKER_DEFINITIONS) {
+      const block = codePrinciplesIn(buildWorkerPrompt(xml, worker));
+      expect(block.trim()).not.toBe("");
+      expect(bulletCount(block)).toBeGreaterThan(3);
+    }
+  });
+});
 
 const XML = [
   "<preamble>I am Mimir.</preamble>",

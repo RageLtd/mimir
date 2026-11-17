@@ -40,6 +40,27 @@ describe("renderAgentMarkdown", () => {
   });
 });
 
+/** The `<code_principles>` body nested in `<required_patterns>`, or "". */
+const codePrinciplesIn = (text: string) => {
+  const patterns =
+    /<required_patterns>[\s\S]*?<\/required_patterns>/.exec(text)?.[0] ?? "";
+  return (
+    /<code_principles>([\s\S]*?)<\/code_principles>/.exec(patterns)?.[1] ?? ""
+  );
+};
+
+describe("seed agents", () => {
+  test("every worker carries the Code Principles inside Required Patterns", async () => {
+    const rendered = await renderSeedAgents();
+    expect(rendered).toHaveLength(WORKER_DEFINITIONS.length);
+    for (const agent of rendered) {
+      const block = codePrinciplesIn(agent.content);
+      expect(block.trim()).not.toBe("");
+      expect(block.match(/^[-*] /gm)?.length ?? 0).toBeGreaterThan(3);
+    }
+  });
+});
+
 describe("committed agents", () => {
   test("agents/*.md match the renderer — run `bun run agents:render` if not", async () => {
     const rendered = await renderSeedAgents();

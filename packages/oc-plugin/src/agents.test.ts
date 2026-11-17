@@ -163,6 +163,25 @@ describe("renderWorkerAgents", () => {
     }
   });
 
+  test("each role's body carries the seed's Code Principles inside Required Patterns", async () => {
+    const seed = await Bun.file(
+      join(import.meta.dir, "..", "..", "server", "system-prompt.md"),
+    ).text();
+    const files = renderWorkerAgents(seed);
+
+    for (const worker of WORKER_DEFINITIONS) {
+      const body = bodyOf(files[`${worker.name}.md`] ?? "");
+      const patterns =
+        /<required_patterns>[\s\S]*?<\/required_patterns>/.exec(body)?.[0] ??
+        "";
+      const block =
+        /<code_principles>([\s\S]*?)<\/code_principles>/.exec(patterns)?.[1] ??
+        "";
+      expect(block.trim()).not.toBe("");
+      expect(block.match(/^[-*] /gm)?.length ?? 0).toBeGreaterThan(3);
+    }
+  });
+
   test("called without models, no agent file names one", () => {
     const files = renderWorkerAgents("# Working Rules\n\nRead first.");
     for (const worker of WORKER_DEFINITIONS) {

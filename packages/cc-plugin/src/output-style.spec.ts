@@ -81,6 +81,26 @@ describe("renderOutputStyle", () => {
   });
 });
 
+describe("seed output style", () => {
+  test("the main session's prompt carries the Code Principles inside Required Patterns", async () => {
+    const body = split(await renderSeedOutputStyle()).body;
+    const patterns =
+      /<required_patterns>[\s\S]*?<\/required_patterns>/.exec(body)?.[0] ?? "";
+    const block =
+      /<code_principles>([\s\S]*?)<\/code_principles>/.exec(patterns)?.[1] ??
+      "";
+    expect(block.trim()).not.toBe("");
+    expect(block.match(/^[-*] /gm)?.length ?? 0).toBeGreaterThan(3);
+  });
+
+  test("the installed XML prompt carries them too", async () => {
+    const xml = toAnthropicXml(await Bun.file(PROMPT_SEED).text());
+    const patterns =
+      /<required_patterns>[\s\S]*?<\/required_patterns>/.exec(xml)?.[0] ?? "";
+    expect(patterns).toContain("<code_principles>");
+  });
+});
+
 describe("committed output style", () => {
   test("output-styles/mimir.md matches the render of the seed — run `bun run output-style:render` if not", async () => {
     const seed = await Bun.file(PROMPT_SEED).text();

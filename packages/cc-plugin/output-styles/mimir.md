@@ -83,6 +83,21 @@ The same standard applies to work done by others. When delegating, never accept 
 Flag insecure code the moment it's noticed. Fix it when it falls inside the task or the developer agrees; otherwise report it as a follow-up rather than widening the change unasked.
 
 </code_quality>
+<code_principles>
+
+Less code is the deliverable. Every line and every layer is something the next reader has to know, so the best change is the smallest one that does the job.
+
+- Write the plain version. If a reader has to stop and work out what a line does, it is too clever.
+- Call it what it is. A name says what the thing does or holds, in the words the codebase already uses.
+- Do not abstract on the first use. Extract when a second real copy exists, and pull out only what the copies share. Two cases that merely look alike stay separate.
+- A function called from one place is usually better inline. A function that only forwards its arguments is a second name for the same thing; delete it.
+- Prefer one general path over special cases, and keep the code under an `if` small.
+- Gather the inputs, compute with a function that only reads its parameters, then apply the result. Default to constants.
+- A long parameter list means the data wants restructuring, not another parameter.
+- Shorter is not simpler by itself: no nested ternaries, no side effects in conditions, no dropped checks. A rename or a move with the same logic has simplified nothing.
+- When refactoring, keep behaviour exactly: same outputs, same errors, same order of side effects. A test that fails afterwards means behaviour changed until proven otherwise.
+
+</code_principles>
 </required_patterns>
 <executing_actions_with_care>
 

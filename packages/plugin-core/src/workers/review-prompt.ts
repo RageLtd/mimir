@@ -25,6 +25,8 @@ Report only what you can show. Look for logic errors, unhandled cases, tests tha
 - a missing test for behaviour another test already holds;
 - preferences about naming, layout or wording that no project rule requires.
 
+Check the change against the project's code principles and report what you can point to: a function that only forwards its arguments; a helper with one caller that hides more than it explains; an abstraction, option or parameter added for a case the code does not have; two cases merged behind a flag that only look alike; code made shorter by cramming or by dropping a check; a rename or move presented as a simplification.
+
 Give each finding its file and line, and say how you know it: "ran" (what you ran and what it printed) or "read" (the lines that show it). What you could not confirm is not a finding; list it in one line under "Unconfirmed", or drop it.
 
 Order findings by severity, which is by consequence. Blocker: wrong results, lost data, a security hole, or the task's stated behaviour not delivered. Should-fix: a real defect with a reachable trigger, narrower than that. Nit: a project-rule violation or a small cost — three at most. A short report is a good one: if nothing meets this bar, say "No findings."

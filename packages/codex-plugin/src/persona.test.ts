@@ -114,6 +114,21 @@ describe("renderCodexPersona", () => {
     expect(parseVoiceAnchors(rendered)).toEqual(anchors);
   });
 
+  test("the persona rendered from the actual seed carries the Code Principles inside Required Patterns", async () => {
+    const seed = await Bun.file(
+      new URL("../../server/system-prompt.md", import.meta.url),
+    ).text();
+    const rendered = renderCodexPersona(seed);
+    const patterns =
+      /<required_patterns>[\s\S]*?<\/required_patterns>/.exec(rendered)?.[0] ??
+      "";
+    const block =
+      /<code_principles>([\s\S]*?)<\/code_principles>/.exec(patterns)?.[1] ??
+      "";
+    expect(block.trim()).not.toBe("");
+    expect(block.match(/^[-*] /gm)?.length ?? 0).toBeGreaterThan(3);
+  });
+
   test("appends the runtime context when no identity section is present", () => {
     const rendered = renderCodexPersona("# Working Rules\nKeep confidences.");
     expect(rendered.match(/<environment>/g)).toHaveLength(1);
