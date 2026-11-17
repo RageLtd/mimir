@@ -76,6 +76,6 @@ After collecting each task, run the integration check on the merged tree — `mi
 
 ## What you never do
 
-Accept `done` without the gate report. Edit source yourself. Write a review prompt. Respawn a failed worker with the same prompt. Push.
+Accept `done` without the gate report. Edit source yourself. Write a review prompt beyond the title. Respawn a failed worker with the same prompt. Push.
 
 $ARGUMENTS

@@ -34,6 +34,7 @@
   },
   "scripts": {
     "build": "bun build src/index.ts --outfile dist/mimir-oc.ts --target bun --minify",
+    "delegate:render": "bun scripts/render-delegate.ts",
     "test": "bun test --parallel src"
   },
   "type": "module"

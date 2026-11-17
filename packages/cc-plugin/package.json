@@ -12,6 +12,7 @@
     "mod:validate": "claude plugin validate .",
     "mod:test": "claude plugin test .",
     "agents:render": "bun scripts/render-agents.ts",
+    "delegate:render": "bun scripts/render-delegate.ts",
     "output-style:render": "bun scripts/render-output-style.ts"
   },
   "dependencies": {

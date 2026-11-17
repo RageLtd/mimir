@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import type { WorkerRoleModels } from "@mimir/plugin-core/shared-config";
 import { WORKER_DEFINITIONS, workerByName } from "@mimir/plugin-core/workers";
 import { renderWorkerAgents, renderWorkerFrontmatter } from "./agents";
@@ -24,6 +25,14 @@ const frontmatterOf = (text: string) => {
   const parsed = Bun.YAML.parse(rest.slice(0, end));
   if (!isRecord(parsed)) throw new Error("frontmatter is not a mapping");
   return parsed;
+};
+
+/** Everything after the closing `---` fence — the role prompt. */
+const bodyOf = (text: string) => {
+  if (!text.startsWith("---\n")) throw new Error("no frontmatter fence");
+  const end = text.indexOf("\n---\n", 4);
+  if (end === -1) throw new Error("unterminated frontmatter");
+  return text.slice(end + "\n---\n".length);
 };
 
 describe("renderWorkerFrontmatter", () => {
@@ -129,6 +138,28 @@ describe("renderWorkerAgents", () => {
       expect(frontmatterOf(files[`${worker.name}.md`] ?? "").model).toBe(
         models[worker.role],
       );
+    }
+  });
+
+  test("each role's body is the text Claude Code's committed worker agent carries", async () => {
+    // Both hosts build the body from the shared worker definitions and the
+    // same prompt seed; only frontmatter and file framing are host-specific.
+    // Claude Code's committed files are read as files, not imported, so
+    // this package takes no dependency on cc-plugin.
+    const packages = join(import.meta.dir, "..", "..");
+    const seed = await Bun.file(
+      join(packages, "server", "system-prompt.md"),
+    ).text();
+    const files = renderWorkerAgents(seed);
+
+    for (const worker of WORKER_DEFINITIONS) {
+      const file = `${worker.name}.md`;
+      const claudeCode = await Bun.file(
+        join(packages, "cc-plugin", "agents", file),
+      ).text();
+      const body = bodyOf(files[file] ?? "");
+      expect(body).toContain("<worker_contract>");
+      expect(body).toBe(bodyOf(claudeCode));
     }
   });
 

@@ -30,12 +30,12 @@ On OpenCode every worker runs in **this** directory — there is no worktree iso
 At the **beginning of EACH task**, before dispatching or resuming any worker for it, call `mimir_delegate` with `action: "task"`. The host captures the task-start Git commit; verification and generated reviews include committed red tests plus implementation changes since that boundary. Do this once per task, even when reusing a worker from a previous task. **Do not call it again for retries, role assistance, or review fixes**, even when those use fresh workers. Repeated `action: "start"` for the same plan preserves the current boundary; `status` does not change it. A worker cannot be dispatched without a task boundary.
 
 1. **`mimir-test`** — `task` with `subagent_type: "mimir-test"`. Prompt: the task title, the behaviour to test (what must be true, not the interface that makes it so), where the tests belong, and "write the test red-first; do not touch implementation". The task result carries the gate report appended (the project's check and the sanity rules ran; typecheck and the test suite are skipped for this role, since a red test may not even compile yet, and a lint that needs a build, such as clippy, is reported as skipped when the code does not build). Commit as `test(<package>): <task title>`.
-2. **`mimir-impl`** — `subagent_type: "mimir-impl"`. Prompt: the task title, the failing test(s) by name, the files in scope, and nothing about *how*. The result must end with `✅ Verify gate passed` — typecheck, tests, checks, `Test functions: N → M`. **Never accept a `done` without that report. Read the added tests before accepting.** Run step 3 **before** committing.
+2. **`mimir-impl`** — `subagent_type: "mimir-impl"`. Prompt: the task title, the failing test(s) by name, the files in scope, and nothing about *how*. The result must end with the gate's `✅ Verify gate passed` report — typecheck, tests, checks, `Test functions: N → M`. **Never accept a `done` without that report. Read the added tests before accepting.** Run step 3 **before** committing.
 3. **`mimir-review`** — `task` with `subagent_type: "mimir-review"` and exactly this prompt, nothing else:
 
    > Call `mimir_review_prompt` with title: "<task title>" and review the generated task diff and files, including committed red tests. You are reviewing cold — judge what is in front of you; do not ask what the plan was. Follow the generated instructions exactly: report only what you can show, with a trigger that can really happen. Do not edit anything. End with exactly one final line: STATUS: done
 
-   You write nothing but the title. A finding is a claim, not a fact: before anything goes back to a worker or up to the developer, check its trigger yourself — read the caller, the config or the workflow it names — and drop what cannot happen in the project as it runs. Confirmed blockers and should-fixes go back to `mimir-impl` by resuming it (`task` with its `task_id`) with the findings as the instruction. Nits you note in the plan file. Then commit as `feat(<package>): <task title>` or `fix(<package>): <task title>`; review fixes as `refactor(<package>): <task title> — review follow-up`. Subjects are conventional because the release pipeline versions from them.
+   You write nothing but the title. Do not add the plan, your reasoning, or what you expect it to find; the cold read is the point. A finding is a claim, not a fact: before anything goes back to a worker or up to the developer, check its trigger yourself — read the caller, the config or the workflow it names — and drop what cannot happen in the project as it runs. Confirmed blockers and should-fixes go back to `mimir-impl` by resuming it (`task` with its `task_id`) with the findings as the instruction. Nits you note in the plan file. Then commit the implementation, and each review fix, as §3 says.
 
 ## 2. Check-ins and retries
 
@@ -45,12 +45,16 @@ At the **beginning of EACH task**, before dispatching or resuming any worker for
 - Partial output (step limit reached), or a worker that died without a result (a rate limit, a crash): its edits are in this directory; check `git status`, then resume once with "continue". If it stalls again, stop and escalate.
 - **Escalate** means: update the plan file with what happened and the `task_id`, `mimir_delegate` `action: "stop"`, and tell the developer what you need decided.
 
-## 3. Finishing
+## 3. Commit subjects
+
+Commit subjects are conventional, because the release pipeline versions from them: `test(<package>): <task>` for a test worker, `feat(<package>): <task>` or `fix(<package>): <task>` for an impl worker, `refactor(<package>): <task> — review follow-up` for review fixes.
+
+## 4. Finishing
 
 1. Every task in the plan file marked done with its gate report summary and review outcome.
 2. `mimir_delegate` `action: "stop"`.
 3. Store **one** curated project memory for the whole delegation: what was built, the decisions, what the developer should look at first. Workers persist nothing; you persist once.
-4. Hand the developer the branch name and the plan file. Recommend a squash-merge with a conventional subject (`feat(<scope>): …`). Do not push, do not open a PR unless asked.
+4. Hand the developer the branch name and the plan file. Recommend a squash-merge with a conventional subject (`feat(<scope>): …`) — the branch's many small commits are an audit trail, not a changelog. Do not push, do not open a PR unless asked.
 
 ## What you never do
 

@@ -10,6 +10,7 @@ import {
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { renderDelegateCommand } from "@mimir/plugin-core/workers";
 import opencodeTemplate from "../artifacts/opencode.json.template" with {
   type: "text",
 };
@@ -171,6 +172,11 @@ describe("installMimir", () => {
     expect(
       await Bun.file(join(opencodeDir, "agents", "mimir.md")).exists(),
     ).toBe(true);
+    // The coordinator command is the shared source's OpenCode rendering,
+    // not a hand-maintained copy.
+    expect(
+      await Bun.file(join(opencodeDir, "commands", "delegate.md")).text(),
+    ).toBe(renderDelegateCommand("opencode"));
 
     // The installer has to read the opencode namespace: dropping the
     // host argument, or reading claudeCode, still writes agent files —
