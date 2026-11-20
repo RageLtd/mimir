@@ -11,6 +11,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderRefactorSkill } from "@mimir/plugin-core/skills/refactor";
+import { TESTING_SKILLS } from "@mimir/plugin-core/skills/testing";
 import { renderDelegateCommand } from "@mimir/plugin-core/workers";
 import opencodeTemplate from "../artifacts/opencode.json.template" with {
   type: "text",
@@ -181,6 +182,12 @@ describe("installMimir", () => {
     expect(
       await Bun.file(join(opencodeDir, "commands", "refactor.md")).text(),
     ).toBe(renderRefactorSkill("opencode"));
+    // The testing skills land where OpenCode discovers global skills.
+    for (const [name, source] of Object.entries(TESTING_SKILLS)) {
+      expect(
+        await Bun.file(join(opencodeDir, "skills", name, "SKILL.md")).text(),
+      ).toBe(source);
+    }
 
     // The installer has to read the opencode namespace: dropping the
     // host argument, or reading claudeCode, still writes agent files —

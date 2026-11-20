@@ -29,6 +29,7 @@ import { dirname, join } from "node:path";
 import { installEmbedderArtifacts } from "@mimir/plugin-core/brain/embedder-install";
 import { resolveCartographerBinary } from "@mimir/plugin-core/cartographer/resolve";
 import { attempt } from "@mimir/plugin-core/result";
+import { TESTING_SKILLS } from "@mimir/plugin-core/skills/testing";
 import { errMessage, mimirHome } from "@mimir/plugin-core/util";
 import { resolveWorkerModels } from "@mimir/plugin-core/workers";
 import agentTemplate from "../artifacts/agent-mimir.md.template" with {
@@ -400,6 +401,21 @@ export const installMimir = async (
     };
   }
   written.push(refactorCommandPath);
+
+  // The testing skills, where OpenCode discovers global skills.
+  const skillsDir = join(dirname(dirname(updateCommandPath)), "skills");
+  for (const [name, source] of Object.entries(TESTING_SKILLS)) {
+    const skillPath = join(skillsDir, name, "SKILL.md");
+    const [skillErr] = await attempt(() => writeText(skillPath, source));
+    if (skillErr) {
+      return {
+        ok: false,
+        message: `Failed to write the ${name} skill: ${errMessage(skillErr)}`,
+        written,
+      };
+    }
+    written.push(skillPath);
+  }
 
   return {
     ok: true,

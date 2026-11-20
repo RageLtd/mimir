@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 /**
- * Render each host's committed refactor skill from the shared source in
- * plugin-core/src/skills/refactor.ts. Run `bun run skills:render` from the
- * repository root after editing it — refactor.test.ts fails when a
- * committed file drifts from this output.
+ * Write each host's committed skill files from the shared sources in
+ * plugin-core/src/skills. Run `bun run skills:render` from the repository
+ * root after editing one — refactor.test.ts and testing.test.ts fail when
+ * a committed file drifts from this output.
  */
 
 import { join } from "node:path";
@@ -12,6 +12,7 @@ import {
   renderRefactorSkill,
   type SkillHost,
 } from "../src/skills/refactor";
+import { TESTING_SKILL_ROOTS, TESTING_SKILLS } from "../src/skills/testing";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const HOSTS: readonly SkillHost[] = ["claudeCode", "opencode", "codex"];
@@ -20,4 +21,12 @@ for (const host of HOSTS) {
   const path = join(REPO_ROOT, REFACTOR_SKILL_FILES[host]);
   await Bun.write(path, renderRefactorSkill(host));
   console.log(`rendered ${path}`);
+}
+
+for (const root of TESTING_SKILL_ROOTS) {
+  for (const [name, source] of Object.entries(TESTING_SKILLS)) {
+    const path = join(REPO_ROOT, root, name, "SKILL.md");
+    await Bun.write(path, source);
+    console.log(`rendered ${path}`);
+  }
 }
