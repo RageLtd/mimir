@@ -35,3 +35,12 @@ Bun workspace — the root `package.json` defines `workspaces` plus dependency c
 Editor-agnostic logic ships once in plugin-core with thin per-distribution wiring — never duplicated into a plugin package.
 
 Shared dependencies are elevated to the root `package.json` catalogs (`ai-sdk`, `protocol`, `server`, `opencode`); reference them with `catalog:<name>`.
+
+## Tickets
+
+Tickets live in Linear under the `RAG` team. Linear links a commit to its ticket from the commit message, through the GitHub mirror, and only when a magic word comes before the ticket ID:
+
+- `Fixes RAG-123` — links the commit and moves the ticket to Done when the commit reaches `main`.
+- `Refs RAG-123` — links the commit without closing the ticket.
+
+A bare `(RAG-123)` links nothing. `MIM-nn` identifiers in older commits, comments and docs belong to the retired workspace and are not rewritten.
