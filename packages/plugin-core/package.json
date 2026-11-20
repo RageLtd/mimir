@@ -57,6 +57,7 @@
     "./verify": "./src/verify/index.ts",
     "./workers": "./src/workers/index.ts",
     "./skills/refactor": "./src/skills/refactor.ts",
+    "./skills/testing": "./src/skills/testing.ts",
     "./project": "./src/project/index.ts",
     "./project/active": "./src/project/active.ts",
     "./voice-anchor": "./src/voice-anchor.ts",
