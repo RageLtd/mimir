@@ -104,8 +104,11 @@ const MECHANICS: Record<WorkerHost, readonly string[]> = {
     "git branch -d <worktreeBranch>",
     "`-d`, never `-D`",
     "mimir-cc verify --worktree <repo root> --allow-empty",
-    // review
+    // review: the reviewer starts in its own worktree, and the git guard
+    // refuses a `cd` into the one under review
     "mimir-cc review-prompt <worktreePath>",
+    "you do not need to `cd` into it",
+    "by their paths under `<worktreePath>`",
   ],
   opencode: [
     "`mimir_delegate`",

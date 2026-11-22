@@ -17,7 +17,7 @@ export type ReviewPromptInput = {
   readonly files: readonly ChangedFile[];
 };
 
-const INSTRUCTIONS = `You are reviewing a change cold. You have the task title and the diff — and nothing else, on purpose. Read the changed files from the worktree you are in (and anything they touch) as you need to; do not ask what the plan was or why a choice was made. Judge what is in front of you.
+const INSTRUCTIONS = `You are reviewing a change cold. You have the task title and the diff — and nothing else, on purpose. Read the changed files from the worktree under review (and anything they touch) as you need to; do not ask what the plan was or why a choice was made. Judge what is in front of you.
 
 Report only what you can show. Look for logic errors, unhandled cases, tests that cannot fail or do not exercise the change, and style that violates the project's rules. A finding needs a trigger that can happen with the code and its callers as they are: name the input, state or sequence, where it comes from, and what goes wrong. Check the trigger is real before you report it — read the caller, the config or the workflow that would produce it. Leave out:
 - what would only break after someone later edits or deletes code, mistypes a command, or misconfigures something;

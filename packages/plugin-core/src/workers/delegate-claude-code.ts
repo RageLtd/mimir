@@ -49,7 +49,7 @@ Each task runs three workers in order, each in its own worktree branched from th
 2. **\`mimir-impl\`** — \`subagent_type: "mimir-impl"\`. ${POLICY_IMPL_PROMPT} Its hand-back ${POLICY_IMPL_GATE} Then, **before collecting** (the reviewer reads the worktree), run step 3.
 3. **\`mimir-review\`** — spawn with \`subagent_type: "mimir-review"\` and exactly this prompt, nothing else:
 
-   > Review the change in the worktree at \`<worktreePath>\`. Run \`mimir-cc review-prompt <worktreePath> --title "<task title>"\` there and follow its instructions exactly; it gives you the task diff (committed red tests plus implementation, excluding the active plan), and you read the files yourself. Keep the coordinator's \`CLAUDE_CODE_SESSION_ID\` so the command uses the active task boundary.
+   > Review the change in the worktree at \`<worktreePath>\`. That is not the directory you start in, and you do not need to \`cd\` into it: run \`mimir-cc review-prompt <worktreePath> --title "<task title>"\` from where you are and follow its instructions exactly. It gives you the task diff (committed red tests plus implementation, excluding the active plan), and you read the files yourself, by their paths under \`<worktreePath>\`. Keep the coordinator's \`CLAUDE_CODE_SESSION_ID\` so the command uses the active task boundary.
 
    ${POLICY_REVIEW_COLD} Confirmed blockers and should-fixes go back to \`mimir-impl\` by resuming it (\`SendMessage\` to its agent id) with the findings as the instruction, or to a fresh impl worker if the original's worktree is already collected; re-run the gate via a fresh hand-back. ${POLICY_REVIEW_NITS}
 

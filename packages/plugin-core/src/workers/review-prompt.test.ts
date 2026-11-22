@@ -39,7 +39,12 @@ describe("buildReviewPrompt", () => {
     // only made the coordinator relay unchanged content.
     expect(prompt).not.toContain("<files>");
     expect(prompt).not.toContain("line1\nline2");
-    expect(prompt).toContain("Read the changed files from the worktree");
+    // On Claude Code the reviewer starts in a worktree of its own, so
+    // "the worktree you are in" sent it looking in the wrong place.
+    expect(prompt).toContain(
+      "Read the changed files from the worktree under review",
+    );
+    expect(prompt).not.toContain("worktree you are in");
     expect(prompt.indexOf("=== greet.ts")).toBeLessThan(
       prompt.indexOf("=== gone.ts"),
     );
