@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderRefactorSkill } from "@mimir/plugin-core/skills/refactor";
 import { TESTING_SKILLS } from "@mimir/plugin-core/skills/testing";
+import { TICKET_SKILLS } from "@mimir/plugin-core/skills/tickets";
 import { renderDelegateCommand } from "@mimir/plugin-core/workers";
 import opencodeTemplate from "../artifacts/opencode.json.template" with {
   type: "text",
@@ -184,6 +185,19 @@ describe("installMimir", () => {
     ).toBe(renderRefactorSkill("opencode"));
     // The testing skills land where OpenCode discovers global skills.
     for (const [name, source] of Object.entries(TESTING_SKILLS)) {
+      expect(
+        await Bun.file(join(opencodeDir, "skills", name, "SKILL.md")).text(),
+      ).toBe(source);
+    }
+    // The ticket skills land beside them, from the same registry
+    // plugin-core ships.
+    expect(Object.keys(TICKET_SKILLS).sort()).toEqual([
+      "bug-tickets",
+      "epic-tickets",
+      "story-tickets",
+      "task-tickets",
+    ]);
+    for (const [name, source] of Object.entries(TICKET_SKILLS)) {
       expect(
         await Bun.file(join(opencodeDir, "skills", name, "SKILL.md")).text(),
       ).toBe(source);
