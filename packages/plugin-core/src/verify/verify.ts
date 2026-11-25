@@ -22,6 +22,7 @@ import { attempt } from "../result";
 import { errMessage } from "../util";
 import { collectChanges } from "./changes";
 import {
+  allowedDeletionCost,
   coverageCheck,
   sanityCheck,
   testCounts,
@@ -69,6 +70,11 @@ export type VerifyOptions = {
    * `done` never sets this: a done with nothing to verify is refused.
    */
   readonly allowEmpty?: boolean;
+  /**
+   * Deleted test files the coordinator accepts — tests folded into
+   * another test file. Each excuses only the deletion of that path.
+   */
+  readonly allowedDeletions?: readonly string[];
 };
 
 export type CommandRun = {
@@ -148,6 +154,7 @@ export const runVerify = async (options: VerifyOptions) => {
   const run = options.run ?? runCommand;
   const tail = options.tail ?? 40;
   const role = options.role ?? "impl";
+  const allowedDeletions = options.allowedDeletions ?? [];
   const status = parseStatus(options.lastMessage);
   if (status !== "done" || role === "review")
     return { kind: "skip", status } satisfies VerifyOutcome;
@@ -181,7 +188,7 @@ export const runVerify = async (options: VerifyOptions) => {
 
   const failed =
     coverageCheck(changes.files, changes.branchPaths) ??
-    sanityCheck(changes.files);
+    sanityCheck(changes.files, allowedDeletions);
   if (failed) return block(failed.reason);
 
   // An empty (allowEmpty) run probes a path AT the root so the project
@@ -229,6 +236,7 @@ export const runVerify = async (options: VerifyOptions) => {
       files: changes.files,
       counts: testCounts(changes.files),
       runs,
+      allowed: allowedDeletionCost(changes.files, allowedDeletions),
     }),
   } satisfies VerifyOutcome;
 };

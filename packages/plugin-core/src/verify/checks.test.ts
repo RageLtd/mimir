@@ -132,6 +132,99 @@ describe("sanityCheck", () => {
   });
 });
 
+describe("sanityCheck with allowed deletions", () => {
+  const GONE = "gone_test.go";
+  const ALSO_GONE = "folded_test.go";
+  const deleted = (path: string) =>
+    file({
+      path,
+      status: "D",
+      after: null,
+      removed:
+        'func TestGone(t *testing.T) {\n\tif f() != 1 {\n\t\tt.Fatal("bad")\n\t}\n}',
+    });
+
+  test("an allowed deleted test file does not block", () => {
+    expect(sanityCheck([deleted(GONE)], [GONE])).toBeNull();
+  });
+
+  test("every allowed deletion is excused when several test files are folded", () => {
+    expect(
+      sanityCheck([deleted(GONE), deleted(ALSO_GONE)], [GONE, ALSO_GONE]),
+    ).toBeNull();
+  });
+
+  test("a deletion that was not allowed blocks with the move advice and the fold advice", () => {
+    const failure = sanityCheck([deleted(GONE)]);
+    expect(failure?.reason).toContain(`${GONE}: test file deleted`);
+    expect(failure?.reason).toMatch(/git (add|mv)/);
+    expect(failure?.reason).toContain("STATUS: question");
+  });
+
+  test("an allowance for one deletion does not excuse another", () => {
+    const failure = sanityCheck([deleted(GONE), deleted(ALSO_GONE)], [GONE]);
+    expect(failure?.reason).toContain(`${ALSO_GONE}: test file deleted`);
+    expect(failure?.reason).not.toContain(`${GONE}: test file deleted`);
+  });
+
+  test("an allowance for a path that is not in the change set allows nothing", () => {
+    const failure = sanityCheck([deleted(GONE)], ["elsewhere_test.go"]);
+    expect(failure?.reason).toContain(`${GONE}: test file deleted`);
+  });
+
+  test("an allowance naming a test file that lost assertions does not excuse it", () => {
+    const path = "a.test.ts";
+    const failure = sanityCheck(
+      [
+        file({
+          path,
+          added: 'test("x", () => {});',
+          removed:
+            'test("x", () => {\n  expect(1).toBe(1);\n  expect(2).toBe(2);\n});',
+        }),
+      ],
+      [path],
+    );
+    expect(failure?.reason).toContain("assertions removed");
+  });
+
+  test("an allowance naming a new test file with no assertions does not excuse it", () => {
+    const path = "b.test.ts";
+    const failure = sanityCheck(
+      [
+        file({
+          path,
+          status: "A",
+          before: null,
+          added: 'test("nothing", () => { doThing(); });',
+        }),
+      ],
+      [path],
+    );
+    expect(failure?.reason).toContain("no assertions");
+  });
+
+  test("an allowed deletion does not excuse a problem in the file it was folded into", () => {
+    const folded = "folded.test.ts";
+    const failure = sanityCheck(
+      [
+        deleted(GONE),
+        file({
+          path: folded,
+          status: "A",
+          before: null,
+          added: 'test("folded", () => { doThing(); });',
+        }),
+      ],
+      [GONE],
+    );
+    expect(failure?.reason).toContain(
+      `${folded}: new tests with no assertions`,
+    );
+    expect(failure?.reason).not.toContain(GONE);
+  });
+});
+
 describe("testCounts", () => {
   test("counts test functions before and after across files", () => {
     expect(

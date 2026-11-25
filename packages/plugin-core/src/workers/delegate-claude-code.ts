@@ -13,6 +13,8 @@ import {
   POLICY_ESCALATE_OPEN,
   POLICY_FINISH_CLOSE,
   POLICY_FINISH_OPEN,
+  POLICY_FOLD_CLOSE,
+  POLICY_FOLD_OPEN,
   POLICY_IMPL_GATE,
   POLICY_IMPL_PROMPT,
   POLICY_INTRO,
@@ -60,6 +62,7 @@ ${CHECKINS_HEADING}
 - **A worker that died** (a task notification with no hand-back — a rate limit, a crash): its worktree is retained with whatever it had written. Check \`git -C <worktreePath> status\`, then resume it by agent id with "continue"; it picks up from its transcript.
 - **Stale base**: a worker whose gate fails on code that landed on the integration branch after it was spawned (a review fix merged while it was still working) is not wrong — merge the integration tip forward into its branch (\`git -C <worktreePath> merge <integration-branch>\`) and resume it to hand back again.
 - Gate block: the worker retries on its own with the gate's reason; after three blocks the gate lets it stop with \`STATUS: failed\`. If the third block was the worker's own doing, escalate — do not respawn with the same prompt. If it was exogenous (a flaky test, a stale base you have since fixed), re-run the gate yourself: \`mimir-cc verify --worktree <worktreePath> --agent <agentId>\` prints the same report and clears the loop guard on a pass.
+${POLICY_FOLD_OPEN} \`mimir-cc delegate allow-deletion <path>...\`. ${POLICY_FOLD_CLOSE}
 ${POLICY_ESCALATE_OPEN} the worker transcript path, \`mimir-cc delegate stop\`, ${POLICY_ESCALATE_CLOSE}
 - Run one task at a time; never advance its boundary while a worker or review fix for it is still in flight.
 

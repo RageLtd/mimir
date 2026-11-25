@@ -34,6 +34,11 @@ export type CoordinatorState = {
     readonly base: string;
     /** The integration worktree the base was captured in. */
     readonly worktree: string;
+    /**
+     * Repository-relative test files the coordinator allows this task to
+     * delete. Kept on the task so the allowance ends when the task does.
+     */
+    readonly allowedDeletions?: readonly string[];
   };
 };
 
@@ -56,7 +61,21 @@ const readTask = (raw: unknown) => {
     throw new Error(
       "Invalid coordinator task state: cannot verify the task base.",
     );
-  return { base: task.base, worktree: task.worktree };
+  const allowed = task.allowedDeletions;
+  if (allowed === undefined)
+    return { base: task.base, worktree: task.worktree };
+  const paths = Array.isArray(allowed)
+    ? allowed.filter((path) => typeof path === "string")
+    : [];
+  if (!Array.isArray(allowed) || paths.length !== allowed.length)
+    throw new Error(
+      "Invalid coordinator task state: cannot read the allowed test deletions.",
+    );
+  return {
+    base: task.base,
+    worktree: task.worktree,
+    allowedDeletions: paths,
+  };
 };
 
 export const readCoordinatorState = async (sessionId: string) => {
@@ -96,6 +115,27 @@ export const writeCoordinatorState = async (
     coordinatorStatePath(sessionId),
     `${JSON.stringify(state, null, 2)}\n`,
   );
+};
+
+/**
+ * Add `paths` to the current task's allowed test deletions and write the
+ * state back. Returns the task's full allowance.
+ */
+export const allowTaskDeletions = async (
+  sessionId: string,
+  state: CoordinatorState & {
+    readonly task: NonNullable<CoordinatorState["task"]>;
+  },
+  paths: readonly string[],
+) => {
+  const allowedDeletions = [
+    ...new Set([...(state.task.allowedDeletions ?? []), ...paths]),
+  ];
+  await writeCoordinatorState(sessionId, {
+    ...state,
+    task: { ...state.task, allowedDeletions },
+  });
+  return allowedDeletions;
 };
 
 export const clearCoordinatorState = async (sessionId: string) => {

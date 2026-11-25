@@ -250,6 +250,40 @@ describe("shell safety (every role)", () => {
   });
 });
 
+describe("allowing a test-file deletion is the coordinator's call", () => {
+  const grants = [
+    "mimir-cc delegate allow-deletion src/a.test.ts",
+    "~/.local/bin/mimir-cc delegate allow-deletion a_test.go b_test.go",
+    "cd /work/repo && mimir-cc delegate allow-deletion a_test.go",
+    "bun packages/cc-plugin/src/cli.ts delegate allow-deletion a_test.go",
+  ];
+
+  for (const role of ["impl", "test", "review"] satisfies GuardRole[]) {
+    test(`${role}: running delegate allow-deletion from its shell is denied`, () => {
+      for (const command of grants) {
+        const d = guardDecision(ctx(role, "Bash", { command }));
+        expect(d.allow).toBe(false);
+        expect(reasonOf(d)).toContain("Role guard");
+      }
+    });
+  }
+
+  test("the coordinator's own call is allowed", () => {
+    for (const command of grants) {
+      expect(
+        guardDecision(
+          ctx(
+            "coordinator",
+            "Bash",
+            { command },
+            { planFile: "/work/repo/plan.md", planFileExists: true },
+          ),
+        ).allow,
+      ).toBe(true);
+    }
+  });
+});
+
 describe("secrets (every role)", () => {
   test("isSecretPath", () => {
     for (const p of [

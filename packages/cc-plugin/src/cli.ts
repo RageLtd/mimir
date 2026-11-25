@@ -95,7 +95,7 @@ const USAGE = [
   "  verify --worktree <path> [--role impl|test] [--agent <id>] [--allow-empty]",
   "                          Run the gate by hand: re-check a retained worktree, or",
   "                          (--allow-empty) the merged tree as the integration check.",
-  "  delegate <start --plan <file> | task | status | stop>",
+  "  delegate <start --plan <file> | task | allow-deletion <path>... | status | stop>",
   "                          Turn the coordinator role on/off for this session;",
   "                          `task` captures HEAD as the next task's base.",
   "  review-prompt <worktree> [--title <t>]",

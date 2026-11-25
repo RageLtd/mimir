@@ -52,6 +52,12 @@ export const POLICY_REVIEW_NITS = "Nits you note in the plan file.";
 export const POLICY_CHECKIN_ANSWER = `Answer the question asked, precisely; do not restate the whole task.
 - \`STATUS: blocked\` — the worker hit its role boundary (impl needs a test change, test needs an implementation change). Spawn the other role for that piece, then resume the blocked worker.`;
 
+/** Continues into the host's way of recording the allowance. */
+export const POLICY_FOLD_OPEN =
+  "- **Test files folded together**: the gate blocks a deleted test file it cannot pair as a move, so a worker that merges test files into one stops with `STATUS: question` and names the files it deleted. Read the tests that replace them. If every check the deleted files made is still held, allow those files for this task:";
+export const POLICY_FOLD_CLOSE =
+  "Give each path relative to the repository root, written as the gate printed it, then resume the worker to hand back. The allowance ends when the next task begins. The gate's report then lists each allowed deletion with the test-function and assertion counts on both sides of the fold: read them before you accept the hand-back. Never allow a deletion whose replacement you have not read.";
+
 export const POLICY_ESCALATE_OPEN =
   "- **Escalate** means: update the plan file with what happened and";
 export const POLICY_ESCALATE_CLOSE =
@@ -84,6 +90,8 @@ export const DELEGATE_POLICY = [
   POLICY_REVIEW_COLD,
   POLICY_REVIEW_NITS,
   POLICY_CHECKIN_ANSWER,
+  POLICY_FOLD_OPEN,
+  POLICY_FOLD_CLOSE,
   POLICY_ESCALATE_OPEN,
   POLICY_ESCALATE_CLOSE,
   POLICY_CONVENTIONAL_COMMITS,

@@ -3,6 +3,7 @@
  */
 
 export {
+  allowTaskDeletions,
   type CoordinatorState,
   clearCoordinatorState,
   coordinatorStatePath,

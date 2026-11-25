@@ -268,7 +268,12 @@ export const gateTaskOutput = async (
   const outcome = await deps.verify({
     role: roleForAgentType(agentType),
     worktree,
-    ...(state?.active ? { base: state.task?.base } : {}),
+    ...(state?.active
+      ? {
+          base: state.task?.base,
+          allowedDeletions: state.task?.allowedDeletions,
+        }
+      : {}),
     lastMessage: output.output,
     agentId: childId ?? input.callID,
     commandTimeoutMs: deps.commandTimeoutMs,

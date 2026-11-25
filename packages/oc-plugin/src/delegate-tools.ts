@@ -1,21 +1,23 @@
 /**
  * In-process tools the `/delegate` playbook calls on OpenCode:
  *
- *   mimir_delegate       start | task | status | stop the coordinator role for
- *                        the calling session (the same state file the
- *                        guard reads)
+ *   mimir_delegate       start | task | allow-deletion | status | stop the
+ *                        coordinator role for the calling session (the same
+ *                        state file the guard reads); allowed deletions live
+ *                        on the task record, so they end with the task
  *   mimir_review_prompt  the context-free review prompt for a worker's
  *                        change — generated, never written by the model
  */
 
 import { resolve } from "node:path";
 import {
+  allowTaskDeletions,
   clearCoordinatorState,
   readCoordinatorState,
   writeCoordinatorState,
 } from "@mimir/plugin-core/guard";
 import { collectChanges, runCommand } from "@mimir/plugin-core/verify";
-import { buildReviewPrompt } from "@mimir/plugin-core/workers";
+import { buildReviewPrompt, workerByName } from "@mimir/plugin-core/workers";
 import { tool } from "./tool-factory";
 
 const describeState = async (sessionID: string, planFile: string) => {
@@ -35,16 +37,23 @@ const describeState = async (sessionID: string, planFile: string) => {
 export const delegateTool = (directory = process.cwd(), worktree = directory) =>
   tool({
     description:
-      "Turn the coordinator role on or off. `start` (with planFile) activates the guard. Call `task` once at the beginning of EACH task, before any worker edits: the host captures its Git base. Never call `task` for retries, role assistance, or review fixes. `status` reports state; `stop` restores normal operation.",
+      "Turn the coordinator role on or off. `start` (with planFile) activates the guard. Call `task` once at the beginning of EACH task, before any worker edits: the host captures its Git base. Never call `task` for retries, role assistance, or review fixes. `allow-deletion` (with paths) lets the current task delete those test files; the allowance ends with the task. `status` reports state; `stop` restores normal operation.",
     args: {
       action: {
         type: "string",
-        description: "start | task | status | stop",
-        enum: ["start", "task", "status", "stop"],
+        description: "start | task | allow-deletion | status | stop",
+        enum: ["start", "task", "allow-deletion", "status", "stop"],
       },
       planFile: {
         type: "string",
         description: "Path to the delegation plan (required for start).",
+        optional: true,
+      },
+      paths: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "Test files the current task may delete, relative to the repository root (required for allow-deletion).",
         optional: true,
       },
     },
@@ -90,11 +99,32 @@ export const delegateTool = (directory = process.cwd(), worktree = directory) =>
           });
           return `task started at ${base}; keep this boundary through retries and review fixes.`;
         }
+        case "allow-deletion": {
+          if (context.agent && workerByName(context.agent))
+            return "Allowing a test-file deletion is the coordinator's call. Stop with STATUS: question and name the deleted test files, so the coordinator can allow them.";
+          if (!args.paths || args.paths.length === 0)
+            return "mimir_delegate allow-deletion needs paths: one or more test file paths, relative to the repository root.";
+          const state = await readCoordinatorState(sessionID);
+          if (!state?.active)
+            return "mimir_delegate allow-deletion needs an active delegation; call start first.";
+          if (!state.task)
+            return 'mimir_delegate allow-deletion needs a task boundary; call action: "task" first.';
+          const allowedDeletions = await allowTaskDeletions(
+            sessionID,
+            { ...state, task: state.task },
+            args.paths,
+          );
+          return `allowed test deletions for this task: ${allowedDeletions.join(", ")}`;
+        }
         case "status": {
           const state = await readCoordinatorState(sessionID);
           if (!state?.active)
             return `no active delegation for session ${sessionID}`;
-          return describeState(sessionID, state.planFile);
+          const described = await describeState(sessionID, state.planFile);
+          const allowed = state.task?.allowedDeletions ?? [];
+          return allowed.length > 0
+            ? `${described}\nallowed test deletions: ${allowed.join(", ")}`
+            : described;
         }
         case "stop":
           await clearCoordinatorState(sessionID);

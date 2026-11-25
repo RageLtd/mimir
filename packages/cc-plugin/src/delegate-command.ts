@@ -3,6 +3,9 @@
  *
  *   mimir-cc delegate start --plan <file>   turn the coordinator role on
  *   mimir-cc delegate task                  capture the next task's Git base
+ *   mimir-cc delegate allow-deletion <path>…
+ *                                            let the current task delete these
+ *                                            test files (ends with the task)
  *   mimir-cc delegate status                 show the state for this session
  *   mimir-cc delegate stop                   turn it off
  *   mimir-cc review-prompt <worktree> [--title <t>]
@@ -17,6 +20,7 @@
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
+  allowTaskDeletions,
   clearCoordinatorState,
   writeCoordinatorState,
 } from "@mimir/plugin-core/guard";
@@ -49,6 +53,7 @@ const unreadableState = (error: Error) => {
 export type DelegateArgs =
   | { readonly action: "start"; readonly planFile: string }
   | { readonly action: "task" }
+  | { readonly action: "allow-deletion"; readonly paths: readonly string[] }
   | { readonly action: "status" }
   | { readonly action: "stop" };
 
@@ -75,10 +80,16 @@ export const parseDelegateArgs = (args: readonly string[]) => {
       if (args.length !== 1)
         return "delegate task takes no arguments; the host captures HEAD.";
       return { action: "task" } satisfies DelegateArgs;
+    case "allow-deletion": {
+      const paths = args.slice(1);
+      if (paths.length === 0)
+        return "delegate allow-deletion needs one or more test file paths, relative to the repository root.";
+      return { action: "allow-deletion", paths } satisfies DelegateArgs;
+    }
     case "stop":
       return { action: "stop" } satisfies DelegateArgs;
     default:
-      return "usage: mimir-cc delegate start --plan <file> | task | status | stop";
+      return "usage: mimir-cc delegate start --plan <file> | task | allow-deletion <path>... | status | stop";
   }
 };
 
@@ -206,6 +217,31 @@ export const runDelegateCommand = async (args: readonly string[]) => {
       );
       return 0;
     }
+    case "allow-deletion": {
+      const [stateError, state] = await attempt(() => readTaskState(session));
+      if (stateError) return unreadableState(stateError);
+      if (!state?.active) {
+        console.error(
+          "delegate allow-deletion needs an active delegation; call start first.",
+        );
+        return 1;
+      }
+      if (!state.task) {
+        console.error(
+          "delegate allow-deletion needs a task boundary; run `mimir-cc delegate task` first.",
+        );
+        return 1;
+      }
+      const allowedDeletions = await allowTaskDeletions(
+        session,
+        { ...state, task: state.task },
+        parsed.paths,
+      );
+      console.log(
+        `allowed test deletions for this task: ${allowedDeletions.join(", ")}`,
+      );
+      return 0;
+    }
     case "status": {
       const [stateError, state] = await attempt(() => readTaskState(session));
       if (stateError) return unreadableState(stateError);
@@ -216,6 +252,9 @@ export const runDelegateCommand = async (args: readonly string[]) => {
       console.log(
         await describeState(session, state.planFile, await claudeCodeModels()),
       );
+      const allowed = state.task?.allowedDeletions ?? [];
+      if (allowed.length > 0)
+        console.log(`allowed test deletions: ${allowed.join(", ")}`);
       return 0;
     }
     case "stop": {

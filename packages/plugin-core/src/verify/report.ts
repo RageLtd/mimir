@@ -3,7 +3,7 @@
  */
 
 import type { ChangedFile } from "./changes";
-import type { TestCounts } from "./checks";
+import type { AllowedDeletionCost, TestCounts } from "./checks";
 import type { CommandRun } from "./verify";
 
 export const formatBlockReason = (
@@ -29,7 +29,17 @@ export const formatPassReport = (input: {
   readonly files: readonly ChangedFile[];
   readonly counts: TestCounts;
   readonly runs: readonly CommandRun[];
+  readonly allowed?: AllowedDeletionCost | null;
 }) => {
+  const { allowed } = input;
+  const allowedLines = allowed
+    ? [
+        `Allowed test deletions (${allowed.paths.length}):`,
+        ...allowed.paths.map((p) => `  ${p}`),
+        `Allowed deleted test files: ${allowed.deleted.tests} test functions, ${allowed.deleted.assertions} assertions`,
+        `Other changed test files: ${allowed.othersBefore.tests} → ${allowed.othersAfter.tests} test functions, ${allowed.othersBefore.assertions} → ${allowed.othersAfter.assertions} assertions`,
+      ]
+    : [];
   const files = input.files.map((f) => `  ${f.status} ${f.path}`).join("\n");
   const runs = input.runs
     .map((r) =>
@@ -44,6 +54,7 @@ export const formatPassReport = (input: {
     `Changed files (${input.files.length}):`,
     files,
     `Test functions: ${input.counts.before} → ${input.counts.after}`,
+    ...allowedLines,
     "Commands:",
     runs.length > 0 ? runs : "  (none)",
   ].join("\n");

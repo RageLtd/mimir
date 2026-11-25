@@ -53,6 +53,7 @@ export const taskProvenance = async (
   }
   return {
     base: task.base,
+    allowedDeletions: task.allowedDeletions ?? [],
     worktree: await realpath(
       await gitOutput(worktree, "rev-parse", "--show-toplevel"),
     ),

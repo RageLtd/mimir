@@ -203,6 +203,7 @@ const verifyForSession = async (
   return runVerify({
     ...options,
     base: task?.base,
+    allowedDeletions: task?.allowedDeletions,
     worktree: task?.worktree ?? options.worktree,
   });
 };

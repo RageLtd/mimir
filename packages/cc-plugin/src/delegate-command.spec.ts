@@ -209,3 +209,178 @@ describe("runDelegateCommand reports the claudeCode namespace", () => {
     await runDelegateCommand(["stop"]);
   });
 });
+
+// Repository-relative test files the coordinator allows to be deleted.
+// Neither is a substring of the other.
+const FIRST = "pkg/first.spec.ts";
+const SECOND = "pkg/second.spec.ts";
+
+describe("parseDelegateArgs allow-deletion", () => {
+  test("takes one or more paths; none is a usage error", () => {
+    expect(parseDelegateArgs(["allow-deletion", FIRST, SECOND])).toEqual({
+      action: "allow-deletion",
+      paths: [FIRST, SECOND],
+    });
+    expect(typeof parseDelegateArgs(["allow-deletion"])).toBe("string");
+  });
+});
+
+describe("delegate allow-deletion", () => {
+  let previousMimirHome: string | undefined;
+  let previousSession: string | undefined;
+  let realCwd: string;
+  let sandbox: string;
+  let planFile: string;
+
+  /** runDelegateCommand with its console output captured. */
+  const delegate = async (...args: string[]) => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const realLog = console.log;
+    const realError = console.error;
+    console.log = (...parts: unknown[]) => {
+      out.push(parts.join(" "));
+    };
+    console.error = (...parts: unknown[]) => {
+      err.push(parts.join(" "));
+    };
+    try {
+      const code = await runDelegateCommand(args);
+      return { code, stdout: out.join("\n"), stderr: err.join("\n") };
+    } finally {
+      console.log = realLog;
+      console.error = realError;
+    }
+  };
+
+  const status = async () => (await delegate("status")).stdout;
+
+  const startTask = async (plan = planFile) => {
+    expect((await delegate("start", "--plan", plan)).code).toBe(0);
+    const task = await delegate("task");
+    expect(task.code, task.stderr).toBe(0);
+  };
+
+  beforeEach(async () => {
+    previousMimirHome = process.env.MIMIR_HOME;
+    previousSession = process.env[SESSION_ENV];
+    realCwd = process.cwd();
+    sandbox = mkdtempSync(join(tmpdir(), "mimir-delegate-allow-"));
+    process.env.MIMIR_HOME = join(sandbox, "home");
+    process.env[SESSION_ENV] = "sess-allow-deletion";
+    const repo = join(sandbox, "repo");
+    mkdirSync(repo, { recursive: true });
+    // `delegate task` captures HEAD of the repository it runs in.
+    for (const argv of [
+      ["git", "init", "-q", "-b", "main"],
+      [
+        "git",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "user.name=Fixture",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "baseline",
+      ],
+    ]) {
+      const result = Bun.spawnSync(argv, { cwd: repo });
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+    }
+    planFile = join(repo, "plan.md");
+    await Bun.write(planFile, "# plan\n");
+    process.chdir(repo);
+  });
+
+  afterEach(() => {
+    process.chdir(realCwd);
+    if (previousMimirHome === undefined) delete process.env.MIMIR_HOME;
+    else process.env.MIMIR_HOME = previousMimirHome;
+    if (previousSession === undefined) delete process.env[SESSION_ENV];
+    else process.env[SESSION_ENV] = previousSession;
+    rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  test("records the paths for the current task, adds on a second call, and status shows them", async () => {
+    await startTask();
+
+    const first = await delegate("allow-deletion", FIRST);
+    expect(first.code, first.stderr).toBe(0);
+    expect(await status()).toContain(FIRST);
+    expect(await status()).not.toContain(SECOND);
+
+    const second = await delegate("allow-deletion", SECOND);
+    expect(second.code, second.stderr).toBe(0);
+    const shown = await status();
+    expect(shown).toContain(FIRST);
+    expect(shown).toContain(SECOND);
+  });
+
+  test("several paths in one call are all recorded", async () => {
+    await startTask();
+
+    expect((await delegate("allow-deletion", FIRST, SECOND)).code).toBe(0);
+    const shown = await status();
+    expect(shown).toContain(FIRST);
+    expect(shown).toContain(SECOND);
+  });
+
+  test("capturing the next task allows nothing", async () => {
+    await startTask();
+    expect((await delegate("allow-deletion", FIRST)).code).toBe(0);
+
+    expect((await delegate("task")).code).toBe(0);
+    expect(await status()).not.toContain(FIRST);
+  });
+
+  test("starting a different plan allows nothing", async () => {
+    await startTask();
+    expect((await delegate("allow-deletion", FIRST)).code).toBe(0);
+
+    const nextPlan = join(sandbox, "repo", "next-plan.md");
+    await Bun.write(nextPlan, "# next plan\n");
+    await startTask(nextPlan);
+    expect(await status()).not.toContain(FIRST);
+  });
+
+  test("stop allows nothing, including after the delegation starts again", async () => {
+    await startTask();
+    expect((await delegate("allow-deletion", FIRST)).code).toBe(0);
+
+    expect((await delegate("stop")).code).toBe(0);
+    expect(await status()).not.toContain(FIRST);
+    await startTask();
+    expect(await status()).not.toContain(FIRST);
+  });
+
+  test("no path: records nothing, exits non-zero and says what is missing", async () => {
+    await startTask();
+
+    const refused = await delegate("allow-deletion");
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain("allow-deletion");
+  });
+
+  test("no active delegation: records nothing, exits non-zero and says so", async () => {
+    const refused = await delegate("allow-deletion", FIRST);
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain("active delegation");
+
+    await startTask();
+    expect(await status()).not.toContain(FIRST);
+  });
+
+  test("a delegation without a task boundary: records nothing, exits non-zero and names delegate task", async () => {
+    expect((await delegate("start", "--plan", planFile)).code).toBe(0);
+
+    const refused = await delegate("allow-deletion", FIRST);
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain("delegate task");
+    expect(await status()).not.toContain(FIRST);
+
+    expect((await delegate("task")).code).toBe(0);
+    expect(await status()).not.toContain(FIRST);
+  });
+});

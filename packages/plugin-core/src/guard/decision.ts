@@ -141,6 +141,7 @@ const GIT_RESET_HARD = new RegExp(`${GIT}reset\\b[^;&|]*--hard\\b`);
 const GIT_BRANCH_DELETE = new RegExp(`${GIT}branch\\b[^;&|]*\\s-[a-zA-Z]*D\\b`);
 const GIT_CLEAN_FORCE = new RegExp(`${GIT}clean\\b[^;&|]*\\s-[a-zA-Z]*f`);
 const RM_RECURSIVE = /\brm\s+((?:-\S+\s+)+)([^;&|]*)/g;
+const DELEGATE_ALLOW_DELETION = /\bdelegate\s+allow-deletion\b/;
 
 const stripQuotes = (word: string) => word.replace(/^['"]|['"]$/g, "");
 
@@ -281,6 +282,11 @@ export const guardDecision = (ctx: GuardContext) => {
           : ctx.worktree;
       const verdict = shellDecision(command, ctx.worktree, cwd);
       if (!verdict.allow) return verdict;
+      if (ctx.role !== "coordinator" && DELEGATE_ALLOW_DELETION.test(command)) {
+        return deny(
+          "Role guard: allowing a test-file deletion is the coordinator's call. Stop with STATUS: question and name the deleted test files, so the coordinator can allow them.",
+        );
+      }
     }
   }
 

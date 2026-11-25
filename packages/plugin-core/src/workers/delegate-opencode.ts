@@ -14,6 +14,8 @@ import {
   POLICY_ESCALATE_OPEN,
   POLICY_FINISH_CLOSE,
   POLICY_FINISH_OPEN,
+  POLICY_FOLD_CLOSE,
+  POLICY_FOLD_OPEN,
   POLICY_IMPL_GATE,
   POLICY_IMPL_PROMPT,
   POLICY_INTRO,
@@ -57,6 +59,7 @@ ${CHECKINS_HEADING}
 - \`STATUS: question\` — resume the worker (${RESUME}) with the answer. ${POLICY_CHECKIN_ANSWER}
 - Gate block — the result tells you the worker has stopped and which \`task_id\` to resume with the gate's reason as its instruction. Do that; after three blocks the gate marks the result \`STATUS: failed\`. That is your signal to escalate — do not respawn with the same prompt.
 - Partial output (step limit reached), or a worker that died without a result (a rate limit, a crash): its edits are in this directory; check \`git status\`, then resume once with "continue". If it stalls again, stop and escalate.
+${POLICY_FOLD_OPEN} \`mimir_delegate\` with \`action: "allow-deletion"\` and \`paths\`. ${POLICY_FOLD_CLOSE}
 ${POLICY_ESCALATE_OPEN} the \`task_id\`, ${STOP}, ${POLICY_ESCALATE_CLOSE}
 
 ## 3. Commit subjects
