@@ -68,7 +68,7 @@ export const extractionConfig = () => {
 
 export const loadConfig = () => {
   const config: MimirConfig = {
-    serverUrl: process.env.MIMIR_SERVER_URL ?? "http://mimir.conhost.lan",
+    serverUrl: process.env.MIMIR_SERVER_URL ?? "https://mimir.rageltd.ca",
     apiKey: process.env.MIMIR_API_KEY ?? "",
     // Empty = no configured default. Model selection is left to the picker:
     // `buildModelsState` defaults to the first discovered model and Zed's
