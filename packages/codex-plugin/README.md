@@ -1,6 +1,6 @@
 # @mimir/codex-plugin
 
-Mimir for OpenAI Codex CLI — the fourth distribution alongside cc-plugin
+Mimir for OpenAI Codex CLI — a distribution alongside cc-plugin
 (Claude Code), oc-plugin (OpenCode), and acp (Zed). Codex hosts its own
 models; Mimir contributes the brain: persona, MCP tools, local memory
 distillation, retrieval injection, cartographer indexing, and rule
@@ -64,6 +64,10 @@ canonical copy in plugin-core.
   `MIMIR_ACTIVE`, links `auth.json` from `~/.codex` when one exists (login
   is shared), exports `MIMIR_API_KEY` from config for the HTTP MCP entry,
   dispatches `keys`/`sync` to the binary, then `exec codex "$@"`.
+- `~/.local/bin/mimir-codex-acp` — Zed agent-panel ACP wrapper: uses the
+  same isolated Codex home, login, MCP configuration, hooks, and updater,
+  then launches `@agentclientprotocol/codex-acp` through `bunx`.
+- `~/.local/bin/mimir-codex-bin` — this package's compiled binary.
 
 ### Login
 
@@ -75,10 +79,6 @@ says so and lets Codex prompt: run `mimir-codex login` once and the
 credential is stored in `~/.mimir/codex/auth.json`. On Linux (file store
 by default) the existing `~/.codex/auth.json` is linked in and nothing
 needs doing.
-- `~/.local/bin/mimir-codex-acp` — Zed agent-panel ACP wrapper: uses the
-  same isolated Codex home, login, MCP configuration, hooks, and updater,
-  then launches `@agentclientprotocol/codex-acp` through `bunx`.
-- `~/.local/bin/mimir-codex-bin` — this package's compiled binary.
 
 ### Hook trust
 
@@ -108,7 +108,7 @@ manual fallback.
 | PreToolUse | `rules` | `.enforce.toml` rule nudges (apply_patch fans out per file via tool-map) |
 | PreToolUse (`^Bash$`) | `file-context` | cartographer + memory injection on single-file read commands, plus path-scoped (`paths:` frontmatter) project rules the first time a matching file is read |
 | PostToolUse (`^apply_patch$`) | `reindex` | detached per-file cart-index upsert |
-| Stop | `persist` | rollout-delta → local extraction → replica (MIM-86) |
+| Stop | `persist` | rollout-delta → local extraction → replica |
 | PreCompact | `precompact` | summary + fact distillation before discard |
 
 Codex-specific translation lives in two modules: `rollout-delta.ts`

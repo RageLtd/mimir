@@ -15,9 +15,13 @@ The rule that shapes this package: **a user-facing flow never belongs to one edi
 | `store/` | SQLite stores: org replica, user memories, cartographer index |
 | `tools/` | Org-memory, user-memory, and cartographer MCP tool definitions |
 | `cartographer/` | Tree-sitter parse client, index sync, file context |
-| `rules/`, `project/` | Rule engine and project resolution |
+| `rules/`, `project/` | Rule engine (the format is in the [`.enforce.toml` reference](../../docs/rules.md)) and project resolution |
+| `guard/` | Role guard: what a coordinator or a worker may do with a tool call |
+| `verify/` | The verify gate that checks a worker's worktree before its hand-back is accepted |
+| `workers/` | Worker definitions, prompts and per-role model resolution for delegation |
+| `skills/` | The shared skills every distribution ships |
 | `mcp/` | Stdio MCP server assembly |
-| `anthropic-xml.ts`, `markdown-to-xml.ts`, `voice-anchor.ts`, `shared-config.ts`, `logger.ts`, `result.ts`, `util.ts` | Prompt conversion, persona anchoring, config resolution, and the small shared utilities |
+| `anthropic-xml.ts`, `markdown-to-xml.ts`, `voice-anchor.ts`, `shared-config.ts`, `mimir-toml.ts`, `logger.ts`, `result.ts`, `util.ts` | Prompt conversion, persona anchoring, config resolution, layered `mimir.toml`, and the small shared utilities |
 
 Submodule paths are the public API — import from `@mimir/plugin-core/<module>`, not from the barrel. The barrel at `src/index.ts` re-exports for callers that want a single line, but explicit paths keep the dependency graph readable.
 
@@ -25,7 +29,7 @@ The only runtime dependencies are the AI SDK provider packages the inference eng
 
 ## The memory brain
 
-Distillation is driven from the developer's machine and never touches mimir-server (MIM-86). When a turn ends (or the session goes idle, depending on the host) and before compaction, new turns are handed to an extraction model and reduced to memories. Which model that is depends on the distribution — see [Extraction configuration](#extraction-configuration). With a local endpoint the transcript never leaves the machine; on Claude Code's default it goes to the session's own model provider, where the session's turns already go, and nowhere else.
+Distillation is driven from the developer's machine and never touches mimir-server. When a turn ends (or the session goes idle, depending on the host) and before compaction, new turns are handed to an extraction model and reduced to memories. Which model that is depends on the distribution — see [Extraction configuration](#extraction-configuration). With a local endpoint the transcript never leaves the machine; on Claude Code's default it goes to the session's own model provider, where the session's turns already go, and nowhere else.
 
 Storage is two SQLite stores with different scopes and different fates:
 
@@ -55,7 +59,7 @@ Whether an endpoint is required depends on the distribution:
 | Codex CLI | Yes | Extraction is skipped and logged; the turn is never failed |
 | ACP (Zed) | Yes | Extraction is skipped and logged; the turn is never failed |
 
-Claude Code is the exception because its hooks-module API lends the plugin the session's model client; the other hosts have no equivalent, so the endpoint is their only path. The Claude Code mechanics are in [`packages/cc-plugin/README.md`](../cc-plugin/README.md#hooks-module-plugin-hooksregisterts).
+Claude Code is the exception because its hooks-module API lends the plugin the session's model client; the other hosts have no equivalent, so the endpoint is their only path. The Claude Code mechanics are in the [cc-plugin hooks reference](../../docs/claude-code/hooks.md#distillation).
 
 Hygiene has no session-model path on any host, Claude Code included: a sweep needs a configured extraction endpoint (`--model` overrides only the model id).
 

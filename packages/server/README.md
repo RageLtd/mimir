@@ -15,7 +15,7 @@ The blind sync server. It has exactly four jobs — **auth** (accounts, orgs, in
 | `/mcp` | Operator-only introspection (`read_mimir_logs`); disabled unless `MIMIR_OPERATOR_TOKEN` is set |
 | `/app`, `/operator/*` | Browser surfaces — organization admin (members, settings, audit, memory maintenance) and the operator dashboard for runtime settings, provisioning, health, and grants. Both gated on browser sessions, mounted only when auth is enabled |
 
-There are **no inference routes**. `/v1/chat/completions`, `/v1/messages`, model listing, and the server-side agent loop were removed under MIM-89 — every model call now originates on the client. `routes/projects.ts` remains in the tree but is deliberately unmounted (project identity is derived locally; see THREAT_MODEL TM-006).
+There are **no inference routes**: every model call originates on the client. `routes/projects.ts` is in the tree but deliberately unmounted (project identity is derived locally; see THREAT_MODEL TM-006).
 
 Storage is two SQLite files: the tenant store (`MIMIR_DB_PATH` — envelopes, sync cursors, and leases) and the auth store (`AUTH_DB_PATH`). There is no database service to operate.
 
@@ -27,12 +27,14 @@ Storage is two SQLite files: the tenant store (`MIMIR_DB_PATH` — envelopes, sy
 | `MIMIR_DB_PATH` | `./mimir.sqlite` | Tenant store — point at a persistent volume in deployments |
 | `MIMIR_OPERATOR_TOKEN` | — | Bootstrap/fallback bearer token for operator MCP introspection; a one-way runtime replacement retires it |
 | `MIMIR_OPERATOR_USER_IDS` | — | Comma-separated existing Better Auth user ids imported once as browser-operator grants |
-| `SYSTEM_PROMPT_PATH` | `./system-prompt.md` | First-boot system-prompt seed; runtime content is stored in the auth database |
+| `SYSTEM_PROMPT_PATH` | `./system-prompt.md` | System-prompt seed. With auth enabled, the prompt served is the copy stored in the auth database: at each boot a changed seed file replaces that copy, unless an operator has edited the stored prompt since, in which case the edit stays and boot logs `kept-operator-edit` |
 | `AUTH_ENABLED` | `false` | Off = single-user self-hosted mode (ungated, plaintext sync); on = accounts + E2E-encrypted sync |
 | `AUTH_SECRET` | — | better-auth signing secret. Required when auth is enabled; boot fails loudly without it |
 | `AUTH_DB_PATH` | `./auth.sqlite` | Auth store |
 | `AUTH_BASE_URL` | `http://localhost:<port>` | Public base URL — feeds better-auth and passkey rpID derivation |
 | `AUTH_SETUP_TOKEN` | — | One-time first-boot claim: while zero users exist, sign-up requires `X-Setup-Token` to match |
+| `LOG_LEVEL` | `info` | Log level |
+| `MIMIR_LOG_FILE` | `/data/mimir.log` | JSON log file, the one `read_mimir_logs` reads |
 
 That is the entire surface. Inference, embeddings, memory extraction, and web search all run client-side; provider keys are client configuration and never reach the server.
 

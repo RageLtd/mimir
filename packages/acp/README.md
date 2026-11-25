@@ -35,7 +35,7 @@ All configuration is via environment variables, set in the editor's agent env bl
 
 | Variable | Default | Description |
 |---|---|---|
-| `MIMIR_SERVER_URL` | `http://mimir.conhost.lan` | mimir-server base URL |
+| `MIMIR_SERVER_URL` | `https://mimir.rageltd.ca` | mimir-server base URL |
 | `MIMIR_API_KEY` | (empty) | Server API key — required for encrypted sync against an auth-enabled server |
 
 **Inference (BYOK — keys never leave your machine):**
@@ -77,7 +77,7 @@ bun run packages/acp/index.ts keys <status|setup|adopt|rotate|recovery-setup|rec
 bun run packages/acp/index.ts sync
 ```
 
-The implementation is shared plugin-core code — the same ceremonies as `mimir keys` under Claude Code and OpenCode. Sync also runs automatically at engine boot and after each turn's distillation.
+The implementation is shared plugin-core code — the same ceremonies as `mimir keys` under Claude Code, `mimir-opencode keys` under OpenCode and `mimir-codex keys` under Codex. Sync also runs automatically at engine boot and after each turn's distillation.
 
 ## Source layout
 
@@ -86,15 +86,8 @@ index.ts                    # Entry point — argv dispatch (keys/sync), then AC
 src/
 ├── agent/                  # Agent factory, session management, the local agent loop
 │   ├── index.ts            # createMimirAgent — replica + engine boot, agent factory
-│   ├── core.ts             # Prompt routing, mode/model switching
 │   ├── prompt-server.ts    # The agent loop: context assembly, tool cycle, events
-│   ├── brain.ts            # Extraction + compaction wiring into the replica
-│   ├── turn-context.ts     # Per-turn context injection, TodoWrite plan tool
-│   ├── model-resolution.ts # Local registry → editor model picker
-│   ├── session.ts          # Session state
-│   ├── commands.ts         # Slash commands
-│   ├── tool-dispatch.ts / tool-reporting.ts / client-tools.ts
-│   └── content.ts / handlers.ts / lifecycle-helpers.ts / types.ts
+│   └── brain.ts            # Extraction + compaction wiring into the replica
 ├── backends/               # Backend abstraction — local.ts (plugin-core engine)
 ├── engine-boot.ts          # Provider registry init + system-prompt fetch (cached)
 ├── client-mcp/             # User-configured MCP servers exposed to the loop
@@ -116,7 +109,32 @@ bun run start
 bun run build
 ```
 
-The agent speaks NDJSON over stdin/stdout per the ACP specification. The Zed registration snippet lives in the [root README](../../README.md#zed-acp).
+The agent speaks NDJSON over stdin/stdout per the ACP specification.
+
+### Registering with Zed
+
+The agent runs from source, so the machine needs [Bun](https://bun.sh) v1.3+. Register it in Zed's `settings.json`. Configuration is entirely through the env block: provider keys for inference, the extraction model for memory.
+
+```json
+{
+  "agent_servers": {
+    "mimir": {
+      "type": "custom",
+      "command": "bun",
+      "args": ["run", "/path/to/mimir/packages/acp/index.ts"],
+      "env": {
+        "MIMIR_SERVER_URL": "https://your-mimir-server",
+        "MIMIR_API_KEY": "...",
+        "OPENROUTER_API_KEY": "...",
+        "MIMIR_EXTRACTION_BASE_URL": "http://localhost:11434",
+        "MIMIR_EXTRACTION_MODEL": "qwen3:8b"
+      }
+    }
+  }
+}
+```
+
+Any provider key the engine recognizes can replace or join `OPENROUTER_API_KEY`. Without an extraction endpoint, no memories are distilled from your turns.
 
 ## Testing
 

@@ -4,7 +4,7 @@ Mimir persona and runtime as an OpenCode plugin. Distributed via GitHub Packages
 
 ## OpenCode compatibility
 
-This entrypoint targets **OpenCode V2**, using `@opencode/plugin` and `@opencode/ai` 2.0.24 APIs. It exports the same `Plugin.define({ id: "mimir", setup })` definition as both the default export and `MimirPlugin`; it is not a V1 callable plugin. Tools register through `ctx.tool.transform`, session/tool hooks through their domain APIs, and unload aborts the event subscription and closes local stores.
+This entrypoint targets **OpenCode V2**, using the `@opencode/plugin` and `@opencode/ai` APIs. It exports the same `Plugin.define({ id: "mimir", setup })` definition as both the default export and `MimirPlugin`; it is not a V1 callable plugin. Tools register through `ctx.tool.transform`, session/tool hooks through their domain APIs, and unload aborts the event subscription and closes local stores.
 
 V2's native configuration key is `plugins`; supported legacy `plugin` configuration is normalized by OpenCode without rewriting the file. Existing agents and commands can stay in place. Upgrade the plugin package for V2 rather than merely renaming a V1 plugin entry. The runtime installer does not rewrite global OpenCode settings.
 
@@ -17,10 +17,10 @@ The plugin matches the Mimir capabilities the cc-plugin exposes under Claude Cod
 - **Rules engine** — `.claude/**/*.enforce.toml` files in the project are evaluated on every tool call. Violations fail the call with the nudge as the error message.
 - **Project rules** — `.claude/rules/**/*.md` is read at plugin init (OpenCode loads the root `AGENTS.md` itself). Rules without `paths:` frontmatter ride in the system prompt after the persona; rules with `paths:` are appended to the `read` tool's output the first time a matching file is read in a session, which is when Claude Code would load them.
 - **Cartographer reindex** — on every file edit, spawns a one-shot cartographer reindex worker that parses the file and updates the local index (nothing leaves the machine). Full project reindex on session start.
-- **User-memory tools** — seven in-process custom tools (`user_memory_search`, `user_memory_store`, `user_memory_list`, `user_memory_delete`, `user_profile_get`, `user_profile_add`, `user_profile_remove`) for recalling and storing facts about the developer. SQLite-backed at `~/.mimir/user-memories.db`.
+- **Memory and codebase tools** — in-process custom tools: `user_memory_*` and `user_profile_*` for facts about the developer (SQLite-backed at `~/.mimir/user-memories.db`), `project_memory_*` and `project_playbook_*` over the local org replica, and `cartographer_search`, `cartographer_file_info` and `cartographer_query` over the local index.
 - **Boot context** — on the first turn of a session, prepends a `<boot_context>` block (user profile + prior session context + project id) so the model reads the lead-in as the most recent content.
-- **Local distillation (MIM-86)** — on session idle and before compaction, the new turns are extracted into the local memory replica on the developer's configured extraction model (`MIMIR_EXTRACTION_*`). The transcript never leaves the machine.
-- **Install + update flow** — first-run setup is exposed as the `mimir_install` tool; a successful install materialises `/mimir-install` and `/mimir-update` for later runs. The plugin package itself is installed via `opencode plugin`.
+- **Local distillation** — on session idle and before compaction, the new turns are extracted into the local memory replica on the developer's configured extraction model (`MIMIR_EXTRACTION_*`). The transcript never leaves the machine.
+- **Install + update flow** — first-run setup is exposed as the `mimir_install` tool; a successful install materialises `/mimir-install`, `/mimir-update` and `/delegate`, and the shared skills, for later runs. The plugin package itself is installed via `opencode plugin`.
 
 ## Install
 
@@ -51,13 +51,11 @@ This is the OpenCode-native install — it resolves `@RageLtd/mimir-oc`, registe
 
 OpenCode supports both `~/.config/opencode/opencode.json` and `~/.config/opencode/opencode.jsonc` and merges them. Keep package registration in one file to avoid conflicting `plugins` (or legacy `plugin`) entries. The Mimir runtime installer deliberately edits neither file.
 
-Versions through `1.1.0` wrote a retired local-plugin reference during runtime installation. If `/mimir-install` is visible but reports that `mimir_install` is not exposed, inspect the effective configuration:
+If `/mimir-install` is visible but reports that `mimir_install` is not exposed, the package did not load: OpenCode discovers the slash command from `commands/` independently of the plugin. Inspect the effective configuration and check that `@RageLtd/mimir-oc` is registered, in one global config file only, then restart OpenCode:
 
 ```bash
 opencode debug config
 ```
-
-Replace every legacy `file://~/.config/opencode/plugins/mimir-oc.ts` plugin entry with `@RageLtd/mimir-oc`, keeping package registration in only one global config file, then restart OpenCode. The slash command is discovered from `commands/` independently of the plugin, so seeing the command does not prove the package loaded.
 
 You can verify by running `opencode` and checking that the Mimir tools (`user_memory_*`, `user_profile_*`, `mimir_install`) appear in the model's tool manifest.
 
@@ -71,18 +69,19 @@ opencode
 > Call the mimir_install tool using the default server URL.
 ```
 
-The `mimir_install` tool writes the runtime state: the system prompt fetched from the server, `~/.mimir/config.json`, the pinned llama-server release and embedding model under `~/.mimir/embedder/`, a stable CLI copy of the package at `~/.mimir/mimir-oc.ts`, the OpenCode custom agent at `~/.config/opencode/agents/mimir.md`, the wrapper script at `~/.local/bin/mimir-opencode`, and the slash commands at `~/.config/opencode/commands/`. The first install downloads roughly 640 MB for the embedding model; later installs verify and reuse it. The tool auto-detects Cartographer from `PATH` or `~/.local/bin/cartographer`, preserving an existing configured path when present. It does not rewrite OpenCode's config; `opencode plugin add` owns the package registration.
-
-OpenCode versions through `1.1.0` wrote their wrapper to `~/.local/bin/mimir`, colliding with the Claude Code launcher. The corrected installer leaves that shared path untouched. If `1.1.0` already replaced it, run `mimir-cc update` once after installing this version to restore the Claude Code wrapper.
+The `mimir_install` tool writes the runtime state: the system prompt fetched from the server, `~/.mimir/config.json`, the pinned llama-server release and embedding model under `~/.mimir/embedder/`, a stable CLI copy of the package at `~/.mimir/mimir-oc.ts`, the OpenCode custom agent at `~/.config/opencode/agents/mimir.md`, the wrapper script at `~/.local/bin/mimir-opencode`, the slash commands at `~/.config/opencode/commands/`, and the shared skills at `~/.config/opencode/skills/`. The first install downloads roughly 640 MB for the embedding model; later installs verify and reuse it. The tool auto-detects Cartographer from `PATH` or `~/.local/bin/cartographer`, preserving an existing configured path when present. It does not rewrite OpenCode's config; `opencode plugin add` owns the package registration.
 
 After a successful first install, restart OpenCode so the slash commands and the new agent are picked up. `/mimir-install` is then available for repeat installs.
 
 ## Slash commands
 
-The first successful install writes two slash commands to `~/.config/opencode/commands/`:
+The first successful install writes these slash commands to `~/.config/opencode/commands/`:
 
-- **`/mimir-install`** — write the Mimir runtime state (system prompt, config, pinned local embedder, stable CLI bundle, custom agent, wrapper script, slash commands).
+- **`/mimir-install`** — write the Mimir runtime state (system prompt, config, pinned local embedder, stable CLI bundle, custom agent, wrapper script, slash commands, skills).
 - **`/mimir-update`** — re-fetch the system prompt, rewrite the local config, and download or verify the pinned local embedder. The install is idempotent.
+- **`/delegate`** — run a change through the worker loop: plan, red test, implementation, cold review, with the verify gate on every hand-back.
+
+It also writes the shared skills to `~/.config/opencode/skills/`: `unit-testing`, `integration-testing`, `end-to-end-testing`, `ui-testing`, `bug-tickets`, `story-tickets`, `task-tickets`, `epic-tickets`, `documentation`, `code-comments` and `refactor`.
 
 ## Worker models
 

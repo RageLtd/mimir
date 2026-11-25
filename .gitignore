@@ -58,9 +58,6 @@ compose.override.yml
 .mcp.json
 !packages/cc-plugin/.mcp.json
 
-# Docs
-docs/
-
 # Delegation plan files — working records for a coordinator session, not source
 .mimir/plans/
 
