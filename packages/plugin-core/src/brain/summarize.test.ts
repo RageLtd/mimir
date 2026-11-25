@@ -5,20 +5,17 @@
  * failure stores nothing.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  setDefaultTimeout,
-  test,
-} from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrgReplica } from "../store/org-replica";
 import { type ExtractionConfig, renderConversation } from "./extract";
+import {
+  refuseConnection,
+  STAND_IN_BASE_URL,
+  withFetch,
+} from "./fetch-stand-in";
 import {
   prepareSummary,
   SUMMARIZE_ELISION_LINE,
@@ -26,10 +23,6 @@ import {
   storeSummary,
   summarizeToReplica,
 } from "./summarize";
-
-// Stub HTTP round-trips starve under `bun test --parallel`; the runner's 5s
-// default is too tight.
-setDefaultTimeout(30_000);
 
 let savedHome: string | undefined;
 
@@ -67,16 +60,13 @@ const longWindow = [
   },
 ];
 
-const withChatStub = async (
+const withChatStub = (
   reply: () => Response,
   fn: (config: ExtractionConfig) => Promise<void>,
-) => {
-  const server = Bun.serve({ port: 0, fetch: () => reply() });
-  await fn({
-    baseUrl: `http://127.0.0.1:${server.port}`,
-    model: "test-model",
-  }).finally(() => server.stop(true));
-};
+) =>
+  withFetch(reply, () =>
+    fn({ baseUrl: STAND_IN_BASE_URL, model: "test-model" }),
+  );
 
 const completion = (content: string) =>
   Response.json({ choices: [{ message: { content } }] });
@@ -150,13 +140,15 @@ describe("summarizeToReplica", () => {
 
   test("transport failure stores nothing and reports ok:false", async () => {
     const replica = newReplica();
-    const result = await summarizeToReplica({
-      config: { baseUrl: "http://127.0.0.1:45991", model: "m" },
-      replica,
-      messages: longWindow,
-      embed: embedNull,
+    await withFetch(refuseConnection, async () => {
+      const result = await summarizeToReplica({
+        config: { baseUrl: STAND_IN_BASE_URL, model: "m" },
+        replica,
+        messages: longWindow,
+        embed: embedNull,
+      });
+      expect(result.ok).toBe(false);
     });
-    expect(result.ok).toBe(false);
     expect(replica.countMemories()).toBe(0);
     replica.close();
   });

@@ -31,9 +31,10 @@ import {
   getOrStartEmbedder,
 } from "./embedder";
 import { stopEmbedder } from "./embedder-stop";
+import { refuseConnection, STAND_IN_PORT, withFetch } from "./fetch-stand-in";
 
-// Stub HTTP round-trips starve under `bun test --parallel`; the runner's 5s
-// default is too tight.
+// The stopEmbedder cases launch a real process and wait for it to exit; the
+// runner's 5s default is too tight for those under `bun test --parallel`.
 setDefaultTimeout(30_000);
 
 // Env isolation (MIM-74 lesson: save/restore so a developer's real env
@@ -69,9 +70,6 @@ type EmbedOpts = {
   readonly healthTimeoutMs?: number;
   readonly embedTimeoutMs?: number;
 };
-/** Generous probe window so stub-backed cases stop depending on the
- *  embedder's default /health timeout under `--parallel` load. */
-const STUB_OPTS: EmbedOpts = { spawnWaitMs: 10_000, healthTimeoutMs: 30_000 };
 /** Wide enough to ride out SLOW_HEALTH_MS, narrow enough to keep the
  *  per-test timeout honest. */
 const SLOW_HEALTH_OPTS: EmbedOpts = {
@@ -89,16 +87,16 @@ const embedQueryWith: (
   opts?: EmbedOpts,
 ) => ReturnType<typeof createEmbedQuery> = createEmbedQuery;
 
-/** Stub llama-server: healthy /health (optionally delayed) plus a
- *  configurable embeddings leg. */
-const withStub = async (
+/** Stand-in llama-server, in process: healthy /health (optionally delayed)
+ *  plus a configurable embeddings leg. No socket is opened. */
+const withStub = (
   embeddings: (body: { input: string[] }) => Response | Promise<Response>,
   fn: (port: number) => Promise<void>,
   healthDelayMs = 0,
 ) => {
-  const server = Bun.serve({
-    port: 0,
-    fetch: async (req) => {
+  process.env.MIMIR_EMBEDDER_PORT = String(STAND_IN_PORT);
+  return withFetch(
+    async (req) => {
       const url = new URL(req.url);
       if (url.pathname === "/health") {
         if (healthDelayMs > 0) await Bun.sleep(healthDelayMs);
@@ -109,11 +107,14 @@ const withStub = async (
       }
       return new Response("not found", { status: 404 });
     },
-  });
-  const port = server.port;
-  if (port === undefined) throw new Error("stub server did not bind a port");
-  process.env.MIMIR_EMBEDDER_PORT = String(port);
-  await fn(port).finally(() => server.stop(true));
+    () => fn(STAND_IN_PORT),
+  );
+};
+
+/** No embedder on the port: every request fails to connect. */
+const withNothingListening = (fn: () => Promise<void>) => {
+  process.env.MIMIR_EMBEDDER_PORT = String(STAND_IN_PORT);
+  return withFetch(refuseConnection, fn);
 };
 
 const okEmbeddings = (vectors: number[][]) =>
@@ -149,23 +150,23 @@ describe("getOrStartEmbedder", () => {
     await withStub(
       () => okEmbeddings([]),
       async (port) => {
-        expect(await getOrStartEmbedder(STUB_OPTS)).toBe(
-          `http://127.0.0.1:${port}`,
-        );
+        expect(await getOrStartEmbedder()).toBe(`http://127.0.0.1:${port}`);
       },
     );
   });
 
   test("null when nothing is running and nothing is installed", async () => {
-    process.env.MIMIR_EMBEDDER_PORT = "45991"; // nothing listens here
-    expect(await getOrStartEmbedder()).toBeNull();
+    await withNothingListening(async () => {
+      expect(await getOrStartEmbedder()).toBeNull();
+    });
   });
 });
 
 describe("embedTexts", () => {
   test("empty input short-circuits without a server", async () => {
-    process.env.MIMIR_EMBEDDER_PORT = "45991";
-    expect(await embedTexts([])).toEqual([]);
+    await withNothingListening(async () => {
+      expect(await embedTexts([])).toEqual([]);
+    });
   });
 
   test("returns vectors re-ordered by index", async () => {
@@ -179,7 +180,7 @@ describe("embedTexts", () => {
           ],
         }),
       async () => {
-        const result = await embedTexts(["first", "second"], STUB_OPTS);
+        const result = await embedTexts(["first", "second"]);
         expect(result).not.toBeNull();
         expect(result?.[0]?.[0]).toBe(1);
         expect(result?.[1]?.[0]).toBe(2);
@@ -191,7 +192,7 @@ describe("embedTexts", () => {
     await withStub(
       () => okEmbeddings([vectorOf(1, 64)]),
       async () => {
-        expect(await embedTexts(["text"], STUB_OPTS)).toBeNull();
+        expect(await embedTexts(["text"])).toBeNull();
       },
     );
   });
@@ -200,7 +201,7 @@ describe("embedTexts", () => {
     await withStub(
       () => okEmbeddings([vectorOf(1)]),
       async () => {
-        expect(await embedTexts(["a", "b"], STUB_OPTS)).toBeNull();
+        expect(await embedTexts(["a", "b"])).toBeNull();
       },
     );
   });
@@ -209,7 +210,7 @@ describe("embedTexts", () => {
     await withStub(
       () => new Response("boom", { status: 500 }),
       async () => {
-        expect(await embedTexts(["text"], STUB_OPTS)).toBeNull();
+        expect(await embedTexts(["text"])).toBeNull();
       },
     );
   });
@@ -223,14 +224,9 @@ describe("embedTexts", () => {
       },
       async () => {
         // Tighter than the server: degrades to null instead of hanging.
-        expect(
-          await embedTexts(["text"], { ...STUB_OPTS, embedTimeoutMs: 100 }),
-        ).toBeNull();
+        expect(await embedTexts(["text"], { embedTimeoutMs: 100 })).toBeNull();
         // Patient budget (what the backfill passes): the same server answers.
-        const result = await embedTexts(["text"], {
-          ...STUB_OPTS,
-          embedTimeoutMs: 10_000,
-        });
+        const result = await embedTexts(["text"], { embedTimeoutMs: 10_000 });
         expect(result).toHaveLength(1);
       },
     );
@@ -258,7 +254,7 @@ describe("createEmbedQuery", () => {
     await withStub(
       () => okEmbeddings([vectorOf(0.5)]),
       async () => {
-        const embedQuery = embedQueryWith(STUB_OPTS);
+        const embedQuery = embedQueryWith();
         const vector = await embedQuery("what changed in auth?");
         expect(vector).toHaveLength(DIMS);
         expect(vector?.[0]).toBe(0.5);
@@ -283,9 +279,10 @@ describe("createEmbedQuery", () => {
   );
 
   test("null when the embedder is unreachable", async () => {
-    process.env.MIMIR_EMBEDDER_PORT = "45991";
-    const embedQuery = createEmbedQuery();
-    expect(await embedQuery("anything")).toBeNull();
+    await withNothingListening(async () => {
+      const embedQuery = createEmbedQuery();
+      expect(await embedQuery("anything")).toBeNull();
+    });
   });
 });
 
@@ -333,16 +330,19 @@ describe("stopEmbedder", () => {
   });
 
   test("leaves a listener that is not the pinned binary alone", async () => {
-    // The stub lives in THIS process — a wrong implementation would kill
-    // the test runner, which is the loudest possible failure.
-    await withStub(
-      () => new Response(),
-      async () => {
-        expect(await stopEmbedder()).toEqual({
-          kind: "kept",
-          reason: expect.stringContaining("not the pinned llama-server"),
-        });
-      },
-    );
+    // A real listener, because stopEmbedder looks up which process holds
+    // the port. It lives in THIS process — a wrong implementation would
+    // kill the test runner, which is the loudest possible failure.
+    const listener = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => Response.json({ status: "ok" }),
+    });
+    process.env.MIMIR_EMBEDDER_PORT = String(listener.port);
+    const outcome = await stopEmbedder().finally(() => listener.stop(true));
+    expect(outcome).toEqual({
+      kind: "kept",
+      reason: expect.stringContaining("not the pinned llama-server"),
+    });
   });
 });

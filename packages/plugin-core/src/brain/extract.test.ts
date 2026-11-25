@@ -4,7 +4,7 @@
  * keyed vs keyless endpoints, and failure degradation to [].
  */
 
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   buildExtractionText,
   type ConversationMessage,
@@ -15,10 +15,11 @@ import {
   parseExtraction,
   prepareExtraction,
 } from "./extract";
-
-// Stub HTTP round-trips starve under `bun test --parallel`; the runner's 5s
-// default is too tight.
-setDefaultTimeout(30_000);
+import {
+  refuseConnection,
+  STAND_IN_BASE_URL,
+  withFetch,
+} from "./fetch-stand-in";
 
 type Captured = {
   auth: string | null;
@@ -26,7 +27,7 @@ type Captured = {
   system: string | null;
 };
 
-const withStub = async (
+const withStub = (
   reply: (body: {
     model?: string;
     messages?: { role: string; content: string }[];
@@ -35,9 +36,13 @@ const withStub = async (
   apiKey?: string,
 ) => {
   const captured: Captured = { auth: null, model: null, system: null };
-  const server = Bun.serve({
-    port: 0,
-    fetch: async (req) => {
+  const config: ExtractionConfig = {
+    baseUrl: STAND_IN_BASE_URL,
+    model: "test-model",
+    ...(apiKey ? { apiKey } : {}),
+  };
+  return withFetch(
+    async (req) => {
       const body = (await req.json()) as {
         model?: string;
         messages?: { role: string; content: string }[];
@@ -48,13 +53,8 @@ const withStub = async (
         body.messages?.find((m) => m.role === "system")?.content ?? null;
       return reply(body);
     },
-  });
-  const config: ExtractionConfig = {
-    baseUrl: `http://127.0.0.1:${server.port}`,
-    model: "test-model",
-    ...(apiKey ? { apiKey } : {}),
-  };
-  await fn(config, captured).finally(() => server.stop(true));
+    () => fn(config, captured),
+  );
 };
 
 const completion = (content: string) =>
@@ -122,11 +122,13 @@ describe("extractMemories", () => {
   });
 
   test("unreachable endpoint is null", async () => {
-    const memories = await extractMemories(
-      { baseUrl: "http://127.0.0.1:45991", model: "m" },
-      "conversation",
-    );
-    expect(memories).toBeNull();
+    await withFetch(refuseConnection, async () => {
+      const memories = await extractMemories(
+        { baseUrl: STAND_IN_BASE_URL, model: "m" },
+        "conversation",
+      );
+      expect(memories).toBeNull();
+    });
   });
 
   test("blank conversation short-circuits without a request", async () => {
@@ -297,13 +299,15 @@ describe("extractFromConversation gates", () => {
   };
 
   test("transport failure reports ok:false and what failed", async () => {
-    const outcome = await extractFromConversation(
-      { baseUrl: "http://127.0.0.1:45991", model: "m" },
-      substantive,
-    );
-    expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.reason).toStartWith("completion failed: ");
+    await withFetch(refuseConnection, async () => {
+      const outcome = await extractFromConversation(
+        { baseUrl: STAND_IN_BASE_URL, model: "m" },
+        substantive,
+      );
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) return;
+      expect(outcome.reason).toStartWith("completion failed: ");
+    });
   });
 
   test("an HTTP error's status and detail are the reason", async () => {

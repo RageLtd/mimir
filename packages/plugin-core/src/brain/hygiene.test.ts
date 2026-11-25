@@ -5,23 +5,13 @@
  * are exact and controllable.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  setDefaultTimeout,
-  test,
-} from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrgReplica, generateMemoryId } from "../store/org-replica";
+import { STAND_IN_BASE_URL, withFetch } from "./fetch-stand-in";
 import { groupClusters, runLocalHygieneSweep, scoreMemory } from "./hygiene";
-
-// Stub HTTP round-trips starve under `bun test --parallel`; the runner's 5s
-// default is too tight.
-setDefaultTimeout(30_000);
 
 let savedHome: string | undefined;
 
@@ -92,13 +82,12 @@ type StubBehavior = {
   classify?: { action: string; survivor: 1 | 2 | null; reason: string };
 };
 
-const withJudge = async (
+const withJudge = (
   behavior: StubBehavior,
   fn: (config: { baseUrl: string; model: string }) => Promise<void>,
-) => {
-  const server = Bun.serve({
-    port: 0,
-    fetch: async (req) => {
+) =>
+  withFetch(
+    async (req) => {
       const body = (await req.json()) as {
         messages: { role: string; content: string }[];
       };
@@ -114,12 +103,8 @@ const withJudge = async (
           );
       return Response.json({ choices: [{ message: { content } }] });
     },
-  });
-  await fn({
-    baseUrl: `http://127.0.0.1:${server.port}`,
-    model: "judge-model",
-  }).finally(() => server.stop(true));
-};
+    () => fn({ baseUrl: STAND_IN_BASE_URL, model: "judge-model" }),
+  );
 
 const newReplica = () =>
   createOrgReplica(join(process.env.MIMIR_HOME as string, "hygiene.db"));

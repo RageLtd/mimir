@@ -4,14 +4,7 @@
  * playbook embed-source rule, embedder-down degradation, and idempotency.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  setDefaultTimeout,
-  test,
-} from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,10 +15,7 @@ import {
 } from "../store/org-replica";
 import { backfillEmbeddings } from "./backfill";
 import { EMBEDDER_MODEL } from "./embedder";
-
-// Stub HTTP round-trips starve under `bun test --parallel`; the runner's 5s
-// default is too tight.
-setDefaultTimeout(30_000);
+import { refuseConnection, STAND_IN_PORT, withFetch } from "./fetch-stand-in";
 
 const SAVED_KEYS = ["MIMIR_EMBEDDER_PORT", "MIMIR_HOME"] as const;
 let savedEnv: Record<string, string | undefined>;
@@ -66,11 +56,11 @@ const seedFact = (replica: ReturnType<typeof createOrgReplica>, n: number) => {
 };
 
 /** Stub embedder recording every input it was asked to embed. */
-const withEmbedStub = async (fn: (inputs: () => string[]) => Promise<void>) => {
+const withEmbedStub = (fn: (inputs: () => string[]) => Promise<void>) => {
   const seen: string[] = [];
-  const server = Bun.serve({
-    port: 0,
-    fetch: async (req) => {
+  process.env.MIMIR_EMBEDDER_PORT = String(STAND_IN_PORT);
+  return withFetch(
+    async (req) => {
       const url = new URL(req.url);
       if (url.pathname === "/health") return Response.json({ status: "ok" });
       const body = (await req.json()) as { input: string[] };
@@ -82,9 +72,14 @@ const withEmbedStub = async (fn: (inputs: () => string[]) => Promise<void>) => {
         })),
       });
     },
-  });
-  process.env.MIMIR_EMBEDDER_PORT = String(server.port);
-  await fn(() => seen).finally(() => server.stop(true));
+    () => fn(() => seen),
+  );
+};
+
+/** No embedder: every request fails to connect. */
+const withNoEmbedder = (fn: () => Promise<void>) => {
+  process.env.MIMIR_EMBEDDER_PORT = String(STAND_IN_PORT);
+  return withFetch(refuseConnection, fn);
 };
 
 describe("backfillEmbeddings", () => {
@@ -141,11 +136,12 @@ describe("backfillEmbeddings", () => {
   test("embedder unavailable surfaces an error with progress preserved", async () => {
     const replica = newReplica();
     seedFact(replica, 2);
-    process.env.MIMIR_EMBEDDER_PORT = "45991"; // nothing listens
-    const result = await backfillEmbeddings(replica, silent);
-    expect(result.embedded).toBe(0);
-    expect(result.error).toContain("embedding failed");
-    expect(result.error).toContain("[mimir-embedder]");
+    await withNoEmbedder(async () => {
+      const result = await backfillEmbeddings(replica, silent);
+      expect(result.embedded).toBe(0);
+      expect(result.error).toContain("embedding failed");
+      expect(result.error).toContain("[mimir-embedder]");
+    });
     // Rows remain unembedded for the next attempt.
     expect(replica.listUnembedded(10)).toHaveLength(2);
     replica.close();
@@ -153,10 +149,11 @@ describe("backfillEmbeddings", () => {
 
   test("empty replica reports zero without touching the network", async () => {
     const replica = newReplica();
-    process.env.MIMIR_EMBEDDER_PORT = "45991";
-    expect(await backfillEmbeddings(replica, silent)).toEqual({
-      embedded: 0,
-      error: null,
+    await withNoEmbedder(async () => {
+      expect(await backfillEmbeddings(replica, silent)).toEqual({
+        embedded: 0,
+        error: null,
+      });
     });
     replica.close();
   });
