@@ -191,7 +191,7 @@ Slash commands inside the editor:
 | `/mimir-install` | Claude Code, OpenCode | Write the runtime state — system prompt, config, MCP wiring, hooks |
 | `/mimir-update` | Claude Code, OpenCode | Re-fetch the system prompt and re-land the runtime |
 | `/run-hygiene` | Claude Code | Sweep the local replica — consolidate near-duplicates, demote contradictions, prune stale facts. Dry-run by default; `--live` applies |
-| `/refactor` | Claude Code, OpenCode, Codex (as a skill) | Make code smaller and simpler without changing what it does — the moves, the order to cut in, and what does not count as simpler |
+| `/refactor` | Claude Code, OpenCode, Codex (a skill in each) | Make code smaller and simpler without changing what it does — the moves, the order to cut in, and what does not count as simpler |
 
 Terminal commands, from the wrapper for your editor (`mimir` for Claude Code, `mimir-opencode`, `mimir-codex`, or `bun run packages/acp/index.ts` for ACP):
 

@@ -1,31 +1,11 @@
-/**
- * The refactor skill — the long form of the code principles in the
- * prompt seed (`## Code Principles`): the moves, the order to cut in and
- * what does not count as simpler. Too long to carry in every session, so
- * it loads when the task is a refactor.
- *
- * One body for every host; only the wrapper differs. The committed skill
- * files are renderings of this module — edit here, then run
- * `bun run skills:render`. refactor.test.ts fails when one drifts.
- */
+---
+name: refactor
+description: Refactor code to make it smaller and simpler without changing what it does — the moves, the order to cut in, and what does not count as simpler. Use when asked to refactor, simplify, clean up or reduce code.
+---
 
-export type SkillHost = "claudeCode" | "opencode" | "codex";
+# Refactor
 
-/** Where each host ships the skill, from the repository root. */
-export const REFACTOR_SKILL_FILES: Record<SkillHost, string> = {
-  claudeCode: "packages/cc-plugin/commands/refactor.md",
-  opencode: "packages/oc-plugin/commands/refactor.md",
-  codex: "packages/codex-plugin/skills/refactor/SKILL.md",
-};
-
-const NAME = "refactor";
-
-const DESCRIPTION =
-  "Refactor code to make it smaller and simpler without changing what it does — the moves, the order to cut in, and what does not count as simpler. Use when asked to refactor, simplify, clean up or reduce code.";
-
-const ARGUMENT_HINT = "<what to refactor>";
-
-export const REFACTOR_SKILL_BODY = `You are refactoring: making code smaller and simpler while it behaves exactly as it did. Less code is the deliverable. Removing complexity pays now, not someday, and every layer of abstraction is one more thing the next reader has to know.
+You are refactoring: making code smaller and simpler while it behaves exactly as it did. Less code is the deliverable. Removing complexity pays now, not someday, and every layer of abstraction is one more thing the next reader has to know.
 
 The project's own rules still apply. Where one of them is stricter than anything here, the rule wins.
 
@@ -69,25 +49,4 @@ The project's own rules still apply. Where one of them is stricter than anything
 
 ## Report
 
-Say what you removed and why it was safe, the line count before and after, and anything you left alone on purpose.`;
-
-const frontmatter = (fields: readonly string[]) =>
-  `---\n${fields.join("\n")}\n---`;
-
-const assertNever = (host: never) => {
-  throw new Error(`no refactor skill rendering for host: ${String(host)}`);
-};
-
-/** The whole skill file for one host. */
-export const renderRefactorSkill = (host: SkillHost) => {
-  switch (host) {
-    case "claudeCode":
-      return `${frontmatter([`description: ${DESCRIPTION}`, `argument-hint: "${ARGUMENT_HINT}"`])}\n\n${REFACTOR_SKILL_BODY}\n\n$ARGUMENTS\n`;
-    case "opencode":
-      return `${frontmatter([`description: ${DESCRIPTION}`])}\n\n${REFACTOR_SKILL_BODY}\n\n$ARGUMENTS\n`;
-    case "codex":
-      return `${frontmatter([`name: ${NAME}`, `description: ${DESCRIPTION}`])}\n\n# Refactor\n\n${REFACTOR_SKILL_BODY}\n`;
-    default:
-      return assertNever(host);
-  }
-};
+Say what you removed and why it was safe, the line count before and after, and anything you left alone on purpose.

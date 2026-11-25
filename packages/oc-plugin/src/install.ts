@@ -23,14 +23,13 @@
  * the env-var flow.
  */
 
-import { chmod, mkdir } from "node:fs/promises";
+import { chmod, mkdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { installEmbedderArtifacts } from "@mimir/plugin-core/brain/embedder-install";
 import { resolveCartographerBinary } from "@mimir/plugin-core/cartographer/resolve";
 import { attempt } from "@mimir/plugin-core/result";
-import { TESTING_SKILLS } from "@mimir/plugin-core/skills/testing";
-import { TICKET_SKILLS } from "@mimir/plugin-core/skills/tickets";
+import { SHARED_SKILLS } from "@mimir/plugin-core/skills/shared";
 import { errMessage, mimirHome } from "@mimir/plugin-core/util";
 import { resolveWorkerModels } from "@mimir/plugin-core/workers";
 import agentTemplate from "../artifacts/agent-mimir.md.template" with {
@@ -42,7 +41,6 @@ import wrapperTemplate from "../artifacts/wrapper.sh.template" with {
 import delegateCommand from "../commands/delegate.md" with { type: "text" };
 import installCommand from "../commands/mimir-install.md" with { type: "text" };
 import updateCommand from "../commands/mimir-update.md" with { type: "text" };
-import refactorCommand from "../commands/refactor.md" with { type: "text" };
 import { renderWorkerAgents } from "./agents";
 import { type MimirConfig, readConfig, writeConfig } from "./config";
 
@@ -390,25 +388,26 @@ export const installMimir = async (
   }
   written.push(delegateCommandPath);
 
-  const refactorCommandPath = join(dirname(updateCommandPath), "refactor.md");
-  const [refactorErr] = await attempt(() =>
-    writeText(refactorCommandPath, refactorCommand),
+  // Earlier installs wrote refactor as a slash command; it ships as a skill
+  // now. `force` makes an absent file a no-op while other failures surface.
+  const staleRefactorCommandPath = join(
+    dirname(updateCommandPath),
+    "refactor.md",
   );
-  if (refactorErr) {
+  const [staleErr] = await attempt(() =>
+    rm(staleRefactorCommandPath, { force: true }),
+  );
+  if (staleErr) {
     return {
       ok: false,
-      message: `Failed to write refactor slash command: ${errMessage(refactorErr)}`,
+      message: `Failed to remove the stale refactor slash command: ${errMessage(staleErr)}`,
       written,
     };
   }
-  written.push(refactorCommandPath);
 
-  // The testing and ticket skills, where OpenCode discovers global skills.
+  // The shared skills, where OpenCode discovers global skills.
   const skillsDir = join(dirname(dirname(updateCommandPath)), "skills");
-  for (const [name, source] of Object.entries({
-    ...TESTING_SKILLS,
-    ...TICKET_SKILLS,
-  })) {
+  for (const [name, source] of Object.entries(SHARED_SKILLS)) {
     const skillPath = join(skillsDir, name, "SKILL.md");
     const [skillErr] = await attempt(() => writeText(skillPath, source));
     if (skillErr) {

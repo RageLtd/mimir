@@ -133,7 +133,7 @@ Slash commands inside Claude Code:
 | `/mimir-disable` | Turn Mimir off for the current project (reverses `mimir-cc enable`) |
 | `/run-hygiene` | Sweep the local replica. Dry-run by default; `--live` applies |
 | `/add-grammar <language> [repo-url]` | Add a tree-sitter grammar to cartographer's host library (`~/.cartographer/grammars`), validate it, and re-index the current project |
-| `/refactor <what to refactor>` | Make code smaller and simpler without changing what it does: the moves, the order to cut in, and what does not count as simpler |
+| `/refactor` | Make code smaller and simpler without changing what it does: the moves, the order to cut in, and what does not count as simpler. Ships as a skill; what you type after it is passed along |
 
 Terminal subcommands on the `mimir-cc` binary — hooks aside, these are the
 human-driven ones:

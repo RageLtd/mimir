@@ -1,6 +1,9 @@
 ---
+name: refactor
 description: Refactor code to make it smaller and simpler without changing what it does — the moves, the order to cut in, and what does not count as simpler. Use when asked to refactor, simplify, clean up or reduce code.
 ---
+
+# Refactor
 
 You are refactoring: making code smaller and simpler while it behaves exactly as it did. Less code is the deliverable. Removing complexity pays now, not someday, and every layer of abstraction is one more thing the next reader has to know.
 
@@ -47,5 +50,3 @@ The project's own rules still apply. Where one of them is stricter than anything
 ## Report
 
 Say what you removed and why it was safe, the line count before and after, and anything you left alone on purpose.
-
-$ARGUMENTS

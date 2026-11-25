@@ -10,9 +10,7 @@ import {
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { renderRefactorSkill } from "@mimir/plugin-core/skills/refactor";
-import { TESTING_SKILLS } from "@mimir/plugin-core/skills/testing";
-import { TICKET_SKILLS } from "@mimir/plugin-core/skills/tickets";
+import { SHARED_SKILLS } from "@mimir/plugin-core/skills/shared";
 import { renderDelegateCommand } from "@mimir/plugin-core/workers";
 import opencodeTemplate from "../artifacts/opencode.json.template" with {
   type: "text",
@@ -180,24 +178,16 @@ describe("installMimir", () => {
     expect(
       await Bun.file(join(opencodeDir, "commands", "delegate.md")).text(),
     ).toBe(renderDelegateCommand("opencode"));
-    expect(
-      await Bun.file(join(opencodeDir, "commands", "refactor.md")).text(),
-    ).toBe(renderRefactorSkill("opencode"));
-    // The testing skills land where OpenCode discovers global skills.
-    for (const [name, source] of Object.entries(TESTING_SKILLS)) {
-      expect(
-        await Bun.file(join(opencodeDir, "skills", name, "SKILL.md")).text(),
-      ).toBe(source);
-    }
-    // The ticket skills land beside them, from the same registry
-    // plugin-core ships.
-    expect(Object.keys(TICKET_SKILLS).sort()).toEqual([
-      "bug-tickets",
-      "epic-tickets",
-      "story-tickets",
-      "task-tickets",
-    ]);
-    for (const [name, source] of Object.entries(TICKET_SKILLS)) {
+    // Refactor ships as a skill now, never as a slash command.
+    const refactorCommandPath = join(opencodeDir, "commands", "refactor.md");
+    expect(result.written).not.toContain(refactorCommandPath);
+    expect(await Bun.file(refactorCommandPath).exists()).toBe(false);
+    // The shared skills land where OpenCode discovers global skills, from
+    // the one registry plugin-core ships.
+    expect(Object.keys(SHARED_SKILLS)).toContain("documentation");
+    expect(Object.keys(SHARED_SKILLS)).toContain("code-comments");
+    expect(Object.keys(SHARED_SKILLS)).toContain("refactor");
+    for (const [name, source] of Object.entries(SHARED_SKILLS)) {
       expect(
         await Bun.file(join(opencodeDir, "skills", name, "SKILL.md")).text(),
       ).toBe(source);
@@ -228,6 +218,62 @@ describe("installMimir", () => {
     expect(await Bun.file(join(root, ".local", "bin", "mimir")).exists()).toBe(
       false,
     );
+  });
+
+  describe("over an earlier install that wrote the refactor command", () => {
+    const opencodeDir = () => join(root, ".config", "opencode");
+    const commandsDir = () => join(opencodeDir(), "commands");
+    const staleRefactorCommand = () => join(commandsDir(), "refactor.md");
+    const userCommand = () => join(commandsDir(), "my-own.md");
+    const userCommandContents = "---\ndescription: mine\n---\n\nDo my thing.\n";
+
+    beforeEach(async () => {
+      await mkdir(commandsDir(), { recursive: true });
+      await Bun.write(
+        staleRefactorCommand(),
+        "---\ndescription: Refactor code\n---\n\nThe old command.\n",
+      );
+      await Bun.write(userCommand(), userCommandContents);
+      spyOn(globalThis, "fetch").mockResolvedValue(
+        Response.json({ content: "# Mimir", version: "test-version" }),
+      );
+    });
+
+    test("removes the stale refactor command and still writes the refactor skill", async () => {
+      const result = await installMimir(
+        { serverUrl: "https://mimir.example.com", apiKey: "test-key" },
+        noCartographer,
+      );
+
+      expect(result.ok).toBe(true);
+      expect(await Bun.file(staleRefactorCommand()).exists()).toBe(false);
+      expect(result.written).not.toContain(staleRefactorCommand());
+      const refactorSkill = SHARED_SKILLS.refactor ?? "";
+      expect(refactorSkill).not.toBe("");
+      expect(
+        await Bun.file(
+          join(opencodeDir(), "skills", "refactor", "SKILL.md"),
+        ).text(),
+      ).toBe(refactorSkill);
+    });
+
+    test("keeps the user's own commands and still writes its own", async () => {
+      const result = await installMimir(
+        { serverUrl: "https://mimir.example.com", apiKey: "test-key" },
+        noCartographer,
+      );
+
+      expect(result.ok).toBe(true);
+      expect(await Bun.file(userCommand()).text()).toBe(userCommandContents);
+      for (const command of ["mimir-install.md", "mimir-update.md"]) {
+        expect(await Bun.file(join(commandsDir(), command)).exists()).toBe(
+          true,
+        );
+      }
+      expect(await Bun.file(join(commandsDir(), "delegate.md")).text()).toBe(
+        renderDelegateCommand("opencode"),
+      );
+    });
   });
 
   test("does not install the operator-only server MCP for tenants", () => {
