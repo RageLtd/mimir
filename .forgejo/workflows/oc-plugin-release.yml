@@ -61,7 +61,10 @@ jobs:
   version-bump:
     name: Analyze & Bump Version
     needs: [test]
-    runs-on: docker
+    # Nothing here depends on the machine's architecture, so it runs on the
+    # Mac Studio's runner, the faster of the two. Only the test job is tied
+    # to x86_64.
+    runs-on: docker-arm64
     container:
       image: git.rageltd.ca/rageltd/ci-node:wolfi
     outputs:
@@ -143,7 +146,10 @@ jobs:
 
   publish:
     name: Build & Publish
-    runs-on: docker
+    # Nothing here depends on the machine's architecture, so it runs on the
+    # Mac Studio's runner, the faster of the two. Only the test job is tied
+    # to x86_64.
+    runs-on: docker-arm64
     container:
       image: git.rageltd.ca/rageltd/ci-node:wolfi
     needs: [version-bump]
