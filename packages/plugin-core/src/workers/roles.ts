@@ -26,6 +26,8 @@ export type WorkerDefinition = {
   readonly maxTurns: number;
   /** Tools the host refuses outright, on top of the role guard. */
   readonly disallowedTools: readonly string[];
+  /** Shared skills (`SHARED_SKILLS` keys) loaded before the first turn. */
+  readonly skills: readonly string[];
 };
 
 export const WORKER_DEFINITIONS: readonly WorkerDefinition[] = [
@@ -36,6 +38,7 @@ export const WORKER_DEFINITIONS: readonly WorkerDefinition[] = [
       "Implements one scoped change against existing tests. Cannot modify test files; ends with a STATUS line; verification is external.",
     maxTurns: 40,
     disallowedTools: [],
+    skills: ["code-comments"],
   },
   {
     name: "mimir-test",
@@ -44,6 +47,7 @@ export const WORKER_DEFINITIONS: readonly WorkerDefinition[] = [
       "Writes or updates tests for one scoped change (red first). Can only modify test files; ends with a STATUS line.",
     maxTurns: 25,
     disallowedTools: [],
+    skills: ["unit-testing"],
   },
   {
     name: "mimir-review",
@@ -52,6 +56,7 @@ export const WORKER_DEFINITIONS: readonly WorkerDefinition[] = [
       "Context-free reviewer: reads a diff cold and reports findings. Read-only; ends with a STATUS line.",
     maxTurns: 25,
     disallowedTools: ["Write", "Edit", "MultiEdit", "NotebookEdit"],
+    skills: ["unit-testing", "code-comments"],
   },
 ];
 

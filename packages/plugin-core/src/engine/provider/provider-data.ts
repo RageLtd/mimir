@@ -6,9 +6,9 @@
  * local-providers-only, and a faster retry loop self-heals once models.dev
  * answers.
  *
- * The refresh callback is injected (the host passes the registry init)
- * rather than imported, to avoid a runtime cycle with registry.ts — which
- * imports `getProviderData` from here. Registry registration is additive
+ * The refresh callback is injected (the host passes the registry init,
+ * handing it `getProviderData()`) rather than imported, so the registry
+ * never reads this store itself. Registry registration is additive
  * (entries are overwritten, maps never cleared), so re-running it after a
  * refresh is safe with requests in flight.
  */

@@ -42,8 +42,9 @@ const VERIFY_TIMEOUT_MS = 600_000;
 export const HANDBACK_TOOL = /^SubagentHandback$/;
 /**
  * The agent type the guard sees for a subagent `$.agent.list()` does not
- * list: not a known worker, so the guard stays silent rather than mistaking
- * it for the coordinator (which is what no `agent_type` means).
+ * list: not a known worker, so the guard applies no role rules to it rather
+ * than mistaking it for the coordinator (which is what no `agent_type`
+ * means). Its edits are still held to the skill-before-edit rule.
  */
 export const UNKNOWN_AGENT_TYPE = "unknown";
 

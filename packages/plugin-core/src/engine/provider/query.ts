@@ -14,7 +14,6 @@
 
 import type { SharedV3ProviderOptions } from "@ai-sdk/provider";
 import { log } from "../log";
-import { getProviderData } from "./provider-data";
 import {
   bareNameToFullId,
   createProviderSDK,
@@ -47,7 +46,7 @@ function normalizeBareId(modelId: string) {
  */
 function lookupProviderDataEntry(modelId: string) {
   const bareId = normalizeBareId(modelId);
-  for (const [id, entry] of Object.entries(getProviderData())) {
+  for (const [id, entry] of Object.entries(providerData)) {
     const model = entry.models?.[bareId] ?? entry.models?.[modelId];
     if (model) return { id, entry, model };
   }
@@ -169,7 +168,7 @@ function getProviderDisplayNames() {
  * (MIM-73) — no Mimir-specific var names, no hardcoded provider knowledge.
  */
 export function getProviderEnvVar(providerId: string) {
-  return getProviderData()[providerId]?.env?.[0];
+  return providerData[providerId]?.env?.[0];
 }
 
 export function getModelProvider(modelId: string) {
@@ -283,7 +282,7 @@ export function resolveModelWithOverride(
   modelId: string,
   override: { apiKey: string; provider?: string; baseUrl?: string },
 ) {
-  const data = getProviderData();
+  const data = providerData;
   const knownProvider = (id: string) => providers.has(id) || id in data;
 
   let providerId = override.provider;

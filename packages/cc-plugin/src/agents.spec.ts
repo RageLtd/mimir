@@ -38,6 +38,32 @@ describe("renderAgentMarkdown", () => {
       "disallowedTools: Write, Edit, MultiEdit, NotebookEdit\n",
     );
   });
+
+  test("test worker preloads unit-testing", () => {
+    const [, frontmatter] = renderAgentMarkdown(
+      workerNamed("mimir-test"),
+      XML,
+    ).split("---\n");
+    expect(frontmatter).toContain('skills: ["unit-testing"]\n');
+  });
+
+  test("implementer preloads code-comments", () => {
+    const [, frontmatter] = renderAgentMarkdown(
+      workerNamed("mimir-impl"),
+      XML,
+    ).split("---\n");
+    expect(frontmatter).toContain('skills: ["code-comments"]\n');
+  });
+
+  test("reviewer preloads unit-testing and code-comments", () => {
+    const [, frontmatter] = renderAgentMarkdown(
+      workerNamed("mimir-review"),
+      XML,
+    ).split("---\n");
+    expect(frontmatter).toContain(
+      'skills: ["unit-testing", "code-comments"]\n',
+    );
+  });
 });
 
 /** The `<code_principles>` body nested in `<required_patterns>`, or "". */

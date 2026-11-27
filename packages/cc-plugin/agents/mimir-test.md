@@ -3,6 +3,7 @@ name: mimir-test
 description: "Writes or updates tests for one scoped change (red first). Can only modify test files; ends with a STATUS line."
 maxTurns: 25
 isolation: worktree
+skills: ["unit-testing"]
 ---
 
 <working_rules>

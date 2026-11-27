@@ -3,6 +3,7 @@ name: mimir-impl
 description: "Implements one scoped change against existing tests. Cannot modify test files; ends with a STATUS line; verification is external."
 maxTurns: 40
 isolation: worktree
+skills: ["code-comments"]
 ---
 
 <working_rules>

@@ -1,5 +1,32 @@
 import { describe, expect, test } from "bun:test";
-import { roleForAgentType, workerByName } from "./roles";
+import { SHARED_SKILLS } from "../skills/shared";
+import { roleForAgentType, WORKER_DEFINITIONS, workerByName } from "./roles";
+
+describe("worker skills", () => {
+  test("the test worker starts with unit-testing", () => {
+    expect(workerByName("mimir-test")?.skills).toEqual(["unit-testing"]);
+  });
+
+  test("the implementer starts with code-comments", () => {
+    expect(workerByName("mimir-impl")?.skills).toEqual(["code-comments"]);
+  });
+
+  test("the reviewer starts with unit-testing and code-comments", () => {
+    expect(workerByName("mimir-review")?.skills).toEqual([
+      "unit-testing",
+      "code-comments",
+    ]);
+  });
+
+  test("every preloaded skill is one the project ships", () => {
+    const shipped = Object.keys(SHARED_SKILLS);
+    for (const worker of WORKER_DEFINITIONS) {
+      for (const skill of worker.skills) {
+        expect(shipped).toContain(skill);
+      }
+    }
+  });
+});
 
 describe("workerByName", () => {
   test("resolves a bare worker name", () => {

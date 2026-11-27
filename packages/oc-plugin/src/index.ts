@@ -48,6 +48,7 @@ import {
 import { Plugin } from "@opencode/plugin";
 import { readConfig } from "./config";
 import { delegateTool, reviewPromptTool } from "./delegate-tools";
+import { enforceEditSkill } from "./edit-skill-guard";
 import { OPENCODE_ENVIRONMENT } from "./environment";
 import { augmentReadOutput, createFileContextCache } from "./file-context";
 import { extractLastUserPrompt, injectLeadingContext } from "./message-inject";
@@ -324,6 +325,9 @@ export const MimirPlugin = Plugin.define({
           projectPath,
         );
       }
+      // Skill-before-edit after the role guard: a role refusal wins.
+      for (const call of calls)
+        await enforceEditSkill(input.sessionID, call, sessionRoles);
       const loaded = await loadRules(projectPath).catch((err) => {
         log.error("loadRules failed", { error: errMessage(err) });
         return null;

@@ -3,49 +3,48 @@
  * handles api-less entries correctly; these prove boot registration does
  * too — no fabricated base URLs, loud skip for url-less providers with no
  * SDK-native factory, and lockstep between SDK_NATIVE_NPMS and the
- * createProviderSDK switch.
+ * createProviderSDK switch. The catalogue is handed to the registry, so no
+ * module mock leaks into other files sharing the process.
  */
 
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-
-mock.module("./provider-data", () => ({
-  getProviderData: () => ({
-    // Mirrors the REAL models.dev cohere entry: npm set, NO `api` field.
-    // The old registry fabricated https://cohere.example.com/v1 here and
-    // registered 14 models that could only fail at call time.
-    cohere: {
-      id: "cohere",
-      env: ["COHERE_API_KEY"],
-      npm: "@ai-sdk/cohere",
-      name: "Cohere",
-      models: {
-        "command-test": { id: "command-test", limit: { context: 128000 } },
-      },
-    },
-    // No api AND no npm → openai-compatible fallback with nowhere to
-    // point. Must be skipped, not registered against a fake URL.
-    brokenhost: {
-      id: "brokenhost",
-      env: ["BROKENHOST_API_KEY"],
-      name: "Broken Host",
-      models: { "broken-model": { id: "broken-model" } },
-    },
-  }),
-}));
-
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import {
   createProviderSDK,
   initProviderRegistry,
   isSdkNativeNpm,
   modelToProvider,
+  type ProviderEntry,
   providerConfig,
   providers,
   SDK_NATIVE_NPMS,
 } from "./registry";
 
+const catalogue: Record<string, ProviderEntry> = {
+  // Mirrors the REAL models.dev cohere entry: npm set, NO `api` field.
+  // The old registry fabricated https://cohere.example.com/v1 here and
+  // registered 14 models that could only fail at call time.
+  cohere: {
+    id: "cohere",
+    env: ["COHERE_API_KEY"],
+    npm: "@ai-sdk/cohere",
+    name: "Cohere",
+    models: {
+      "command-test": { id: "command-test", limit: { context: 128000 } },
+    },
+  },
+  // No api AND no npm → openai-compatible fallback with nowhere to
+  // point. Must be skipped, not registered against a fake URL.
+  brokenhost: {
+    id: "brokenhost",
+    env: ["BROKENHOST_API_KEY"],
+    name: "Broken Host",
+    models: { "broken-model": { id: "broken-model" } },
+  },
+};
+
 // Local-provider env vars would trigger live /models fetches during
-// initProviderRegistry — neutralise them for the test run. Each test file
-// runs in its own process under the harness, but restore anyway.
+// initProviderRegistry — neutralise them for the test run, and restore
+// them after, since other files may share this process.
 const LOCAL_ENV_KEYS = [
   "VLLM_BASE_URL",
   "OLLAMA_BASE_URL",
@@ -76,7 +75,7 @@ describe("initProviderRegistry with api-less entries (MIM-78)", () => {
   });
 
   test("SDK-native provider without an api URL registers with undefined baseUrl", async () => {
-    await initProviderRegistry();
+    await initProviderRegistry(catalogue);
 
     expect(providers.has("cohere")).toBe(true);
     expect(providerConfig.get("cohere")?.baseUrl).toBeUndefined();
@@ -84,7 +83,7 @@ describe("initProviderRegistry with api-less entries (MIM-78)", () => {
   });
 
   test("url-less provider with no SDK-native factory is skipped, not fabricated", async () => {
-    await initProviderRegistry();
+    await initProviderRegistry(catalogue);
 
     expect(providers.has("brokenhost")).toBe(false);
     expect(providerConfig.has("brokenhost")).toBe(false);

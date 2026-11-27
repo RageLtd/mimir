@@ -24,3 +24,10 @@ export {
   SECRET_PATH,
   SECRET_PATH_GLOBS,
 } from "./decision";
+export { editSkillDecision } from "./edit-skills";
+export {
+  loadedSkillsPath,
+  readLoadedSkills,
+  recordLoadedSkill,
+  type SkillLoop,
+} from "./loaded-skills";

@@ -53,6 +53,9 @@ export const renderAgentMarkdown = (
     ...(worker.disallowedTools.length > 0
       ? [`disallowedTools: ${worker.disallowedTools.join(", ")}`]
       : []),
+    ...(worker.skills.length > 0
+      ? [`skills: [${worker.skills.map((s) => JSON.stringify(s)).join(", ")}]`]
+      : []),
   ];
   return `---\n${frontmatter.join("\n")}\n---\n\n${buildWorkerPrompt(promptXml, worker)}\n`;
 };

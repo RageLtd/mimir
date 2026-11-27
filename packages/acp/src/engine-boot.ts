@@ -16,6 +16,7 @@
 
 import { setEngineLogger } from "@mimir/plugin-core/engine/log";
 import {
+  getProviderData,
   initProviderRegistry,
   loadProviderData,
   startProviderDataRefresh,
@@ -39,10 +40,10 @@ export const ensureEngineReady = () => {
   enginePromise ??= (async () => {
     setEngineLogger(createChildLogger(log, "engine"));
     await loadProviderData();
-    initProviderRegistry();
+    initProviderRegistry(getProviderData());
     // Refresh re-runs registry init so newly published models register
     // without a restart — same wiring the server used.
-    startProviderDataRefresh(() => initProviderRegistry());
+    startProviderDataRefresh(() => initProviderRegistry(getProviderData()));
     logger.info("provider engine initialized");
     // Silent key reconcile (MIM-87) then blind sync (MIM-88): fulfil
     // pending wraps, pull/push org memories. Detached — the ACP process

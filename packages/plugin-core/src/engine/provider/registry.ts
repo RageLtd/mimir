@@ -4,7 +4,7 @@
  * code (BYOK keys live in the client's env), it just happened to run
  * server-side.
  *
- * All behavior is driven by the in-memory models.dev data (provider-data.ts):
+ * All behavior is driven by the models.dev catalogue handed to init:
  *   - `npm` field determines which AI SDK factory creates the provider
  *   - `env` field determines which API key env var gates the provider
  *   - `api` field gives the base URL
@@ -27,7 +27,6 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { attempt } from "../../result";
 import { log } from "../log";
-import { getProviderData } from "./provider-data";
 
 // ---------------------------------------------------------------------------
 // Types from provider-data.json
@@ -36,7 +35,7 @@ import { getProviderData } from "./provider-data";
 export interface ProviderEntry {
   id: string;
   env: string[];
-  npm: string;
+  npm?: string;
   api?: string;
   name: string;
   models: Record<string, ModelEntry>;
@@ -264,21 +263,23 @@ function registerModels(
 // Initialization
 // ---------------------------------------------------------------------------
 
-export async function initProviderRegistry(options?: RegistryOptions) {
+/**
+ * `catalogue` is the models.dev data — hosts pass `getProviderData()` from
+ * provider-data.ts (MIM-65). Empty when the fetch has never succeeded:
+ * remote providers sit out until the refresh loop lands; locals register
+ * regardless.
+ */
+export async function initProviderRegistry(
+  catalogue: Record<string, ProviderEntry>,
+  options?: RegistryOptions,
+) {
   if (options) registryOptions = options;
 
-  // In-memory provider data (models.dev), loaded/refreshed by
-  // provider-data.ts (MIM-65). Empty when the fetch has never succeeded —
-  // remote providers sit out until the refresh loop lands; locals register
-  // regardless.
-  providerData = getProviderData();
+  providerData = catalogue;
 
   // Build reverse index: env var → provider IDs
   const envVarToProviders = new Map<string, string[]>();
-  for (const [providerId, entry] of Object.entries(providerData) as [
-    string,
-    ProviderEntry,
-  ][]) {
+  for (const [providerId, entry] of Object.entries(providerData)) {
     for (const envVar of entry.env) {
       if (!envVarToProviders.has(envVar)) envVarToProviders.set(envVar, []);
       envVarToProviders.get(envVar)?.push(providerId);
