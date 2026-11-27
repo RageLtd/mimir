@@ -22,8 +22,13 @@ import {
   POLICY_NEVER_DO,
   POLICY_PLAN_FILE,
   POLICY_PLAN_LOCK,
+  POLICY_REFACTOR_CLOSE,
+  POLICY_REFACTOR_OPEN,
+  POLICY_REMOVAL_CLOSE,
+  POLICY_REMOVAL_OPEN,
   POLICY_REVIEW_COLD,
   POLICY_REVIEW_NITS,
+  POLICY_ROLE_BOUNDARY,
   POLICY_TEST_GATE,
   POLICY_TEST_PROMPT,
 } from "./delegate-policy";
@@ -46,6 +51,8 @@ On OpenCode every worker runs in **this** directory — there is no worktree iso
 
 At the **beginning of EACH task**, before dispatching or resuming any worker for it, call \`mimir_delegate\` with \`action: "task"\`. The host captures the task-start Git commit; verification and generated reviews include committed red tests plus implementation changes since that boundary. Do this once per task, even when reusing a worker from a previous task. **Do not call it again for retries, role assistance, or review fixes**, even when those use fresh workers. Repeated \`action: "start"\` for the same plan preserves the current boundary; \`status\` does not change it. A worker cannot be dispatched without a task boundary.
 
+${POLICY_REFACTOR_OPEN} \`mimir_delegate\` with \`action: "task"\` and \`refactor: true\`. ${POLICY_REFACTOR_CLOSE}
+
 1. **\`mimir-test\`** — \`task\` with \`subagent_type: "mimir-test"\`. ${POLICY_TEST_PROMPT} The task result carries the gate report appended ${POLICY_TEST_GATE} Commit as \`test(<package>): <task title>\`.
 2. **\`mimir-impl\`** — \`subagent_type: "mimir-impl"\`. ${POLICY_IMPL_PROMPT} The result ${POLICY_IMPL_GATE} Run step 3 **before** committing.
 3. **\`mimir-review\`** — \`task\` with \`subagent_type: "mimir-review"\` and exactly this prompt, nothing else:
@@ -57,9 +64,11 @@ At the **beginning of EACH task**, before dispatching or resuming any worker for
 ${CHECKINS_HEADING}
 
 - \`STATUS: question\` — resume the worker (${RESUME}) with the answer. ${POLICY_CHECKIN_ANSWER}
+${POLICY_ROLE_BOUNDARY}
 - Gate block — the result tells you the worker has stopped and which \`task_id\` to resume with the gate's reason as its instruction. Do that; after three blocks the gate marks the result \`STATUS: failed\`. That is your signal to escalate — do not respawn with the same prompt.
 - Partial output (step limit reached), or a worker that died without a result (a rate limit, a crash): its edits are in this directory; check \`git status\`, then resume once with "continue". If it stalls again, stop and escalate.
 ${POLICY_FOLD_OPEN} \`mimir_delegate\` with \`action: "allow-deletion"\` and \`paths\`. ${POLICY_FOLD_CLOSE}
+${POLICY_REMOVAL_OPEN} \`mimir_delegate\` with \`action: "allow-removal"\` and \`paths\`. ${POLICY_REMOVAL_CLOSE} On OpenCode every gate run judges the whole task from its base, so an allowance you grant for one worker's change still covers the next worker's gate.
 ${POLICY_ESCALATE_OPEN} the \`task_id\`, ${STOP}, ${POLICY_ESCALATE_CLOSE}
 
 ## 3. Commit subjects

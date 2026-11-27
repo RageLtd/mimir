@@ -32,6 +32,12 @@ A brief is all a worker knows of the task. Three habits make one go wrong.
 
 Tell the test worker what its gate leaves unchecked. Its hand-back is not type-checked, since the code under test may not exist yet, so a type error in a red test surfaces only once the implementation is written, as a blocked implementer. Say so in the test brief, and ask for fakes and fixtures typed against what the project already declares, not against what the implementation is expected to infer.`;
 
+/** Continues into the host's way of marking the task. */
+export const POLICY_REFACTOR_OPEN =
+  "**A refactor has no red test.** When a task keeps behaviour, the existing suite is its contract and there is nothing to write red first. Mark the task as a refactor when you begin it:";
+export const POLICY_REFACTOR_CLOSE =
+  "The gate then drops its rule that changed source needs a changed test, and blocks instead if any test changed since the task began, in a test file or inline in a source file. Skip the test worker: brief the implementer with the behaviour that must not change, then review as usual. The mark ends with the task. If the code cannot move without its tests moving or changing with it, the task is not a refactor: run it as a normal task with a test worker.";
+
 export const POLICY_TEST_PROMPT = `Prompt: the task title, the behaviour to test (what must be true, not the interface that makes it so), where the tests belong, and "write the test red-first; do not touch implementation".`;
 
 export const POLICY_TEST_GATE =
@@ -52,11 +58,20 @@ export const POLICY_REVIEW_NITS = "Nits you note in the plan file.";
 export const POLICY_CHECKIN_ANSWER = `Answer the question asked, precisely; do not restate the whole task.
 - \`STATUS: blocked\` — the worker hit its role boundary (impl needs a test change, test needs an implementation change). Spawn the other role for that piece, then resume the blocked worker.`;
 
+export const POLICY_ROLE_BOUNDARY =
+  "- **A failure in the other role's files**: when a typecheck, lint or vet command fails and every file its output names is one the worker's role may not edit, the gate's block says so and names the files. The worker is told to stop with `STATUS: blocked` only if its own change cannot clear the failure, because an error reported in a test file is often the implementer's own to fix. When it does stop, handle it as any role-boundary block: run the other role for the files the gate named, collect that result, then resume the blocked worker.";
+
 /** Continues into the host's way of recording the allowance. */
 export const POLICY_FOLD_OPEN =
   "- **Test files folded together**: the gate blocks a deleted test file it cannot pair as a move, so a worker that merges test files into one stops with `STATUS: question` and names the files it deleted. Read the tests that replace them. If every check the deleted files made is still held, allow those files for this task:";
 export const POLICY_FOLD_CLOSE =
   "Give each path relative to the repository root, written as the gate printed it, then resume the worker to hand back. The allowance ends when the next task begins. The gate's report then lists each allowed deletion with the test-function and assertion counts on both sides of the fold: read them before you accept the hand-back. Never allow a deletion whose replacement you have not read.";
+
+/** Continues into the host's way of recording the allowance. */
+export const POLICY_REMOVAL_OPEN =
+  "- **Assertions removed**: the gate blocks a test file that loses more assertions than it gains. It counts by line, so assertions moved into a shared helper read as removed, and so do the tests of behaviour the task deletes. A worker in either case stops with `STATUS: question` and names the files. Read each one. If every check that went is still made through the helper, or tested behaviour the task removes, allow those files for this task:";
+export const POLICY_REMOVAL_CLOSE =
+  "Give each path relative to the repository root, written as the gate printed it, then resume the worker to hand back. The allowance ends when the next task begins, and it excuses only the loss: an added skip still blocks, and so does a file that gains more tests than it loses with no assertion added. The gate's report then lists each allowed file with its test-function and assertion counts before and after: read them before you accept the hand-back. To the gate a real test swapped for an empty one looks like a renamed test, so never allow a file you have not read.";
 
 export const POLICY_ESCALATE_OPEN =
   "- **Escalate** means: update the plan file with what happened and";
@@ -83,6 +98,8 @@ export const DELEGATE_POLICY = [
   POLICY_PLAN_FILE,
   POLICY_PLAN_LOCK,
   POLICY_BRIEFS,
+  POLICY_REFACTOR_OPEN,
+  POLICY_REFACTOR_CLOSE,
   POLICY_TEST_PROMPT,
   POLICY_TEST_GATE,
   POLICY_IMPL_PROMPT,
@@ -90,8 +107,11 @@ export const DELEGATE_POLICY = [
   POLICY_REVIEW_COLD,
   POLICY_REVIEW_NITS,
   POLICY_CHECKIN_ANSWER,
+  POLICY_ROLE_BOUNDARY,
   POLICY_FOLD_OPEN,
   POLICY_FOLD_CLOSE,
+  POLICY_REMOVAL_OPEN,
+  POLICY_REMOVAL_CLOSE,
   POLICY_ESCALATE_OPEN,
   POLICY_ESCALATE_CLOSE,
   POLICY_CONVENTIONAL_COMMITS,

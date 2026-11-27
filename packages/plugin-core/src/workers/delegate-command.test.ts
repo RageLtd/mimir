@@ -50,6 +50,22 @@ const POLICY_ANCHORS = {
     "drop what cannot happen in the project as it runs",
     "Nits you note in the plan file.",
   ],
+  refactorTask: [
+    "**A refactor has no red test.**",
+    "blocks instead if any test changed since the task began",
+    "run it as a normal task with a test worker",
+  ],
+  roleBoundary: [
+    "**A failure in the other role's files**",
+    "only if its own change cannot clear the failure",
+    "run the other role for the files the gate named",
+  ],
+  assertionsRemoved: [
+    "**Assertions removed**",
+    "assertions moved into a shared helper read as removed",
+    "it excuses only the loss",
+    "never allow a file you have not read",
+  ],
   conventionalCommits: [
     "the release pipeline versions from them",
     "— review follow-up",
@@ -86,6 +102,9 @@ const MECHANICS: Record<WorkerHost, readonly string[]> = {
     // coordinator lifecycle
     "mimir-cc delegate start --plan",
     "mimir-cc delegate task",
+    "mimir-cc delegate task --refactor",
+    "mimir-cc delegate allow-deletion <path>...",
+    "mimir-cc delegate allow-removal <path>...",
     "mimir-cc delegate stop",
     "keyed by session id",
     // one worktree per worker
@@ -104,6 +123,7 @@ const MECHANICS: Record<WorkerHost, readonly string[]> = {
     "git branch -d <worktreeBranch>",
     "`-d`, never `-D`",
     "mimir-cc verify --worktree <repo root> --allow-empty",
+    "This run judges the whole task from its base",
     // review: the reviewer starts in its own worktree, and the git guard
     // refuses a `cd` into the one under review
     "mimir-cc review-prompt <worktreePath>",
@@ -115,6 +135,10 @@ const MECHANICS: Record<WorkerHost, readonly string[]> = {
     'action: "start"',
     'action: "task"',
     'action: "stop"',
+    "`refactor: true`",
+    'action: "allow-deletion"',
+    'action: "allow-removal"',
+    "every gate run judges the whole task from its base",
     "strictly one at a time",
     "every worker runs in **this** directory",
     "commit each accepted result before spawning the next",

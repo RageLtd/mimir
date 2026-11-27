@@ -3,7 +3,11 @@
  */
 
 import type { ChangedFile } from "./changes";
-import type { AllowedDeletionCost, TestCounts } from "./checks";
+import type {
+  AllowedDeletionCost,
+  AllowedRemovalCost,
+  TestCounts,
+} from "./checks";
 import type { CommandRun } from "./verify";
 
 export const formatBlockReason = (
@@ -30,8 +34,20 @@ export const formatPassReport = (input: {
   readonly counts: TestCounts;
   readonly runs: readonly CommandRun[];
   readonly allowed?: AllowedDeletionCost | null;
+  readonly removals?: AllowedRemovalCost;
+  readonly refactor?: boolean;
 }) => {
-  const { allowed } = input;
+  const { allowed, removals = [] } = input;
+  const removalLines =
+    removals.length > 0
+      ? [
+          `Allowed assertion removals (${removals.length}):`,
+          ...removals.map(
+            (r) =>
+              `  ${r.path}: ${r.before.tests} → ${r.after.tests} test functions, ${r.before.assertions} → ${r.after.assertions} assertions`,
+          ),
+        ]
+      : [];
   const allowedLines = allowed
     ? [
         `Allowed test deletions (${allowed.paths.length}):`,
@@ -51,10 +67,16 @@ export const formatPassReport = (input: {
   return [
     "✅ Verify gate passed.",
     `Base: ${input.base.slice(0, 12)}`,
+    ...(input.refactor
+      ? [
+          "Gated as a refactor: no coverage rule, and no test changed since the task base, in a test file or inline in a source file.",
+        ]
+      : []),
     `Changed files (${input.files.length}):`,
     files,
     `Test functions: ${input.counts.before} → ${input.counts.after}`,
     ...allowedLines,
+    ...removalLines,
     "Commands:",
     runs.length > 0 ? runs : "  (none)",
   ].join("\n");

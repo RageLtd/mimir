@@ -70,6 +70,51 @@ export const resolveBase = async (run: CommandRunner, worktree: string) => {
   return base && base.length > 0 ? base : head;
 };
 
+/**
+ * The commit the worker's branch shares with the integration worktree's
+ * HEAD — what the integration branch already holds, a forward merge
+ * included, so a diff from here is the worker's own change.
+ */
+export const resolveOwnBase = async (
+  run: CommandRunner,
+  worktree: string,
+  integrationWorktree: string,
+) => {
+  const integrationHead = (
+    await git(run, integrationWorktree, "rev-parse", "HEAD")
+  )?.trim();
+  if (!integrationHead)
+    throw new Error(
+      `Cannot resolve the integration worktree's HEAD in ${integrationWorktree}.`,
+    );
+  const ownBase = (
+    await git(run, worktree, "merge-base", "HEAD", integrationHead)
+  )?.trim();
+  if (!ownBase)
+    throw new Error(
+      `${worktree} shares no commit with the integration worktree's HEAD ${integrationHead}.`,
+    );
+  return ownBase;
+};
+
+/**
+ * Where the gate gets its change sets. Git is not ours, so the gate
+ * reaches it only through this: `gitChanges` in production, a stand-in
+ * that returns built change sets in tests.
+ */
+export type ChangeSource = {
+  /** The tree against `base`, or against the base it resolves itself. */
+  readonly collect: (
+    worktree: string,
+    base?: string,
+  ) => Promise<ChangeSet | null>;
+  /** The commit the worker's branch shares with the integration worktree's HEAD. */
+  readonly ownBase: (
+    worktree: string,
+    integrationWorktree: string,
+  ) => Promise<string>;
+};
+
 /** merge-base(base, trunk) for the first trunk ref that exists; null without one. */
 const resolveTrunkBase = async (
   run: CommandRunner,
@@ -327,3 +372,11 @@ export const collectChanges = async (
     taskBase === undefined ? await collectBranchPaths(run, worktree, base) : [];
   return { base, files, branchPaths } satisfies ChangeSet;
 };
+
+/** The change source that asks git, through `run`. */
+export const gitChanges = (run: CommandRunner) =>
+  ({
+    collect: (worktree, base) => collectChanges(run, worktree, base),
+    ownBase: (worktree, integrationWorktree) =>
+      resolveOwnBase(run, worktree, integrationWorktree),
+  }) satisfies ChangeSource;

@@ -10,6 +10,7 @@ import {
   runDelegateCommand,
   SESSION_ENV,
 } from "./delegate-command";
+import { delegateSandbox } from "./delegate-sandbox";
 
 describe("parseDelegateArgs", () => {
   test("start requires --plan and resolves it", () => {
@@ -226,32 +227,8 @@ describe("parseDelegateArgs allow-deletion", () => {
 });
 
 describe("delegate allow-deletion", () => {
-  let previousMimirHome: string | undefined;
-  let previousSession: string | undefined;
-  let realCwd: string;
-  let sandbox: string;
+  const { delegate, repo } = delegateSandbox("sess-allow-deletion");
   let planFile: string;
-
-  /** runDelegateCommand with its console output captured. */
-  const delegate = async (...args: string[]) => {
-    const out: string[] = [];
-    const err: string[] = [];
-    const realLog = console.log;
-    const realError = console.error;
-    console.log = (...parts: unknown[]) => {
-      out.push(parts.join(" "));
-    };
-    console.error = (...parts: unknown[]) => {
-      err.push(parts.join(" "));
-    };
-    try {
-      const code = await runDelegateCommand(args);
-      return { code, stdout: out.join("\n"), stderr: err.join("\n") };
-    } finally {
-      console.log = realLog;
-      console.error = realError;
-    }
-  };
 
   const status = async () => (await delegate("status")).stdout;
 
@@ -262,45 +239,8 @@ describe("delegate allow-deletion", () => {
   };
 
   beforeEach(async () => {
-    previousMimirHome = process.env.MIMIR_HOME;
-    previousSession = process.env[SESSION_ENV];
-    realCwd = process.cwd();
-    sandbox = mkdtempSync(join(tmpdir(), "mimir-delegate-allow-"));
-    process.env.MIMIR_HOME = join(sandbox, "home");
-    process.env[SESSION_ENV] = "sess-allow-deletion";
-    const repo = join(sandbox, "repo");
-    mkdirSync(repo, { recursive: true });
-    // `delegate task` captures HEAD of the repository it runs in.
-    for (const argv of [
-      ["git", "init", "-q", "-b", "main"],
-      [
-        "git",
-        "-c",
-        "user.email=fixture@example.invalid",
-        "-c",
-        "user.name=Fixture",
-        "commit",
-        "-q",
-        "--allow-empty",
-        "-m",
-        "baseline",
-      ],
-    ]) {
-      const result = Bun.spawnSync(argv, { cwd: repo });
-      expect(result.exitCode, result.stderr.toString()).toBe(0);
-    }
-    planFile = join(repo, "plan.md");
+    planFile = join(repo(), "plan.md");
     await Bun.write(planFile, "# plan\n");
-    process.chdir(repo);
-  });
-
-  afterEach(() => {
-    process.chdir(realCwd);
-    if (previousMimirHome === undefined) delete process.env.MIMIR_HOME;
-    else process.env.MIMIR_HOME = previousMimirHome;
-    if (previousSession === undefined) delete process.env[SESSION_ENV];
-    else process.env[SESSION_ENV] = previousSession;
-    rmSync(sandbox, { recursive: true, force: true });
   });
 
   test("records the paths for the current task, adds on a second call, and status shows them", async () => {
@@ -339,7 +279,7 @@ describe("delegate allow-deletion", () => {
     await startTask();
     expect((await delegate("allow-deletion", FIRST)).code).toBe(0);
 
-    const nextPlan = join(sandbox, "repo", "next-plan.md");
+    const nextPlan = join(repo(), "next-plan.md");
     await Bun.write(nextPlan, "# next plan\n");
     await startTask(nextPlan);
     expect(await status()).not.toContain(FIRST);

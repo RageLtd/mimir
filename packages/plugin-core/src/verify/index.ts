@@ -5,7 +5,9 @@
 export {
   type ChangedFile,
   type ChangeSet,
+  type ChangeSource,
   collectChanges,
+  gitChanges,
   resolveBase,
 } from "./changes";
 export {

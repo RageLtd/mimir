@@ -142,6 +142,8 @@ const GIT_BRANCH_DELETE = new RegExp(`${GIT}branch\\b[^;&|]*\\s-[a-zA-Z]*D\\b`);
 const GIT_CLEAN_FORCE = new RegExp(`${GIT}clean\\b[^;&|]*\\s-[a-zA-Z]*f`);
 const RM_RECURSIVE = /\brm\s+((?:-\S+\s+)+)([^;&|]*)/g;
 const DELEGATE_ALLOW_DELETION = /\bdelegate\s+allow-deletion\b/;
+const DELEGATE_ALLOW_REMOVAL = /\bdelegate\s+allow-removal\b/;
+const DELEGATE_TASK = /\bdelegate\s+task\b/;
 
 const stripQuotes = (word: string) => word.replace(/^['"]|['"]$/g, "");
 
@@ -285,6 +287,16 @@ export const guardDecision = (ctx: GuardContext) => {
       if (ctx.role !== "coordinator" && DELEGATE_ALLOW_DELETION.test(command)) {
         return deny(
           "Role guard: allowing a test-file deletion is the coordinator's call. Stop with STATUS: question and name the deleted test files, so the coordinator can allow them.",
+        );
+      }
+      if (ctx.role !== "coordinator" && DELEGATE_ALLOW_REMOVAL.test(command)) {
+        return deny(
+          "Role guard: allowing a test file to lose assertions is the coordinator's call. Stop with STATUS: question and name the test files, so the coordinator can allow the removal.",
+        );
+      }
+      if (ctx.role !== "coordinator" && DELEGATE_TASK.test(command)) {
+        return deny(
+          "Role guard: starting a task is the coordinator's call. A worker works inside the task it was given; stop with STATUS: question if the task needs to change.",
         );
       }
     }

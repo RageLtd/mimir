@@ -1,38 +1,25 @@
 /**
- * A moved test file is not a deleted one: the gate pairs the old path
- * with the new one, through `collectChanges` on a real git repository,
- * and the checks judge the pair as an edit.
+ * A moved test file is not a deleted one: the collector pairs the old path
+ * with the new one from what git reports and what is on disk, and the
+ * checks judge the pair as an edit. Git's answers are canned, so no command
+ * runs; whether git would report a given move as a rename is not checked
+ * here.
  */
 
-import { afterAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { describe, expect, test } from "bun:test";
+import {
+  cannedGit,
+  gateSandbox,
+  TASK_BASE,
+} from "./change-fixtures.test-helpers";
 import { collectChanges } from "./changes";
 import { sanityCheck, testCounts } from "./checks";
-import { runCommand } from "./exec";
 
 const OLD_PATH = "src/widget/format.test.ts";
 const NEW_PATH = "src/format/format.test.ts";
 const DELETED = "test file deleted";
 const ORIGINAL_TESTS = 12;
-
-const dirs: string[] = [];
-
-afterAll(async () => {
-  await Promise.all(dirs.map((d) => rm(d, { recursive: true, force: true })));
-});
-
-const git = async (cwd: string, ...args: string[]) => {
-  const r = await runCommand(["git", ...args], cwd);
-  if (r.code !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
-  return r.stdout.trim();
-};
-
-const write = async (root: string, rel: string, content: string) => {
-  await mkdir(dirname(join(root, rel)), { recursive: true });
-  await Bun.write(join(root, rel), content);
-};
+const HEAD = "c".repeat(40);
 
 /** One realistic test: a setup line, a call, two assertions. */
 const testCase = (i: number, assertions = 2) => {
@@ -91,26 +78,32 @@ const rewrittenFile = (count: number) =>
     "",
   ].join("\n");
 
-/** A repo whose base commit holds a source file and a 12-test file at OLD_PATH. */
-const seedRepo = async (tests = ORIGINAL_TESTS) => {
-  const root = await mkdtemp(join(tmpdir(), "mimir-rename-"));
-  dirs.push(root);
-  await git(root, "init", "-q", "-b", "main");
-  await git(root, "config", "user.email", "t@example.com");
-  await git(root, "config", "user.name", "t");
-  await write(
-    root,
-    "src/widget/format.ts",
-    "export const format = (x: unknown) => x;\n",
-  );
-  await write(root, OLD_PATH, testFile(tests));
-  await git(root, "add", ".");
-  await git(root, "commit", "-q", "-m", "base");
-  return root;
-};
+const ORIGINAL = testFile(ORIGINAL_TESTS);
 
-const gateOn = async (root: string) => {
-  const changes = await collectChanges(runCommand, root);
+const { project } = gateSandbox();
+
+/**
+ * The gate's view of a worktree whose base commit held `ORIGINAL` at
+ * OLD_PATH. `onDisk` is what the worktree holds now, `nameStatus` is what
+ * `git diff --name-status -M` reports against the base, and `untracked`
+ * what `git ls-files --others` lists.
+ */
+const gateOn = async (
+  onDisk: Record<string, string>,
+  nameStatus: string,
+  untracked: readonly string[] = [],
+) => {
+  const root = await project(onDisk);
+  const run = cannedGit({
+    "worktree list --porcelain": `worktree ${root}\nHEAD ${HEAD}\n`,
+    "rev-parse HEAD": `${HEAD}\n`,
+    [`diff --name-status -M ${HEAD}`]: nameStatus,
+    "ls-files --others --exclude-standard": untracked.join("\n"),
+    [`show ${HEAD}:${OLD_PATH}`]: ORIGINAL,
+    [`diff ${HEAD} -- ${OLD_PATH}`]: "",
+    [`merge-base ${HEAD} main`]: `${HEAD}\n`,
+  });
+  const changes = await collectChanges(run, root);
   if (!changes) throw new Error("collectChanges returned null");
   return {
     sanity: sanityCheck(changes.files),
@@ -119,29 +112,25 @@ const gateOn = async (root: string) => {
 };
 
 describe("verify gate: moved test files", () => {
-  test("staged git mv, content unchanged → no sanity problem, counts N → N", async () => {
-    const root = await seedRepo();
-    await mkdir(join(root, dirname(NEW_PATH)), { recursive: true });
-    await git(root, "mv", OLD_PATH, NEW_PATH);
-
-    const { sanity, counts } = await gateOn(root);
+  test("a rename git reports, content unchanged → no sanity problem, counts N → N", async () => {
+    const { sanity, counts } = await gateOn(
+      { [NEW_PATH]: ORIGINAL },
+      `R100\t${OLD_PATH}\t${NEW_PATH}\n`,
+    );
     expect(sanity?.reason ?? "").not.toContain(DELETED);
     expect(sanity).toBeNull();
     expect(counts).toEqual({ before: ORIGINAL_TESTS, after: ORIGINAL_TESTS });
   });
 
-  test("staged git mv with four tests added and a comment edited → not a deletion", async () => {
-    const root = await seedRepo();
-    await mkdir(join(root, dirname(NEW_PATH)), { recursive: true });
-    await git(root, "mv", OLD_PATH, NEW_PATH);
-    await write(
-      root,
-      NEW_PATH,
-      testFile(ORIGINAL_TESTS + 4, { comment: "// Formatting rules, moved." }),
+  test("a rename git reports, with four tests added and a comment edited → not a deletion", async () => {
+    const { sanity, counts } = await gateOn(
+      {
+        [NEW_PATH]: testFile(ORIGINAL_TESTS + 4, {
+          comment: "// Formatting rules, moved.",
+        }),
+      },
+      `R074\t${OLD_PATH}\t${NEW_PATH}\n`,
     );
-    await git(root, "add", NEW_PATH);
-
-    const { sanity, counts } = await gateOn(root);
     expect(sanity?.reason ?? "").not.toContain(DELETED);
     expect(sanity).toBeNull();
     expect(counts).toEqual({
@@ -151,49 +140,46 @@ describe("verify gate: moved test files", () => {
   });
 
   test("a move that drops assertions is still blocked as assertions removed", async () => {
-    const root = await seedRepo();
-    await mkdir(join(root, dirname(NEW_PATH)), { recursive: true });
-    await git(root, "mv", OLD_PATH, NEW_PATH);
-    await write(root, NEW_PATH, testFile(ORIGINAL_TESTS, { weakened: 3 }));
-    await git(root, "add", NEW_PATH);
-
-    const { sanity } = await gateOn(root);
+    const { sanity } = await gateOn(
+      { [NEW_PATH]: testFile(ORIGINAL_TESTS, { weakened: 3 }) },
+      `R090\t${OLD_PATH}\t${NEW_PATH}\n`,
+    );
     expect(sanity?.reason).toContain("assertions removed");
     expect(sanity?.reason).not.toContain(DELETED);
   });
 
   test("a test file deleted outright is still reported as deleted", async () => {
-    const root = await seedRepo();
-    await git(root, "rm", "-q", OLD_PATH);
-
-    const { sanity, counts } = await gateOn(root);
+    const { sanity, counts } = await gateOn({}, `D\t${OLD_PATH}\n`);
     expect(sanity?.reason).toContain(`${OLD_PATH}: ${DELETED}`);
     expect(counts).toEqual({ before: ORIGINAL_TESTS, after: 0 });
   });
 
-  test("unstaged move with identical content → treated like a staged move", async () => {
-    const root = await seedRepo();
-    const content = await Bun.file(join(root, OLD_PATH)).text();
-    await write(root, NEW_PATH, content);
-    await rm(join(root, OLD_PATH));
-
-    const { sanity, counts } = await gateOn(root);
+  test("an unstaged move with identical content → treated like a reported rename", async () => {
+    const { sanity, counts } = await gateOn(
+      { [NEW_PATH]: ORIGINAL },
+      `D\t${OLD_PATH}\n`,
+      [NEW_PATH],
+    );
     expect(sanity?.reason ?? "").not.toContain(DELETED);
     expect(sanity).toBeNull();
     expect(counts).toEqual({ before: ORIGINAL_TESTS, after: ORIGINAL_TESTS });
   });
 
-  test("move against an older task base, file rewritten in between → not a deletion, counts from the base", async () => {
-    const root = await seedRepo(4);
-    const taskBase = await git(root, "rev-parse", "HEAD");
-    await write(root, OLD_PATH, rewrittenFile(12));
-    await git(root, "commit", "-q", "-am", "rewrite tests");
-    await mkdir(join(root, dirname(NEW_PATH)), { recursive: true });
-    await git(root, "mv", OLD_PATH, NEW_PATH);
-    await write(root, NEW_PATH, rewrittenFile(16));
-    await git(root, "add", NEW_PATH);
+  test("a move git pairs only against HEAD, the file rewritten since an older task base → not a deletion, counts from the base", async () => {
+    const root = await project({ [NEW_PATH]: rewrittenFile(16) });
+    // Against the task base the two files are too different for git to
+    // pair; against HEAD, where the rewrite is committed, it does.
+    const run = cannedGit({
+      [`cat-file -e ${TASK_BASE}^{commit}`]: "",
+      [`merge-base --is-ancestor ${TASK_BASE} HEAD`]: "",
+      [`diff --name-status -M ${TASK_BASE}`]: `D\t${OLD_PATH}\nA\t${NEW_PATH}\n`,
+      "ls-files --others --exclude-standard": "",
+      "rev-parse HEAD": `${HEAD}\n`,
+      "diff --name-status -M HEAD": `R081\t${OLD_PATH}\t${NEW_PATH}\n`,
+      [`show ${TASK_BASE}:${OLD_PATH}`]: testFile(4),
+    });
 
-    const changes = await collectChanges(runCommand, root, taskBase);
+    const changes = await collectChanges(run, root, TASK_BASE);
     if (!changes) throw new Error("collectChanges returned null");
     expect(sanityCheck(changes.files)?.reason ?? "").not.toContain(DELETED);
     expect(testCounts(changes.files)).toEqual({ before: 4, after: 16 });
@@ -205,32 +191,29 @@ const FIXTURE_PATH = "src/widget/format.fixture.ts";
 const OTHER_PATH = "src/other/format.test.ts";
 
 describe("verify gate: moves the pairing must not accept", () => {
-  test("staged git mv to a non-test path → still a deleted test", async () => {
-    const root = await seedRepo();
-    await git(root, "mv", OLD_PATH, FIXTURE_PATH);
-
-    const { sanity } = await gateOn(root);
+  test("a rename git reports to a non-test path → still a deleted test", async () => {
+    const { sanity } = await gateOn(
+      { [FIXTURE_PATH]: ORIGINAL },
+      `R100\t${OLD_PATH}\t${FIXTURE_PATH}\n`,
+    );
     expect(sanity?.reason).toContain(`${OLD_PATH}: ${DELETED}`);
   });
 
-  test("unstaged move to a non-test path → still a deleted test", async () => {
-    const root = await seedRepo();
-    const content = await Bun.file(join(root, OLD_PATH)).text();
-    await write(root, FIXTURE_PATH, content);
-    await rm(join(root, OLD_PATH));
-
-    const { sanity } = await gateOn(root);
+  test("an unstaged move to a non-test path → still a deleted test", async () => {
+    const { sanity } = await gateOn(
+      { [FIXTURE_PATH]: ORIGINAL },
+      `D\t${OLD_PATH}\n`,
+      [FIXTURE_PATH],
+    );
     expect(sanity?.reason).toContain(`${OLD_PATH}: ${DELETED}`);
   });
 
   test("one deleted test file, two untracked identical copies → paired once, counts N → 2N", async () => {
-    const root = await seedRepo();
-    const content = await Bun.file(join(root, OLD_PATH)).text();
-    await write(root, NEW_PATH, content);
-    await write(root, OTHER_PATH, content);
-    await rm(join(root, OLD_PATH));
-
-    const { sanity, counts } = await gateOn(root);
+    const { sanity, counts } = await gateOn(
+      { [NEW_PATH]: ORIGINAL, [OTHER_PATH]: ORIGINAL },
+      `D\t${OLD_PATH}\n`,
+      [NEW_PATH, OTHER_PATH],
+    );
     expect(sanity?.reason ?? "").not.toContain(DELETED);
     expect(counts).toEqual({
       before: ORIGINAL_TESTS,
@@ -238,12 +221,12 @@ describe("verify gate: moves the pairing must not accept", () => {
     });
   });
 
-  test("unstaged move with content edited → reported as deleted, with a hint to stage the move", async () => {
-    const root = await seedRepo();
-    await write(root, NEW_PATH, testFile(ORIGINAL_TESTS + 4));
-    await rm(join(root, OLD_PATH));
-
-    const { sanity } = await gateOn(root);
+  test("an unstaged move with content edited → reported as deleted, with a hint to stage the move", async () => {
+    const { sanity } = await gateOn(
+      { [NEW_PATH]: testFile(ORIGINAL_TESTS + 4) },
+      `D\t${OLD_PATH}\n`,
+      [NEW_PATH],
+    );
     expect(sanity?.reason).toContain(`${OLD_PATH}: ${DELETED}`);
     expect(sanity?.reason).toMatch(/git (add|mv)/);
   });

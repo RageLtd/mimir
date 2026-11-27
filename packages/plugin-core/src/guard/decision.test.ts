@@ -284,6 +284,78 @@ describe("allowing a test-file deletion is the coordinator's call", () => {
   });
 });
 
+describe("allowing a test file to lose assertions is the coordinator's call", () => {
+  const grants = [
+    "mimir-cc delegate allow-removal src/a.test.ts",
+    "~/.local/bin/mimir-cc delegate allow-removal a_test.go b_test.go",
+    "cd /work/repo && mimir-cc delegate allow-removal a_test.go",
+    "bun packages/cc-plugin/src/cli.ts delegate allow-removal a_test.go",
+  ];
+
+  for (const role of ["impl", "test", "review"] satisfies GuardRole[]) {
+    test(`${role}: running delegate allow-removal from its shell is denied with the STATUS: question advice`, () => {
+      for (const command of grants) {
+        const d = guardDecision(ctx(role, "Bash", { command }));
+        expect(d.allow).toBe(false);
+        expect(reasonOf(d)).toContain("Role guard");
+        expect(reasonOf(d)).toContain("STATUS: question");
+      }
+    });
+  }
+
+  test("the coordinator's own call is allowed", () => {
+    for (const command of grants) {
+      expect(
+        guardDecision(
+          ctx(
+            "coordinator",
+            "Bash",
+            { command },
+            { planFile: "/work/repo/plan.md", planFileExists: true },
+          ),
+        ).allow,
+      ).toBe(true);
+    }
+  });
+});
+
+describe("starting a task is the coordinator's call", () => {
+  const starts = [
+    "mimir-cc delegate task",
+    "~/.local/bin/mimir-cc delegate task --refactor",
+    "cd /work/repo && mimir-cc delegate task",
+    "bun packages/cc-plugin/src/cli.ts delegate task refactor",
+  ];
+
+  for (const role of ["impl", "test", "review"] satisfies GuardRole[]) {
+    test(`${role}: running delegate task from its shell is denied`, () => {
+      for (const command of starts) {
+        const d = guardDecision(ctx(role, "Bash", { command }));
+        expect(d.allow).toBe(false);
+        expect(reasonOf(d)).toContain("Role guard");
+        expect(reasonOf(d)).toMatch(
+          /starting a task is the coordinator's call/i,
+        );
+      }
+    });
+  }
+
+  test("the coordinator's own call is allowed", () => {
+    for (const command of starts) {
+      expect(
+        guardDecision(
+          ctx(
+            "coordinator",
+            "Bash",
+            { command },
+            { planFile: "/work/repo/plan.md", planFileExists: true },
+          ),
+        ).allow,
+      ).toBe(true);
+    }
+  });
+});
+
 describe("secrets (every role)", () => {
   test("isSecretPath", () => {
     for (const p of [

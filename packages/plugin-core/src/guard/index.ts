@@ -4,10 +4,13 @@
 
 export {
   allowTaskDeletions,
+  allowTaskRemovals,
   type CoordinatorState,
   clearCoordinatorState,
   coordinatorStatePath,
+  REFACTOR_LABEL,
   readCoordinatorState,
+  TASK_ALLOWANCES,
   writeCoordinatorState,
 } from "./coordinator-state";
 export {

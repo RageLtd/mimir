@@ -4,7 +4,7 @@ import {
   coordinatorStatePath,
   readCoordinatorState,
 } from "@mimir/plugin-core/guard";
-import { runCommand } from "@mimir/plugin-core/verify";
+import { type CommandRunner, runCommand } from "@mimir/plugin-core/verify";
 
 // The shared reader tolerates broken session files for ordinary editing; an
 // existing CC delegation file must not silently disable its provenance gate.
@@ -16,19 +16,19 @@ export const readTaskState = async (session: string | undefined) => {
   return state;
 };
 
-const gitOutput = async (cwd: string, ...args: string[]) => {
-  const result = await runCommand(["git", ...args], cwd);
-  if (result.code !== 0 || result.timedOut)
-    throw new Error(
-      `Cannot validate task repository: ${result.stderr || result.stdout}`,
-    );
-  return result.stdout.trim();
-};
-
 export const taskProvenance = async (
   session: string | undefined,
   worktree: string,
+  run: CommandRunner = runCommand,
 ) => {
+  const gitOutput = async (cwd: string, ...args: string[]) => {
+    const result = await run(["git", ...args], cwd);
+    if (result.code !== 0 || result.timedOut)
+      throw new Error(
+        `Cannot validate task repository: ${result.stderr || result.stdout}`,
+      );
+    return result.stdout.trim();
+  };
   const state = await readTaskState(session);
   if (!state?.active) return null;
   const task = state.task;
@@ -54,6 +54,9 @@ export const taskProvenance = async (
   return {
     base: task.base,
     allowedDeletions: task.allowedDeletions ?? [],
+    allowedRemovals: task.allowedRemovals ?? [],
+    refactor: task.refactor === true,
+    integrationWorktree: await realpath(task.worktree),
     worktree: await realpath(
       await gitOutput(worktree, "rev-parse", "--show-toplevel"),
     ),

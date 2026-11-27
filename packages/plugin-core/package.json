@@ -55,6 +55,7 @@
     "./rules": "./src/rules/index.ts",
     "./guard": "./src/guard/index.ts",
     "./verify": "./src/verify/index.ts",
+    "./verify/testing": "./src/verify/change-fixtures.test-helpers.ts",
     "./workers": "./src/workers/index.ts",
     "./skills/shared": "./src/skills/shared.ts",
     "./project": "./src/project/index.ts",

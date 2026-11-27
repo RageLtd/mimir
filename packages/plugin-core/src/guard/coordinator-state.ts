@@ -39,8 +39,20 @@ export type CoordinatorState = {
      * delete. Kept on the task so the allowance ends when the task does.
      */
     readonly allowedDeletions?: readonly string[];
+    /**
+     * Repository-relative test files the coordinator allows this task to
+     * lose assertions in. Held beside `allowedDeletions`, for the same reason.
+     */
+    readonly allowedRemovals?: readonly string[];
+    /**
+     * The task keeps behaviour, so the verify gate holds it to the existing
+     * suite: no coverage rule, and no test may change, inline ones included.
+     */
+    readonly refactor?: boolean;
   };
 };
+
+type TaskAllowance = "allowedDeletions" | "allowedRemovals";
 
 const stateDir = () => join(mimirHome(), "agents");
 
@@ -49,6 +61,17 @@ const safeSessionId = (sessionId: string) =>
 
 export const coordinatorStatePath = (sessionId: string) =>
   join(stateDir(), `${safeSessionId(sessionId)}.json`);
+
+/** An allowance's paths; undefined when absent, a throw when malformed. */
+const readAllowance = (allowed: unknown, what: string) => {
+  if (allowed === undefined) return undefined;
+  const paths = Array.isArray(allowed)
+    ? allowed.filter((path) => typeof path === "string")
+    : [];
+  if (!Array.isArray(allowed) || paths.length !== allowed.length)
+    throw new Error(`Invalid coordinator task state: cannot read ${what}.`);
+  return paths;
+};
 
 const readTask = (raw: unknown) => {
   if (raw === undefined) return undefined;
@@ -61,20 +84,25 @@ const readTask = (raw: unknown) => {
     throw new Error(
       "Invalid coordinator task state: cannot verify the task base.",
     );
-  const allowed = task.allowedDeletions;
-  if (allowed === undefined)
-    return { base: task.base, worktree: task.worktree };
-  const paths = Array.isArray(allowed)
-    ? allowed.filter((path) => typeof path === "string")
-    : [];
-  if (!Array.isArray(allowed) || paths.length !== allowed.length)
+  const allowedDeletions = readAllowance(
+    task.allowedDeletions,
+    "the allowed test deletions",
+  );
+  const allowedRemovals = readAllowance(
+    task.allowedRemovals,
+    "the allowed assertion removals",
+  );
+  const { refactor } = task;
+  if (refactor !== undefined && typeof refactor !== "boolean")
     throw new Error(
-      "Invalid coordinator task state: cannot read the allowed test deletions.",
+      "Invalid coordinator task state: cannot read the refactor mark.",
     );
   return {
     base: task.base,
     worktree: task.worktree,
-    allowedDeletions: paths,
+    ...(allowedDeletions ? { allowedDeletions } : {}),
+    ...(allowedRemovals ? { allowedRemovals } : {}),
+    ...(refactor !== undefined ? { refactor } : {}),
   };
 };
 
@@ -117,26 +145,56 @@ export const writeCoordinatorState = async (
   );
 };
 
+type TaskState = CoordinatorState & {
+  readonly task: NonNullable<CoordinatorState["task"]>;
+};
+
 /**
- * Add `paths` to the current task's allowed test deletions and write the
- * state back. Returns the task's full allowance.
+ * Add `paths` to one of the current task's allowances and write the
+ * state back. Returns that allowance in full.
  */
-export const allowTaskDeletions = async (
+const allowOnTask = async (
+  key: TaskAllowance,
   sessionId: string,
-  state: CoordinatorState & {
-    readonly task: NonNullable<CoordinatorState["task"]>;
-  },
+  state: TaskState,
   paths: readonly string[],
 ) => {
-  const allowedDeletions = [
-    ...new Set([...(state.task.allowedDeletions ?? []), ...paths]),
-  ];
+  const allowed = [...new Set([...(state.task[key] ?? []), ...paths])];
   await writeCoordinatorState(sessionId, {
     ...state,
-    task: { ...state.task, allowedDeletions },
+    task: { ...state.task, [key]: allowed },
   });
-  return allowedDeletions;
+  return allowed;
 };
+
+/** Add `paths` to the test files the current task may delete. */
+export const allowTaskDeletions = (
+  sessionId: string,
+  state: TaskState,
+  paths: readonly string[],
+) => allowOnTask("allowedDeletions", sessionId, state, paths);
+
+/** Add `paths` to the test files the current task may lose assertions in. */
+export const allowTaskRemovals = (
+  sessionId: string,
+  state: TaskState,
+  paths: readonly string[],
+) => allowOnTask("allowedRemovals", sessionId, state, paths);
+
+/** What each allowance action grants on the task, and how it is printed. */
+export const TASK_ALLOWANCES = {
+  "allow-deletion": {
+    allow: allowTaskDeletions,
+    label: "allowed test deletions",
+  },
+  "allow-removal": {
+    allow: allowTaskRemovals,
+    label: "allowed assertion removals",
+  },
+} as const;
+
+/** How a host prints the task's refactor mark. */
+export const REFACTOR_LABEL = "marked as a refactor";
 
 export const clearCoordinatorState = async (sessionId: string) => {
   const file = Bun.file(coordinatorStatePath(sessionId));

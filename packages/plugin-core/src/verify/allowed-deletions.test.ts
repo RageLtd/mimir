@@ -1,24 +1,22 @@
 /**
  * Test files folded into one: the coordinator names the deleted test
  * files it accepts (`allowedDeletions`), the gate accepts those and no
- * others, and its pass report shows what the fold cost. Runs against a
- * real git repo; toolchain commands are intercepted so only git runs.
+ * others, and its pass report shows what the fold cost. The change set is
+ * handed in and toolchain commands are scripted, so no command runs.
  */
 
+import { describe, expect, test } from "bun:test";
 import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { type CommandRunner, runCommand } from "./exec";
+  changed,
+  changeSet,
+  fixedChanges,
+  gateSandbox,
+  toolchain,
+} from "./change-fixtures.test-helpers";
+import type { ChangedFile } from "./changes";
 import { runVerify } from "./verify";
 
+const GO = { "go.mod": "module x\n" };
 const ADD_TEST = "add_test.go";
 const SUB_TEST = "sub_test.go";
 const FOLDED = "math_test.go";
@@ -26,35 +24,6 @@ const NOTES = "NOTES.md";
 const ALLOWED_HEADER = "Allowed test deletions";
 const ALLOWED_TOTALS = "Allowed deleted test files";
 const OTHER_TOTALS = "Other changed test files";
-
-const dirs: string[] = [];
-const savedHome = process.env.MIMIR_HOME;
-
-beforeEach(async () => {
-  const home = await mkdtemp(join(tmpdir(), "mimir-allowed-home-"));
-  dirs.push(home);
-  process.env.MIMIR_HOME = home;
-});
-
-afterEach(() => {
-  if (savedHome === undefined) delete process.env.MIMIR_HOME;
-  else process.env.MIMIR_HOME = savedHome;
-});
-
-afterAll(async () => {
-  await Promise.all(dirs.map((d) => rm(d, { recursive: true, force: true })));
-});
-
-const git = async (cwd: string, ...args: string[]) => {
-  const r = await runCommand(["git", ...args], cwd);
-  if (r.code !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
-  return r.stdout.trim();
-};
-
-const write = async (root: string, rel: string, content: string) => {
-  await mkdir(dirname(join(root, rel)), { recursive: true });
-  await Bun.write(join(root, rel), content);
-};
 
 /** A Go test function with one assertion line per check. */
 const goTest = (name: string, checks: readonly string[]) =>
@@ -67,65 +36,44 @@ const goTest = (name: string, checks: readonly string[]) =>
 const goFile = (...tests: string[]) =>
   ["package x", 'import "testing"', ...tests, ""].join("\n");
 
-/**
- * Base: two test files holding 3 test functions and 4 assertions —
- * add_test.go (TestAdd: 2, TestAddZero: 1), sub_test.go (TestSub: 1).
- */
-const seedRepo = async () => {
-  const root = await mkdtemp(join(tmpdir(), "mimir-allowed-repo-"));
-  dirs.push(root);
-  await git(root, "init", "-q", "-b", "main");
-  await git(root, "config", "user.email", "t@example.com");
-  await git(root, "config", "user.name", "t");
-  await write(root, "go.mod", "module x\n");
-  await write(
-    root,
-    "math.go",
-    "package x\nfunc Add(a, b int) int { return a + b }\nfunc Sub(a, b int) int { return a - b }\n",
-  );
-  await write(
-    root,
-    ADD_TEST,
-    goFile(
-      goTest("TestAdd", ["Add(1, 2) != 3", "Add(2, 2) != 4"]),
-      goTest("TestAddZero", ["Add(0, 0) != 0"]),
-    ),
-  );
-  await write(root, SUB_TEST, goFile(goTest("TestSub", ["Sub(3, 1) != 2"])));
-  await git(root, "add", ".");
-  await git(root, "commit", "-q", "-m", "base");
-  return root;
-};
+const TEST_ADD = goTest("TestAdd", ["Add(1, 2) != 3", "Add(2, 2) != 4"]);
+const TEST_ADD_ZERO = goTest("TestAddZero", ["Add(0, 0) != 0"]);
+const TEST_SUB = goTest("TestSub", ["Sub(3, 1) != 2"]);
 
 /**
- * Fold both test files into a new math_test.go: 2 test functions and
- * 3 assertions. Different enough from either original that git cannot
- * pair it with one as a move.
+ * Before the change: two test files holding 3 test functions and 4
+ * assertions — add_test.go (TestAdd: 2, TestAddZero: 1), sub_test.go
+ * (TestSub: 1).
  */
-const fold = async (root: string) => {
-  await write(
-    root,
-    FOLDED,
-    goFile(
-      goTest("TestMathAdd", ["Add(1, 2) != 3", "Add(0, 0) != 0"]),
-      goTest("TestMathSub", ["Sub(3, 1) != 2"]),
-    ),
-  );
-  await rm(join(root, ADD_TEST));
-  await rm(join(root, SUB_TEST));
-};
+const ADD_TEST_BEFORE = goFile(TEST_ADD, TEST_ADD_ZERO);
+const SUB_TEST_BEFORE = goFile(TEST_SUB);
 
-const passingRunner: CommandRunner = async (argv, cwd, timeoutMs) =>
-  argv[0] === "git"
-    ? runCommand(argv, cwd, timeoutMs)
-    : { code: 0, stdout: "", stderr: "", timedOut: false };
+/** The folded file: 2 test functions and 3 assertions. */
+const FOLDED_TESTS = goFile(
+  goTest("TestMathAdd", ["Add(1, 2) != 3", "Add(0, 0) != 0"]),
+  goTest("TestMathSub", ["Sub(3, 1) != 2"]),
+);
 
-const verify = (root: string, agentId: string, allowed?: readonly string[]) =>
+/** Both test files folded into a new math_test.go. */
+const FOLD = [
+  changed(FOLDED, null, FOLDED_TESTS),
+  changed(ADD_TEST, ADD_TEST_BEFORE, null),
+  changed(SUB_TEST, SUB_TEST_BEFORE, null),
+];
+
+const { project } = gateSandbox();
+
+const verify = async (
+  files: readonly ChangedFile[],
+  agentId: string,
+  allowed?: readonly string[],
+) =>
   runVerify({
-    worktree: root,
+    worktree: await project(GO),
     lastMessage: "STATUS: done",
     agentId,
-    run: passingRunner,
+    changes: fixedChanges(changeSet(files)),
+    run: toolchain(),
     allowedDeletions: allowed,
   });
 
@@ -141,10 +89,7 @@ const allowedSection = (report: string) => {
 
 describe("verify gate: allowed test-file deletions", () => {
   test("without an allowance, folding two test files blocks on both deletions with the fold advice", async () => {
-    const root = await seedRepo();
-    await fold(root);
-
-    const outcome = await verify(root, "fold-none");
+    const outcome = await verify(FOLD, "fold-none");
     expect(outcome.kind).toBe("block");
     if (outcome.kind !== "block") return;
     expect(outcome.reason).toContain(`${ADD_TEST}: test file deleted`);
@@ -154,10 +99,7 @@ describe("verify gate: allowed test-file deletions", () => {
   });
 
   test("allowing only one of the deletions still blocks on the other", async () => {
-    const root = await seedRepo();
-    await fold(root);
-
-    const outcome = await verify(root, "fold-one", [ADD_TEST]);
+    const outcome = await verify(FOLD, "fold-one", [ADD_TEST]);
     expect(outcome.kind).toBe("block");
     if (outcome.kind !== "block") return;
     expect(outcome.reason).toContain(`${SUB_TEST}: test file deleted`);
@@ -165,10 +107,7 @@ describe("verify gate: allowed test-file deletions", () => {
   });
 
   test("an allowance for a path the change did not delete allows nothing", async () => {
-    const root = await seedRepo();
-    await fold(root);
-
-    const outcome = await verify(root, "fold-wrong", ["other_test.go", FOLDED]);
+    const outcome = await verify(FOLD, "fold-wrong", ["other_test.go", FOLDED]);
     expect(outcome.kind).toBe("block");
     if (outcome.kind !== "block") return;
     expect(outcome.reason).toContain(`${ADD_TEST}: test file deleted`);
@@ -176,10 +115,7 @@ describe("verify gate: allowed test-file deletions", () => {
   });
 
   test("both deletions allowed → pass, and the report shows what the fold cost", async () => {
-    const root = await seedRepo();
-    await fold(root);
-
-    const outcome = await verify(root, "fold-all", [ADD_TEST, SUB_TEST]);
+    const outcome = await verify(FOLD, "fold-all", [ADD_TEST, SUB_TEST]);
     expect(outcome.kind).toBe("pass");
     if (outcome.kind !== "pass") return;
     const { report } = outcome;
@@ -199,21 +135,20 @@ describe("verify gate: allowed test-file deletions", () => {
   });
 
   test("folding a deleted test file into an existing one shows that file's counts rising", async () => {
-    const root = await seedRepo();
     // TestSub moves into add_test.go, which already held 2 test functions
     // and 3 assertions; add_test.go is changed, not added.
-    await write(
-      root,
-      ADD_TEST,
-      goFile(
-        goTest("TestAdd", ["Add(1, 2) != 3", "Add(2, 2) != 4"]),
-        goTest("TestAddZero", ["Add(0, 0) != 0"]),
-        goTest("TestSub", ["Sub(3, 1) != 2"]),
-      ),
+    const outcome = await verify(
+      [
+        changed(
+          ADD_TEST,
+          ADD_TEST_BEFORE,
+          goFile(TEST_ADD, TEST_ADD_ZERO, TEST_SUB),
+        ),
+        changed(SUB_TEST, SUB_TEST_BEFORE, null),
+      ],
+      "fold-existing",
+      [SUB_TEST],
     );
-    await rm(join(root, SUB_TEST));
-
-    const outcome = await verify(root, "fold-existing", [SUB_TEST]);
     expect(outcome.kind).toBe("pass");
     if (outcome.kind !== "pass") return;
     const { report } = outcome;
@@ -228,18 +163,11 @@ describe("verify gate: allowed test-file deletions", () => {
   });
 
   test("an allowed path that was deleted but is not a test file is neither listed nor counted", async () => {
-    const root = await seedRepo();
-    await write(root, NOTES, "notes\n");
-    await git(root, "add", NOTES);
-    await git(root, "commit", "-q", "-m", "notes");
-    await fold(root);
-    await rm(join(root, NOTES));
-
-    const outcome = await verify(root, "fold-notes", [
-      ADD_TEST,
-      SUB_TEST,
-      NOTES,
-    ]);
+    const outcome = await verify(
+      [...FOLD, changed(NOTES, "notes\n", null)],
+      "fold-notes",
+      [ADD_TEST, SUB_TEST, NOTES],
+    );
     expect(outcome.kind).toBe("pass");
     if (outcome.kind !== "pass") return;
     const { report } = outcome;
@@ -254,34 +182,37 @@ describe("verify gate: allowed test-file deletions", () => {
   });
 
   test("an allowed deletion does not excuse a skip added in the folded file", async () => {
-    const root = await seedRepo();
-    await fold(root);
-    await write(
-      root,
-      FOLDED,
-      goFile(
-        goTest("TestMathAdd", ["Add(1, 2) != 3", "Add(0, 0) != 0"]),
-        'func TestMathSub(t *testing.T) {\n\tt.Skip("later")\n\tif Sub(3, 1) != 2 {\n\t\tt.Fatal("sub")\n\t}\n}',
-      ),
+    const outcome = await verify(
+      [
+        changed(
+          FOLDED,
+          null,
+          goFile(
+            goTest("TestMathAdd", ["Add(1, 2) != 3", "Add(0, 0) != 0"]),
+            'func TestMathSub(t *testing.T) {\n\tt.Skip("later")\n\tif Sub(3, 1) != 2 {\n\t\tt.Fatal("sub")\n\t}\n}',
+          ),
+        ),
+        changed(ADD_TEST, ADD_TEST_BEFORE, null),
+        changed(SUB_TEST, SUB_TEST_BEFORE, null),
+      ],
+      "fold-skip",
+      [ADD_TEST, SUB_TEST],
     );
-
-    const outcome = await verify(root, "fold-skip", [ADD_TEST, SUB_TEST]);
     expect(outcome.kind).toBe("block");
     if (outcome.kind === "block") expect(outcome.reason).toContain("skip");
   });
 
   test("with no allowance, a pass report carries no allowed-deletions lines", async () => {
-    const root = await seedRepo();
-    await write(
-      root,
-      SUB_TEST,
-      goFile(
-        goTest("TestSub", ["Sub(3, 1) != 2"]),
-        goTest("TestSubZero", ["Sub(0, 0) != 0"]),
-      ),
+    const outcome = await verify(
+      [
+        changed(
+          SUB_TEST,
+          SUB_TEST_BEFORE,
+          goFile(TEST_SUB, goTest("TestSubZero", ["Sub(0, 0) != 0"])),
+        ),
+      ],
+      "plain",
     );
-
-    const outcome = await verify(root, "plain");
     expect(outcome.kind).toBe("pass");
     if (outcome.kind !== "pass") return;
     expect(outcome.report).toContain("Test functions: 1 → 2");

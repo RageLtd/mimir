@@ -33,8 +33,10 @@ import { resolve } from "node:path";
 import { attempt } from "@mimir/plugin-core/result";
 import { errMessage } from "@mimir/plugin-core/util";
 import {
+  type CommandRunner,
   clearBlocks,
   parseStatus,
+  runCommand,
   runVerify,
   type VerifyOutcome,
   type VerifyRole,
@@ -156,19 +158,34 @@ export const parseVerifyArgs = (args: readonly string[]) => {
   } satisfies VerifyCliArgs;
 };
 
-const runVerifyCli = async (args: VerifyCliArgs) => {
+/** What the gate entry reaches outside itself for: the gate, and git. */
+export type GateEntryDeps = {
+  readonly verify: typeof runVerify;
+  readonly run: CommandRunner;
+};
+
+const REAL_DEPS = {
+  verify: runVerify,
+  run: runCommand,
+} satisfies GateEntryDeps;
+
+const runVerifyCli = async (args: VerifyCliArgs, deps: GateEntryDeps) => {
   const agentId = args.agentId ?? CLI_AGENT_ID;
   // A worker's block count is its own; the coordinator's shared id
   // starts clean every time so old runs can't exhaust a new one.
   if (!args.agentId) await clearBlocks(agentId);
-  const outcome = await verifyForSession(process.env.CLAUDE_CODE_SESSION_ID, {
-    role: args.role,
-    worktree: resolve(args.worktree),
-    lastMessage: "STATUS: done",
-    agentId,
-    allowEmpty: args.allowEmpty,
-    commandTimeoutMs: COMMAND_TIMEOUT_MS,
-  });
+  const outcome = await verifyForSession(
+    process.env.CLAUDE_CODE_SESSION_ID,
+    {
+      role: args.role,
+      worktree: resolve(args.worktree),
+      lastMessage: "STATUS: done",
+      agentId,
+      allowEmpty: args.allowEmpty,
+      commandTimeoutMs: COMMAND_TIMEOUT_MS,
+    },
+    deps,
+  );
   switch (outcome.kind) {
     case "pass":
       console.log(outcome.report);
@@ -185,14 +202,20 @@ const runVerifyCli = async (args: VerifyCliArgs) => {
   }
 };
 
-const verifyForSession = async (
+/**
+ * The gate for one hand-back or manual run, given what the session's task
+ * boundary says: its base, its allowances, its refactor mark, and which
+ * worktree the worker's own change is measured against.
+ */
+export const verifyForSession = async (
   session: string | undefined,
   options: Parameters<typeof runVerify>[0],
+  deps: GateEntryDeps = REAL_DEPS,
 ) => {
   if (options.role === "review" || parseStatus(options.lastMessage) !== "done")
-    return runVerify(options);
+    return deps.verify(options);
   const [error, task] = await attempt(() =>
-    taskProvenance(session, options.worktree),
+    taskProvenance(session, options.worktree, deps.run),
   );
   if (error)
     return {
@@ -200,10 +223,21 @@ const verifyForSession = async (
       blocks: 0,
       reason: `Cannot verify task provenance: ${errMessage(error)}`,
     } satisfies VerifyOutcome;
-  return runVerify({
+  // A worker is judged on its own change, from where its branch meets the
+  // integration HEAD. The integration worktree itself is the task-level
+  // check: there that meeting point is HEAD, which would hide every commit
+  // the task collected, so its test-change rules read from the task base.
+  const integrationWorktree =
+    task && task.worktree !== task.integrationWorktree
+      ? task.integrationWorktree
+      : undefined;
+  return deps.verify({
     ...options,
     base: task?.base,
     allowedDeletions: task?.allowedDeletions,
+    allowedRemovals: task?.allowedRemovals,
+    refactor: task?.refactor,
+    integrationWorktree,
     worktree: task?.worktree ?? options.worktree,
   });
 };
@@ -216,56 +250,58 @@ const handbackMessage = (input: HookInput) => {
   return typeof toolInput.message === "string" ? toolInput.message : "";
 };
 
-export const runVerifyHook = async (args: readonly string[] = []) => {
-  const cli = parseVerifyArgs(args);
-  if (typeof cli === "string") {
-    console.error(cli);
-    return 1;
-  }
-  if (cli) return runVerifyCli(cli);
-
-  if (process.env.MIMIR_ACTIVE !== "1") return 0;
-  const payload = await parseInput(await readPayload());
+/**
+ * The hook's answer to one payload: the PreToolUse output for a gated
+ * hand-back, or null when the payload is not one to answer.
+ */
+export const answerHandback = async (
+  raw: string,
+  deps: GateEntryDeps = REAL_DEPS,
+) => {
+  const payload = await parseInput(raw);
   const agentId = payload.agent_id;
   if (!agentId) {
     log.debug("verify: no agent_id — not inside a subagent, skipping");
-    return 0;
+    return null;
   }
   if (
     payload.hook_event_name !== "PreToolUse" ||
     payload.tool_name !== HANDBACK_TOOL
   )
-    return 0;
+    return null;
   if (cwdMissing(payload.cwd)) {
     log.info("verify: worktree already collected — skipping late re-fire", {
       agentId,
       cwd: payload.cwd,
     });
-    return 0;
+    return null;
   }
 
   // A worker without its worktree: the coordinator already collected it.
   // The session's tree is not the worker's change set, so no gate runs.
-  const { input, missing } = await withAgentCwd(payload);
-  if (missing) return 0;
+  const { input, missing } = await withAgentCwd(payload, deps.run);
+  if (missing) return null;
   const message = handbackMessage(input);
 
-  const outcome = await verifyForSession(input.session_id, {
-    role: roleOf(input.agent_type),
-    worktree: input.cwd ?? process.cwd(),
-    lastMessage: message,
-    agentId,
-    commandTimeoutMs: COMMAND_TIMEOUT_MS,
-  }).catch((err) => {
+  const outcome = await verifyForSession(
+    input.session_id,
+    {
+      role: roleOf(input.agent_type),
+      worktree: input.cwd ?? process.cwd(),
+      lastMessage: message,
+      agentId,
+      commandTimeoutMs: COMMAND_TIMEOUT_MS,
+    },
+    deps,
+  ).catch((err) => {
     log.error("verify gate crashed — letting the worker through", {
       agentId,
       error: errMessage(err),
     });
     return null;
   });
-  if (!outcome) return 0;
+  if (!outcome) return null;
 
-  const output = handbackOutput(outcome, message);
   log.info("verify gate", {
     agentId,
     agentType: input.agent_type,
@@ -273,6 +309,22 @@ export const runVerifyHook = async (args: readonly string[] = []) => {
     kind: outcome.kind,
     ...("blocks" in outcome ? { blocks: outcome.blocks } : {}),
   });
+  return handbackOutput(outcome, message);
+};
+
+export const runVerifyHook = async (
+  args: readonly string[] = [],
+  deps: GateEntryDeps = REAL_DEPS,
+) => {
+  const cli = parseVerifyArgs(args);
+  if (typeof cli === "string") {
+    console.error(cli);
+    return 1;
+  }
+  if (cli) return runVerifyCli(cli, deps);
+
+  if (process.env.MIMIR_ACTIVE !== "1") return 0;
+  const output = await answerHandback(await readPayload(), deps);
   if (output) process.stdout.write(JSON.stringify(output));
   return 0;
 };

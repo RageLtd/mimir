@@ -21,8 +21,13 @@ import {
   POLICY_NEVER_DO,
   POLICY_PLAN_FILE,
   POLICY_PLAN_LOCK,
+  POLICY_REFACTOR_CLOSE,
+  POLICY_REFACTOR_OPEN,
+  POLICY_REMOVAL_CLOSE,
+  POLICY_REMOVAL_OPEN,
   POLICY_REVIEW_COLD,
   POLICY_REVIEW_NITS,
+  POLICY_ROLE_BOUNDARY,
   POLICY_TEST_GATE,
   POLICY_TEST_PROMPT,
 } from "./delegate-policy";
@@ -43,6 +48,8 @@ ${PER_TASK_HEADING}
 
 Before the red worker for **each new task**, run \`mimir-cc delegate task\` from the integration worktree. The host captures HEAD as the task base; there is no model-supplied base argument. Keep that boundary through red-test collection, implementation, retries, role assistance, and review fixes. Call \`delegate task\` again only when moving to the next task. Starting the same plan again preserves its task boundary; a different plan clears it. A failed capture clears the prior boundary and blocks workers until capture succeeds. Only Mimir's workers need a boundary — utility agents (Explore, docs lookups) spawn without one.
 
+${POLICY_REFACTOR_OPEN} \`mimir-cc delegate task --refactor\`. ${POLICY_REFACTOR_CLOSE}
+
 Each task runs three workers in order, each in its own worktree branched from the current HEAD, so **merge each worker's result before spawning the next** or the next one won't see it. Run tasks sequentially: the session has one active task boundary. A worker's worktree gets its dependencies installed by the role guard on the worker's first tool call (Bun projects) — you do not need to tell it to install anything.
 
 \`delegate start\` prints a \`worker models:\` line — the per-role models from \`~/.mimir/config.json\` overlaid by \`[workers.models.claudeCode]\` in the layered \`mimir.toml\` (user, then this project). When it names a model for a role (\`impl=opus\`), pass that value as the Agent tool's \`model\` parameter on every spawn of that role. When the line reads \`default (same model for every role)\`, or names no model for the role you are spawning, omit \`model\` — the worker runs on your model. \`delegate status\` prints the same line while the delegation is active, so you can recover it mid-run.
@@ -58,11 +65,13 @@ Each task runs three workers in order, each in its own worktree branched from th
 ${CHECKINS_HEADING}
 
 - \`STATUS: question\` — answer it with \`SendMessage\` to the worker's agent id; it resumes with full context. ${POLICY_CHECKIN_ANSWER}
+${POLICY_ROLE_BOUNDARY}
 - Partial output (\`maxTurns\` reached): resume once with "continue". If it stalls again, stop and escalate.
 - **A worker that died** (a task notification with no hand-back — a rate limit, a crash): its worktree is retained with whatever it had written. Check \`git -C <worktreePath> status\`, then resume it by agent id with "continue"; it picks up from its transcript.
 - **Stale base**: a worker whose gate fails on code that landed on the integration branch after it was spawned (a review fix merged while it was still working) is not wrong — merge the integration tip forward into its branch (\`git -C <worktreePath> merge <integration-branch>\`) and resume it to hand back again.
 - Gate block: the worker retries on its own with the gate's reason; after three blocks the gate lets it stop with \`STATUS: failed\`. If the third block was the worker's own doing, escalate — do not respawn with the same prompt. If it was exogenous (a flaky test, a stale base you have since fixed), re-run the gate yourself: \`mimir-cc verify --worktree <worktreePath> --agent <agentId>\` prints the same report and clears the loop guard on a pass.
 ${POLICY_FOLD_OPEN} \`mimir-cc delegate allow-deletion <path>...\`. ${POLICY_FOLD_CLOSE}
+${POLICY_REMOVAL_OPEN} \`mimir-cc delegate allow-removal <path>...\`. ${POLICY_REMOVAL_CLOSE}
 ${POLICY_ESCALATE_OPEN} the worker transcript path, \`mimir-cc delegate stop\`, ${POLICY_ESCALATE_CLOSE}
 - Run one task at a time; never advance its boundary while a worker or review fix for it is still in flight.
 
@@ -80,7 +89,7 @@ ${POLICY_CONVENTIONAL_COMMITS}
 
 \`-d\`, never \`-D\`: the guard denies a force-delete for every role. If \`-d\` refuses, the branch holds commits your merge didn't take — stop and find out why rather than forcing it. Resolve conflicts yourself only in the merge; never edit source files directly.
 
-After collecting each task, run the integration check on the merged tree — \`mimir-cc verify --worktree <repo root> --allow-empty\` uses the active task base, runs the project's full toolchain, and prints the report (a worker cannot opt into an empty change set). Do this before advancing to the next task boundary. Integration is where individually-passing work breaks.
+After collecting each task, run the integration check on the merged tree — \`mimir-cc verify --worktree <repo root> --allow-empty\` uses the active task base, runs the project's full toolchain, and prints the report (a worker cannot opt into an empty change set). A worker's gate judges only what that worker changed. This run judges the whole task from its base, with the task's allowances applied and listed in its report, so it is where a merge that dropped tests shows up. Do this before advancing to the next task boundary. Integration is where individually-passing work breaks.
 
 ${POLICY_FINISH_OPEN}
 2. \`mimir-cc delegate stop\`.

@@ -268,10 +268,17 @@ export const gateTaskOutput = async (
   const outcome = await deps.verify({
     role: roleForAgentType(agentType),
     worktree,
+    // Workers share the session's directory, so there is no integration
+    // worktree to judge a worker's own change against: every run reads the
+    // test-change rules from the task base and judges the whole task. The
+    // task's allowances keep a later worker from being charged for an
+    // accepted earlier change.
     ...(state?.active
       ? {
           base: state.task?.base,
           allowedDeletions: state.task?.allowedDeletions,
+          allowedRemovals: state.task?.allowedRemovals,
+          refactor: state.task?.refactor,
         }
       : {}),
     lastMessage: output.output,

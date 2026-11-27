@@ -11,19 +11,24 @@
  *      (an unverifiable "done" is worth nothing, so silence is the wrong
  *      default)
  *   5. typecheck → test → check → vet per root; first failure blocks with
- *      the output tail as the reason
+ *      the output tail as the reason, plus a note when every file the
+ *      output names lies outside the worker's role
  *   6. loop guard: after MAX_BLOCKS the worker may stop with
  *      `STATUS: failed` so the coordinator escalates
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { resolveToolchainsForFiles } from "../project/toolchain";
 import type { ResolvedToolchain } from "../project/toolchain-types";
 import { attempt } from "../result";
 import { errMessage } from "../util";
-import { collectChanges } from "./changes";
+import { type ChangeSource, gitChanges } from "./changes";
 import {
   allowedDeletionCost,
+  allowedRemovalCost,
   coverageCheck,
+  refactorCheck,
   sanityCheck,
   testCounts,
   verifiablePaths,
@@ -31,6 +36,7 @@ import {
 import { type CommandRunner, runCommand, shellArgv, tailLines } from "./exec";
 import { clearBlocks, MAX_BLOCKS, noteBlock } from "./loop-guard";
 import { formatBlockReason, formatPassReport } from "./report";
+import { roleBoundaryNote } from "./role-boundary";
 import { parseStatus, type WorkerStatus } from "./status";
 
 /**
@@ -55,11 +61,19 @@ export type VerifyOptions = {
   readonly worktree: string;
   /** Host-owned task-start commit; excludes coverage from earlier tasks. */
   readonly base?: string;
+  /**
+   * The integration worktree the worker branched from. When given, the
+   * sanity rules judge only the worker's own change: its tree against the
+   * commit its branch shares with this worktree's HEAD.
+   */
+  readonly integrationWorktree?: string;
   /** The worker's final message; the STATUS line is parsed from it. */
   readonly lastMessage: string;
   /** Identifies the worker for the loop guard. */
   readonly agentId: string;
   readonly run?: CommandRunner;
+  /** Where the change sets come from. Defaults to git, through `run`. */
+  readonly changes?: ChangeSource;
   /** Per-command timeout for toolchain commands. */
   readonly commandTimeoutMs?: number;
   /** Lines of output kept in a failure reason. */
@@ -75,6 +89,16 @@ export type VerifyOptions = {
    * another test file. Each excuses only the deletion of that path.
    */
   readonly allowedDeletions?: readonly string[];
+  /**
+   * Test files the coordinator lets lose assertions — the tests of a
+   * feature the task deletes. Each excuses only that file's net loss.
+   */
+  readonly allowedRemovals?: readonly string[];
+  /**
+   * The task keeps behaviour: the coverage rule does not apply, and any
+   * test changed since the task base blocks, inline tests included.
+   */
+  readonly refactor?: boolean;
 };
 
 export type CommandRun = {
@@ -98,7 +122,7 @@ export type VerifyOutcome =
 
 const COMMAND_ORDER = ["typecheck", "test", "check", "vet"] as const;
 
-type CommandKind = (typeof COMMAND_ORDER)[number];
+export type CommandKind = (typeof COMMAND_ORDER)[number];
 
 /** The test role with a vet to run: check, then the build probe, then the vet. */
 const TEST_WITH_VET: readonly CommandKind[] = ["check", "typecheck", "vet"];
@@ -121,6 +145,7 @@ const runToolchain = async (
   run: CommandRunner,
   timeoutMs: number | undefined,
   tail: number,
+  worktree: string,
 ) => {
   const runs: CommandRun[] = [];
   const { root } = toolchain;
@@ -141,10 +166,16 @@ const runToolchain = async (
       const why = result.timedOut
         ? `timed out after ${timeoutMs}ms`
         : `exit ${result.code}`;
-      return {
-        runs,
-        failure: `\`${command}\` in ${root} failed (${why}):\n${tailLines(result, tail)}`,
-      };
+      const note = roleBoundaryNote({
+        kind,
+        role,
+        output: `${result.stdout}\n${result.stderr}`,
+        cwd: root,
+        worktree,
+        exists: (path) => existsSync(join(worktree, path)),
+      });
+      const failure = `\`${command}\` in ${root} failed (${why}):\n${tailLines(result, tail)}`;
+      return { runs, failure: note ? `${failure}\n\n${note}` : failure };
     }
   }
   return { runs, failure: null };
@@ -155,6 +186,7 @@ export const runVerify = async (options: VerifyOptions) => {
   const tail = options.tail ?? 40;
   const role = options.role ?? "impl";
   const allowedDeletions = options.allowedDeletions ?? [];
+  const allowedRemovals = options.allowedRemovals ?? [];
   const status = parseStatus(options.lastMessage);
   if (status !== "done" || role === "review")
     return { kind: "skip", status } satisfies VerifyOutcome;
@@ -171,8 +203,9 @@ export const runVerify = async (options: VerifyOptions) => {
       : ({ kind: "block", reason: formatted, blocks } satisfies VerifyOutcome);
   };
 
+  const source = options.changes ?? gitChanges(run);
   const [error, changes] = await attempt(() =>
-    collectChanges(run, options.worktree, options.base),
+    source.collect(options.worktree, options.base),
   );
   if (error) return block(`Change collection failed: ${errMessage(error)}`);
   if (!changes) {
@@ -186,9 +219,27 @@ export const runVerify = async (options: VerifyOptions) => {
     );
   }
 
+  // Coverage reads from the task base; the sanity rules read only the
+  // worker's own change, so what the integration branch committed since
+  // the task base is not charged to the worker.
+  const { integrationWorktree } = options;
+  const [ownError, own] = await attempt(async () =>
+    integrationWorktree === undefined
+      ? changes
+      : source.collect(
+          options.worktree,
+          await source.ownBase(options.worktree, integrationWorktree),
+        ),
+  );
+  if (ownError || !own)
+    return block(
+      `Own change collection failed: ${ownError ? errMessage(ownError) : "no change set"}`,
+    );
   const failed =
-    coverageCheck(changes.files, changes.branchPaths) ??
-    sanityCheck(changes.files, allowedDeletions);
+    (options.refactor
+      ? refactorCheck(changes.files)
+      : coverageCheck(changes.files, changes.branchPaths)) ??
+    sanityCheck(own.files, allowedDeletions, allowedRemovals);
   if (failed) return block(failed.reason);
 
   // An empty (allowEmpty) run probes a path AT the root so the project
@@ -216,6 +267,7 @@ export const runVerify = async (options: VerifyOptions) => {
       run,
       options.commandTimeoutMs,
       tail,
+      options.worktree,
     );
     runs.push(...outcome.runs);
     if (outcome.failure) return block(outcome.failure);
@@ -237,6 +289,8 @@ export const runVerify = async (options: VerifyOptions) => {
       counts: testCounts(changes.files),
       runs,
       allowed: allowedDeletionCost(changes.files, allowedDeletions),
+      removals: allowedRemovalCost(own.files, allowedRemovals),
+      refactor: options.refactor,
     }),
   } satisfies VerifyOutcome;
 };

@@ -19,7 +19,14 @@ describe("V2 delegate tools", () => {
     expect(delegate.input.required).toEqual(["action"]);
     expect(delegate.input.properties.action).toMatchObject({
       type: "string",
-      enum: ["start", "task", "allow-deletion", "status", "stop"],
+      enum: [
+        "start",
+        "task",
+        "allow-deletion",
+        "allow-removal",
+        "status",
+        "stop",
+      ],
     });
     expect(reviewPromptTool("/project").input.required).toEqual(["title"]);
   });

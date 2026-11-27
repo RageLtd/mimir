@@ -1,22 +1,30 @@
 /**
  * In-process tools the `/delegate` playbook calls on OpenCode:
  *
- *   mimir_delegate       start | task | allow-deletion | status | stop the
- *                        coordinator role for the calling session (the same
- *                        state file the guard reads); allowed deletions live
- *                        on the task record, so they end with the task
+ *   mimir_delegate       start | task | allow-deletion | allow-removal |
+ *                        status | stop the coordinator role for the calling
+ *                        session (the same state file the guard reads);
+ *                        allowed deletions and removals live on the task
+ *                        record, so they end with the task, as does the
+ *                        refactor mark `task` sets with `refactor: true`
  *   mimir_review_prompt  the context-free review prompt for a worker's
  *                        change — generated, never written by the model
  */
 
 import { resolve } from "node:path";
 import {
-  allowTaskDeletions,
   clearCoordinatorState,
+  REFACTOR_LABEL,
   readCoordinatorState,
+  TASK_ALLOWANCES,
   writeCoordinatorState,
 } from "@mimir/plugin-core/guard";
-import { collectChanges, runCommand } from "@mimir/plugin-core/verify";
+import {
+  type ChangeSource,
+  type CommandRunner,
+  gitChanges,
+  runCommand,
+} from "@mimir/plugin-core/verify";
 import { buildReviewPrompt, workerByName } from "@mimir/plugin-core/workers";
 import { tool } from "./tool-factory";
 
@@ -34,15 +42,36 @@ const describeState = async (sessionID: string, planFile: string) => {
   return lines.join("\n");
 };
 
-export const delegateTool = (directory = process.cwd(), worktree = directory) =>
+/** What a worker's session is told when it asks to start a task or for an allowance. */
+const WORKER_REFUSALS = {
+  task: "Starting a task is the coordinator's call. Stop with STATUS: question if the work needs a new task boundary.",
+  "allow-deletion":
+    "Allowing a test-file deletion is the coordinator's call. Stop with STATUS: question and name the deleted test files, so the coordinator can allow them.",
+  "allow-removal":
+    "Allowing an assertion removal is the coordinator's call. Stop with STATUS: question and name the test files that lose assertions, so the coordinator can allow them.",
+} as const;
+
+export const delegateTool = (
+  directory = process.cwd(),
+  worktree = directory,
+  run: CommandRunner = runCommand,
+) =>
   tool({
     description:
-      "Turn the coordinator role on or off. `start` (with planFile) activates the guard. Call `task` once at the beginning of EACH task, before any worker edits: the host captures its Git base. Never call `task` for retries, role assistance, or review fixes. `allow-deletion` (with paths) lets the current task delete those test files; the allowance ends with the task. `status` reports state; `stop` restores normal operation.",
+      "Turn the coordinator role on or off. `start` (with planFile) activates the guard. Call `task` once at the beginning of EACH task, before any worker edits: the host captures its Git base. Pass `refactor: true` with `task` when the task keeps behaviour: the gate then drops the coverage rule and blocks any test change; the mark ends with the task. Never call `task` for retries, role assistance, or review fixes. `allow-deletion` (with paths) lets the current task delete those test files; `allow-removal` (with paths) lets it remove assertions from them; each allowance ends with the task. `status` reports state; `stop` restores normal operation.",
     args: {
       action: {
         type: "string",
-        description: "start | task | allow-deletion | status | stop",
-        enum: ["start", "task", "allow-deletion", "status", "stop"],
+        description:
+          "start | task | allow-deletion | allow-removal | status | stop",
+        enum: [
+          "start",
+          "task",
+          "allow-deletion",
+          "allow-removal",
+          "status",
+          "stop",
+        ],
       },
       planFile: {
         type: "string",
@@ -53,7 +82,13 @@ export const delegateTool = (directory = process.cwd(), worktree = directory) =>
         type: "array",
         items: { type: "string" },
         description:
-          "Test files the current task may delete, relative to the repository root (required for allow-deletion).",
+          "Test files the current task may delete (allow-deletion) or remove assertions from (allow-removal), relative to the repository root (required for both).",
+        optional: true,
+      },
+      refactor: {
+        type: "boolean",
+        description:
+          "Mark the task as a refactor (task only): no coverage rule, and no test may change since the task base.",
         optional: true,
       },
     },
@@ -70,6 +105,8 @@ export const delegateTool = (directory = process.cwd(), worktree = directory) =>
           return describeState(sessionID, planFile);
         }
         case "task": {
+          if (context.agent && workerByName(context.agent))
+            return WORKER_REFUSALS.task;
           const state = await readCoordinatorState(sessionID);
           if (!state?.active)
             return "mimir_delegate task needs an active delegation; call start first.";
@@ -80,7 +117,7 @@ export const delegateTool = (directory = process.cwd(), worktree = directory) =>
           });
           if (!(await Bun.file(state.planFile).exists()))
             return "mimir_delegate task needs the plan file to exist first.";
-          const head = await runCommand(
+          const head = await run(
             ["git", "rev-parse", "--verify", "HEAD"],
             worktree,
           );
@@ -95,36 +132,51 @@ export const delegateTool = (directory = process.cwd(), worktree = directory) =>
           const base = head.stdout.trim();
           await writeCoordinatorState(sessionID, {
             ...state,
-            task: { base, worktree: resolve(worktree) },
+            task: {
+              base,
+              worktree: resolve(worktree),
+              ...(args.refactor ? { refactor: true } : {}),
+            },
           });
-          return `task started at ${base}; keep this boundary through retries and review fixes.`;
+          return `task started at ${base}${args.refactor ? `, ${REFACTOR_LABEL}` : ""}; keep this boundary through retries and review fixes.`;
         }
-        case "allow-deletion": {
+        case "allow-deletion":
+        case "allow-removal": {
           if (context.agent && workerByName(context.agent))
-            return "Allowing a test-file deletion is the coordinator's call. Stop with STATUS: question and name the deleted test files, so the coordinator can allow them.";
+            return WORKER_REFUSALS[args.action];
           if (!args.paths || args.paths.length === 0)
-            return "mimir_delegate allow-deletion needs paths: one or more test file paths, relative to the repository root.";
+            return `mimir_delegate ${args.action} needs paths: one or more test file paths, relative to the repository root.`;
           const state = await readCoordinatorState(sessionID);
           if (!state?.active)
-            return "mimir_delegate allow-deletion needs an active delegation; call start first.";
+            return `mimir_delegate ${args.action} needs an active delegation; call start first.`;
           if (!state.task)
-            return 'mimir_delegate allow-deletion needs a task boundary; call action: "task" first.';
-          const allowedDeletions = await allowTaskDeletions(
+            return `mimir_delegate ${args.action} needs a task boundary; call action: "task" first.`;
+          const grant = TASK_ALLOWANCES[args.action];
+          const allowed = await grant.allow(
             sessionID,
             { ...state, task: state.task },
             args.paths,
           );
-          return `allowed test deletions for this task: ${allowedDeletions.join(", ")}`;
+          return `${grant.label} for this task: ${allowed.join(", ")}`;
         }
         case "status": {
           const state = await readCoordinatorState(sessionID);
           if (!state?.active)
             return `no active delegation for session ${sessionID}`;
-          const described = await describeState(sessionID, state.planFile);
-          const allowed = state.task?.allowedDeletions ?? [];
-          return allowed.length > 0
-            ? `${described}\nallowed test deletions: ${allowed.join(", ")}`
-            : described;
+          const lines = [await describeState(sessionID, state.planFile)];
+          if (state.task?.refactor)
+            lines.push(`current task ${REFACTOR_LABEL}`);
+          const deletions = state.task?.allowedDeletions ?? [];
+          if (deletions.length > 0)
+            lines.push(
+              `${TASK_ALLOWANCES["allow-deletion"].label}: ${deletions.join(", ")}`,
+            );
+          const removals = state.task?.allowedRemovals ?? [];
+          if (removals.length > 0)
+            lines.push(
+              `${TASK_ALLOWANCES["allow-removal"].label}: ${removals.join(", ")}`,
+            );
+          return lines.join("\n");
         }
         case "stop":
           await clearCoordinatorState(sessionID);
@@ -143,6 +195,7 @@ export const reviewPromptTool = (
   directory = process.cwd(),
   coordinatorSession = async (sessionID: string) => sessionID,
   defaultWorktree = directory,
+  changes: ChangeSource = gitChanges(runCommand),
 ) =>
   tool({
     description:
@@ -169,13 +222,12 @@ export const reviewPromptTool = (
         (!state.task || resolve(state.task.worktree) !== worktree)
       )
         return "Cannot review: missing task base for this worktree.";
-      const changes = await collectChanges(
-        runCommand,
+      const set = await changes.collect(
         worktree,
         state?.active ? state.task?.base : undefined,
       );
-      if (!changes) return `${worktree} is not a git worktree.`;
-      const files = changes.files.filter(
+      if (!set) return `${worktree} is not a git worktree.`;
+      const files = set.files.filter(
         (file) =>
           !state?.active ||
           resolve(worktree, file.path) !== resolve(state.planFile),

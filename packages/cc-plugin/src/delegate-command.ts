@@ -2,10 +2,16 @@
  * Delegation helpers the `/delegate` playbook calls from Bash:
  *
  *   mimir-cc delegate start --plan <file>   turn the coordinator role on
- *   mimir-cc delegate task                  capture the next task's Git base
+ *   mimir-cc delegate task [--refactor]     capture the next task's Git base;
+ *                                            --refactor marks the task as a
+ *                                            refactor (ends with the task)
  *   mimir-cc delegate allow-deletion <path>…
  *                                            let the current task delete these
  *                                            test files (ends with the task)
+ *   mimir-cc delegate allow-removal <path>…
+ *                                            let the current task lose
+ *                                            assertions in these test files
+ *                                            (ends with the task)
  *   mimir-cc delegate status                 show the state for this session
  *   mimir-cc delegate stop                   turn it off
  *   mimir-cc review-prompt <worktree> [--title <t>]
@@ -20,8 +26,9 @@
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
-  allowTaskDeletions,
   clearCoordinatorState,
+  REFACTOR_LABEL,
+  TASK_ALLOWANCES,
   writeCoordinatorState,
 } from "@mimir/plugin-core/guard";
 import { attempt } from "@mimir/plugin-core/result";
@@ -30,7 +37,12 @@ import {
   type WorkerRoleModels,
 } from "@mimir/plugin-core/shared-config";
 import { errMessage } from "@mimir/plugin-core/util";
-import { collectChanges, runCommand } from "@mimir/plugin-core/verify";
+import {
+  type ChangeSource,
+  type CommandRunner,
+  gitChanges,
+  runCommand,
+} from "@mimir/plugin-core/verify";
 import {
   buildReviewPrompt,
   resolveWorkerModels,
@@ -52,10 +64,15 @@ const unreadableState = (error: Error) => {
 
 export type DelegateArgs =
   | { readonly action: "start"; readonly planFile: string }
-  | { readonly action: "task" }
-  | { readonly action: "allow-deletion"; readonly paths: readonly string[] }
+  | { readonly action: "task"; readonly refactor: boolean }
+  | {
+      readonly action: "allow-deletion" | "allow-removal";
+      readonly paths: readonly string[];
+    }
   | { readonly action: "status" }
   | { readonly action: "stop" };
+
+const REFACTOR_FLAG = "--refactor";
 
 const flagValue = (args: readonly string[], flag: string) => {
   const at = args.indexOf(flag);
@@ -76,20 +93,24 @@ export const parseDelegateArgs = (args: readonly string[]) => {
     }
     case "status":
       return { action: "status" } satisfies DelegateArgs;
-    case "task":
-      if (args.length !== 1)
-        return "delegate task takes no arguments; the host captures HEAD.";
-      return { action: "task" } satisfies DelegateArgs;
-    case "allow-deletion": {
+    case "task": {
+      const rest = args.slice(1);
+      const refactor = rest.length === 1 && rest[0] === REFACTOR_FLAG;
+      if (rest.length > 0 && !refactor)
+        return `delegate task takes only ${REFACTOR_FLAG}; the host captures HEAD.`;
+      return { action: "task", refactor } satisfies DelegateArgs;
+    }
+    case "allow-deletion":
+    case "allow-removal": {
       const paths = args.slice(1);
       if (paths.length === 0)
-        return "delegate allow-deletion needs one or more test file paths, relative to the repository root.";
-      return { action: "allow-deletion", paths } satisfies DelegateArgs;
+        return `delegate ${action} needs one or more test file paths, relative to the repository root.`;
+      return { action, paths } satisfies DelegateArgs;
     }
     case "stop":
       return { action: "stop" } satisfies DelegateArgs;
     default:
-      return "usage: mimir-cc delegate start --plan <file> | task | allow-deletion <path>... | status | stop";
+      return "usage: mimir-cc delegate start --plan <file> | task [--refactor] | allow-deletion <path>... | allow-removal <path>... | status | stop";
   }
 };
 
@@ -129,7 +150,10 @@ const claudeCodeModels = () => resolveWorkerModels("claudeCode", process.cwd());
 const planIdentity = async (path: string) =>
   (await Bun.file(path).exists()) ? realpath(path) : resolve(path);
 
-export const runDelegateCommand = async (args: readonly string[]) => {
+export const runDelegateCommand = async (
+  args: readonly string[],
+  run: CommandRunner = runCommand,
+) => {
   const parsed = parseDelegateArgs(args);
   if (typeof parsed === "string") {
     console.error(parsed);
@@ -187,7 +211,7 @@ export const runDelegateCommand = async (args: readonly string[]) => {
         console.error("delegate task needs the plan file to exist first.");
         return 1;
       }
-      const head = await runCommand(
+      const head = await run(
         ["git", "rev-parse", "--verify", "HEAD"],
         process.cwd(),
       );
@@ -198,7 +222,7 @@ export const runDelegateCommand = async (args: readonly string[]) => {
         );
         return 1;
       }
-      const root = await runCommand(
+      const root = await run(
         ["git", "rev-parse", "--show-toplevel"],
         process.cwd(),
       );
@@ -210,36 +234,40 @@ export const runDelegateCommand = async (args: readonly string[]) => {
       }
       await writeCoordinatorState(session, {
         ...state,
-        task: { base, worktree: resolve(root.stdout.trim()) },
+        task: {
+          base,
+          worktree: resolve(root.stdout.trim()),
+          ...(parsed.refactor ? { refactor: true } : {}),
+        },
       });
       console.log(
-        `task started at ${base}; keep this boundary through retries and review fixes.`,
+        `task started at ${base}${parsed.refactor ? `, ${REFACTOR_LABEL}` : ""}; keep this boundary through retries and review fixes.`,
       );
       return 0;
     }
-    case "allow-deletion": {
+    case "allow-deletion":
+    case "allow-removal": {
       const [stateError, state] = await attempt(() => readTaskState(session));
       if (stateError) return unreadableState(stateError);
       if (!state?.active) {
         console.error(
-          "delegate allow-deletion needs an active delegation; call start first.",
+          `delegate ${parsed.action} needs an active delegation; call start first.`,
         );
         return 1;
       }
       if (!state.task) {
         console.error(
-          "delegate allow-deletion needs a task boundary; run `mimir-cc delegate task` first.",
+          `delegate ${parsed.action} needs a task boundary; run \`mimir-cc delegate task\` first.`,
         );
         return 1;
       }
-      const allowedDeletions = await allowTaskDeletions(
+      const grant = TASK_ALLOWANCES[parsed.action];
+      const allowed = await grant.allow(
         session,
         { ...state, task: state.task },
         parsed.paths,
       );
-      console.log(
-        `allowed test deletions for this task: ${allowedDeletions.join(", ")}`,
-      );
+      console.log(`${grant.label} for this task: ${allowed.join(", ")}`);
       return 0;
     }
     case "status": {
@@ -252,9 +280,17 @@ export const runDelegateCommand = async (args: readonly string[]) => {
       console.log(
         await describeState(session, state.planFile, await claudeCodeModels()),
       );
-      const allowed = state.task?.allowedDeletions ?? [];
-      if (allowed.length > 0)
-        console.log(`allowed test deletions: ${allowed.join(", ")}`);
+      if (state.task?.refactor) console.log(`current task ${REFACTOR_LABEL}`);
+      const deletions = state.task?.allowedDeletions ?? [];
+      if (deletions.length > 0)
+        console.log(
+          `${TASK_ALLOWANCES["allow-deletion"].label}: ${deletions.join(", ")}`,
+        );
+      const removals = state.task?.allowedRemovals ?? [];
+      if (removals.length > 0)
+        console.log(
+          `${TASK_ALLOWANCES["allow-removal"].label}: ${removals.join(", ")}`,
+        );
       return 0;
     }
     case "stop": {
@@ -284,7 +320,11 @@ export const parseReviewPromptArgs = (args: readonly string[]) => {
 };
 
 /** `review-prompt <worktree> [--title <t>]` — prints the prompt to stdout. */
-export const runReviewPromptCommand = async (args: readonly string[]) => {
+export const runReviewPromptCommand = async (
+  args: readonly string[],
+  run: CommandRunner = runCommand,
+  changes: ChangeSource = gitChanges(run),
+) => {
   const parsed = parseReviewPromptArgs(args);
   if (!parsed) {
     console.error("usage: mimir-cc review-prompt <worktree> [--title <text>]");
@@ -299,24 +339,23 @@ export const runReviewPromptCommand = async (args: readonly string[]) => {
     return 1;
   }
   const [error, collected] = await attempt(async () => {
-    const task = await taskProvenance(session, resolve(worktree));
-    const changes = await collectChanges(
-      runCommand,
+    const task = await taskProvenance(session, resolve(worktree), run);
+    const set = await changes.collect(
       task?.worktree ?? resolve(worktree),
       task?.base,
     );
-    return { task, changes };
+    return { task, set };
   });
   if (error) {
     console.error(`review-prompt: ${errMessage(error)}`);
     return 1;
   }
-  const { task, changes } = collected;
-  if (!changes) {
+  const { task, set } = collected;
+  if (!set) {
     console.error(`review-prompt: ${worktree} is not a git worktree`);
     return 1;
   }
-  const files = changes.files.filter(
+  const files = set.files.filter(
     (file) => !task || file.path !== task.planPath,
   );
   if (files.length === 0) {

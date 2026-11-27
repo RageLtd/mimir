@@ -10,7 +10,7 @@
 
 import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { runCommand } from "@mimir/plugin-core/verify";
+import { type CommandRunner, runCommand } from "@mimir/plugin-core/verify";
 import { workerByName } from "@mimir/plugin-core/workers";
 import { createLogger } from "./logger";
 import { WORKTREES_DIRS } from "./worktree-types";
@@ -22,8 +22,8 @@ const WORKTREES_DIR = join(...WORKTREES_DIRS);
 const worktreeName = (agentId: string) => `agent-${agentId}`;
 
 /** The top level of `cwd`'s git work tree; `cwd` itself outside one. */
-const topLevelOf = async (cwd: string) => {
-  const result = await runCommand(["git", "rev-parse", "--show-toplevel"], cwd);
+const topLevelOf = async (cwd: string, run: CommandRunner) => {
+  const result = await run(["git", "rev-parse", "--show-toplevel"], cwd);
   const top = result.stdout.trim();
   if (result.code === 0 && !result.timedOut && top) return top;
   log.debug("not inside a git work tree — looking beside cwd", {
@@ -44,9 +44,10 @@ const isAgentWorktree = (top: string, agentId: string) =>
 export const resolveAgentCwd = async (
   cwd: string,
   agentId: string | undefined,
+  run: CommandRunner = runCommand,
 ) => {
   if (!agentId || !existsSync(cwd)) return { cwd, missing: null };
-  const top = await topLevelOf(cwd);
+  const top = await topLevelOf(cwd, run);
   if (isAgentWorktree(top, agentId)) return { cwd, missing: null };
   const worktree = join(top, WORKTREES_DIR, worktreeName(agentId));
   return existsSync(worktree)
@@ -70,11 +71,13 @@ export const withAgentCwd = async <
   },
 >(
   input: T,
+  run: CommandRunner = runCommand,
 ) => {
   if (!input.agent_id) return { input, missing: null };
   const resolved = await resolveAgentCwd(
     input.cwd ?? process.cwd(),
     input.agent_id,
+    run,
   );
   const isWorker = workerByName(input.agent_type ?? "") !== null;
   const missing = isWorker ? resolved.missing : null;
