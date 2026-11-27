@@ -213,12 +213,6 @@ export const runVerify = async (options: VerifyOptions) => {
       `${options.worktree} is not a git worktree, so the change set cannot be verified.`,
     );
   }
-  if (changes.files.length === 0 && !options.allowEmpty) {
-    return block(
-      "No changes detected. If the task needs no change, say so with STATUS: blocked and explain; a `done` with nothing to verify is not accepted.",
-    );
-  }
-
   // Coverage reads from the task base; the sanity rules read only the
   // worker's own change, so what the integration branch committed since
   // the task base is not charged to the worker.
@@ -235,6 +229,13 @@ export const runVerify = async (options: VerifyOptions) => {
     return block(
       `Own change collection failed: ${ownError ? errMessage(ownError) : "no change set"}`,
     );
+  // Judged on the worker's own change: what the integration branch already
+  // holds is not something this worker did.
+  if (own.files.length === 0 && !options.allowEmpty) {
+    return block(
+      "No changes detected. If the task needs no change, say so with STATUS: blocked and explain; a `done` with nothing to verify is not accepted.",
+    );
+  }
   const failed =
     (options.refactor
       ? refactorCheck(changes.files)

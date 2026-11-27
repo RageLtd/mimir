@@ -25,21 +25,14 @@ import {
 type Action = "allow" | "deny" | "ask";
 type Rules = readonly (readonly [pattern: string, action: Action])[];
 
-const DESTRUCTIVE_GIT: Rules = [
-  ["git push*", "deny"],
-  ["git reset --hard*", "deny"],
-  ["git branch -D*", "deny"],
-  ["git clean -f*", "deny"],
+// Workers do not use git: the coordinator owns the branch.
+const WORKER_BASH: Rules = [
+  ["*", "allow"],
+  ["git", "deny"],
+  ["git *", "deny"],
 ];
 
-const REVIEW_BASH: Rules = [
-  ["*", "deny"],
-  ["git diff*", "allow"],
-  ["git log*", "allow"],
-  ["git show*", "allow"],
-  ["git status*", "allow"],
-  ["git blame*", "allow"],
-];
+const REVIEW_BASH: Rules = [["*", "deny"]];
 
 const withDefault = (
   first: Action,
@@ -92,12 +85,7 @@ export const renderWorkerFrontmatter = (
     "permission:",
     "  task: deny",
     renderRules("edit", editRules(worker.role)),
-    renderRules(
-      "bash",
-      worker.role === "review"
-        ? REVIEW_BASH
-        : [["*", "allow"], ...DESTRUCTIVE_GIT],
-    ),
+    renderRules("bash", worker.role === "review" ? REVIEW_BASH : WORKER_BASH),
     renderRules("read", secretReads()),
     "---",
   ].join("\n");

@@ -144,4 +144,27 @@ describe("buildWorkerPrompt", () => {
     expect(lines[2]).toContain("read-only");
     expect(new Set(lines).size).toBe(3);
   });
+
+  test("every role is told it does not run git and leaves its change uncommitted for the coordinator", async () => {
+    const seedXml = toAnthropicXml(await Bun.file(SEED_PATH).text());
+    for (const worker of WORKER_DEFINITIONS) {
+      // With no prompt sections, the instruction must come from the
+      // worker's own role line or contract; with the seed, it must survive.
+      for (const prompt of [
+        buildWorkerPrompt("", worker),
+        buildWorkerPrompt(seedXml, worker),
+      ]) {
+        expect({ worker: worker.name, prompt }).toEqual({
+          worker: worker.name,
+          prompt: expect.stringMatching(
+            /(?:do(?:es)? not|never|don't) (?:run|use) git/i,
+          ),
+        });
+        expect({ worker: worker.name, prompt }).toEqual({
+          worker: worker.name,
+          prompt: expect.stringMatching(/uncommitted[^.]*coordinator/i),
+        });
+      }
+    }
+  });
 });

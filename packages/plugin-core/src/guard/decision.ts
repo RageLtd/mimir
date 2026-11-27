@@ -17,7 +17,8 @@
  *                  worker's worktree (its context stays strategic)
  *
  * Every role: no `git push`, no destructive git, no `rm -rf` outside the
- * agent's own worktree, no reads or writes of secret material.
+ * agent's own worktree, no reads or writes of secret material. Workers
+ * get no git at all.
  */
 
 import { tmpdir } from "node:os";
@@ -141,9 +142,21 @@ const GIT_RESET_HARD = new RegExp(`${GIT}reset\\b[^;&|]*--hard\\b`);
 const GIT_BRANCH_DELETE = new RegExp(`${GIT}branch\\b[^;&|]*\\s-[a-zA-Z]*D\\b`);
 const GIT_CLEAN_FORCE = new RegExp(`${GIT}clean\\b[^;&|]*\\s-[a-zA-Z]*f`);
 const RM_RECURSIVE = /\brm\s+((?:-\S+\s+)+)([^;&|]*)/g;
-const DELEGATE_ALLOW_DELETION = /\bdelegate\s+allow-deletion\b/;
-const DELEGATE_ALLOW_REMOVAL = /\bdelegate\s+allow-removal\b/;
-const DELEGATE_TASK = /\bdelegate\s+task\b/;
+// Fails closed: a worker line that so much as names git is refused, since
+// no subcommand list survives aliases, `sh -c` or a quoted argument.
+const GIT_WORD = /\bgit\b/;
+
+/**
+ * The program (`mimir-cc`, or the source `cli.ts`) followed by
+ * `delegate <sub>` anywhere in the line — env prefixes, `sh -c`, `xargs`
+ * and subshells cannot hide it. Without the program name, a grep for the
+ * subcommand words stays allowed.
+ */
+const delegateRun = (sub: string) =>
+  new RegExp(String.raw`(?:mimir-cc|cli\.ts)\s+delegate\s+${sub}\b`);
+const DELEGATE_ALLOW_DELETION = delegateRun("allow-deletion");
+const DELEGATE_ALLOW_REMOVAL = delegateRun("allow-removal");
+const DELEGATE_TASK = delegateRun("task");
 
 const stripQuotes = (word: string) => word.replace(/^['"]|['"]$/g, "");
 
@@ -284,6 +297,11 @@ export const guardDecision = (ctx: GuardContext) => {
           : ctx.worktree;
       const verdict = shellDecision(command, ctx.worktree, cwd);
       if (!verdict.allow) return verdict;
+      if (ctx.role !== "coordinator" && GIT_WORD.test(command)) {
+        return deny(
+          "Role guard: workers do not use git. Leave the change uncommitted in the worktree for the coordinator, and inspect state by reading the files directly.",
+        );
+      }
       if (ctx.role !== "coordinator" && DELEGATE_ALLOW_DELETION.test(command)) {
         return deny(
           "Role guard: allowing a test-file deletion is the coordinator's call. Stop with STATUS: question and name the deleted test files, so the coordinator can allow them.",

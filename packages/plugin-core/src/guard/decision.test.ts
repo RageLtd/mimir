@@ -72,7 +72,11 @@ describe("review", () => {
       guardDecision(ctx("review", "Read", { file_path: "src/a.ts" })).allow,
     ).toBe(true);
     expect(
-      guardDecision(ctx("review", "Bash", { command: "git diff" })).allow,
+      guardDecision(ctx("review", "Bash", { command: "cat src/a.ts" })).allow,
+    ).toBe(true);
+    // Workers get no git (decision-worker-shell.test.ts); the coordinator does.
+    expect(
+      guardDecision(ctx("coordinator", "Bash", { command: "git diff" })).allow,
     ).toBe(true);
   });
 });
@@ -165,19 +169,23 @@ describe("shell safety (every role)", () => {
     });
   }
 
-  test("ordinary git is allowed", () => {
+  test("ordinary git is allowed for the coordinator", () => {
+    // Workers get no git at all (decision-worker-shell.test.ts).
     for (const command of [
       "git status",
       "git diff --stat",
-      "git commit -m 'x'",
       "git branch feature",
       "git reset HEAD file.ts",
       "git stash",
       "git log --grep push",
-      "git commit -m 'push the button'",
       "git --no-pager diff",
+      "git commit -m 'x'",
+      "git commit -m 'push the button'",
     ]) {
-      expect(guardDecision(ctx("impl", "Bash", { command })).allow).toBe(true);
+      expect({
+        command,
+        allow: guardDecision(ctx("coordinator", "Bash", { command })).allow,
+      }).toEqual({ command, allow: true });
     }
   });
 

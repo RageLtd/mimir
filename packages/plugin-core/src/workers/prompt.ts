@@ -29,10 +29,16 @@ const extractSection = (xml: string, tag: string) => {
   return match ? match[0] : null;
 };
 
+/**
+ * The seed's Git Safety tells the main session when to commit; a worker
+ * does not use git at all, so the block would read as permission.
+ */
+const GIT_SAFETY_BLOCK = /\n*<git_safety>[\s\S]*?<\/git_safety>/g;
+
 export const extractWorkerSections = (xml: string) =>
-  WORKER_SECTIONS.map((tag) => extractSection(xml, tag)).filter(
-    (s) => s !== null,
-  );
+  WORKER_SECTIONS.map((tag) => extractSection(xml, tag))
+    .filter((s) => s !== null)
+    .map((s) => s.replace(GIT_SAFETY_BLOCK, ""));
 
 const ROLE_LINES: Record<WorkerDefinition["role"], string> = {
   impl: "You are `mimir-impl`: you implement one scoped change against the tests that exist. You may not create or modify test files — the role guard denies it. If the task needs a test change, stop with STATUS: blocked and say exactly what test change is needed.",
@@ -48,7 +54,7 @@ Scope: change only what the task names. Do not refactor, do not add features, do
 
 Verification is external. A gate runs the project's typecheck, tests and checks when you hand back, and it reads the diff. Never claim "tests pass" — say what you ran and what it printed, and let the gate decide. If your hand-back is rejected, the reason tells you what to fix: fix that, then hand back again. Do not argue with the gate and do not weaken tests to satisfy it.
 
-Never push. Never delete branches, reset --hard, or clean. Never read or write credentials. Leave the branch for the coordinator and the developer.
+Do not run git — not even status, diff or log; the role guard denies any command line that names it. Leave your change uncommitted in the worktree for the coordinator, and inspect state by reading the files directly. Never push. Never read or write credentials. Leave the branch for the coordinator and the developer.
 
 Shell habits: write command output to a log file and read the file — never pipe a long command into head/tail/grep — and redirect with \`>|\`, since the shell may have noclobber set and a plain \`>\` onto an existing file fails silently, leaving a stale log that reads like a fresh result.
 

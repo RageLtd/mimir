@@ -246,3 +246,47 @@ describe("verify gate: a worker is judged on its own change", () => {
     expect(outcome.report).toContain("Test functions: 3 → 4");
   });
 });
+
+describe("verify gate: a worker with no own change", () => {
+  const NO_CHANGES = "No changes detected";
+  /** What the integration branch collected since the task base: a red test. */
+  const COLLECTED = [changed(ADD_TEST, ADD_TEST_AT_BASE, ADD_TEST_WITH_NEG)];
+
+  const handBack = async (
+    agentId: string,
+    options: { integrationWorktree?: string; allowEmpty?: boolean },
+  ) =>
+    runVerify({
+      worktree: await project(GO),
+      base: TASK_BASE,
+      lastMessage: "STATUS: done",
+      agentId,
+      changes: taskAndOwnChanges(
+        changeSet(COLLECTED),
+        changeSet([], { base: OWN_BASE }),
+      ),
+      run: toolchain(),
+      ...options,
+    });
+
+  test("is blocked as nothing to verify, although the task base change set holds the integration branch's test", async () => {
+    const outcome = await handBack("own-empty", {
+      integrationWorktree: INTEGRATION,
+    });
+    expect(outcome.kind).toBe("block");
+    if (outcome.kind === "block") expect(outcome.reason).toContain(NO_CHANGES);
+  });
+
+  test("passes when an empty change set is allowed", async () => {
+    const outcome = await handBack("own-empty-allowed", {
+      integrationWorktree: INTEGRATION,
+      allowEmpty: true,
+    });
+    expect(outcome).toMatchObject({ kind: "pass" });
+  });
+
+  test("without an integration worktree is judged on the task base change set as before", async () => {
+    const outcome = await handBack("own-empty-alone", {});
+    expect(outcome).toMatchObject({ kind: "pass" });
+  });
+});

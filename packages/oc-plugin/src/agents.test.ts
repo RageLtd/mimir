@@ -35,6 +35,74 @@ const bodyOf = (text: string) => {
   return text.slice(end + "\n---\n".length);
 };
 
+/** The `permission.<tool>` table of an agent's frontmatter, in file order. */
+const permissionTable = (fm: string, tool: string) => {
+  const permission = frontmatterOf(`${fm}\n`).permission;
+  if (!isRecord(permission)) throw new Error("permission is not a mapping");
+  const table = permission[tool];
+  if (!isRecord(table)) throw new Error(`permission.${tool} is not a table`);
+  return Object.entries(table);
+};
+
+const escapeRegex = (text: string) => text.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+
+/** How OpenCode resolves a command against a permission table: `*`
+ *  matches any run of characters (`/` included), `?` one character, the
+ *  whole command must match, and the last matching rule wins. */
+const resolve = (table: [string, unknown][], command: string) => {
+  let action: unknown;
+  for (const [pattern, value] of table) {
+    const source = escapeRegex(pattern)
+      .replace(/\*/g, ".*")
+      .replace(/\?/g, ".");
+    if (new RegExp(`^${source}$`, "s").test(command)) action = value;
+  }
+  return action;
+};
+
+const GIT_COMMANDS = [
+  "git status",
+  "git diff",
+  "git log",
+  "git show HEAD",
+  "git blame src/agents.ts",
+  "git commit -m x",
+  "git push",
+  "git reset --hard",
+];
+
+describe("worker bash permissions", () => {
+  for (const worker of WORKER_DEFINITIONS) {
+    test(`${worker.name}: no git command is allowed`, () => {
+      const bash = permissionTable(renderWorkerFrontmatter(worker), "bash");
+      for (const command of GIT_COMMANDS) {
+        expect({ command, action: resolve(bash, command) }).toEqual({
+          command,
+          action: "deny",
+        });
+      }
+    });
+  }
+
+  for (const name of ["mimir-impl", "mimir-test"]) {
+    test(`${name}: ordinary shell commands stay allowed`, () => {
+      const bash = permissionTable(renderWorkerFrontmatter(need(name)), "bash");
+      expect(resolve(bash, "bun run test")).toBe("allow");
+      expect(resolve(bash, "bun test src/agents.test.ts")).toBe("allow");
+      expect(resolve(bash, "ls -la")).toBe("allow");
+    });
+  }
+
+  test("mimir-review: every shell command is denied", () => {
+    const bash = permissionTable(
+      renderWorkerFrontmatter(need("mimir-review")),
+      "bash",
+    );
+    expect(resolve(bash, "bun run test")).toBe("deny");
+    expect(resolve(bash, "ls")).toBe("deny");
+  });
+});
+
 describe("renderWorkerFrontmatter", () => {
   test("impl: edits allowed except test paths, broad rule first", () => {
     const fm = renderWorkerFrontmatter(need("mimir-impl"));
@@ -46,7 +114,6 @@ describe("renderWorkerFrontmatter", () => {
       edit.indexOf('"*.test.*": deny'),
     );
     expect(edit).toContain('"*_test.go": deny');
-    expect(fm).toContain('"git push*": deny');
     expect(fm).toContain('"*/.ssh/*": deny');
   });
 
@@ -58,15 +125,12 @@ describe("renderWorkerFrontmatter", () => {
     );
   });
 
-  test("review: no edits, git inspection only", () => {
+  test("review: no edits, and no shell allowance for git", () => {
     const fm = renderWorkerFrontmatter(need("mimir-review"));
     const edit = fm.slice(fm.indexOf("  edit:"), fm.indexOf("  bash:"));
     expect(edit.trim()).toBe('edit:\n    "*": deny');
-    const bash = fm.slice(fm.indexOf("  bash:"), fm.indexOf("  read:"));
-    expect(bash.indexOf('"*": deny')).toBeLessThan(
-      bash.indexOf('"git diff*": allow'),
-    );
-    expect(bash).not.toContain("git push");
+    const bash = permissionTable(fm, "bash");
+    expect(bash.filter(([, action]) => action !== "deny")).toEqual([]);
   });
 
   test("a model pins the agent, quoted", () => {
