@@ -10,11 +10,6 @@
  * or HTTPS produces the same string after a downstream canonical
  * normaliser rewrites the scheme. We only trim here — full
  * canonicalisation is a server-side concern (Slice 1 risk note).
- *
- * Ported from packages/acp/src/project/git.ts. Differences vs the ACP
- * version: uses the plugin's file-based createLogger instead of pino,
- * and inlines the catch into a promise chain so the public API stays
- * `Promise<string | null>` without throwing.
  */
 
 import { createLoggerFactory } from "../logger";

@@ -6,7 +6,7 @@
  * - Cookie: browser/dashboard sessions, passed through untouched.
  * - x-api-key: better-auth api-key plugin's native header.
  * - Authorization: Bearer <key>: the header every existing machine client
- *   (cc-plugin authHeaders(), ACP adapter) already sends — surfaced to
+ *   (the plugins' authHeaders()) already sends — surfaced to
  *   better-auth as x-api-key so client wiring stays unchanged, they just
  *   carry better-auth-minted keys now.
  *

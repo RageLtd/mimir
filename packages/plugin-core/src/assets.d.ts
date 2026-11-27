@@ -1,7 +1,7 @@
 // Bun supports `import x from "./file.ext" with { type: "text" }` to embed
 // text contents directly into the compiled bundle. TypeScript doesn't know
 // the resulting type by default, so we declare it once here for every asset
-// extension the install flows text-import across cc-plugin / acp / oc-plugin.
+// extension the install flows text-import across the plugin packages.
 //
 // Shared from plugin-core and referenced by each package's tsconfig `include`
 // so the set can't drift per-package again.

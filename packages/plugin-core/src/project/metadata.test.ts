@@ -5,11 +5,8 @@
  * Each test creates its own isolated directory, writes the files it needs,
  * and calls collectProjectMetadata against it.
  *
- * Scope is tighter than the ACP version — we cover the cross-language
- * dispatch and one representative case per manifest type rather than
- * exhaustively retesting every framework name. The curated lists are
- * verbatim from the ACP module so the ACP test suite already covers
- * the per-name matching exhaustively.
+ * Scope: the cross-language dispatch and one representative case per
+ * manifest type. Not every name in the curated lists is tested.
  */
 
 import { afterAll, describe, expect, test } from "bun:test";

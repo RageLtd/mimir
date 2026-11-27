@@ -11,16 +11,37 @@ import {
 
 const TMP = join(import.meta.dir, ".tmp-project-rules-test");
 const rulesDir = join(TMP, ".claude/rules");
+const HOME = join(TMP, "mimir-home");
+const savedHome = process.env.MIMIR_HOME;
 
 beforeEach(() => {
   mkdirSync(rulesDir, { recursive: true });
+  process.env.MIMIR_HOME = HOME;
 });
 
 afterEach(() => {
   rmSync(TMP, { recursive: true, force: true });
+  if (savedHome === undefined) delete process.env.MIMIR_HOME;
+  else process.env.MIMIR_HOME = savedHome;
 });
 
 describe("readProjectRules", () => {
+  test("Mimir's own rules, installed under its home directory, come before the project's", async () => {
+    mkdirSync(join(HOME, "rules"), { recursive: true });
+    writeFileSync(join(HOME, "rules/no-needless-work.md"), "Do no extra work.");
+    writeFileSync(join(rulesDir, "style.md"), "Functional only.");
+
+    const entries = await readProjectRules(TMP, { includeRootFiles: false });
+
+    expect(entries).toEqual([
+      {
+        path: "mimir/rules/no-needless-work.md",
+        content: "Do no extra work.",
+      },
+      { path: ".claude/rules/style.md", content: "Functional only." },
+    ]);
+  });
+
   test("returns [] when the project has no rules files", async () => {
     rmSync(rulesDir, { recursive: true, force: true });
     expect(await readProjectRules(TMP)).toEqual([]);

@@ -1,8 +1,7 @@
 /**
  * Editor-agnostic key-ceremony CLI (MIM-87). The logic lives here ONCE;
  * each distribution wires a thin argv entry to it (mimir-cc `keys`
- * subcommand, mimir-acp pre-handshake dispatch, the oc wrapper's `keys`
- * branch). Hard rule from Rage: a user may not use Claude Code at all —
+ * subcommand, mimir-codex `keys`, the oc wrapper's `keys` branch). Hard rule from Rage: a user may not use Claude Code at all —
  * no human key flow may be captive to one editor plugin.
  *
  * Config resolution: env wins, then the shared ~/.mimir/config.json both

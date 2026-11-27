@@ -26,6 +26,7 @@ import { dirname, join, resolve } from "node:path";
 import { embedderDir } from "@mimir/plugin-core/brain/embedder";
 import { installEmbedderArtifacts } from "@mimir/plugin-core/brain/embedder-install";
 import { resolveCartographerBinary } from "@mimir/plugin-core/cartographer/resolve";
+import { writeShippedRules } from "@mimir/plugin-core/rules";
 import { mimirHome } from "@mimir/plugin-core/util";
 import settingsTemplate from "../artifacts/settings.json.template" with {
   type: "text",
@@ -229,6 +230,7 @@ export const runInstall = async (
   const ensureBinaryPath = join(home, "ensure-binary.sh");
 
   await writePersonaFiles(promptResult.value.content);
+  await writeShippedRules();
   await writeText(settingsPath, settingsTemplate);
   // Retired files an update removes: workers moved into the plugin's
   // agents/ directory; MCP servers moved into the plugin's .mcp.json (a

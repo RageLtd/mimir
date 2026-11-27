@@ -76,6 +76,9 @@ test.each([
     expect(xml).toContain("<environment>");
     expect(xml).toContain("<model_override>");
     expect(xml).toContain("mcp__plugin_mimir-cc_mimir-local__");
+    expect(
+      await Bun.file(join(mimirDir, "rules", "no-needless-work.md")).exists(),
+    ).toBe(true);
     expect(await Bun.file(legacyStyle).exists()).toBe(false);
   } finally {
     await rm(home, { recursive: true, force: true });

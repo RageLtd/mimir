@@ -13,15 +13,12 @@
     "test": "bun run --parallel --workspaces test && bun run test:root",
     "test:root": "bun test ./tests",
     "test:server": "bun run --cwd packages/server test",
-    "test:acp": "bun run --cwd packages/acp test",
     "test:cc-plugin": "bun run --cwd packages/cc-plugin test",
     "test:plugin-core": "bun run --cwd packages/plugin-core test",
     "test:oc-plugin": "bun run --cwd packages/oc-plugin test",
     "test:codex-plugin": "bun run --cwd packages/codex-plugin test",
     "server:dev": "bun run --filter @mimir/server dev",
     "start": "bun run --filter @mimir/server start",
-    "acp:start": "bun run --filter @mimir/acp start",
-    "acp:build": "bun run --filter @mimir/acp build",
     "cc-plugin:build": "bun run --filter @mimir/cc-plugin build",
     "cc-plugin:mod:validate": "bun run --cwd packages/cc-plugin mod:validate",
     "cc-plugin:mod:test": "bun run --cwd packages/cc-plugin mod:test",
@@ -35,18 +32,9 @@
     "catalogs": {
       "ai-sdk": {
         "ai": "^6.0.158",
-        "@ai-sdk/anthropic": "^3.0.69",
-        "@ai-sdk/google": "^3.0.62",
-        "@ai-sdk/mcp": "^1.0.36",
-        "@ai-sdk/moonshotai": "^2.0.16",
-        "@ai-sdk/openai": "^3.0.52",
-        "@ai-sdk/openai-compatible": "^2.0.38",
-        "@ai-sdk/provider": "^3.0.8",
-        "@ai-sdk/provider-utils": "^4.0.27",
-        "@openrouter/ai-sdk-provider": "^2.9.0"
+        "@ai-sdk/provider-utils": "^4.0.27"
       },
       "protocol": {
-        "@agentclientprotocol/sdk": "^0.19.0",
         "@anthropic-ai/claude-agent-sdk": "^0.3.154",
         "@modelcontextprotocol/sdk": "^1.29.0"
       },

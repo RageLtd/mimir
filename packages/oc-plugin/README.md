@@ -126,7 +126,7 @@ export PATH="$HOME/.local/bin:$PATH"
 mimir-opencode   # equivalent to `MIMIR_ACTIVE=1 opencode`
 ```
 
-The wrapper also dispatches the E2E key ceremonies and manual sync without entering the editor — `mimir-opencode keys <status|setup|adopt|rotate|recovery-setup|recover>` and `mimir-opencode sync` run the plugin bundle directly via `bun` (the same shared plugin-core implementation as the Claude Code and ACP wrappers).
+The wrapper also dispatches the E2E key ceremonies and manual sync without entering the editor — `mimir-opencode keys <status|setup|adopt|rotate|recovery-setup|recover>` and `mimir-opencode sync` run the plugin bundle directly via `bun` (the same shared plugin-core implementation as the Claude Code and Codex wrappers).
 
 ## Development
 

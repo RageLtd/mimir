@@ -26,6 +26,7 @@ import { dirname, join, resolve } from "node:path";
 import { embedderDir } from "@mimir/plugin-core/brain/embedder";
 import { installEmbedderArtifacts } from "@mimir/plugin-core/brain/embedder-install";
 import { resolveCartographerBinary } from "@mimir/plugin-core/cartographer/resolve";
+import { writeShippedRules } from "@mimir/plugin-core/rules";
 import {
   extractionConfig,
   readConfig,
@@ -240,6 +241,7 @@ export const runInstall = async (
   const selfPath = join(binDir, "mimir-codex-bin");
 
   await writeText(personaPath, xml);
+  await writeShippedRules();
 
   // Splice the regenerated mimir block into the existing config.toml so
   // codex-written state (project trust_level entries, personality, …)

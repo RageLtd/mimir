@@ -20,8 +20,7 @@
  * Originally in packages/cc-plugin/src/markdown-to-xml.ts; the
  * Anthropic-specific environment + override blocks split out into
  * the cc-plugin's wrapper file because they're CC-specific concerns.
- * The pure converter lives here so any adapter (CC, ACP, future OC)
- * can use the same heading-to-tag structure.
+ * The pure converter lives here so any adapter can use the same heading-to-tag structure.
  */
 
 const slugify = (heading: string) =>

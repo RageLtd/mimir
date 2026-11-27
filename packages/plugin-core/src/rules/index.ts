@@ -29,6 +29,7 @@ export {
   runAndPartition,
   runRules,
 } from "./runner";
+export { writeShippedRules } from "./shipped";
 export {
   conventionFor,
   isTestFile,

@@ -19,13 +19,19 @@
  * Root files are deduplicated by real path, so a CLAUDE.md symlinked to
  * AGENTS.md is read once. Hosts that already load AGENTS.md natively
  * (OpenCode, Codex) pass `includeRootFiles: false` and receive only the
- * rules directory.
+ * rules directories.
+ *
+ * Mimir's own rules, which an install writes under its home (shipped.ts),
+ * are read here too and come first, so the project has the last word.
+ * Claude Code does not load those itself: its hooks module adds them to
+ * the system prompt.
  */
 
 import { realpath, stat } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { Glob } from "bun";
 import type { Logger } from "../logger";
+import { mimirHome } from "../util";
 
 /** One rules file. `paths` is present only for path-scoped rules. */
 export type ProjectRulesEntry = {
@@ -98,17 +104,59 @@ const toEntry = (path: string, raw: string) => {
   return paths ? { path, content: body, paths } : { path, content: body };
 };
 
+/** Where an install writes Mimir's own rules. */
+export const mimirRulesDir = () => join(mimirHome(), "rules");
+
 /**
- * Read every project rules file. Returns [] when the project has none.
- * Read failures on individual files are logged and skipped so one bad
- * file never hides the rest.
+ * Every rule file under `dir`, each entry's path given as `label` and the
+ * file's path beneath it. [] when the directory is absent.
+ */
+const readRulesDir = async (dir: string, label: string, log?: Logger) => {
+  if (!(await isDirectory(dir))) return [];
+  const matches: string[] = [];
+  for await (const match of new Glob(RULES_GLOB).scan({
+    cwd: dir,
+    followSymlinks: true,
+  }))
+    matches.push(match);
+  // Stable order so the injected block is byte-identical across runs
+  // (it sits in a cached prompt prefix on some hosts).
+  matches.sort();
+  const entries: ProjectRulesEntry[] = [];
+  for (const match of matches) {
+    const path = `${label}/${match}`;
+    const raw = await Bun.file(`${dir}/${match}`)
+      .text()
+      .catch((err: unknown) => {
+        log?.warn("project rules: rule file unreadable", {
+          path,
+          error: String(err),
+        });
+        return "";
+      });
+    const entry = toEntry(path, raw);
+    if (entry) entries.push(entry);
+  }
+  return entries;
+};
+
+/**
+ * Read Mimir's own rules, then every project rules file. Returns [] when
+ * there are none of either. Read failures on individual files are logged
+ * and skipped so one bad file never hides the rest.
  */
 export const readProjectRules = async (
   projectPath: string,
   options: ReadProjectRulesOptions = {},
 ) => {
   const { includeRootFiles = true, log } = options;
-  const entries: ProjectRulesEntry[] = [];
+  // Labelled without the home path, which would put the account's name in
+  // every prompt.
+  const entries: ProjectRulesEntry[] = await readRulesDir(
+    mimirRulesDir(),
+    "mimir/rules",
+    log,
+  );
   const seenReal = new Set<string>();
 
   if (includeRootFiles) {
@@ -137,32 +185,9 @@ export const readProjectRules = async (
     }
   }
 
-  const rulesDir = `${projectPath}/${RULES_DIR}`;
-  if (await isDirectory(rulesDir)) {
-    const glob = new Glob(RULES_GLOB);
-    const matches: string[] = [];
-    for await (const match of glob.scan({
-      cwd: rulesDir,
-      followSymlinks: true,
-    }))
-      matches.push(match);
-    // Stable order so the injected block is byte-identical across runs
-    // (it sits in a cached prompt prefix on some hosts).
-    matches.sort();
-    for (const match of matches) {
-      const raw = await Bun.file(`${rulesDir}/${match}`)
-        .text()
-        .catch((err: unknown) => {
-          log?.warn("project rules: rule file unreadable", {
-            path: `${RULES_DIR}/${match}`,
-            error: String(err),
-          });
-          return "";
-        });
-      const entry = toEntry(`${RULES_DIR}/${match}`, raw);
-      if (entry) entries.push(entry);
-    }
-  }
+  entries.push(
+    ...(await readRulesDir(`${projectPath}/${RULES_DIR}`, RULES_DIR, log)),
+  );
 
   log?.info("project rules loaded", {
     projectPath,

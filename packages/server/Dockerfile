@@ -17,7 +17,6 @@ WORKDIR /app
 # `Could not resolve: "react/jsx-dev-runtime"`.
 COPY package.json bun.lock tsconfig.json ./
 COPY packages/server/package.json packages/server/tsconfig.json packages/server/
-COPY packages/acp/package.json packages/acp/
 COPY packages/cc-plugin/package.json packages/cc-plugin/
 COPY packages/oc-plugin/package.json packages/oc-plugin/
 COPY packages/plugin-core/package.json packages/plugin-core/

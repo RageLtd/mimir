@@ -24,15 +24,7 @@ Use the user's selection (or their "Other" custom input) as the server URL. Bind
 
 ## Step 2 — choose the user-memory database path
 
-Call `AskUserQuestion`:
-
-- question: `Where should the user-memory SQLite database live?`
-- header: `Memory DB`
-- options:
-  - label: `~/.mimir/user-memories.db`, description: `Default — colocated with other Mimir state`
-  - label: `Share with mimir-acp`, description: `Use the path mimir-acp already writes to (~/.mimir/user-memories.db)`
-
-Both default options resolve to the same path; the second is there to flag the shared-DB use case to testers who already run mimir-acp. Bind the result to `<db-path>`. If the user picks "Other", expand any leading `~` to `$HOME` before using it.
+Bind `<db-path>` to `~/.mimir/user-memories.db`, the default, colocated with other Mimir state. If the user has already named another path, use that, expanding any leading `~` to `$HOME`.
 
 ## Step 3 — API key
 

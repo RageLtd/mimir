@@ -9,16 +9,14 @@ happens. For exactly what the server can and cannot see, read
 flowchart LR
   subgraph machine["Your machine"]
     direction TB
-    plugins["Editor plugin<br/>Claude Code · Zed ACP · OpenCode · Codex CLI"]
+    plugins["Editor plugin<br/>Claude Code · OpenCode · Codex CLI"]
     core["@mimir/plugin-core — shared layer"]
     brain["Memory brain<br/>extraction · hygiene · retrieval<br/>FTS + local embeddings"]
-    engine["Inference engine<br/>BYOK providers · local endpoints"]
     keys["Keys<br/>X25519 keypair · org keyring<br/>device secret in the OS keychain"]
     syncmod["Sync<br/>encrypt-on-push · decrypt-on-pull<br/>(the only crypto seam)"]
     localstate[("~/.mimir<br/>org replica (SQLite + FTS)<br/>user memories · sessions<br/>cartographer index")]
     plugins --> core
     core --> brain
-    core --> engine
     core --> keys
     core --> syncmod
     brain --> localstate
@@ -37,7 +35,7 @@ flowchart LR
 
   providers["AI providers<br/>Anthropic · OpenRouter · vLLM · Ollama · …"]
 
-  engine -->|"direct — your keys"| providers
+  plugins -->|"direct — your keys"| providers
   keys <-->|HTTPS| keyroutes
   syncmod <-->|HTTPS| syncroutes
 ```

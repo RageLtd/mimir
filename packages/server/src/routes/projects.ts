@@ -1,8 +1,8 @@
 /**
  * Project entity routes.
  *
- * Exposes the Project store to mimir-acp so each session can resolve its
- * own project UUID at startup. The UUID then replaces the filesystem path
+ * Exposes the Project store so each session can resolve its own project
+ * UUID at startup. The UUID then replaces the filesystem path
  * as the cross-table identifier in memory, cart_file, etc.
  *
  *   POST /v1/projects/resolve  — get-or-create by git_remote / local_path

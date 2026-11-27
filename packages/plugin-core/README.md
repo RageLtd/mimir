@@ -1,6 +1,6 @@
 # @mimir/plugin-core
 
-The backend-agnostic shared layer — the code that's the same whether the host is Claude Code, the ACP protocol, OpenCode, or the Codex CLI. Consumers: `@mimir/cc-plugin`, `@mimir/acp`, `@mimir/oc-plugin`, `@mimir/codex-plugin`.
+The backend-agnostic shared layer — the code that's the same whether the host is Claude Code, OpenCode, or the Codex CLI. Consumers: `@mimir/cc-plugin`, `@mimir/oc-plugin`, `@mimir/codex-plugin`.
 
 The rule that shapes this package: **a user-facing flow never belongs to one editor.** Key ceremonies, sync, install-adjacent tooling, and the memory brain all ship here once; each distribution wires a thin argv entry. A user may not use Claude Code at all.
 
@@ -9,13 +9,12 @@ The rule that shapes this package: **a user-facing flow never belongs to one edi
 | Path | What it owns |
 |------|--------------|
 | `brain/` | Extraction, retrieval (hybrid FTS + vector), summarization, hygiene, local embeddings + embedder install, boot context, embedding backfill |
-| `engine/` | Local inference: provider registry (models.dev + BYOK env keys + local endpoints), turn streaming, secret redaction |
 | `keys/` | E2E key material: X25519/HKDF/AES-GCM primitives, keysets, org keyrings, the OS-keychain device secret, ceremony flows + CLI |
 | `sync/` | The one crypto seam: envelope seal/open, the sync engine (pull → apply → push, LWW), CLI |
 | `store/` | SQLite stores: org replica, user memories, cartographer index |
 | `tools/` | Org-memory, user-memory, and cartographer MCP tool definitions |
 | `cartographer/` | Tree-sitter parse client, index sync, file context |
-| `rules/`, `project/` | Rule engine (the format is in the [`.enforce.toml` reference](../../docs/rules.md)) and project resolution |
+| `rules/`, `project/` | Rule engine (the format is in the [`.enforce.toml` reference](../../docs/rules.md)), the [rules Mimir ships](../../docs/rules.md#rules-mimir-ships), and project resolution |
 | `guard/` | Role guard: what a coordinator or a worker may do with a tool call |
 | `verify/` | The verify gate that checks a worker's worktree before its hand-back is accepted |
 | `workers/` | Worker definitions, prompts and per-role model resolution for delegation |
@@ -25,7 +24,7 @@ The rule that shapes this package: **a user-facing flow never belongs to one edi
 
 Submodule paths are the public API — import from `@mimir/plugin-core/<module>`, not from the barrel. The barrel at `src/index.ts` re-exports for callers that want a single line, but explicit paths keep the dependency graph readable.
 
-The only runtime dependencies are the AI SDK provider packages the inference engine needs. Everything else is `bun:sqlite`, `node:crypto`, `node:fs`, and the standard library. Consumers bring their own protocol adapters, install flows, and persistence.
+The one dependency is the AI SDK's `ai` package, for a message type. Everything else is `bun:sqlite`, `node:crypto`, `node:fs`, and the standard library. Consumers bring their own protocol adapters, install flows, and persistence.
 
 ## The memory brain
 
@@ -57,7 +56,6 @@ Whether an endpoint is required depends on the distribution:
 | Claude Code | No | Distillation runs on the session's own model (`haiku`, through the hooks module). A configured endpoint and model still win |
 | OpenCode | Yes | Extraction is skipped and logged; the turn is never failed |
 | Codex CLI | Yes | Extraction is skipped and logged; the turn is never failed |
-| ACP (Zed) | Yes | Extraction is skipped and logged; the turn is never failed |
 
 Claude Code is the exception because its hooks-module API lends the plugin the session's model client; the other hosts have no equivalent, so the endpoint is their only path. The Claude Code mechanics are in the [cc-plugin hooks reference](../../docs/claude-code/hooks.md#distillation).
 
@@ -88,7 +86,7 @@ macOS note: the keychain ACL binds to the `bun` binary, so the first access prom
 
 ### Ceremonies
 
-`keys/cli.ts` implements them once; every wrapper dispatches to it (`mimir keys …`, `mimir-opencode keys …`, `mimir-codex keys …`, `bun run packages/acp/index.ts keys …`):
+`keys/cli.ts` implements them once; every wrapper dispatches to it (`mimir keys …`, `mimir-opencode keys …`, `mimir-codex keys …`):
 
 | Command | What it does |
 |---------|--------------|

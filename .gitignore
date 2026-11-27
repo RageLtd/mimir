@@ -7,8 +7,6 @@ dist
 *.tgz
 output/playwright/
 
-# compiled binaries
-packages/acp/mimir-acp
 # bun build --compile scratch files left behind by an interrupted build
 *.bun-build
 

@@ -110,3 +110,30 @@ body = "file-length.md"
 ```
 
 An unknown detector name is a load error.
+
+## Rules Mimir ships
+
+Mimir installs six rules of its own. They are prose the agent reads, not
+`.enforce.toml` rules: nothing checks a tool call against them.
+
+| File | Rule |
+|------|------|
+| `calling-code-first.md` | Write the calling code first |
+| `data-for-the-loop.md` | Lay data out for the code that processes it |
+| `layers-and-dependencies.md` | A layer or a dependency has to pay for itself |
+| `no-needless-work.md` | Do no work the problem does not require |
+| `operation-over-type.md` | Organise by operation, not by type |
+| `reachable-states-only.md` | Handle only the states that can occur |
+
+Install and update write them to `~/.mimir/rules/`, or to `rules/` under
+`MIMIR_HOME` when that is set, and overwrite what is there. A file you edit or
+delete comes back on the next update.
+
+Every host loads the Markdown files in that directory ahead of the project's
+own `.claude/rules/`:
+
+| Host | Where the agent sees them |
+|------|---------------------------|
+| Claude Code | A section of the system prompt, before the persona |
+| OpenCode, Codex CLI | The same block as the project's rules |
+| Delegated workers | The worker's own prompt |

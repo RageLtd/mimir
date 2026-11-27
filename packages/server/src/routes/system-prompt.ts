@@ -7,8 +7,7 @@
  * The version is a content hash so clients can skip re-fetching
  * if nothing changed (ETag-style).
  *
- * Used by mimir-acp's context-client to fetch and cache the system
- * prompt for the CC backend, with configurable TTL.
+ * Fetched by each plugin's install and update.
  */
 
 import { Hono } from "hono";

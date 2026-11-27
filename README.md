@@ -1,6 +1,6 @@
 # Mimir
 
-A coding agent with persistent memory and a personality, running inside the editor you already use — Claude Code, Zed (via ACP), OpenCode, or OpenAI Codex CLI.
+A coding agent with persistent memory and a personality, running inside the editor you already use — Claude Code, OpenCode, or OpenAI Codex CLI.
 
 Mimir is not another chat window. It is a memory brain and a persona that attach to the agent you already have. It remembers the decisions you made three weeks ago, knows how your codebase is wired, enforces your team's rules at the moment you're about to break them, and talks like someone who has opinions about your architecture.
 
@@ -62,8 +62,7 @@ Every editor needs a mimir-server URL, [hosted or self-hosted](#self-hosting-the
 |--------|-------|---------------|
 | Claude Code | An authenticated `gh` CLI; macOS on Apple Silicon or Linux on x64 | [cc-plugin](packages/cc-plugin/README.md#install) |
 | OpenAI Codex CLI | An authenticated `gh` CLI; an extraction endpoint for memory | [codex-plugin](packages/codex-plugin/README.md#installing) |
-| Zed (ACP) | [Bun](https://bun.sh) v1.3+; provider keys or a local model endpoint; an extraction endpoint for memory | [acp](packages/acp/README.md#registering-with-zed) |
-| OpenCode | Bun v1.3+; a GitHub token with `read:packages`; an extraction endpoint for memory | [oc-plugin](packages/oc-plugin/README.md#install) |
+| OpenCode | [Bun](https://bun.sh) v1.3+; a GitHub token with `read:packages`; an extraction endpoint for memory | [oc-plugin](packages/oc-plugin/README.md#install) |
 
 ## Self-Hosting the Server
 
@@ -91,9 +90,8 @@ By default the server runs without auth, for one person hosting for themselves: 
 
 | Package | Description |
 |---------|-------------|
-| [`plugin-core`](packages/plugin-core/README.md) | Shared layer: memory brain, inference engine, keys, sync, rules, cartographer |
+| [`plugin-core`](packages/plugin-core/README.md) | Shared layer: memory brain, keys, sync, rules, cartographer |
 | [`cc-plugin`](packages/cc-plugin/README.md) | Claude Code plugin — persona, hooks, MCP servers, per-project enablement for the desktop app, the `mimir` wrapper |
-| [`acp`](packages/acp/README.md) | ACP agent — full local agent for ACP editors (Zed) |
 | [`oc-plugin`](packages/oc-plugin/README.md) | OpenCode plugin — persona, tools, hooks, the `mimir-opencode` wrapper |
 | [`codex-plugin`](packages/codex-plugin/README.md) | OpenAI Codex CLI plugin — persona, lifecycle hooks in a dedicated `CODEX_HOME`, the `mimir-codex` wrapper |
 | [`server`](packages/server/README.md) | The blind sync server — auth, key distribution, ciphertext sync, coordination |
@@ -108,7 +106,6 @@ Bun v1.3+ required; Docker only if you're running the server.
 bun install
 
 bun run server:dev        # server outside Docker, with --watch
-bun run acp:start         # ACP adapter in dev mode
 bun run cc-plugin:build   # compile the Claude Code plugin binaries
 
 bun run check             # lint + format (biome)
@@ -116,7 +113,7 @@ bun run typecheck
 
 # Tests — always via the root harness, never `bun test <path>`
 bun run test              # all packages
-bun run test:server       # or one of: server, acp, cc-plugin, oc-plugin, codex-plugin, plugin-core
+bun run test:server       # or one of: server, cc-plugin, oc-plugin, codex-plugin, plugin-core
 ```
 
 Conventions, code style, and the repository layout live in [CLAUDE.md](./CLAUDE.md). Each package README covers its own build, release, and dev loop.

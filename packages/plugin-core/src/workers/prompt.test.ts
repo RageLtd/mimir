@@ -115,6 +115,19 @@ describe("extractWorkerSections", () => {
 });
 
 describe("buildWorkerPrompt", () => {
+  test("Mimir's rules sit between the extracted sections and the role, whole and in name order", () => {
+    const impl = workerByName("mimir-impl");
+    if (!impl) throw new Error("mimir-impl missing");
+    const prompt = buildWorkerPrompt(XML, impl);
+    expect(prompt).toContain(
+      "</error_handling>\n\n<mimir_rules>\n# Write the calling code first\n",
+    );
+    expect(prompt).toContain(
+      "# Handle only the states that can occur\n\nJudge by how the code is called right now",
+    );
+    expect(prompt).toContain("</mimir_rules>\n\n<role>");
+  });
+
   test("role line and contract come last, with the STATUS protocol", () => {
     const impl = workerByName("mimir-impl");
     if (!impl) throw new Error("mimir-impl missing");

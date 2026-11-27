@@ -11,7 +11,7 @@
  * they sit adjacent to the personality definition (recency effect).
  * Environment first, override second.
  *
- * Other adapters (ACP, future OC) call `markdownToXml` directly with
+ * Other adapters call `markdownToXml` directly with
  * their own environment + override blocks as needed; the pure
  * converter is host-agnostic.
  */

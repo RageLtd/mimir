@@ -21,11 +21,20 @@
  * not offer is simply absent; one it adds later is dropped until it is
  * named here.
  *
- * The persona is read once per load from the installed XML; the module's
- * variable resets on a hot reload, which is when a re-read is wanted.
+ * Mimir's own rules ride in a section of their own, just ahead of the
+ * persona. An install writes them to ~/.mimir/rules; the engine loads a
+ * project's rule files itself but knows nothing of that directory, so on
+ * this host they reach the model here or not at all.
+ *
+ * The persona and the rules are read once per load; the module's
+ * variables reset on a hot reload, which is when a re-read is wanted.
  */
 
-import type { EngineInterface, Register } from "claude-code";
+import type {
+  EngineInterface,
+  PromptComposeSection,
+  Register,
+} from "claude-code";
 
 /** In preference order; the first that exists wins. */
 const PERSONA_CANDIDATES = ["cc/system-prompt.xml", "system-prompt.md"];
@@ -56,6 +65,23 @@ const readPersona = async ($: EngineInterface) => {
   );
 };
 
+/**
+ * The installed rule files as one text, in name order; empty when there
+ * are none, as before the first update that writes them.
+ */
+const readRules = async ($: EngineInterface) => {
+  const dir = `${(await $.env.get("HOME")) ?? ""}/.mimir/rules`;
+  if (!(await $.fs.exists(dir))) return "";
+  const names = (await $.fs.list(dir))
+    .map((entry) => entry.name)
+    .filter((name) => name.endsWith(".md"))
+    .sort();
+  const texts = await Promise.all(
+    names.map((name) => $.fs.read(`${dir}/${name}`)),
+  );
+  return texts.map((text) => text.trim()).join("\n\n");
+};
+
 /** The engine's attachment type for an output style's text. */
 const STYLE_ATTACHMENT = "output_style_instructions";
 
@@ -64,18 +90,31 @@ const STYLE_NAME = "Mimir";
 
 export const registerPersona: Register = (on) => {
   let persona: string | null = null;
+  let rules: string | null = null;
   let composed = false;
 
   on("prompt.compose", async ($, e, next) => {
     composed = false;
     persona ??= await readPersona($);
+    // Caught here and not by the handler's own catch, which would drop
+    // the persona along with the rules.
+    rules ??= await readRules($).catch((err: unknown) => {
+      $.ui.status(
+        `mimir: rules unavailable — ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return "";
+    });
     const engine = await next(e);
     composed = true;
+    const rulesSections: PromptComposeSection[] = rules
+      ? [{ id: `${$.plugin.name}:rules`, text: rules, scope: "session" }]
+      : [];
     return {
       sections: [
         ...engine.sections.filter((section) =>
           KEPT_SECTIONS.includes(section.id),
         ),
+        ...rulesSections,
         { id: `${$.plugin.name}:persona`, text: persona, scope: "session" },
       ],
     };

@@ -37,7 +37,7 @@ import {
  * - organization: multi-tenancy — orgs/members/invitations (MIM-69 scope grain)
  * - apiKey: machine-client auth; enableSessionForAPIKeys turns a valid
  *   x-api-key header into a session so one getSession path serves both
- *   humans and the cc-plugin/ACP clients (slice 2)
+ *   humans and the plugin clients (slice 2)
  * - passkey: on by default (Rage 2026-07-04) — rpID/rpName derive from
  *   baseURL; WebAuthn ceremonies belong to the dashboard/installer clients
  */
@@ -120,7 +120,7 @@ export function buildAuthOptions(database: Database, secret: string) {
          *  seconds, then every verify rejects and surfaces as the gate's
          *  detail-free 401 (the MIM-70 cutover outage, 2026-07-05).
          *  100/min keeps a real throttle without strangling the
-         *  cc-plugin/ACP clients. NOTE: values are stamped onto each key
+         *  plugin clients. NOTE: values are stamped onto each key
          *  row at creation — changing them here does not retune existing
          *  keys; re-mint after changing. */
         rateLimit: {

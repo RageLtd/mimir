@@ -6,5 +6,4 @@ dist
 logs
 *.log
 .env
-packages/acp/mimir-acp
 packages/server/mimir-server

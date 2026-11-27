@@ -1,8 +1,8 @@
 /**
  * Editor-agnostic sync command + boot-reconcile helper (MIM-88) — same
  * discipline as keys/cli.ts: the logic lives here once, each
- * distribution wires a thin argv entry (mimir-cc `sync`, mimir-acp
- * pre-handshake dispatch, the oc wrapper branch).
+ * distribution wires a thin argv entry (mimir-cc `sync`, mimir-codex
+ * `sync`, the oc wrapper branch).
  *
  * Config resolution: env wins, then the shared ~/.mimir/config.json.
  * Unlike the key ceremonies, sync works WITHOUT an apiKey — a keyless

@@ -230,7 +230,7 @@ const dispatch = async (argv: readonly string[]): Promise<number> => {
 
     case "keys":
       // Shared editor-agnostic implementation (plugin-core) — the same
-      // ceremonies are reachable from mimir-acp and the oc wrapper.
+      // ceremonies are reachable from mimir-codex and the oc wrapper.
       return runKeysCommand(rest);
 
     case "sync":

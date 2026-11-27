@@ -7,10 +7,6 @@
  * upstream, and kills the process — no long-lived state, no auto-index
  * on startup (the hook drives parsing explicitly per file).
  *
- * Originally in packages/cc-plugin/src/cartographer/client.ts; the
- * acp adapter's larger client (with `indexProject`, `detectChanges`,
- * `stats`) wraps this base.
- *
  * Error handling: per the mimir monorepo convention, errors propagate
  * rather than being swallowed. The background read/stderr loops attach
  * a single `.catch()` at the call site (they're fire-and-forget) so

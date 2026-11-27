@@ -1,7 +1,7 @@
 /**
  * Small shared helpers. Originally from packages/cc-plugin/src/util.ts —
- * lifted into the shared layer because every Mimir adapter (CC plugin,
- * ACP adapter, future OC plugin) needs `mimirHome`, error-message
+ * lifted into the shared layer because every Mimir adapter needs
+ * `mimirHome`, error-message
  * extraction, and JSON-with-type parsing. Nothing here references a
  * specific protocol.
  */

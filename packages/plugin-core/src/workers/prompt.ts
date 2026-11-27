@@ -10,6 +10,7 @@
  * second document to maintain.
  */
 
+import { SHIPPED_RULES } from "../rules/shipped";
 import type { WorkerDefinition } from "./roles";
 
 /** Sections kept, in order. Anything else in the prompt is dropped. */
@@ -68,13 +69,24 @@ STATUS: question  you need a decision from the coordinator; ask one precise ques
 </worker_contract>`;
 
 /**
+ * Mimir's own rules, written into the prompt: a worker's prompt is this
+ * text and nothing a host composes for the main session, so on Claude
+ * Code the rules reach a worker here or not at all.
+ */
+const RULES_BLOCK = `<mimir_rules>\n${Object.values(SHIPPED_RULES)
+  .map((text) => text.trim())
+  .join("\n\n")}\n</mimir_rules>`;
+
+/**
  * Build a worker's system prompt from the installed Mimir prompt XML.
  * Sections first (so project-wide working rules frame the contract),
- * role line and contract last (so they win the recency slot).
+ * then Mimir's rules, role line and contract last (so they win the
+ * recency slot).
  */
 export const buildWorkerPrompt = (xml: string, worker: WorkerDefinition) =>
   [
     ...extractWorkerSections(xml),
+    RULES_BLOCK,
     `<role>\n${ROLE_LINES[worker.role]}\n</role>`,
     CONTRACT,
   ].join("\n\n");

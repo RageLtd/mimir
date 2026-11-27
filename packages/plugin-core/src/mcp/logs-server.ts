@@ -3,12 +3,11 @@
  * distribution's `log-mcp` subcommand (hoisted from cc-plugin when
  * codex-plugin became a second consumer).
  *
- * Exposes three tools:
+ * Exposes two tools:
  *   - read_cc_plugin_logs     — tail ~/.mimir/logs/mimir-cc.log
  *   - read_codex_plugin_logs  — tail ~/.mimir/logs/mimir-codex.log
- *   - read_acp_logs           — tail ~/.mimir/logs/acp.log
  *
- * All support a `lines` param (default 100, max 500) and an optional
+ * Both support a `lines` param (default 100, max 500) and an optional
  * `filter` (case-insensitive substring match). Previous-session logs
  * are available via `previous: true`.
  *
@@ -28,7 +27,6 @@ const LOGS_DIR = () => join(mimirHome(), "logs");
 const LOG_FILES = {
   cc: { current: "mimir-cc.log", prev: "mimir-cc.prev.log" },
   codex: { current: "mimir-codex.log", prev: "mimir-codex.prev.log" },
-  acp: { current: "acp.log", prev: "acp.prev.log" },
 };
 
 // ── Tool definitions ──
@@ -62,30 +60,6 @@ const TOOLS = [
     name: "read_codex_plugin_logs",
     description:
       "Read the Codex plugin's hook logs (session-start, reindex, file-context, retrieve, persist, voice-anchor, rollout-delta). Use to diagnose cartographer sync failures, project resolution issues, boot context assembly errors, or hook timing under Codex CLI.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        lines: {
-          type: "number",
-          description:
-            "Number of recent lines to return (default: 100, max: 500)",
-        },
-        filter: {
-          type: "string",
-          description: "Case-insensitive substring filter",
-        },
-        previous: {
-          type: "boolean",
-          description:
-            "Read the previous session's log instead of the current one",
-        },
-      },
-    },
-  },
-  {
-    name: "read_acp_logs",
-    description:
-      "Read the ACP (Zed agent) logs — model routing, tool execution, SSE parsing, permission handling, cartographer lifecycle. Use to diagnose Zed-side issues, server backend errors, or streaming problems.",
     inputSchema: {
       type: "object",
       properties: {
@@ -226,9 +200,7 @@ const handleRequest = async (req: JsonRpcRequest) => {
           ? ("cc" as const)
           : name === "read_codex_plugin_logs"
             ? ("codex" as const)
-            : name === "read_acp_logs"
-              ? ("acp" as const)
-              : null;
+            : null;
 
       if (!source) {
         respond(id, {

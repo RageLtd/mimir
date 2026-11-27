@@ -66,6 +66,42 @@ const reviewTask = () => {
   return prompt.slice(start, end);
 };
 
+describe("buildReviewPrompt — Mimir's rules", () => {
+  // Pinned on a short phrase each, as the code principles are below.
+  const lookFor: ReadonlyArray<readonly [string, RegExp]> = [
+    ["work the problem does not require", /work the problem does not require/i],
+    [
+      "a guard, fallback or default for a state no caller produces",
+      /state no caller produces/i,
+    ],
+    [
+      "an interface shaped before the code that calls it",
+      /before the code that calls it/i,
+    ],
+    [
+      "a hierarchy where one function over the variants would do",
+      /switching over the variants/i,
+    ],
+    ["a layer that only converts data", /only converts data/i],
+    [
+      "files changed that the task did not need",
+      /files changed that the task did not need/i,
+    ],
+  ];
+
+  for (const [idea, phrase] of lookFor) {
+    test(`the reviewer is told to look for ${idea}`, () => {
+      expect(reviewTask()).toMatch(phrase);
+    });
+  }
+
+  test("code the task did not need is a should-fix, not one of three nits", () => {
+    expect(reviewTask()).toMatch(
+      /Should-fix:[^\n]*code the change added that the task did not need/,
+    );
+  });
+});
+
 describe("buildReviewPrompt — code principles", () => {
   test("the task tells the reviewer to check the change against the code principles", () => {
     expect(reviewTask()).toMatch(/code principles/i);

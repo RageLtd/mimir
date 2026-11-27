@@ -85,6 +85,11 @@ describe("installMimir", () => {
         await Bun.file(join(root, ".mimir", "system-prompt.md")).text(),
       ).toBe(persona);
       expect(await Bun.file(ccPrompt).text()).toBe(ccContents);
+      expect(
+        await Bun.file(
+          join(root, ".mimir", "rules", "no-needless-work.md"),
+        ).exists(),
+      ).toBe(true);
     }
   });
 

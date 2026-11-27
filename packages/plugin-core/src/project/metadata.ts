@@ -6,11 +6,6 @@
  * Technologies are a curated set of recognizable names — not every
  * dependency, just the ones that meaningfully describe the project's stack.
  *
- * Ported from packages/acp/src/project/metadata.ts. Differences: uses the
- * plugin's file-based createLogger instead of pino's createChildLogger;
- * otherwise verbatim, since the manifest-parsing logic is shared across
- * both clients.
- *
  * Returns collected metadata suitable for PATCHing to the project entity.
  * Never throws — malformed or missing files yield empty results.
  */

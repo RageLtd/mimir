@@ -1,7 +1,7 @@
 # @mimir/codex-plugin
 
 Mimir for OpenAI Codex CLI — a distribution alongside cc-plugin
-(Claude Code), oc-plugin (OpenCode), and acp (Zed). Codex hosts its own
+(Claude Code) and oc-plugin (OpenCode). Codex hosts its own
 models; Mimir contributes the brain: persona, MCP tools, local memory
 distillation, retrieval injection, cartographer indexing, and rule
 nudges, all wired through Codex's lifecycle hooks (a structural clone of

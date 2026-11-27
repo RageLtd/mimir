@@ -21,7 +21,6 @@ const LOAD_COMMAND = "claude --plugin-dir packages/cc-plugin";
 export const PACKAGES: readonly string[] = [
   "server",
   "plugin-core",
-  "acp",
   MOD_PACKAGE,
   "oc-plugin",
   "codex-plugin",

@@ -6,12 +6,6 @@
  * Adapters that speak MCP convert to the wire shape at serve time; the
  * OpenCode plugin path can use these definitions directly via the `tool`
  * helper API. The shape is backend-neutral.
- *
- * Originally maintained in parallel by the cc-plugin and the acp adapter
- * (the acp version imported `ToolDefinition` from server-client.ts). The
- * shared version inlines the type so the tools module is self-contained
- * and the acp's server-client can keep its own internal type without
- * coupling.
  */
 
 import type { UserMemoryStore } from "../store/user-memories";

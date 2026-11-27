@@ -3,7 +3,7 @@
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "private": true,
-  "description": "Backend-agnostic shared layer for Mimir's editor adapters. Consumed by @mimir/cc-plugin, @mimir/acp, and @mimir/oc-plugin.",
+  "description": "Backend-agnostic shared layer for Mimir's editor adapters. Consumed by @mimir/cc-plugin, @mimir/oc-plugin, and @mimir/codex-plugin.",
   "exports": {
     ".": "./src/index.ts",
     "./util": "./src/util.ts",
@@ -37,10 +37,6 @@
     "./sync/cli": "./src/sync/cli.ts",
     "./sync/engine": "./src/sync/engine.ts",
     "./sync/envelope": "./src/sync/envelope.ts",
-    "./engine/provider": "./src/engine/provider/index.ts",
-    "./engine/turn": "./src/engine/turn/index.ts",
-    "./engine/log": "./src/engine/log.ts",
-    "./engine/redact": "./src/engine/redact.ts",
     "./mcp/local-tools-server": "./src/mcp/local-tools-server.ts",
     "./mcp/logs-server": "./src/mcp/logs-server.ts",
     "./tools/user-memory": "./src/tools/user-memory.ts",
@@ -68,14 +64,6 @@
     "test": "bun test --parallel src"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "catalog:ai-sdk",
-    "@ai-sdk/cohere": "^3.0.78",
-    "@ai-sdk/google": "catalog:ai-sdk",
-    "@ai-sdk/moonshotai": "catalog:ai-sdk",
-    "@ai-sdk/openai": "catalog:ai-sdk",
-    "@ai-sdk/openai-compatible": "catalog:ai-sdk",
-    "@ai-sdk/provider": "catalog:ai-sdk",
-    "@openrouter/ai-sdk-provider": "catalog:ai-sdk",
     "ai": "catalog:ai-sdk"
   }
 }

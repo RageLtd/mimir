@@ -12,7 +12,7 @@
 #   - only commits touching packages/<pkg-name>/** count toward the bump
 #   - the bumped manifest is the given JSON file (its .version field)
 #   - the tag created is `<pkg-name>/v<version>`
-# so a server- or acp-only change never triggers a release for this package.
+# so a server-only change never triggers a release for this package.
 #
 # Bump rules (conventional commits):
 #   feat!:, fix!:, BREAKING CHANGE  → major

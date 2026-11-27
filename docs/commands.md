@@ -4,8 +4,7 @@ The commands Mimir adds, inside the editor and in a terminal. Each editor's
 own page lists anything specific to it:
 [Claude Code](../packages/cc-plugin/README.md#commands),
 [OpenCode](../packages/oc-plugin/README.md#slash-commands),
-[Codex CLI](../packages/codex-plugin/README.md),
-[Zed (ACP)](../packages/acp/README.md).
+[Codex CLI](../packages/codex-plugin/README.md).
 
 ## Slash commands
 
@@ -24,7 +23,7 @@ documentation or code comments.
 ## Terminal commands
 
 Run these from the wrapper for your editor: `mimir` for Claude Code,
-`mimir-opencode`, `mimir-codex`, or `bun run packages/acp/index.ts` for ACP.
+`mimir-opencode` or `mimir-codex`.
 The examples use `mimir`.
 
 ```bash

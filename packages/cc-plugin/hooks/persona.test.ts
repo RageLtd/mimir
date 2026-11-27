@@ -52,6 +52,55 @@ test("the persona replaces the engine's prompt, keeping only the sections it has
   ]);
 });
 
+test("Mimir's installed rules go out as one section, in name order, ahead of the persona", async ($, on) => {
+  const RULES_DIR = `${HOME}/.mimir/rules`;
+  const file = (name: string) =>
+    ({ name, kind: "file", size: 1, mtimeMs: 0, isLink: false }) as const;
+  mock.env(on, { HOME });
+  on("fs.exists", (_, e) => ({
+    value: [`${HOME}/.mimir/cc/system-prompt.xml`, RULES_DIR].includes(e.path),
+  }));
+  on("fs.list", () => ({
+    value: [file("b-rule.md"), file("notes.txt"), file("a-rule.md")],
+  }));
+  on("fs.read", (_, e) => ({
+    value: e.path.startsWith(RULES_DIR) ? `# ${e.path}\n` : PERSONA_XML,
+  }));
+  on("prompt.compose", () => ({ sections: [engineSection("user_privacy")] }));
+
+  const { sections } = await $.prompt.compose(compose);
+
+  expect(sections).toEqual([
+    engineSection("user_privacy"),
+    {
+      id: "mimir-cc:rules",
+      text: `# ${RULES_DIR}/a-rule.md\n\n# ${RULES_DIR}/b-rule.md`,
+      scope: "session",
+    },
+    PERSONA_SECTION,
+  ]);
+});
+
+test("rules that cannot be read cost only the rules: the persona still goes out, with a status line", async ($, on) => {
+  const statuses: (string | undefined)[] = [];
+  mock.env(on, { HOME });
+  // The rules directory is there and nothing answers fs.list, so listing
+  // it rejects.
+  on("fs.exists", () => ({ value: true }));
+  on("fs.read", () => ({ value: PERSONA_XML }));
+  on("ui.status", (_, e) => {
+    statuses.push(e.text);
+    return { value: undefined };
+  });
+  on("prompt.compose", () => ({ sections: [] }));
+
+  const { sections } = await $.prompt.compose(compose);
+
+  expect(sections).toEqual([PERSONA_SECTION]);
+  expect(statuses).toHaveLength(1);
+  expect(statuses[0]).toStartWith("mimir: rules unavailable — ");
+});
+
 test("a section the engine adds for the plugin's output style is dropped, so the persona goes out once", async ($, on) => {
   const STYLE_SECTION = {
     id: "output_style",

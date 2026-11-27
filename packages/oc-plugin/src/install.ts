@@ -29,6 +29,7 @@ import { dirname, join } from "node:path";
 import { installEmbedderArtifacts } from "@mimir/plugin-core/brain/embedder-install";
 import { resolveCartographerBinary } from "@mimir/plugin-core/cartographer/resolve";
 import { attempt } from "@mimir/plugin-core/result";
+import { writeShippedRules } from "@mimir/plugin-core/rules";
 import { SHARED_SKILLS } from "@mimir/plugin-core/skills/shared";
 import { errMessage, mimirHome } from "@mimir/plugin-core/util";
 import { resolveWorkerModels } from "@mimir/plugin-core/workers";
@@ -401,6 +402,15 @@ export const installMimir = async (
     return {
       ok: false,
       message: `Failed to remove the stale refactor slash command: ${errMessage(staleErr)}`,
+      written,
+    };
+  }
+
+  const [rulesErr] = await attempt(writeShippedRules);
+  if (rulesErr) {
+    return {
+      ok: false,
+      message: `Failed to write Mimir's rules: ${errMessage(rulesErr)}`,
       written,
     };
   }
