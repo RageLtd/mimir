@@ -115,10 +115,10 @@ server names.
 ## Cartographer
 
 Mimir owns the codebase index and uses the cartographer binary purely as a
-parser. The installer lands the `cartographer-parse-only-<platform>` asset of
-the latest `RageLtd/cartographer` GitHub release, the build without
-cartographer's SurrealDB feature, into `~/.mimir/bin`, and refreshes it on
-`update` when a newer release exists.
+parser. The installer lands the `cartographer-<platform>` asset of the latest
+`RageLtd/cartographer` GitHub release, the one binary cartographer publishes
+for each platform, into `~/.mimir/bin`, and refreshes it on `update` when a
+newer release exists.
 
 A cartographer already on the machine is not picked up: a binary Mimir did not
 fetch is one it cannot keep current. `--cartographer PATH` is the only

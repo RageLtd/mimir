@@ -105,13 +105,16 @@ describe("installCartographer", () => {
     expect(github.downloads).toBe(1);
   });
 
-  test("downloads the parse-only asset, never the full build", async () => {
+  test("downloads the one binary cartographer publishes for this platform", async () => {
     await installCartographer(log, opts());
     // `null` would mean "unsupported platform", which the fresh-machine test
     // above already rules out; the fallback keeps this assertion failing
     // loudly rather than the type-checker complaining.
     const asset = cartographerAssetName() ?? "";
-    expect(asset).toStartWith("cartographer-parse-only-");
+    const platforms = ["darwin-arm64", "darwin-x64", "linux-x64"];
+    expect(platforms.map((platform) => `cartographer-${platform}`)).toContain(
+      asset,
+    );
     expect(github.requestedAssets).toEqual([asset]);
   });
 
