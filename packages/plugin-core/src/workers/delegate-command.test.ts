@@ -36,6 +36,7 @@ const POLICY_ANCHORS = {
     "Say what must be true, not what the code looks like.",
     "Preserve behaviour, never files.",
     "Size a task to one worker run.",
+    "Load the `less-code` skill before you write the first brief.",
     "Tell the test worker what its gate leaves unchecked.",
   ],
   workerBriefs: [

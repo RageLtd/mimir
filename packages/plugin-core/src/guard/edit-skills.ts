@@ -1,8 +1,9 @@
 /**
- * The rule that an edit needs its skill loaded: a test file needs
- * `unit-testing`, a source file needs `code-comments` (and `refactor` too
- * in a refactor task), and anything else (docs, config, lockfiles) needs
- * nothing.
+ * The rule that an edit needs its skills loaded: a test file needs
+ * `unit-testing`, a source file needs `code-comments` and `less-code` (and
+ * `refactor` too in a refactor task), and anything else (docs, config,
+ * lockfiles) needs nothing. A refusal names every skill still missing for
+ * the edit, so one refusal is enough to load them all.
  */
 
 import { isTestFile } from "../rules/test-conventions";
@@ -10,6 +11,7 @@ import type { GuardDecision } from "./decision";
 
 const UNIT_TESTING = "unit-testing";
 const CODE_COMMENTS = "code-comments";
+const LESS_CODE = "less-code";
 const REFACTOR = "refactor";
 
 const SOURCE_EXTENSION =
@@ -21,20 +23,19 @@ const isLoaded = (skill: string, loaded: readonly string[]) =>
 
 const TEST_REASON = `Editing a test file needs the ${UNIT_TESTING} skill. Load ${UNIT_TESTING} with the Skill tool, and also integration-testing, end-to-end-testing or ui-testing when the test is that kind, then retry the edit.`;
 
-const SOURCE_REASON = `Editing a source file needs the ${CODE_COMMENTS} skill. Load ${CODE_COMMENTS} with the Skill tool, then retry the edit.`;
-
-const REFACTOR_REASON = `Editing a source file in a refactor task needs the ${REFACTOR} skill. Load ${REFACTOR} with the Skill tool, then retry the edit.`;
-
 const ALLOW: GuardDecision = { allow: true };
 
-/** The skills an edit to `path` needs, each with its refusal, in load order. */
-const requiredSkills = (path: string, refactor: boolean) => {
-  if (!SOURCE_EXTENSION.test(path)) return [];
-  if (isTestFile(path)) return [{ skill: UNIT_TESTING, reason: TEST_REASON }];
-  const source = { skill: CODE_COMMENTS, reason: SOURCE_REASON };
-  return refactor
-    ? [source, { skill: REFACTOR, reason: REFACTOR_REASON }]
-    : [source];
+/** "a", "a and b", "a, b and c". */
+const listOf = (names: readonly string[]) =>
+  names.length === 1
+    ? (names[0] ?? "")
+    : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+
+const sourceReason = (missing: readonly string[], refactor: boolean) => {
+  const task = refactor ? " in a refactor task" : "";
+  const skills = missing.length === 1 ? "skill" : "skills";
+  const them = missing.length === 1 ? "it" : "them";
+  return `Editing a source file${task} needs the ${listOf(missing)} ${skills}. Load ${them} with the Skill tool, then retry the edit.`;
 };
 
 export const editSkillDecision = (
@@ -42,11 +43,20 @@ export const editSkillDecision = (
   loaded: readonly string[],
   { refactor = false }: { readonly refactor?: boolean } = {},
 ) => {
-  const missing = requiredSkills(path, refactor).find(
-    ({ skill }) => !isLoaded(skill, loaded),
-  );
-  const decision: GuardDecision = missing
-    ? { allow: false, reason: missing.reason }
-    : ALLOW;
+  if (!SOURCE_EXTENSION.test(path)) return ALLOW;
+  if (isTestFile(path)) {
+    const decision: GuardDecision = isLoaded(UNIT_TESTING, loaded)
+      ? ALLOW
+      : { allow: false, reason: TEST_REASON };
+    return decision;
+  }
+  const required = refactor
+    ? [CODE_COMMENTS, LESS_CODE, REFACTOR]
+    : [CODE_COMMENTS, LESS_CODE];
+  const missing = required.filter((skill) => !isLoaded(skill, loaded));
+  const decision: GuardDecision =
+    missing.length === 0
+      ? ALLOW
+      : { allow: false, reason: sourceReason(missing, refactor) };
   return decision;
 };

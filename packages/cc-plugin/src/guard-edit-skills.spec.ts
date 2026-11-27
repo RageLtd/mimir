@@ -64,10 +64,16 @@ const reasonOf = (answer: Awaited<ReturnType<typeof answerGuard>>) =>
 const sourceFile = () => join(repo(), "src", "value.ts");
 const testFile = () => join(repo(), "src", "value.test.ts");
 
-/** What the rule says when the edit's skill is missing. */
-const ruleRefusal = (path: string) => {
-  const decision = editSkillDecision(path, []);
+/** What the rule says to an edit of `path` with only `loaded` loaded. */
+const ruleRefusal = (path: string, loaded: readonly string[] = []) => {
+  const decision = editSkillDecision(path, loaded);
   return decision.allow ? "" : decision.reason;
+};
+
+/** Both skills a source file needs, plugin-qualified as the Skill tool names them. */
+const loadSourceSkills = async (agent?: { agent_id?: string }) => {
+  await loadSkill("mimir-cc:code-comments", agent);
+  await loadSkill("mimir-cc:less-code", agent);
 };
 
 describe("a Skill call", () => {
@@ -94,7 +100,7 @@ describe("the main loop with no delegation active", () => {
     ["Edit", { old_string: "0", new_string: "1" }],
     ["Write", { content: "export const value = 1;\n" }],
     ["MultiEdit", { edits: [{ old_string: "0", new_string: "1" }] }],
-  ])("%s of a source file is refused with the rule's message until code-comments is loaded", async (tool, input) => {
+  ])("%s of a source file is refused with the rule's message until code-comments and less-code are loaded", async (tool, input) => {
     const path = sourceFile();
     const write = () =>
       answerGuard(call(tool, { file_path: path, ...input }), deps());
@@ -104,7 +110,40 @@ describe("the main loop with no delegation active", () => {
     expect(reasonOf(before)).toBe(ruleRefusal(path));
 
     await loadSkill("mimir-cc:code-comments");
+    const halfway = await write();
+    expect(halfway?.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(reasonOf(halfway)).toBe(
+      ruleRefusal(path, ["mimir-cc:code-comments"]),
+    );
+
+    await loadSkill("mimir-cc:less-code");
     expect(await write()).toBeNull();
+  });
+
+  test("one refusal names both missing skills, and loading them lets the retried edit through", async () => {
+    const reason = reasonOf(await edit(sourceFile()));
+    expect(reason).toContain("code-comments");
+    expect(reason).toContain("less-code");
+    expect(reason).toMatch(/\bload\b/i);
+    expect(reason).toMatch(/\bretry\b/i);
+
+    await loadSkill("mimir-cc:code-comments");
+    await loadSkill("mimir-cc:less-code");
+    expect(await edit(sourceFile())).toBeNull();
+  });
+
+  test("with code-comments loaded the refusal names only less-code, says to load it and then retry the edit", async () => {
+    await loadSkill("mimir-cc:code-comments");
+    const reason = reasonOf(await edit(sourceFile()));
+    expect(reason).toContain("less-code");
+    expect(reason).not.toContain("code-comments");
+    expect(reason).toMatch(/\bload\b/i);
+    expect(reason).toMatch(/\bretry\b/i);
+  });
+
+  test("less-code does not let a test file through", async () => {
+    await loadSkill("mimir-cc:less-code");
+    expect(reasonOf(await edit(testFile()))).toBe(ruleRefusal(testFile()));
   });
 
   test.each([
@@ -126,6 +165,7 @@ describe("the main loop with no delegation active", () => {
 
   test("a skill loaded by its bare name counts", async () => {
     await loadSkill("code-comments");
+    await loadSkill("less-code");
     expect(await edit(sourceFile())).toBeNull();
   });
 
@@ -144,7 +184,7 @@ describe("the main loop with no delegation active", () => {
 
 describe("each loop keeps its own skills", () => {
   test("a skill the main loop loaded does not let a subagent's edit through", async () => {
-    await loadSkill("mimir-cc:code-comments");
+    await loadSourceSkills();
 
     expect(reasonOf(await edit(sourceFile(), GENERAL))).toBe(
       ruleRefusal(sourceFile()),
@@ -152,10 +192,19 @@ describe("each loop keeps its own skills", () => {
   });
 
   test("a skill a subagent loaded does not let the main loop's edit through", async () => {
-    await loadSkill("mimir-cc:code-comments", GENERAL);
+    await loadSourceSkills(GENERAL);
 
     expect(await edit(sourceFile(), GENERAL)).toBeNull();
     expect(reasonOf(await edit(sourceFile()))).toBe(ruleRefusal(sourceFile()));
+  });
+
+  test("a subagent that is not one of Mimir's workers needs less-code for a source file", async () => {
+    await loadSkill("mimir-cc:code-comments", GENERAL);
+    expect(reasonOf(await edit(sourceFile(), GENERAL))).toBe(
+      ruleRefusal(sourceFile(), ["mimir-cc:code-comments"]),
+    );
+    await loadSkill("mimir-cc:less-code", GENERAL);
+    expect(await edit(sourceFile(), GENERAL)).toBeNull();
   });
 
   test("a skill one subagent loaded does not let another's edit through", async () => {
@@ -180,7 +229,7 @@ describe("Mimir's workers", () => {
   const TEST = { agent_id: "test-1", agent_type: "mimir-cc:mimir-test" };
   const REVIEW = { agent_id: "review-1", agent_type: "mimir-cc:mimir-review" };
 
-  test("an impl worker edits a source file without loading code-comments", async () => {
+  test("an impl worker edits a source file without loading code-comments or less-code", async () => {
     expect(await edit(sourceFile(), IMPL)).toBeNull();
   });
 
@@ -229,11 +278,11 @@ describe("Mimir's workers in a task marked as a refactor", () => {
     expect(await edit(sourceFile(), IMPL)).toBeNull();
   });
 
-  test("the impl worker is not asked for code-comments, which is preloaded", async () => {
+  test("the impl worker is not asked for code-comments or less-code, which are preloaded", async () => {
     await startTask(true);
-    expect(reasonOf(await edit(sourceFile(), IMPL))).not.toContain(
-      "code-comments",
-    );
+    const reason = reasonOf(await edit(sourceFile(), IMPL));
+    expect(reason).not.toContain("code-comments");
+    expect(reason).not.toContain("less-code");
   });
 
   test("refactor loaded by another loop does not let the impl worker through", async () => {
@@ -285,8 +334,8 @@ describe("the coordinator in an active delegation", () => {
     expect(reason).not.toBe(ruleRefusal(sourceFile()));
   });
 
-  test("editing a source file stays refused once code-comments is loaded", async () => {
-    await loadSkill("mimir-cc:code-comments");
+  test("editing a source file stays refused once code-comments and less-code are loaded", async () => {
+    await loadSourceSkills();
     expect(reasonOf(await edit(sourceFile()))).toContain(COORDINATOR_REFUSAL);
   });
 

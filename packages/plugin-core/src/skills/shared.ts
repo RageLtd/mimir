@@ -1,15 +1,16 @@
 /**
  * The skills every host reads as the same SKILL.md: testing, tickets,
- * documentation and refactor. Reference knowledge the model loads when the
- * task calls for it, so each ships as a true skill, not a command the
- * developer runs.
+ * documentation, coding and refactor. Reference knowledge the model loads
+ * when the task calls for it, so each ships as a true skill, not a command
+ * the developer runs.
  *
  * There is nothing to render per host: the markdown under ./testing,
- * ./tickets, ./documentation and ./refactor is the source and each plugin's
- * committed copy is that file byte for byte. Edit the source, then run
- * `bun run skills:render`. shared.test.ts fails when a copy drifts.
+ * ./tickets, ./documentation, ./coding and ./refactor is the source and each
+ * plugin's committed copy is that file byte for byte. Edit the source, then
+ * run `bun run skills:render`. shared.test.ts fails when a copy drifts.
  */
 
+import lessCode from "./coding/less-code.md" with { type: "text" };
 import codeComments from "./documentation/code-comments.md" with {
   type: "text",
 };
@@ -42,6 +43,7 @@ export const SHARED_SKILLS: Readonly<Record<string, string>> = {
   "epic-tickets": epicTickets,
   documentation,
   "code-comments": codeComments,
+  "less-code": lessCode,
   refactor,
 };
 

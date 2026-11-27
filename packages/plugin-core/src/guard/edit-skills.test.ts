@@ -69,37 +69,95 @@ describe("editing a test file", () => {
       editSkillDecision("/repo/app/test_models.py", ["code-comments"]).allow,
     ).toBe(false);
   });
+
+  test("less-code does not satisfy a test file", () => {
+    expect(
+      editSkillDecision("/repo/app/test_models.py", ["less-code"]).allow,
+    ).toBe(false);
+  });
+
+  test("a test file needs only unit-testing", () => {
+    expect(
+      editSkillDecision("/repo/src/brain/extract.test.ts", ["unit-testing"]),
+    ).toEqual({ allow: true });
+  });
 });
 
 describe("editing a source file", () => {
-  test.each(SOURCE_FILES)("%s is refused without code-comments", (path) => {
+  test.each(SOURCE_FILES)("%s is refused with nothing loaded", (path) => {
     expect(editSkillDecision(path, []).allow).toBe(false);
   });
 
-  test("the refusal says to load code-comments and then retry the edit", () => {
+  test("with nothing loaded one refusal names code-comments and less-code, says to load them and then retry the edit", () => {
     const reason = refusal(editSkillDecision("/repo/pkg/sync/client.go", []));
     expect(reason).toContain("code-comments");
+    expect(reason).toContain("less-code");
     expect(reason).toMatch(/\bload\b/i);
     expect(reason).toMatch(/\bretry\b/i);
   });
 
-  test.each(
-    SOURCE_FILES,
-  )("%s is allowed once code-comments is loaded", (path) => {
-    expect(editSkillDecision(path, ["code-comments"])).toEqual({ allow: true });
+  test("with less-code loaded the refusal names only code-comments", () => {
+    const reason = refusal(
+      editSkillDecision("/repo/pkg/sync/client.go", ["less-code"]),
+    );
+    expect(reason).toContain("code-comments");
+    expect(reason).not.toContain("less-code");
   });
 
-  test("a plugin-qualified code-comments counts as loaded", () => {
+  test.each(
+    SOURCE_FILES,
+  )("%s is refused with only code-comments loaded", (path) => {
+    expect(editSkillDecision(path, ["code-comments"]).allow).toBe(false);
+  });
+
+  test("with code-comments loaded the refusal names only less-code, says to load it and then retry the edit", () => {
+    const reason = refusal(
+      editSkillDecision("/repo/pkg/sync/client.go", ["code-comments"]),
+    );
+    expect(reason).toContain("less-code");
+    expect(reason).not.toContain("code-comments");
+    expect(reason).toMatch(/\bload\b/i);
+    expect(reason).toMatch(/\bretry\b/i);
+  });
+
+  test("less-code alone does not stand in for code-comments", () => {
+    expect(
+      editSkillDecision("/repo/src/brain/extract.ts", ["less-code"]).allow,
+    ).toBe(false);
+  });
+
+  test.each(
+    SOURCE_FILES,
+  )("%s is allowed once code-comments and less-code are loaded", (path) => {
+    expect(editSkillDecision(path, ["code-comments", "less-code"])).toEqual({
+      allow: true,
+    });
+  });
+
+  test("plugin-qualified code-comments and less-code count as loaded", () => {
     expect(
       editSkillDecision("/repo/crates/core/src/lib.rs", [
         "mimir-cc:code-comments",
+        "mimir-cc:less-code",
+      ]),
+    ).toEqual({ allow: true });
+  });
+
+  test("bare and plugin-qualified names count together", () => {
+    expect(
+      editSkillDecision("/repo/app/models.py", [
+        "code-comments",
+        "mimir-cc:less-code",
       ]),
     ).toEqual({ allow: true });
   });
 
   test("unit-testing does not satisfy a source file", () => {
     expect(
-      editSkillDecision("/repo/src/brain/extract.ts", ["unit-testing"]).allow,
+      editSkillDecision("/repo/src/brain/extract.ts", [
+        "unit-testing",
+        "less-code",
+      ]).allow,
     ).toBe(false);
   });
 });
@@ -115,17 +173,43 @@ describe("an implementer's edit in a refactor task", () => {
 
   test.each(
     SOURCE_FILES,
-  )("%s is refused with only code-comments loaded", (path) => {
-    expect(editSkillDecision(path, ["code-comments"], REFACTOR).allow).toBe(
-      false,
-    );
+  )("%s is refused with code-comments and less-code but not refactor loaded", (path) => {
+    expect(
+      editSkillDecision(path, ["code-comments", "less-code"], REFACTOR).allow,
+    ).toBe(false);
   });
 
   test.each(SOURCE_FILES)("%s is refused with nothing loaded", (path) => {
     expect(editSkillDecision(path, [], REFACTOR).allow).toBe(false);
   });
 
-  test("the refusal says to load refactor and then retry the edit", () => {
+  test("with nothing loaded one refusal names code-comments, less-code and refactor", () => {
+    const reason = refusal(
+      editSkillDecision("/repo/pkg/sync/client.go", [], REFACTOR),
+    );
+    expect(reason).toContain("code-comments");
+    expect(reason).toContain("less-code");
+    expect(reason).toContain("refactor");
+    expect(reason).toMatch(/\bload\b/i);
+    expect(reason).toMatch(/\bretry\b/i);
+  });
+
+  test("with code-comments and less-code loaded the refusal names only refactor, says to load it and then retry the edit", () => {
+    const reason = refusal(
+      editSkillDecision(
+        "/repo/pkg/sync/client.go",
+        ["code-comments", "less-code"],
+        REFACTOR,
+      ),
+    );
+    expect(reason).toContain("refactor");
+    expect(reason).not.toContain("code-comments");
+    expect(reason).not.toContain("less-code");
+    expect(reason).toMatch(/\bload\b/i);
+    expect(reason).toMatch(/\bretry\b/i);
+  });
+
+  test("with code-comments loaded the refusal names less-code and refactor, not code-comments", () => {
     const reason = refusal(
       editSkillDecision(
         "/repo/pkg/sync/client.go",
@@ -133,12 +217,36 @@ describe("an implementer's edit in a refactor task", () => {
         REFACTOR,
       ),
     );
+    expect(reason).toContain("less-code");
     expect(reason).toContain("refactor");
-    expect(reason).toMatch(/\bload\b/i);
-    expect(reason).toMatch(/\bretry\b/i);
+    expect(reason).not.toContain("code-comments");
   });
 
-  test("refactor alone does not stand in for code-comments", () => {
+  test("with code-comments and refactor loaded the refusal names only less-code", () => {
+    const reason = refusal(
+      editSkillDecision(
+        "/repo/pkg/sync/client.go",
+        ["code-comments", "refactor"],
+        REFACTOR,
+      ),
+    );
+    expect(reason).toContain("less-code");
+    expect(reason).not.toContain("code-comments");
+  });
+
+  test("with less-code and refactor loaded the refusal names only code-comments", () => {
+    const reason = refusal(
+      editSkillDecision(
+        "/repo/pkg/sync/client.go",
+        ["less-code", "refactor"],
+        REFACTOR,
+      ),
+    );
+    expect(reason).toContain("code-comments");
+    expect(reason).not.toContain("less-code");
+  });
+
+  test("refactor alone does not stand in for code-comments or less-code", () => {
     expect(
       editSkillDecision("/repo/src/brain/extract.ts", ["refactor"], REFACTOR)
         .allow,
@@ -147,19 +255,29 @@ describe("an implementer's edit in a refactor task", () => {
 
   test.each(
     SOURCE_FILES,
-  )("%s is allowed once code-comments and refactor are loaded", (path) => {
+  )("%s is allowed once code-comments, less-code and refactor are loaded", (path) => {
     expect(
-      editSkillDecision(path, ["code-comments", "refactor"], REFACTOR),
+      editSkillDecision(
+        path,
+        ["code-comments", "less-code", "refactor"],
+        REFACTOR,
+      ),
     ).toEqual({ allow: true });
   });
 
-  test("a plugin-qualified refactor counts as loaded", () => {
+  test("plugin-qualified names count as loaded", () => {
     expect(
       editSkillDecision(
         "/repo/crates/core/src/lib.rs",
-        ["mimir-cc:code-comments", "mimir-cc:refactor"],
+        ["mimir-cc:code-comments", "mimir-cc:less-code", "mimir-cc:refactor"],
         REFACTOR,
       ),
+    ).toEqual({ allow: true });
+  });
+
+  test("a test file still needs only unit-testing", () => {
+    expect(
+      editSkillDecision("/repo/app/test_models.py", ["unit-testing"], REFACTOR),
     ).toEqual({ allow: true });
   });
 
@@ -167,9 +285,9 @@ describe("an implementer's edit in a refactor task", () => {
     expect(editSkillDecision(path, [], REFACTOR)).toEqual({ allow: true });
   });
 
-  test("outside a refactor task a source file needs only code-comments", () => {
+  test("outside a refactor task a source file needs code-comments and less-code, not refactor", () => {
     expect(
-      editSkillDecision("/repo/app/models.py", ["code-comments"], {
+      editSkillDecision("/repo/app/models.py", ["code-comments", "less-code"], {
         refactor: false,
       }),
     ).toEqual({ allow: true });

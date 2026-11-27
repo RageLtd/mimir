@@ -21,6 +21,7 @@ const SOURCE_FOLDERS: Readonly<Record<string, string>> = {
   "epic-tickets": "tickets",
   documentation: "documentation",
   "code-comments": "documentation",
+  "less-code": "coding",
   refactor: "refactor",
 };
 const NAMES = Object.keys(SOURCE_FOLDERS);
@@ -35,7 +36,7 @@ const frontmatterOf = (file: string) =>
   file.match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? "";
 
 describe("shared skills", () => {
-  test("are the testing, ticket, documentation and refactor skills, and no others", () => {
+  test("are the testing, ticket, documentation, coding and refactor skills, and no others", () => {
     expect(Object.keys(SHARED_SKILLS).sort()).toEqual([...NAMES].sort());
   });
 

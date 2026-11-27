@@ -30,6 +30,8 @@ A brief is all a worker knows of the task. Three habits make one go wrong.
 - **Preserve behaviour, never files.** When a task moves or replaces code, the tests for that code move, change or go with it. Say which behaviour has to survive; do not declare an existing test file untouchable. A test pinned in place keeps alive whatever it imports, and the usual result is a wrapper whose only caller is its own test.
 - **Size a task to one worker run.** An implementation task touches a handful of files, about eight at most. Work that spans several packages or hosts is one task for the shared piece and one for each host that adopts it, not a single task listing them all. A worker that runs out of turns mid-task costs a resume and leaves you guessing at the state it stopped in.
 
+Load the \`less-code\` skill before you write the first brief. A worker asked to stop something happening will wrap a condition around it and leave it in place, and telling it to delete instead changes little; naming the lines to remove does. The skill has how to brief a removal, and the questions to put to a diff before you accept it: what it deleted, and what old logic still runs behind a new condition.
+
 Tell the test worker what its gate leaves unchecked. Its hand-back is not type-checked, since the code under test may not exist yet, so a type error in a red test surfaces only once the implementation is written, as a blocked implementer. Say so in the test brief, and ask for fakes and fixtures typed against what the project already declares, not against what the implementation is expected to infer.`;
 
 /** Continues into the host's way of marking the task. */

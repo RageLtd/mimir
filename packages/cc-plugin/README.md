@@ -117,6 +117,7 @@ The plugin ships skills that the agent loads when the task calls for one. You ca
 | `unit-testing`, `integration-testing`, `end-to-end-testing`, `ui-testing` | Writing and reviewing tests |
 | `bug-tickets`, `story-tickets`, `task-tickets`, `epic-tickets` | Writing and updating tickets |
 | `documentation`, `code-comments` | Writing documentation and comments |
+| `less-code` | Making a change with the least code that does the job |
 | `refactor` | Making code smaller and simpler without changing what it does |
 
 ## More

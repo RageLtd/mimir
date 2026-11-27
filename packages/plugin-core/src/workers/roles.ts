@@ -38,7 +38,7 @@ export const WORKER_DEFINITIONS: readonly WorkerDefinition[] = [
       "Implements one scoped change against existing tests. Cannot modify test files; ends with a STATUS line; verification is external.",
     maxTurns: 40,
     disallowedTools: [],
-    skills: ["code-comments"],
+    skills: ["code-comments", "less-code"],
   },
   {
     name: "mimir-test",
@@ -56,7 +56,7 @@ export const WORKER_DEFINITIONS: readonly WorkerDefinition[] = [
       "Context-free reviewer: reads a diff cold and reports findings. Read-only; ends with a STATUS line.",
     maxTurns: 25,
     disallowedTools: ["Write", "Edit", "MultiEdit", "NotebookEdit"],
-    skills: ["unit-testing", "code-comments"],
+    skills: ["unit-testing", "code-comments", "less-code"],
   },
 ];
 

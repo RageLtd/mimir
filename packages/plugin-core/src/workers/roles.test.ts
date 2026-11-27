@@ -7,14 +7,18 @@ describe("worker skills", () => {
     expect(workerByName("mimir-test")?.skills).toEqual(["unit-testing"]);
   });
 
-  test("the implementer starts with code-comments", () => {
-    expect(workerByName("mimir-impl")?.skills).toEqual(["code-comments"]);
+  test("the implementer starts with code-comments and less-code", () => {
+    expect(workerByName("mimir-impl")?.skills).toEqual([
+      "code-comments",
+      "less-code",
+    ]);
   });
 
-  test("the reviewer starts with unit-testing and code-comments", () => {
+  test("the reviewer starts with unit-testing, code-comments and less-code", () => {
     expect(workerByName("mimir-review")?.skills).toEqual([
       "unit-testing",
       "code-comments",
+      "less-code",
     ]);
   });
 

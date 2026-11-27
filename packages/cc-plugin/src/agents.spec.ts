@@ -47,21 +47,21 @@ describe("renderAgentMarkdown", () => {
     expect(frontmatter).toContain('skills: ["unit-testing"]\n');
   });
 
-  test("implementer preloads code-comments", () => {
+  test("implementer preloads code-comments and less-code", () => {
     const [, frontmatter] = renderAgentMarkdown(
       workerNamed("mimir-impl"),
       XML,
     ).split("---\n");
-    expect(frontmatter).toContain('skills: ["code-comments"]\n');
+    expect(frontmatter).toContain('skills: ["code-comments", "less-code"]\n');
   });
 
-  test("reviewer preloads unit-testing and code-comments", () => {
+  test("reviewer preloads unit-testing, code-comments and less-code", () => {
     const [, frontmatter] = renderAgentMarkdown(
       workerNamed("mimir-review"),
       XML,
     ).split("---\n");
     expect(frontmatter).toContain(
-      'skills: ["unit-testing", "code-comments"]\n',
+      'skills: ["unit-testing", "code-comments", "less-code"]\n',
     );
   });
 });

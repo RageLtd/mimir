@@ -309,14 +309,16 @@ pattern = 'class SongSource'
   });
   await assert.rejects(
     () => host.invoke(host.toolHooks, "execute.before", before("../../x.py")),
-    /needs the code-comments skill/,
+    /needs the code-comments and less-code skills/,
   );
-  await host.invoke(host.toolHooks, "execute.before", {
-    sessionID: "sess-smoke",
-    id: "skill-1",
-    tool: "skill",
-    input: { id: "code-comments" },
-  });
+  for (const skill of ["code-comments", "less-code"]) {
+    await host.invoke(host.toolHooks, "execute.before", {
+      sessionID: "sess-smoke",
+      id: `skill-${skill}`,
+      tool: "skill",
+      input: { id: skill },
+    });
+  }
   await host.invoke(host.toolHooks, "execute.before", before("../../x.py"));
   await assert.rejects(
     () => host.invoke(host.toolHooks, "execute.before", before("../../x.ts")),

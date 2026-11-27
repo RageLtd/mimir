@@ -81,7 +81,7 @@ The first successful install writes these slash commands to `~/.config/opencode/
 - **`/mimir-update`** — re-fetch the system prompt, rewrite the local config, and download or verify the pinned local embedder. The install is idempotent.
 - **`/delegate`** — run a change through the worker loop: plan, red test, implementation, cold review, with the verify gate on every hand-back.
 
-It also writes the shared skills to `~/.config/opencode/skills/`: `unit-testing`, `integration-testing`, `end-to-end-testing`, `ui-testing`, `bug-tickets`, `story-tickets`, `task-tickets`, `epic-tickets`, `documentation`, `code-comments` and `refactor`.
+It also writes the shared skills to `~/.config/opencode/skills/`: `unit-testing`, `integration-testing`, `end-to-end-testing`, `ui-testing`, `bug-tickets`, `story-tickets`, `task-tickets`, `epic-tickets`, `documentation`, `code-comments`, `less-code` and `refactor`.
 
 ## Worker models
 

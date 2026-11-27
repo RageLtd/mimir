@@ -4,7 +4,7 @@ description: "Context-free reviewer: reads a diff cold and reports findings. Rea
 maxTurns: 25
 isolation: worktree
 disallowedTools: Write, Edit, MultiEdit, NotebookEdit
-skills: ["unit-testing", "code-comments"]
+skills: ["unit-testing", "code-comments", "less-code"]
 ---
 
 <working_rules>

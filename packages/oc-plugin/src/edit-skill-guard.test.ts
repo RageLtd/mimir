@@ -86,15 +86,29 @@ const patch = (...lines: string[]) => ({
   patchText: ["*** Begin Patch", ...lines, "*** End Patch"].join("\n"),
 });
 
-/** The shared rule's own refusal for an edit to `path` with nothing loaded. */
-const ruleReason = (path: string) => {
-  const decision = editSkillDecision(join(ROOT, path), []);
-  if (decision.allow) throw new Error(`${path} needs no skill`);
+/** The shared rule's own refusal for an edit to `path` with `loaded` loaded. */
+const ruleReason = (path: string, loaded: readonly string[] = []) => {
+  const decision = editSkillDecision(join(ROOT, path), loaded);
+  if (decision.allow) throw new Error(`${path} needs no further skill`);
   return decision.reason;
 };
 
 const SOURCE_REASON = ruleReason(SOURCE);
+const lessCodeReason = () => ruleReason(SOURCE, ["code-comments"]);
 const TEST_REASON = ruleReason(TEST);
+
+/** The message an edit was refused with, or "" when it went through. */
+const refusalOf = (attempt: Promise<void>) =>
+  attempt.then(
+    () => "",
+    (err: unknown) => (err instanceof Error ? err.message : String(err)),
+  );
+
+/** Both skills a source file needs. */
+const loadSourceSkills = async (sessionID: string) => {
+  await loadSkill(sessionID, "code-comments");
+  await loadSkill(sessionID, "less-code");
+};
 
 /** Each OpenCode tool that writes a file, as a call against `path`. */
 const writers = (path: string) => ({
@@ -115,13 +129,20 @@ describe("loading a skill", () => {
 
   test("a skill named by the older `name` field counts too", async () => {
     await beforeTool(MAIN, "skill", { name: "code-comments" });
+    await beforeTool(MAIN, "skill", { name: "less-code" });
+    await edit(MAIN, SOURCE);
+  });
+
+  test("a plugin-qualified skill counts too", async () => {
+    await loadSkill(MAIN, "mimir-cc:code-comments");
+    await loadSkill(MAIN, "mimir-cc:less-code");
     await edit(MAIN, SOURCE);
   });
 });
 
 describe("an edit needs its skill loaded", () => {
   for (const [label, [tool, input]] of Object.entries(writers(SOURCE))) {
-    test(`${label} on a source file is refused until code-comments is loaded`, async () => {
+    test(`${label} on a source file is refused until code-comments and less-code are loaded`, async () => {
       await expect(beforeTool(MAIN, tool, input)).rejects.toThrow(
         SOURCE_REASON,
       );
@@ -130,21 +151,45 @@ describe("an edit needs its skill loaded", () => {
         SOURCE_REASON,
       );
       await loadSkill(MAIN, "code-comments");
+      const reason = lessCodeReason();
+      await expect(beforeTool(MAIN, tool, input)).rejects.toThrow(reason);
+      await loadSkill(MAIN, "less-code");
       await beforeTool(MAIN, tool, input);
     });
   }
+
+  test("one refusal names both missing skills, and loading them lets the retried edit through", async () => {
+    const refused = await refusalOf(edit(MAIN, SOURCE));
+    expect(refused).toContain("code-comments");
+    expect(refused).toContain("less-code");
+    expect(refused).toMatch(/\bload\b/i);
+    expect(refused).toMatch(/\bretry\b/i);
+
+    await loadSkill(MAIN, "code-comments");
+    await loadSkill(MAIN, "less-code");
+    await edit(MAIN, SOURCE);
+  });
+
+  test("with code-comments loaded the refusal names only less-code, says to load it and then retry the edit", async () => {
+    await loadSkill(MAIN, "code-comments");
+    const refused = await refusalOf(edit(MAIN, SOURCE));
+    expect(refused).toContain("less-code");
+    expect(refused).not.toContain("code-comments");
+    expect(refused).toMatch(/\bload\b/i);
+    expect(refused).toMatch(/\bretry\b/i);
+  });
 
   for (const [label, [tool, input]] of Object.entries(writers(TEST))) {
     test(`${label} on a test file is refused until unit-testing is loaded`, async () => {
       await expect(beforeTool(MAIN, tool, input)).rejects.toThrow(TEST_REASON);
-      await loadSkill(MAIN, "code-comments");
+      await loadSourceSkills(MAIN);
       await expect(beforeTool(MAIN, tool, input)).rejects.toThrow(TEST_REASON);
       await loadSkill(MAIN, "unit-testing");
       await beforeTool(MAIN, tool, input);
     });
   }
 
-  test("a patch touching a source and a test file needs both skills", async () => {
+  test("a patch touching a source and a test file needs every skill for both", async () => {
     const input = patch(
       `*** Update File: ${SOURCE}`,
       "@@",
@@ -154,8 +199,10 @@ describe("an edit needs its skill loaded", () => {
       "+x",
     );
     await loadSkill(MAIN, "code-comments");
-    await expect(beforeTool(MAIN, "patch", input)).rejects.toThrow(TEST_REASON);
     await loadSkill(MAIN, "unit-testing");
+    const reason = lessCodeReason();
+    await expect(beforeTool(MAIN, "patch", input)).rejects.toThrow(reason);
+    await loadSkill(MAIN, "less-code");
     await beforeTool(MAIN, "patch", input);
   });
 
@@ -169,7 +216,7 @@ describe("an edit needs its skill loaded", () => {
 
 describe("sessions are separate", () => {
   test("a skill one session loaded does not let another session's edit through", async () => {
-    await loadSkill(MAIN, "code-comments");
+    await loadSourceSkills(MAIN);
     await loadSkill(MAIN, "unit-testing");
     await expect(edit("other", SOURCE)).rejects.toThrow(SOURCE_REASON);
     await expect(edit("other", TEST)).rejects.toThrow(TEST_REASON);
@@ -177,7 +224,7 @@ describe("sessions are separate", () => {
   });
 
   test("a parent's skills do not cover its worker", async () => {
-    await loadSkill(MAIN, "code-comments");
+    await loadSourceSkills(MAIN);
     await expect(edit(IMPL_WORKER, SOURCE)).rejects.toThrow(SOURCE_REASON);
   });
 });
@@ -189,9 +236,12 @@ describe("Mimir's workers are held to the rule", () => {
     await edit(TEST_WORKER, TEST);
   });
 
-  test("an implementer's edit to a source file waits for code-comments", async () => {
+  test("an implementer's edit to a source file waits for code-comments and less-code", async () => {
     await expect(edit(IMPL_WORKER, SOURCE)).rejects.toThrow(SOURCE_REASON);
     await loadSkill(IMPL_WORKER, "code-comments");
+    const reason = lessCodeReason();
+    await expect(edit(IMPL_WORKER, SOURCE)).rejects.toThrow(reason);
+    await loadSkill(IMPL_WORKER, "less-code");
     await edit(IMPL_WORKER, SOURCE);
   });
 });
@@ -208,38 +258,62 @@ describe("in a task marked as a refactor", () => {
     });
   };
 
-  test("an implementer's edit to a source file waits for code-comments and refactor", async () => {
+  test("an implementer's edit to a source file waits for code-comments, less-code and refactor", async () => {
     await startTask(true);
     await expect(edit(IMPL_WORKER, SOURCE)).rejects.toThrow(/code-comments/);
     await loadSkill(IMPL_WORKER, "code-comments");
+    await expect(edit(IMPL_WORKER, SOURCE)).rejects.toThrow(/less-code/);
+    await loadSkill(IMPL_WORKER, "less-code");
     await expect(edit(IMPL_WORKER, SOURCE)).rejects.toThrow(/refactor/);
     await loadSkill(IMPL_WORKER, "refactor");
     await edit(IMPL_WORKER, SOURCE);
   });
 
-  test("refactor loaded first still leaves code-comments to load", async () => {
+  test("refactor loaded first still leaves code-comments and less-code to load", async () => {
     await startTask(true);
     await loadSkill(IMPL_WORKER, "refactor");
     await expect(edit(IMPL_WORKER, SOURCE)).rejects.toThrow(/code-comments/);
     await loadSkill(IMPL_WORKER, "code-comments");
+    await expect(edit(IMPL_WORKER, SOURCE)).rejects.toThrow(/less-code/);
+    await loadSkill(IMPL_WORKER, "less-code");
     await edit(IMPL_WORKER, SOURCE);
   });
 
-  test("the refusal says to load refactor and then retry the edit", async () => {
+  test("with code-comments and less-code loaded the refusal names only refactor, says to load it and then retry the edit", async () => {
     await startTask(true);
-    await loadSkill(IMPL_WORKER, "code-comments");
-    const refused = await edit(IMPL_WORKER, SOURCE).then(
-      () => "",
-      (err: unknown) => (err instanceof Error ? err.message : String(err)),
-    );
+    await loadSourceSkills(IMPL_WORKER);
+    const refused = await refusalOf(edit(IMPL_WORKER, SOURCE));
     expect(refused).toContain("refactor");
+    expect(refused).not.toContain("code-comments");
+    expect(refused).not.toContain("less-code");
     expect(refused).toMatch(/\bload\b/i);
     expect(refused).toMatch(/\bretry\b/i);
   });
 
-  test("in a task not marked as a refactor the implementer needs only code-comments", async () => {
-    await startTask(false);
+  test("one refusal names all three missing skills, and loading them lets the retried edit through", async () => {
+    await startTask(true);
+    const refused = await refusalOf(edit(IMPL_WORKER, SOURCE));
+    expect(refused).toContain("code-comments");
+    expect(refused).toContain("less-code");
+    expect(refused).toContain("refactor");
+
     await loadSkill(IMPL_WORKER, "code-comments");
+    await loadSkill(IMPL_WORKER, "less-code");
+    await loadSkill(IMPL_WORKER, "refactor");
+    await edit(IMPL_WORKER, SOURCE);
+  });
+
+  test("with refactor loaded the refusal names code-comments and less-code", async () => {
+    await startTask(true);
+    await loadSkill(IMPL_WORKER, "refactor");
+    const refused = await refusalOf(edit(IMPL_WORKER, SOURCE));
+    expect(refused).toContain("code-comments");
+    expect(refused).toContain("less-code");
+  });
+
+  test("in a task not marked as a refactor the implementer needs code-comments and less-code, not refactor", async () => {
+    await startTask(false);
+    await loadSourceSkills(IMPL_WORKER);
     await edit(IMPL_WORKER, SOURCE);
   });
 
@@ -277,7 +351,7 @@ describe("the role guard refuses first", () => {
     await expect(edit(MAIN, SOURCE)).rejects.toThrow(
       "the coordinator delegates",
     );
-    await loadSkill(MAIN, "code-comments");
+    await loadSourceSkills(MAIN);
     await expect(edit(MAIN, SOURCE)).rejects.toThrow(
       "the coordinator delegates",
     );
